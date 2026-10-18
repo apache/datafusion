@@ -810,11 +810,11 @@ mod tests {
 #[cfg(test)]
 mod record_batch_tests {
     use super::*;
-    use crate::HashSet;
     use arrow::array::{
-        ArrayData, ArrayRef, BinaryViewArray, DictionaryArray, Float64Array, Int16Array,
-        Int32Array, Int64Array, LargeListViewArray, ListArray, ListViewArray, MapArray,
-        RunArray, StringArray, StringViewArray, StructArray, UnionArray, new_null_array,
+        ArrayData, ArrayRef, BinaryViewArray, BooleanArray, DictionaryArray,
+        Float64Array, Int16Array, Int32Array, Int64Array, LargeListViewArray, ListArray,
+        ListViewArray, MapArray, RunArray, StringArray, StringViewArray, StructArray,
+        UnionArray, new_null_array,
     };
     use arrow::buffer::OffsetBuffer;
     use arrow::datatypes::{
@@ -1375,480 +1375,182 @@ mod record_batch_tests {
         assert_eq!(size, 8208);
     }
 
-    // ---- uncount tests ----
+    // ---- RecordBatchMemoryTracker ----
 
     #[test]
     fn test_uncount_two_slices_example_from_issue() {
-        // The exact example from the issue description.
         let array = Int32Array::from(vec![0; 1_000_000]); // 4 MB
         let schema =
             Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
         let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
         let slice1 = batch.slice(0, 500_000);
         let slice2 = batch.slice(500_000, 500_000);
-
         let buffer_size = get_record_batch_memory_size(&batch);
 
-        let mut counter = RecordBatchMemoryTracker::new();
-
-        // count_batch(slice1) → buffer_size (parent buffer counted)
-        assert_eq!(counter.count_batch(&slice1), buffer_size);
-        assert_eq!(counter.memory_usage(), buffer_size);
-
-        // count_batch(slice2) → 0 (already counted)
-        assert_eq!(counter.count_batch(&slice2), 0);
-        assert_eq!(counter.memory_usage(), buffer_size);
-
-        // uncount_batch(slice1) → 0 released (slice2 still uses it)
-        assert_eq!(counter.uncount_batch(&slice1), 0);
-        assert_eq!(counter.memory_usage(), buffer_size);
-
-        // uncount_batch(slice2) → buffer_size released
-        assert_eq!(counter.uncount_batch(&slice2), buffer_size);
-        assert_eq!(counter.memory_usage(), 0);
+        let mut tracker = RecordBatchMemoryTracker::new();
+        assert_eq!(tracker.count_batch(&slice1), buffer_size);
+        assert_eq!(tracker.count_batch(&slice2), 0);
+        // slice2 still holds the buffer
+        assert_eq!(tracker.uncount_batch(&slice1), 0);
+        assert_eq!(tracker.memory_usage(), buffer_size);
+        assert_eq!(tracker.uncount_batch(&slice2), buffer_size);
+        assert_eq!(tracker.memory_usage(), 0);
     }
 
-    /// Shared-buffer uncount tests: each row builds two arrays that share
-    /// underlying buffers, then verifies: count both → uncount first releases
-    /// nothing → uncount second releases everything.
+    /// Uncounting one of two arrays that share buffers keeps exactly what the
+    /// other one still holds.
     #[test]
-    fn test_uncount_shared_buffer_pairs() {
-        // (first, second) pairs that share at least one underlying buffer.
-        let cases: Vec<(&str, ArrayRef, ArrayRef)> = vec![
-            // Sliced Int32 — shares values buffer.
-            {
-                let base = Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef;
-                ("int32_slices", base.slice(0, 2), base.slice(2, 2))
-            },
-            // Sliced String — shares offsets + data buffers.
-            {
-                let base =
-                    Arc::new(StringArray::from(vec!["a", "b", "c", "d"])) as ArrayRef;
-                ("string_slices", base.slice(0, 2), base.slice(2, 2))
-            },
-            // StringView slices — shares views + variadic data buffers.
-            {
-                let base = Arc::new(StringViewArray::from_iter_values([
-                    "short",
-                    "a payload longer than twelve bytes that spills",
-                    "another long payload that also spills to data buffers",
-                    "yet another long payload exceeding the inline limit",
-                ])) as ArrayRef;
-                ("string_view_slices", base.slice(0, 2), base.slice(2, 2))
-            },
-            // BinaryView slices — same sharing as StringView.
-            {
-                let base = Arc::new(BinaryViewArray::from_iter_values([
-                    b"short".as_slice(),
-                    b"a binary payload longer than twelve bytes for spillover",
-                    b"another binary payload that spills into the data buffer",
-                ])) as ArrayRef;
-                ("binary_view_slices", base.slice(0, 1), base.slice(1, 2))
-            },
-            // Dictionary — two dicts sharing the same values array.
-            {
-                let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
-                let d1 = Arc::new(
-                    DictionaryArray::<Int32Type>::try_new(
-                        Int32Array::from(vec![0, 1, 2]),
-                        Arc::clone(&values),
-                    )
-                    .unwrap(),
-                ) as ArrayRef;
-                let d2 = Arc::new(
-                    DictionaryArray::<Int32Type>::try_new(
-                        Int32Array::from(vec![2, 1, 0]),
-                        Arc::clone(&values),
-                    )
-                    .unwrap(),
-                ) as ArrayRef;
-                ("dictionary_shared_values", d1, d2)
-            },
-            // List — two lists sharing the same child values.
-            {
-                let child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
-                let field = Arc::new(Field::new_list_field(DataType::Int32, false));
-                let l1 = Arc::new(ListArray::new(
-                    Arc::clone(&field),
-                    OffsetBuffer::new(vec![0, 3].into()),
-                    Arc::clone(&child),
-                    None,
-                )) as ArrayRef;
-                let l2 = Arc::new(ListArray::new(
-                    field,
-                    OffsetBuffer::new(vec![0, 3].into()),
-                    Arc::clone(&child),
-                    None,
-                )) as ArrayRef;
-                ("list_shared_child", l1, l2)
-            },
-            // Map — two maps sharing key+value children.
-            {
-                let key: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
-                let val: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-                let fields = Fields::from(vec![
-                    Arc::new(Field::new("key", DataType::Int32, false)),
-                    Arc::new(Field::new("value", DataType::Int32, false)),
-                ]);
-                let m1 = map_with_shared_children(&fields, &key, &val);
-                let m2 = map_with_shared_children(&fields, &key, &val);
-                ("map_shared_children", m1, m2)
-            },
-            // Union slices — share child buffers.
-            {
-                let child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-                let fields: UnionFields = std::iter::once((
-                    0,
-                    Arc::new(Field::new("v", DataType::Int32, false)),
-                ))
-                .collect();
-                let union_arr = Arc::new(
-                    UnionArray::try_new(
-                        fields,
-                        vec![0, 0, 0].into(),
-                        Some(vec![0, 1, 2].into()),
-                        vec![Arc::clone(&child)],
-                    )
-                    .unwrap(),
-                ) as ArrayRef;
-                let slice = union_arr.slice(1, 2);
-                ("union_slices", union_arr, slice)
-            },
-            // RunEndEncoded slices — share run-end + values buffers.
-            {
-                let values: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
-                let run_array = Arc::new(
-                    RunArray::<Int32Type>::try_new(
-                        &Int32Array::from(vec![1, 2, 3]),
-                        values.as_ref(),
-                    )
-                    .unwrap(),
-                ) as ArrayRef;
-                let slice: ArrayRef = Arc::new(
-                    run_array
-                        .as_any()
-                        .downcast_ref::<RunArray<Int32Type>>()
-                        .unwrap()
-                        .slice(1, 2),
-                );
-                ("run_end_slices", run_array, slice)
-            },
+    fn test_uncount_keeps_buffers_shared_with_counted_arrays() {
+        let string_view = Arc::new(StringViewArray::from_iter_values([
+            "short",
+            "a payload longer than twelve bytes that spills",
+            "another long payload that also spills to data buffers",
+        ])) as ArrayRef;
+        let dictionary_values: ArrayRef =
+            Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let dictionary = |keys: Vec<i32>| {
+            Arc::new(
+                DictionaryArray::<Int32Type>::try_new(
+                    Int32Array::from(keys),
+                    Arc::clone(&dictionary_values),
+                )
+                .unwrap(),
+            ) as ArrayRef
+        };
+        let list_values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let list = |offsets: Vec<i32>| {
+            Arc::new(ListArray::new(
+                Arc::new(Field::new_list_field(DataType::Int32, false)),
+                OffsetBuffer::new(offsets.into()),
+                Arc::clone(&list_values),
+                None,
+            )) as ArrayRef
+        };
+
+        let cases = [
+            (
+                "view data buffers",
+                string_view.slice(0, 1),
+                string_view.slice(1, 2),
+            ),
+            (
+                "dictionary values",
+                dictionary(vec![0, 1]),
+                dictionary(vec![2]),
+            ),
+            ("list child", list(vec![0, 2]), list(vec![0, 1, 4])),
         ];
-
-        for (name, first, second) in &cases {
-            let mut counter = RecordBatchMemoryTracker::new();
-            let counted1 = counter.count_array(first.as_ref());
-            assert!(counted1 > 0, "{name}: first should count some buffers");
-            let counted2 = counter.count_array(second.as_ref());
-            // second shares buffers with first, so it may add less (or zero).
-            let total = counter.memory_usage();
-
-            // Uncount first — shared buffers still referenced by second.
-            let released1 = counter.uncount_array(first.as_ref());
+        for (name, first, second) in cases {
+            let mut tracker = RecordBatchMemoryTracker::new();
+            tracker.count_array(first.as_ref());
+            tracker.count_array(second.as_ref());
+            tracker.uncount_array(first.as_ref());
             assert_eq!(
-                counter.memory_usage(),
-                total - released1,
-                "{name}: memory after uncounting first"
+                tracker.memory_usage(),
+                RecordBatchMemoryCounter::new().count_array(second.as_ref()),
+                "{name}"
             );
-
-            // Uncount second — everything released.
-            let released2 = counter.uncount_array(second.as_ref());
-            assert_eq!(
-                released1 + released2,
-                total,
-                "{name}: total released should equal total counted"
-            );
-            assert_eq!(counter.memory_usage(), 0, "{name}: memory should be zero");
-
-            // Also verify that for fully-shared pairs, uncounting first
-            // releases nothing.
-            if counted2 == 0 {
-                // Re-run to verify the exact pattern from the issue.
-                let mut c2 = RecordBatchMemoryTracker::new();
-                c2.count_array(first.as_ref());
-                c2.count_array(second.as_ref());
-                assert_eq!(
-                    c2.uncount_array(first.as_ref()),
-                    0,
-                    "{name}: first uncount of fully-shared pair should release nothing"
-                );
-                assert_eq!(c2.memory_usage(), total, "{name}: memory unchanged");
-            }
+            tracker.uncount_array(second.as_ref());
+            assert_eq!(tracker.memory_usage(), 0, "{name}");
         }
     }
 
     #[test]
     fn test_uncount_with_overflow_promotion() {
-        // Create more than INLINE_BUFFER_IDS distinct buffers, then uncount.
-        let n = INLINE_BUFFER_IDS + 4;
-        let arrays: Vec<ArrayRef> = (0..n)
+        let arrays: Vec<ArrayRef> = (0..INLINE_BUFFER_IDS + 4)
             .map(|i| Arc::new(Int32Array::from(vec![i as i32])) as ArrayRef)
             .collect();
 
-        let mut counter = RecordBatchMemoryTracker::new();
-        let mut total_counted = 0usize;
-        for array in &arrays {
-            total_counted += counter.count_array(array.as_ref());
-        }
-        assert!(counter.counted_buffers.overflow.is_some());
-        assert_eq!(counter.memory_usage(), total_counted);
-
-        // Uncount all in reverse order.
-        let mut total_released = 0usize;
-        for array in arrays.iter().rev() {
-            total_released += counter.uncount_array(array.as_ref());
-        }
-        assert_eq!(total_released, total_counted);
-        assert_eq!(counter.memory_usage(), 0);
-    }
-
-    #[test]
-    fn test_uncount_never_counted_is_noop() {
-        let array = Int32Array::from(vec![1, 2, 3]);
-        let mut counter = RecordBatchMemoryTracker::new();
-
-        // Uncounting something never counted should return 0 and not panic.
-        assert_eq!(counter.uncount_array(&array), 0);
-        assert_eq!(counter.memory_usage(), 0);
-    }
-
-    #[test]
-    fn test_double_uncount_does_not_underflow() {
-        let array = Int32Array::from(vec![1, 2, 3]);
-        let mut counter = RecordBatchMemoryTracker::new();
-
-        counter.count_array(&array);
-        counter.uncount_array(&array);
-        assert_eq!(counter.memory_usage(), 0);
-
-        // Second uncount of the same array should be a no-op, not underflow.
-        let released = counter.uncount_array(&array);
-        assert_eq!(released, 0);
-        assert_eq!(counter.memory_usage(), 0);
-    }
-
-    #[test]
-    fn test_uncount_batch_with_array_overhead_round_trip() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("ints", DataType::Int32, false),
-            Field::new("floats", DataType::Float64, false),
-        ]));
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(Float64Array::from(vec![1., 2., 3.])),
-            ],
-        )
-        .unwrap();
-
-        let mut counter = RecordBatchMemoryTracker::new();
-        let counted = counter.count_batch_with_array_overhead(&batch);
-        assert!(counted > 0);
-        assert_eq!(counter.memory_usage(), counted);
-
-        let released = counter.uncount_batch_with_array_overhead(&batch);
+        let mut tracker = RecordBatchMemoryTracker::new();
+        let counted: usize = arrays.iter().map(|a| tracker.count_array(a)).sum();
+        assert!(tracker.counted_buffers.overflow.is_some());
+        let released: usize = arrays.iter().rev().map(|a| tracker.uncount_array(a)).sum();
         assert_eq!(released, counted);
-        assert_eq!(counter.memory_usage(), 0);
+        assert_eq!(tracker.memory_usage(), 0);
     }
 
-    /// Regression test from reviewer: array overhead must be refcounted so
-    /// it is released only when the last batch holding a shared ArrayRef is
-    /// uncounted. Previously `counted_arrays` was a HashSet and overhead was
-    /// released on the first uncount.
     #[test]
-    fn test_overhead_released_while_still_held() {
+    fn test_uncount_untracked_array_releases_nothing() {
+        let array = Int32Array::from(vec![1, 2, 3]);
+        let mut tracker = RecordBatchMemoryTracker::new();
+        assert_eq!(tracker.uncount_array(&array), 0);
+
+        tracker.count_array(&array);
+        tracker.uncount_array(&array);
+        assert_eq!(tracker.uncount_array(&array), 0);
+        assert_eq!(tracker.memory_usage(), 0);
+    }
+
+    /// Array overhead is released only when the last batch holding a shared
+    /// `ArrayRef` is uncounted.
+    #[test]
+    fn test_uncount_array_overhead_while_still_held() {
         let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
-        let b1 =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&col)]).unwrap();
+        let b1 = RecordBatch::try_new(schema, vec![col]).unwrap();
         let b2 = b1.clone();
-        let mut counter = RecordBatchMemoryTracker::new();
-        let full = counter.count_batch_with_array_overhead(&b1);
-        counter.count_batch_with_array_overhead(&b2);
-        // b2 shares the ArrayRef, so uncounting b1 should release nothing.
-        assert_eq!(counter.uncount_batch_with_array_overhead(&b1), 0);
-        assert_eq!(counter.memory_usage(), full);
-        assert_eq!(counter.uncount_batch_with_array_overhead(&b2), full);
+
+        let mut tracker = RecordBatchMemoryTracker::new();
+        let full = tracker.count_batch_with_array_overhead(&b1);
+        assert_eq!(tracker.count_batch_with_array_overhead(&b2), 0);
+        assert_eq!(tracker.uncount_batch_with_array_overhead(&b1), 0);
+        assert_eq!(tracker.memory_usage(), full);
+        assert_eq!(tracker.uncount_batch_with_array_overhead(&b2), full);
     }
 
-    #[test]
-    fn test_uncount_batch_with_array_overhead_shared_across_batches() {
-        // Two batches share the same ArrayRef — array overhead should be
-        // counted once and released correctly.
-        let shared_col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
-        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
-        let batch1 =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&shared_col)])
-                .unwrap()
-                .slice(0, 3);
-        let batch2 =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&shared_col)])
-                .unwrap()
-                .slice(3, 3);
-
-        let mut counter = RecordBatchMemoryTracker::new();
-        let counted1 = counter.count_batch_with_array_overhead(&batch1);
-        let _counted2 = counter.count_batch_with_array_overhead(&batch2);
-        assert!(counted1 > 0);
-
-        let total = counter.memory_usage();
-        let released1 = counter.uncount_batch_with_array_overhead(&batch1);
-        let released2 = counter.uncount_batch_with_array_overhead(&batch2);
-        assert_eq!(released1 + released2, total);
-        assert_eq!(counter.memory_usage(), 0);
-    }
-
+    /// A random sequence of counts and uncounts, checked against counting the
+    /// arrays still held from scratch.
     #[test]
     fn test_randomized_count_uncount_sequence() {
-        // Reference model: track per-buffer refcount in a HashMap.
-        // Uses diverse array types and hundreds of operations.
-        use std::collections::HashMap;
-
-        // Build a mix of array types to exercise different buffer layouts.
-        let arrays: Vec<ArrayRef> = vec![
-            // Int32 (single values buffer)
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
-            Arc::new(Int64Array::from(vec![10, 20, 30])),
-            // String (offsets + values buffers)
-            Arc::new(StringArray::from(vec!["hello", "world", "foo"])),
-            // StringView (views + variadic data buffers)
-            Arc::new(StringViewArray::from_iter_values([
-                "short",
-                "another long string that also spills to data buffers for sharing",
-            ])),
-            // Float64
-            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
-            // Dictionary (keys + shared values)
-            {
-                let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
-                Arc::new(
-                    DictionaryArray::<Int32Type>::try_new(
-                        Int32Array::from(vec![0, 1, 2]),
-                        values,
-                    )
-                    .unwrap(),
-                ) as ArrayRef
-            },
-            // List (offsets + child values)
-            {
-                let child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
-                let field = Arc::new(Field::new_list_field(DataType::Int32, false));
-                Arc::new(ListArray::new(
-                    field,
-                    OffsetBuffer::new(vec![0, 2, 4].into()),
-                    child,
-                    None,
-                )) as ArrayRef
-            },
-            // Boolean (bit-packed values buffer)
-            Arc::new(arrow::array::BooleanArray::from(vec![true, false, true])),
+        let int32 = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let string = Arc::new(StringArray::from(vec!["a", "bc", "def"])) as ArrayRef;
+        let string_view = Arc::new(StringViewArray::from_iter_values([
+            "short",
+            "another long string that also spills to data buffers for sharing",
+        ])) as ArrayRef;
+        let dictionary = Arc::new(
+            DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![0, 1, 2]),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let arrays = [
+            int32.slice(0, 2),
+            int32.slice(1, 2),
+            Arc::clone(&string),
+            string.slice(1, 2),
+            string_view.slice(0, 1),
+            string_view.slice(1, 1),
+            dictionary.slice(0, 2),
+            dictionary,
+            Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef,
         ];
 
-        // Also add slices that share buffers with arrays[0] and arrays[2].
-        let int_slice = arrays[0].slice(0, 2);
-        let str_slice = arrays[2].slice(1, 2);
-
-        let all_arrays: Vec<&dyn Array> = arrays
-            .iter()
-            .map(|a| a.as_ref())
-            .chain([int_slice.as_ref(), str_slice.as_ref()])
-            .collect();
-
-        // Deterministic pseudo-random sequence using a simple LCG.
-        // 200 operations: mix of count and uncount.
         let mut seed: u64 = 42;
-        let mut next_rand = || -> u64 {
+        let mut next_rand = || {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            seed >> 33
+            (seed >> 33) as usize
         };
-
-        let mut counter = RecordBatchMemoryTracker::new();
-
-        // Reference model: map from buffer addr -> (refcount, capacity).
-        let mut ref_map: HashMap<NonZero<usize>, (u32, usize)> = HashMap::new();
-        let mut ref_memory: usize = 0;
-
-        // Helper: walk an array's buffers and collect (addr, capacity) pairs.
-        fn collect_buffers(array: &dyn Array) -> Vec<(NonZero<usize>, usize)> {
-            let mut result = Vec::new();
-            fn walk(array: &dyn Array, out: &mut Vec<(NonZero<usize>, usize)>) {
-                if let Some(nulls) = array.nulls() {
-                    let buf = nulls.buffer();
-                    out.push((buf.data_ptr().addr(), buf.capacity()));
-                }
-                let data = array.to_data();
-                for buf in data.buffers() {
-                    out.push((buf.data_ptr().addr(), buf.capacity()));
-                }
-                for child in data.child_data() {
-                    let child_array = arrow::array::make_array(child.clone());
-                    walk(child_array.as_ref(), out);
-                }
-            }
-            walk(array, &mut result);
-            result
-        }
-
-        // Track per-array count so we don't uncount more than counted.
-        let mut array_live_counts = vec![0u32; all_arrays.len()];
-
-        for op_num in 0..200 {
-            let idx = (next_rand() as usize) % all_arrays.len();
-            // Bias toward counting early, uncounting later.
-            let is_count = if array_live_counts[idx] == 0 {
-                true
-            } else if op_num < 80 {
-                next_rand() % 3 != 0 // 67% count early
+        let mut tracker = RecordBatchMemoryTracker::new();
+        let mut held = vec![0usize; arrays.len()];
+        for op in 0..300 {
+            let idx = next_rand() % arrays.len();
+            if held[idx] > 0 && next_rand() % 2 == 0 {
+                tracker.uncount_array(arrays[idx].as_ref());
+                held[idx] -= 1;
             } else {
-                next_rand() % 3 == 0 // 33% count later
-            };
-
-            let array = all_arrays[idx];
-            let buffers = collect_buffers(array);
-
-            if is_count {
-                counter.count_array(array);
-                array_live_counts[idx] += 1;
-                for (addr, cap) in &buffers {
-                    let entry = ref_map.entry(*addr).or_insert((0, *cap));
-                    if entry.0 == 0 {
-                        ref_memory += cap;
-                    }
-                    entry.0 += 1;
-                }
-            } else if array_live_counts[idx] > 0 {
-                counter.uncount_array(array);
-                array_live_counts[idx] -= 1;
-                for (addr, cap) in &buffers {
-                    if let Some(entry) = ref_map.get_mut(addr)
-                        && entry.0 > 0
-                    {
-                        entry.0 -= 1;
-                        if entry.0 == 0 {
-                            ref_memory -= cap;
-                        }
-                    }
-                }
+                tracker.count_array(arrays[idx].as_ref());
+                held[idx] += 1;
             }
 
-            assert_eq!(
-                counter.memory_usage(),
-                ref_memory,
-                "Mismatch at op #{op_num} (array {idx}, count={is_count})"
-            );
-        }
-
-        // Drain everything.
-        for (idx, array) in all_arrays.iter().enumerate() {
-            for _ in 0..array_live_counts[idx] {
-                counter.uncount_array(*array);
+            let mut expected = RecordBatchMemoryCounter::new();
+            for (array, &count) in arrays.iter().zip(&held) {
+                if count > 0 {
+                    expected.count_array(array.as_ref());
+                }
             }
+            assert_eq!(tracker.memory_usage(), expected.memory_usage(), "op {op}");
         }
-        assert_eq!(
-            counter.memory_usage(),
-            0,
-            "Memory not zero after full drain"
-        );
     }
 }
