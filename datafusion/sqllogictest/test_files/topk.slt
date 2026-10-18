@@ -456,7 +456,25 @@ ORDER BY c0, c1 LIMIT 2;
 1 0
 1 1
 
-# Descending on the constant key: the `c0 = 5` arm comes first
+# Descending on the constant key: the `c0 = 5` arm comes first. Without the
+# fix, whether the query returns wrong rows depends on which arm publishes its
+# threshold first, so the EXPLAIN is what pins the key
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0 DESC, c1 LIMIT 2;
+----
+physical_plan
+01)SortPreservingMergeExec: [c0@0 DESC, c1@1 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[c0@0 DESC, c1@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[c0@0 DESC]
+03)----UnionExec
+04)------ProjectionExec: expr=[5 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+07)--------FilterExec: g@1 = 0, projection=[id@0]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
 query II
 SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
 UNION ALL
@@ -465,6 +483,33 @@ ORDER BY c0 DESC, c1 LIMIT 2;
 ----
 5 0
 5 1
+
+# The constant is kept when it is not the leading key, where it breaks ties on
+# `c1`. The second arm's `c1` values are shifted so that both arms have `c1 = 1`
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id + 1 AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c1, c0 LIMIT 2;
+----
+physical_plan
+01)SortPreservingMergeExec: [c1@1 ASC NULLS LAST, c0@0 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[c1@1 ASC NULLS LAST, c0@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----UnionExec
+04)------ProjectionExec: expr=[5 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[1 as c0, id@0 + 1 as c1]
+07)--------FilterExec: g@1 = 0, projection=[id@0]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id + 1 AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c1, c0 LIMIT 2;
+----
+5 0
+1 1
 
 # Control: a constant with the same value in every partition is still removed
 # from the TopK key
@@ -530,6 +575,23 @@ ORDER BY c0, c1;
 # needed, and a threshold on `c1` alone from the `c0 = 5` arm would cut the third
 statement ok
 CREATE TABLE heterogeneous_const_offset(id BIGINT, g BIGINT) AS VALUES (0, 0), (1, 0), (2, 0), (3, 1), (4, 1);
+
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const_offset
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const_offset WHERE g = 0
+ORDER BY c0, c1 LIMIT 2 OFFSET 1;
+----
+physical_plan
+01)GlobalLimitExec: skip=1, fetch=2
+02)--SortPreservingMergeExec: [c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], fetch=3
+03)----SortExec: TopK(fetch=3), expr=[c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[c0@0 ASC NULLS LAST]
+04)------UnionExec
+05)--------ProjectionExec: expr=[5 as c0, id@0 as c1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------ProjectionExec: expr=[1 as c0, id@0 as c1]
+08)----------FilterExec: g@1 = 0, projection=[id@0]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT 5 AS c0, id AS c1 FROM heterogeneous_const_offset
