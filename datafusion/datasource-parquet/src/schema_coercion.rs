@@ -33,9 +33,7 @@
 //! extended to map children, whose positional matching is newer, so binary map
 //! values keep going through the validating cast instead.
 
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, TimeUnit};
@@ -541,189 +539,95 @@ fn coerce_int96_to_resolution_impl(
     time_unit: &TimeUnit,
     timezone: Option<&Arc<str>>,
 ) -> Option<Schema> {
-    // Traverse the parquet_schema columns looking for int96 physical types. If encountered, insert
-    // the field's full path into a set.
-    let int96_fields: HashSet<_> = parquet_schema
-        .columns()
-        .iter()
-        .filter(|f| f.physical_type() == Type::INT96)
-        .map(|f| f.path().string())
-        .collect();
-
-    if int96_fields.is_empty() {
-        // The schema doesn't contain any int96 fields, so skip the remaining logic.
+    // Whether each leaf column of a top-level field is INT96. arrow-rs maps leaf columns to Arrow
+    // leaves in depth-first order whatever the list or map encoding, so they match by position.
+    let mut int96_leaves: HashMap<&str, Vec<bool>> = HashMap::new();
+    for (index, column) in parquet_schema.columns().iter().enumerate() {
+        int96_leaves
+            .entry(parquet_schema.get_column_root(index).name())
+            .or_default()
+            .push(column.physical_type() == Type::INT96);
+    }
+    if !int96_leaves.values().flatten().any(|&is_int96| is_int96) {
         return None;
     }
 
-    // Do a DFS into the schema using a stack, looking for timestamp(nanos) fields that originated
-    // as int96 to coerce to the provided time_unit.
-
-    type NestedFields = Rc<RefCell<Vec<FieldRef>>>;
-    type StackContext<'a> = (
-        Vec<&'a str>, // The Parquet column path (e.g., "c0.list.element.c1") for the current field.
-        &'a FieldRef, // The current field to be processed.
-        NestedFields, // The parent's fields that this field will be (possibly) type-coerced and
-        // inserted into. All fields have a parent, so this is not an Option type.
-        Option<NestedFields>, // Nested types need to create their own vector of fields for their
-                              // children. For primitive types this will remain None. For nested
-                              // types it is None the first time they are processed. Then, we
-                              // instantiate a vector for its children, push the field back onto the
-                              // stack to be processed again, and DFS into its children. The next
-                              // time we process the field, we know we have DFS'd into the children
-                              // because this field is Some.
-    );
-
-    // This is our top-level fields from which we will construct our schema. We pass this into our
-    // initial stack context as the parent fields, and the DFS populates it.
-    let fields = Rc::new(RefCell::new(Vec::with_capacity(file_schema.fields.len())));
-
-    // TODO: It might be possible to only DFS into nested fields that we know contain an int96 if we
-    // use some sort of LPM data structure to check if we're currently DFS'ing nested types that are
-    // in a column path that contains an int96. That can be a future optimization for large schemas.
-    let transformed_schema = {
-        // Populate the stack with our top-level fields.
-        let mut stack: Vec<StackContext> = file_schema
-            .fields()
-            .iter()
-            .rev()
-            .map(|f| (vec![f.name().as_str()], f, Rc::clone(&fields), None))
-            .collect();
-
-        // Pop fields to DFS into until we have exhausted the stack.
-        while let Some((parquet_path, current_field, parent_fields, child_fields)) =
-            stack.pop()
-        {
-            match (current_field.data_type(), child_fields) {
-                (DataType::Struct(unprocessed_children), None) => {
-                    // This is the first time popping off this struct. We don't yet know the
-                    // correct types of its children (i.e., if they need coercing) so we create
-                    // a vector for child_fields, push the struct node back onto the stack to be
-                    // processed again (see below) after processing all its children.
-                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(
-                        unprocessed_children.len(),
-                    )));
-                    // Note that here we push the struct back onto the stack with its
-                    // parent_fields in the same position, now with Some(child_fields).
-                    stack.push((
-                        parquet_path.clone(),
-                        current_field,
-                        parent_fields,
-                        Some(Rc::clone(&child_fields)),
-                    ));
-                    // Push all the children in reverse to maintain original schema order due to
-                    // stack processing.
-                    for child in unprocessed_children.into_iter().rev() {
-                        let mut child_path = parquet_path.clone();
-                        // Build up a normalized path that we'll use as a key into the original
-                        // int96_fields set above to test if this originated as int96.
-                        child_path.push(".");
-                        child_path.push(child.name());
-                        // Note that here we push the field onto the stack using the struct's
-                        // new child_fields vector as the field's parent_fields.
-                        stack.push((child_path, child, Rc::clone(&child_fields), None));
-                    }
-                }
-                (DataType::Struct(unprocessed_children), Some(processed_children)) => {
-                    // This is the second time popping off this struct. The child_fields vector
-                    // now contains each field that has been DFS'd into, and we can construct
-                    // the resulting struct with correct child types.
-                    let processed_children = processed_children.borrow();
-                    assert_eq!(processed_children.len(), unprocessed_children.len());
-                    let processed_struct = Field::new_struct(
-                        current_field.name(),
-                        processed_children.as_slice(),
-                        current_field.is_nullable(),
-                    )
-                    .with_metadata(current_field.metadata().clone());
-                    parent_fields.borrow_mut().push(Arc::new(processed_struct));
-                }
-                (DataType::List(unprocessed_child), None) => {
-                    // This is the first time popping off this list. See struct docs above.
-                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
-                    stack.push((
-                        parquet_path.clone(),
-                        current_field,
-                        parent_fields,
-                        Some(Rc::clone(&child_fields)),
-                    ));
-                    let mut child_path = parquet_path.clone();
-                    // Spark uses a definition for arrays/lists that results in a group
-                    // named "list" that is not maintained when parsing to Arrow. We just push
-                    // this name into the path.
-                    child_path.push(".list.");
-                    child_path.push(unprocessed_child.name());
-                    stack.push((
-                        child_path.clone(),
-                        unprocessed_child,
-                        Rc::clone(&child_fields),
-                        None,
-                    ));
-                }
-                (DataType::List(_), Some(processed_children)) => {
-                    // This is the second time popping off this list. See struct docs above.
-                    let processed_children = processed_children.borrow();
-                    assert_eq!(processed_children.len(), 1);
-                    let processed_list = Field::new_list(
-                        current_field.name(),
-                        Arc::clone(&processed_children[0]),
-                        current_field.is_nullable(),
-                    )
-                    .with_metadata(current_field.metadata().clone());
-                    parent_fields.borrow_mut().push(Arc::new(processed_list));
-                }
-                (DataType::Map(unprocessed_child, _), None) => {
-                    // This is the first time popping off this map. See struct docs above.
-                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
-                    stack.push((
-                        parquet_path.clone(),
-                        current_field,
-                        parent_fields,
-                        Some(Rc::clone(&child_fields)),
-                    ));
-                    let mut child_path = parquet_path.clone();
-                    child_path.push(".");
-                    child_path.push(unprocessed_child.name());
-                    stack.push((
-                        child_path.clone(),
-                        unprocessed_child,
-                        Rc::clone(&child_fields),
-                        None,
-                    ));
-                }
-                (DataType::Map(_, sorted), Some(processed_children)) => {
-                    // This is the second time popping off this map. See struct docs above.
-                    let processed_children = processed_children.borrow();
-                    assert_eq!(processed_children.len(), 1);
-                    let processed_map = Field::new(
-                        current_field.name(),
-                        DataType::Map(Arc::clone(&processed_children[0]), *sorted),
-                        current_field.is_nullable(),
-                    )
-                    .with_metadata(current_field.metadata().clone());
-                    parent_fields.borrow_mut().push(Arc::new(processed_map));
-                }
-                (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
-                    if int96_fields.contains(parquet_path.concat().as_str()) =>
-                // We found a timestamp(nanos) and it originated as int96. Coerce it to the correct
-                // time_unit, optionally attaching the requested timezone.
-                {
-                    parent_fields.borrow_mut().push(field_with_new_type(
-                        current_field,
-                        DataType::Timestamp(*time_unit, timezone.cloned()),
-                    ));
-                }
-                // Other types can be cloned as they are.
-                _ => parent_fields.borrow_mut().push(Arc::clone(current_field)),
+    let fields: Vec<FieldRef> = file_schema
+        .fields()
+        .iter()
+        .map(|field| match int96_leaves.get(field.name().as_str()) {
+            Some(leaves)
+                if leaves.contains(&true)
+                    && leaf_count(field.data_type()) == leaves.len() =>
+            {
+                coerce_int96_leaves(
+                    field,
+                    &mut leaves.iter().copied(),
+                    time_unit,
+                    timezone,
+                )
             }
-        }
-        assert_eq!(fields.borrow().len(), file_schema.fields.len());
-        Schema::new_with_metadata(
-            fields.borrow_mut().clone(),
-            file_schema.metadata.clone(),
-        )
-    };
+            _ => Arc::clone(field),
+        })
+        .collect();
+    Some(Schema::new_with_metadata(
+        fields,
+        file_schema.metadata.clone(),
+    ))
+}
 
-    Some(transformed_schema)
+/// Coerces the `Timestamp(Nanosecond, None)` leaves of `field` that `int96`, read in depth-first
+/// order, marks as INT96.
+fn coerce_int96_leaves(
+    field: &FieldRef,
+    int96: &mut impl Iterator<Item = bool>,
+    time_unit: &TimeUnit,
+    timezone: Option<&Arc<str>>,
+) -> FieldRef {
+    let data_type = match field.data_type() {
+        DataType::Struct(children) => DataType::Struct(
+            children
+                .iter()
+                .map(|child| coerce_int96_leaves(child, int96, time_unit, timezone))
+                .collect(),
+        ),
+        DataType::List(item) => {
+            DataType::List(coerce_int96_leaves(item, int96, time_unit, timezone))
+        }
+        DataType::LargeList(item) => {
+            DataType::LargeList(coerce_int96_leaves(item, int96, time_unit, timezone))
+        }
+        DataType::FixedSizeList(item, size) => DataType::FixedSizeList(
+            coerce_int96_leaves(item, int96, time_unit, timezone),
+            *size,
+        ),
+        DataType::Map(entries, sorted) => DataType::Map(
+            coerce_int96_leaves(entries, int96, time_unit, timezone),
+            *sorted,
+        ),
+        leaf => match (leaf, int96.next()) {
+            (DataType::Timestamp(TimeUnit::Nanosecond, None), Some(true)) => {
+                DataType::Timestamp(*time_unit, timezone.cloned())
+            }
+            _ => return Arc::clone(field),
+        },
+    };
+    field_with_new_type(field, data_type)
+}
+
+/// The number of leaves [`coerce_int96_leaves`] reads under `data_type`.
+fn leaf_count(data_type: &DataType) -> usize {
+    match data_type {
+        DataType::Struct(children) => children
+            .iter()
+            .map(|child| leaf_count(child.data_type()))
+            .sum(),
+        DataType::List(item)
+        | DataType::LargeList(item)
+        | DataType::FixedSizeList(item, _)
+        | DataType::Map(item, _) => leaf_count(item.data_type()),
+        _ => 1,
+    }
 }
 
 /// Create a new field with the specified data type, copying the other
@@ -1521,6 +1425,93 @@ mod tests {
         ]);
 
         assert_eq!(result, expected_schema);
+    }
+
+    #[test]
+    fn coerce_int96_to_resolution_with_two_level_and_legacy_lists() {
+        // Hive's two-level `array<timestamp>`, parquet-mr Avro's `array` group and a bare repeated
+        // field: lists without the `list` group of the three-level layout
+        let schema = "
+        message spark_schema {
+          optional group hive (LIST) {
+            repeated int96 bag;
+          }
+          repeated int96 bare;
+          optional group avro (LIST) {
+            repeated group array {
+              optional int96 ts;
+              optional int32 id;
+            }
+          }
+          optional group three (LIST) {
+            repeated group list {
+              optional int96 element;
+            }
+          }
+          optional group m (MAP) {
+            repeated group key_value {
+              required int32 key;
+              optional int96 value;
+            }
+          }
+          optional int64 nanos (TIMESTAMP(NANOS,false));
+        }
+        ";
+        let descr = SchemaDescriptor::new(Arc::new(
+            parse_message_type(schema).expect("should parse schema"),
+        ));
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+
+        fn leaf_types(data_type: &DataType, leaves: &mut Vec<DataType>) {
+            match data_type {
+                DataType::Struct(children) => children
+                    .iter()
+                    .for_each(|child| leaf_types(child.data_type(), leaves)),
+                DataType::List(item) | DataType::Map(item, _) => {
+                    leaf_types(item.data_type(), leaves)
+                }
+                leaf => leaves.push(leaf.clone()),
+            }
+        }
+        let schema_leaf_types = |schema: &Schema| {
+            let mut leaves = vec![];
+            schema
+                .fields()
+                .iter()
+                .for_each(|field| leaf_types(field.data_type(), &mut leaves));
+            leaves
+        };
+        let micros = DataType::Timestamp(TimeUnit::Microsecond, None);
+
+        let result = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
+        assert_eq!(
+            schema_leaf_types(&result),
+            vec![
+                micros.clone(),
+                micros.clone(),
+                micros.clone(),
+                DataType::Int32,
+                micros.clone(),
+                DataType::Int32,
+                micros.clone(),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ]
+        );
+
+        // A projection of the file schema, in another order, matches its fields by name
+        let projected = Schema::new(vec![
+            arrow_schema.field_with_name("m").unwrap().clone(),
+            arrow_schema.field_with_name("hive").unwrap().clone(),
+        ]);
+        let result = Int96Coercer::new(&descr, &projected, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
+        assert_eq!(
+            schema_leaf_types(&result),
+            vec![DataType::Int32, micros.clone(), micros]
+        );
     }
 
     #[test]
