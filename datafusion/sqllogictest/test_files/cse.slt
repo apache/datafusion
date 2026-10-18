@@ -351,12 +351,12 @@ FROM cse_agg_filter
 ----
 logical_plan
 01)Projection: sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)) AS s, count(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) AS c
-02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1) FILTER (WHERE cse_agg_filter.y > Int64(0)) AS sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)), count(__common_expr_1) AS count(arrow_cast(cse_agg_filter.x,Utf8("UInt64")))]]
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1) FILTER (WHERE cse_agg_filter.y > Int64(0)) AS sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)), count(Int64(1)) AS count(arrow_cast(cse_agg_filter.x,Utf8("UInt64")))]]
 03)----Projection: CAST(cse_agg_filter.x AS UInt64) AS __common_expr_1, cse_agg_filter.y
 04)------TableScan: cse_agg_filter projection=[x, y]
 physical_plan
 01)ProjectionExec: expr=[sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0))@0 as s, count(arrow_cast(cse_agg_filter.x,Utf8("UInt64")))@1 as c]
-02)--AggregateExec: mode=Single, gby=[], aggr=[sum(__common_expr_1) FILTER (WHERE cse_agg_filter.y > Int64(0)) as sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)), count(__common_expr_1) as count(arrow_cast(cse_agg_filter.x,Utf8("UInt64")))]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(__common_expr_1) FILTER (WHERE cse_agg_filter.y > Int64(0)) as sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)), count(1) as count(arrow_cast(cse_agg_filter.x,Utf8("UInt64")))]
 03)----ProjectionExec: expr=[CAST(x@0 AS UInt64) as __common_expr_1, y@1 as y]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
