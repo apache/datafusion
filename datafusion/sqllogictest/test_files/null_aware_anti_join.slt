@@ -624,8 +624,8 @@ query I
 SELECT id FROM nai_outer WHERE id > 5 AND id NOT IN (SELECT id FROM nai_inner) ORDER BY id;
 ----
 
-# Same query under SortMergeJoin + multiple partitions: null-aware joins must
-# be planned as a CollectLeft HashJoin, not a plain anti SortMergeJoin.
+# When hash joins are not preferred, the supported uncorrelated case uses a null-aware
+# SortMergeJoin, which must still preserve the subquery NULL.
 statement ok
 SET datafusion.optimizer.prefer_hash_join = false;
 
@@ -784,6 +784,22 @@ NULL
 # The projected value column must be the FIRST equi-join key: a null-aware hash
 # join reads `on[0]` as the `NOT IN` value key and `on[1..]` as correlation
 # scope keys, positionally. Giving the correlation that slot returns wrong rows.
+# Correlated null-aware joins must keep the CollectLeft HashJoin fallback even
+# when hash joins are not preferred: the single-key SMJ path cannot handle scopes.
+statement ok
+SET datafusion.optimizer.prefer_hash_join = false;
+
+query I
+SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z) ORDER BY z;
+----
+7
+NULL
+
+query I
+SELECT z FROM naconst_corr_t3 WHERE 2 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z) ORDER BY z;
+----
+NULL
+
 query TT
 EXPLAIN SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z);
 ----
@@ -801,6 +817,9 @@ physical_plan
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)--ProjectionExec: expr=[CAST(id@0 AS Int64) as naconst_corr_t4.id, z@1 as z]
 05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.optimizer.prefer_hash_join = true;
 
 statement ok
 DROP TABLE naconst_corr_t3;
