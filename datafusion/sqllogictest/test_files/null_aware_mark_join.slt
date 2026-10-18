@@ -387,8 +387,9 @@ c
 d
 e
 
-# Null-aware mark joins are pinned to CollectLeft hash joins (mark joins have no
-# sort-merge path); flipping prefer_hash_join off must not drop null awareness.
+# Null-aware mark joins are pinned to CollectLeft hash joins because their
+# null-aware semantics have no sort-merge path. Flipping prefer_hash_join off
+# must not drop null awareness.
 
 statement ok
 set datafusion.optimizer.prefer_hash_join = false;
@@ -411,6 +412,18 @@ physical_plan
 03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Execute under the same setting: matching keys are FALSE for NOT IN, while
+# unmatched keys and the NULL outer key are UNKNOWN because the RHS contains NULL.
+query IT rowsort
+SELECT id, value
+FROM outer_table
+WHERE (id NOT IN (SELECT id FROM inner_table_with_null)) IS NULL;
+----
+1 a
+3 c
+4 d
+NULL e
 
 ####################################
 ## Nested loop mark join with NULLs
