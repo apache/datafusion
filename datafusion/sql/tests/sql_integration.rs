@@ -30,8 +30,9 @@ use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
     ColumnarValue, CreateIndex, DdlStatement, Expr, ExprSchemable,
     HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
-    HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress, ScalarFunctionArgs,
-    ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility, col,
+    HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress, Operator,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility,
+    binary_expr, col,
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
     lambda,
     logical_plan::LogicalPlan,
@@ -947,6 +948,144 @@ fn select_scalar_func_with_expr_planner() -> Result<()> {
     "
     );
     Ok(())
+}
+
+#[test]
+fn select_rlike_plans_as_regexp_like() -> Result<()> {
+    // RLIKE resolves `regexp_like` through the registry, like an explicit call
+    let state = mock_session_state().with_scalar_function(Arc::new(make_udf(
+        "regexp_like",
+        vec![DataType::Utf8, DataType::Utf8],
+        DataType::Boolean,
+    )));
+    let plan = logical_plan_from_state(
+        "SELECT id FROM person WHERE first_name RLIKE '^a' \
+         AND first_name NOT REGEXP last_name",
+        &GenericDialect {},
+        ParserOptions::default(),
+        state,
+    )?;
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: person.id
+      Filter: regexp_like(person.first_name, Utf8("^a")) AND NOT regexp_like(person.first_name, person.last_name)
+        TableScan: person
+    "#
+    );
+    Ok(())
+}
+
+#[derive(Debug)]
+struct RegexpLikeToRegexMatchPlanner;
+
+impl ExprPlanner for RegexpLikeToRegexMatchPlanner {
+    fn plan_scalar(
+        &self,
+        expr: RawScalarExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<RawScalarExpr>> {
+        if expr.func.name() == "regexp_like"
+            && let [value, pattern] = expr.args.as_slice()
+        {
+            Ok(PlannerResult::Planned(binary_expr(
+                value.clone(),
+                Operator::RegexMatch,
+                pattern.clone(),
+            )))
+        } else {
+            Ok(PlannerResult::Original(expr))
+        }
+    }
+}
+
+#[test]
+fn select_rlike_with_expr_planner() -> Result<()> {
+    // RLIKE and REGEXP go through the same `plan_scalar` hooks as an explicit call
+    let state = mock_session_state()
+        .with_scalar_function(Arc::new(make_udf(
+            "regexp_like",
+            vec![DataType::Utf8, DataType::Utf8],
+            DataType::Boolean,
+        )))
+        .with_expr_planner(Arc::new(RegexpLikeToRegexMatchPlanner));
+    let plan = logical_plan_from_state(
+        "SELECT id FROM person WHERE regexp_like(first_name, 'a') \
+         AND first_name RLIKE 'b' AND first_name REGEXP 'c' \
+         AND first_name NOT RLIKE 'd' AND first_name NOT REGEXP 'e'",
+        &GenericDialect {},
+        ParserOptions::default(),
+        state,
+    )?;
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: person.id
+      Filter: person.first_name ~ Utf8("a") AND person.first_name ~ Utf8("b") AND person.first_name ~ Utf8("c") AND NOT person.first_name ~ Utf8("d") AND NOT person.first_name ~ Utf8("e")
+        TableScan: person
+    "#
+    );
+    Ok(())
+}
+
+#[derive(Debug)]
+struct RegexpLikeToUdfPlanner(Arc<ScalarUDF>);
+
+impl ExprPlanner for RegexpLikeToUdfPlanner {
+    fn plan_scalar(
+        &self,
+        expr: RawScalarExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<RawScalarExpr>> {
+        if expr.func.name() == "regexp_like" {
+            Ok(PlannerResult::Planned(Expr::ScalarFunction(
+                ScalarFunction::new_udf(Arc::clone(&self.0), expr.args),
+            )))
+        } else {
+            Ok(PlannerResult::Original(expr))
+        }
+    }
+}
+
+#[test]
+fn select_expr_planner_rewrite_to_other_function() -> Result<()> {
+    // A planner that rewrites to another scalar function keeps that function's
+    // name: the rewrite is not aliased back to the name the query used
+    let state = mock_session_state()
+        .with_scalar_function(Arc::new(make_udf(
+            "regexp_like",
+            vec![DataType::Utf8, DataType::Utf8],
+            DataType::Boolean,
+        )))
+        .with_expr_planner(Arc::new(RegexpLikeToUdfPlanner(Arc::new(make_udf(
+            "my_regex_match",
+            vec![DataType::Utf8, DataType::Utf8],
+            DataType::Boolean,
+        )))));
+    let plan = logical_plan_from_state(
+        "SELECT regexp_like(first_name, 'a'), first_name RLIKE 'b' FROM person",
+        &GenericDialect {},
+        ParserOptions::default(),
+        state,
+    )?;
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: my_regex_match(person.first_name, Utf8("a")), my_regex_match(person.first_name, Utf8("b"))
+      TableScan: person
+    "#
+    );
+    Ok(())
+}
+
+#[test]
+fn select_rlike_without_regexp_like() {
+    let err = logical_plan("SELECT id FROM person WHERE first_name RLIKE '^a'")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: RLIKE and REGEXP require the 'regexp_like' function, which is not registered"
+    );
 }
 
 #[test]

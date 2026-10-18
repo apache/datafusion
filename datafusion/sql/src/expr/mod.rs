@@ -31,7 +31,7 @@ use sqlparser::ast::{Query, Visit, Visitor};
 
 use datafusion_common::{
     DFSchema, Diagnostic, HashMap, Result, ScalarValue, Span, internal_datafusion_err,
-    internal_err, not_impl_err, plan_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 
 use datafusion_expr::expr::ScalarFunction;
@@ -632,6 +632,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 any,
             ),
 
+            SQLExpr::RLike {
+                negated,
+                expr,
+                pattern,
+                regexp: _,
+            } => {
+                self.sql_rlike_to_expr(negated, *expr, *pattern, schema, planner_context)
+            }
+
             SQLExpr::SimilarTo {
                 negated,
                 expr,
@@ -1153,6 +1162,37 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             escape_char,
             case_insensitive,
         )))
+    }
+
+    /// Plans `expr [NOT] RLIKE pattern` and `expr [NOT] REGEXP pattern` as a call
+    /// to the `regexp_like` function, resolved through the function registry.
+    fn sql_rlike_to_expr(
+        &self,
+        negated: bool,
+        expr: SQLExpr,
+        pattern: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let fun = self
+            .context_provider
+            .get_function_meta("regexp_like")
+            .ok_or_else(|| {
+                plan_datafusion_err!(
+                    "RLIKE and REGEXP require the 'regexp_like' function, which is not registered"
+                )
+            })?;
+        let expr = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
+        let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
+        let regexp_like = match self.plan_scalar_udf(fun, vec![expr, pattern], schema)? {
+            PlannerResult::Planned(expr) => expr,
+            PlannerResult::Original(inner) => Expr::ScalarFunction(inner),
+        };
+        if negated {
+            Ok(Expr::Not(Box::new(regexp_like)))
+        } else {
+            Ok(regexp_like)
+        }
     }
 
     fn sql_similarto_to_expr(

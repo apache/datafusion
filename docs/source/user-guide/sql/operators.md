@@ -117,6 +117,8 @@ Modulo (remainder)
 - [~\* (regex case-insensitive match)](#op_re_match_i)
 - [!~ (not regex match)](#op_re_not_match)
 - [!~\* (not regex case-insensitive match)](#op_re_not_match_i)
+- [RLIKE (regex match)](#op_rlike)
+- [NOT RLIKE (not regex match)](#op_not_rlike)
 
 (op_eq)=
 
@@ -334,6 +336,36 @@ Not Regex Case-Insensitive Match
 +---------------------------------------------------+
 | true                                              |
 +---------------------------------------------------+
+```
+
+(op_rlike)=
+
+### `RLIKE`
+
+Regex Match, planned as a call to [`regexp_like`](scalar_functions.md#regexp_like). `REGEXP` is a synonym.
+
+```sql
+> SELECT 'datafusion' RLIKE '^datafusion(-cli)*';
++------------------------------------------------------------+
+| regexp_like(Utf8("datafusion"),Utf8("^datafusion(-cli)*")) |
++------------------------------------------------------------+
+| true                                                       |
++------------------------------------------------------------+
+```
+
+(op_not_rlike)=
+
+### `NOT RLIKE`
+
+Not Regex Match, planned as `NOT regexp_like`. `NOT REGEXP` is a synonym.
+
+```sql
+> SELECT 'datafusion' NOT RLIKE '^DATAFUSION';
++---------------------------------------------------------+
+| NOT regexp_like(Utf8("datafusion"),Utf8("^DATAFUSION")) |
++---------------------------------------------------------+
+| true                                                    |
++---------------------------------------------------------+
 ```
 
 ### `~~`
