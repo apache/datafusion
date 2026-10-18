@@ -27,7 +27,8 @@ pub async fn from_if_then(
 ) -> datafusion::common::Result<Expr> {
     // Parse `ifs`
     // If the first element does not have a `then` part, then we can assume it's a base expression
-    let mut when_then_expr: Vec<(Box<Expr>, Box<Expr>)> = vec![];
+    let mut when_then_expr: Vec<(Box<Expr>, Box<Expr>)> =
+        Vec::with_capacity(if_then.ifs.len());
     let mut expr = None;
     for (i, if_expr) in if_then.ifs.iter().enumerate() {
         if i == 0 {
