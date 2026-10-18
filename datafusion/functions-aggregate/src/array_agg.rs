@@ -36,6 +36,7 @@ use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::scalar::copy_array_data;
+use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::utils::proxy::HashTableAllocExt;
 use datafusion_common::utils::{SingleRowListArrayBuilder, offset_span};
 use datafusion_common::{
@@ -1242,7 +1243,8 @@ impl GroupsAccumulator for DistinctArrayAggGroupsAccumulator {
             + self.values.as_ref().map_or(0, Rows::size)
             + self.value_map_size
             + self.pairs.capacity() * size_of::<(u32, u32)>()
-            + self.pair_set.capacity() * (size_of::<(u32, u32)>() + 1)
+            + estimate_memory_size::<(u32, u32)>(self.pair_set.capacity(), 0)
+                .unwrap_or_default()
     }
 }
 
