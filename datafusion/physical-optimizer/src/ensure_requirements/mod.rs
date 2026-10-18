@@ -59,6 +59,7 @@
 //!     ├─ parallelize_sorts
 //!     ├─ replace_with_order_preserving_variants
 //!     ├─ pushdown_sorts                         (recursive walk)
+//!     ├─ add_sort_for_unproven_ordering
 //!     └─ replace_with_partial_sort
 //! ```
 //!
@@ -69,6 +70,17 @@
 //!   <https://github.com/apache/datafusion/issues/21973>, where the old
 //!   two-rule pipeline could regress a parallel sort plan into a serial one
 //!   on pass 2.
+//! - **Requirements are provable**: Every ordering requirement in the
+//!   output is satisfied according to the children's
+//!   [`EquivalenceProperties`], the same check `SanityCheckPlan` applies.
+//!   `pushdown_sorts` removes a sort when it can map the requirement onto a
+//!   descendant that satisfies it, but the operators in between can report
+//!   weaker properties than that mapping assumed (for example, a hash join
+//!   that forgets a probe-side column is constant). Phase 3 then adds a sort
+//!   where the requirement cannot be proven, so the rule never emits a plan
+//!   that it cannot show to be valid.
+//!
+//!   [`EquivalenceProperties`]: datafusion_physical_expr::EquivalenceProperties
 //! - **Distribution before sorting**: For each child, distribution is
 //!   resolved before ordering, so sorting decisions always have full
 //!   distribution context.
@@ -267,10 +279,15 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         assign_initial_requirements(&mut sort_pushdown);
         let adjusted = pushdown_sorts(sort_pushdown)?;
 
-        // 3d: Partial sort
-        adjusted
+        // 3d: Sort where an ordering requirement cannot be proven
+        use super::enforce_sorting::add_sort_for_unproven_ordering;
+        let plan = adjusted
             .plan
-            .transform_up(|p| Ok(Transformed::yes(replace_with_partial_sort(p)?)))
+            .transform_up(add_sort_for_unproven_ordering)
+            .data()?;
+
+        // 3e: Partial sort
+        plan.transform_up(|p| Ok(Transformed::yes(replace_with_partial_sort(p)?)))
             .data()
     }
 

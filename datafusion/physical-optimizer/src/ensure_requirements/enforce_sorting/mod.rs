@@ -69,7 +69,10 @@ use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::windows::{
     BoundedWindowAggExec, WindowAggExec, get_best_fitting_window,
 };
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, InputOrderMode};
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
+    ReplaceChildrenOptions,
+};
 
 use itertools::izip;
 
@@ -230,6 +233,71 @@ pub fn replace_with_partial_sort(
         ));
     }
     Ok(plan)
+}
+
+/// Adds a [`SortExec`] below every node whose ordering requirement is not
+/// satisfied by its child's equivalence properties.
+///
+/// [`pushdown_sorts`] removes a sort when it can map the requirement onto a
+/// descendant that satisfies it. That mapping is computed separately from the
+/// equivalence properties of the operators in between, and the two can
+/// disagree. The plan may then be correct, but its properties cannot show it,
+/// and `SanityCheckPlan` rejects it. Adding the sort back keeps every plan
+/// produced by `EnsureRequirements` valid by the same check.
+///
+/// A requirement that a new [`SortExec`] still cannot satisfy is left as is,
+/// for `SanityCheckPlan` to report.
+///
+/// [`pushdown_sorts`]: sort_pushdown::pushdown_sorts
+pub fn add_sort_for_unproven_ordering(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let requirements = plan.required_input_ordering();
+    if requirements.iter().all(Option::is_none) {
+        return Ok(Transformed::no(plan));
+    }
+    let mut children: Vec<_> = plan.children().into_iter().cloned().collect();
+    let mut changed = false;
+    for (child, requirement) in children.iter_mut().zip(requirements) {
+        let Some(requirement) = requirement else {
+            continue;
+        };
+        let requirement = requirement.into_single();
+        let eq_properties = child.equivalence_properties();
+        if eq_properties.ordering_satisfy_requirement(requirement.clone())? {
+            continue;
+        }
+        let sort_reqs: Vec<_> = requirement.clone().into();
+        let sort_exprs = sort_reqs
+            .into_iter()
+            .filter(|req| eq_properties.is_expr_constant(&req.expr).is_none())
+            .map(Into::into);
+        let Some(ordering) = LexOrdering::new(sort_exprs) else {
+            continue;
+        };
+        let sort: Arc<dyn ExecutionPlan> = Arc::new(
+            SortExec::new(ordering, Arc::clone(child)).with_preserve_partitioning(
+                child.output_partitioning().partition_count() > 1,
+            ),
+        );
+        if !sort
+            .equivalence_properties()
+            .ordering_satisfy_requirement(requirement)?
+        {
+            continue;
+        }
+        *child = sort;
+        changed = true;
+    }
+    if changed {
+        plan.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+        .map(Transformed::yes)
+    } else {
+        Ok(Transformed::no(plan))
+    }
 }
 
 /// Transform [`CoalescePartitionsExec`] + [`SortExec`] cascades into [`SortExec`]

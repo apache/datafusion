@@ -1560,3 +1560,69 @@ fn test_sort_pushed_below_limit_with_skip_keeps_skip_rows() -> Result<()> {
     ");
     Ok(())
 }
+
+/// `EnsureRequirements` keeps the sort it adds when the join output does not
+/// report a probe-side constant, and running it again leaves the plan as is.
+/// <https://github.com/apache/datafusion/issues/26283>
+#[tokio::test]
+async fn test_idempotent_with_sort_for_unproven_ordering() -> Result<()> {
+    use datafusion::execution::SessionStateBuilder;
+    use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
+    use datafusion::prelude::{SessionConfig, SessionContext};
+    use datafusion_physical_plan::displayable;
+
+    // The default rules up to and including `EnsureRequirements`
+    let mut rules = PhysicalOptimizer::new().rules;
+    let ensure_requirements = EnsureRequirements::new();
+    let end = rules
+        .iter()
+        .position(|rule| rule.name() == ensure_requirements.name())
+        .unwrap();
+    rules.truncate(end + 1);
+
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(4));
+    for sql in [
+        "CREATE TABLE t(a INT, b INT) AS VALUES (1, 1), (2, 2), (3, 3), (4, 4)",
+        "CREATE TABLE u(a INT) AS VALUES (1)",
+        "CREATE TABLE v(x INT) AS VALUES (1), (2)",
+    ] {
+        ctx.sql(sql).await?.collect().await?;
+    }
+    let logical_plan = ctx
+        .sql(
+            "SELECT s.k, s.a \
+             FROM (SELECT t.a, -2 AS k FROM t JOIN v ON t.b <> v.x) s \
+             JOIN u ON s.a = u.a \
+             ORDER BY s.k DESC",
+        )
+        .await?
+        .into_optimized_plan()?;
+    let state = SessionStateBuilder::new_from_existing(ctx.state())
+        .with_physical_optimizer_rules(rules)
+        .build();
+    let plan = state.create_physical_plan(&logical_plan).await?;
+
+    let config = state.config_options().as_ref().clone();
+    let rerun = ensure_requirements.optimize(Arc::clone(&plan), &config)?;
+    assert_eq!(
+        displayable(plan.as_ref()).indent(true).to_string(),
+        displayable(rerun.as_ref()).indent(true).to_string()
+    );
+    assert_snapshot!(displayable(rerun.as_ref()).indent(true), @r"
+    OutputRequirementExec: order_by=[(k@0, desc)], dist_by=SinglePartition
+      SortPreservingMergeExec: [k@0 DESC]
+        SortExec: expr=[k@0 DESC], preserve_partitioning=[true]
+          ProjectionExec: expr=[k@1 as k, a@0 as a]
+            ProjectionExec: expr=[a@1 as a, k@2 as k, a@0 as a]
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  ProjectionExec: expr=[a@0 as a, -2 as k]
+                    ProjectionExec: expr=[a@1 as a, b@2 as b, x@0 as x]
+                      NestedLoopJoinExec: join_type=Inner, filter=b@0 != x@1
+                        DataSourceExec: partitions=1, partition_sizes=[1]
+                        DataSourceExec: partitions=1, partition_sizes=[1]
+    ");
+    Ok(())
+}

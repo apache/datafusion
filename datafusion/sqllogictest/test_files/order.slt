@@ -2276,3 +2276,79 @@ SELECT i, -i AS n FROM (
 -128 -128
 -128 -128
 NULL NULL
+
+# EnsureRequirements removes the sort on `k` because `k` is constant on the
+# probe side of the join, but the join output does not report `k` as constant.
+# The sort must then be kept so the plan can be checked and run.
+# https://github.com/apache/datafusion/issues/26283
+statement ok
+CREATE TABLE probe_constant_t(a INT, b INT) AS VALUES (1, 1), (2, 2), (3, 3), (4, 4);
+
+statement ok
+CREATE TABLE probe_constant_u(a INT) AS VALUES (1);
+
+statement ok
+CREATE TABLE probe_constant_v(x INT) AS VALUES (1), (2);
+
+query II
+SELECT s.k, s.a
+FROM (
+  SELECT probe_constant_t.a, -2 AS k
+  FROM probe_constant_t JOIN probe_constant_v ON probe_constant_t.b <> probe_constant_v.x
+) s
+JOIN probe_constant_u ON s.a = probe_constant_u.a
+ORDER BY s.k DESC;
+----
+-2 1
+
+query TT
+EXPLAIN SELECT s.k, s.a
+FROM (
+  SELECT probe_constant_t.a, -2 AS k
+  FROM probe_constant_t JOIN probe_constant_v ON probe_constant_t.b <> probe_constant_v.x
+) s
+JOIN probe_constant_u ON s.a = probe_constant_u.a
+ORDER BY s.k DESC;
+----
+logical_plan
+01)Sort: s.k DESC NULLS FIRST
+02)--Projection: s.k, s.a
+03)----Inner Join: s.a = probe_constant_u.a
+04)------SubqueryAlias: s
+05)--------Projection: probe_constant_t.a, Int64(-2) AS k
+06)----------Inner Join:  Filter: probe_constant_t.b != probe_constant_v.x
+07)------------TableScan: probe_constant_t projection=[a, b]
+08)------------TableScan: probe_constant_v projection=[x]
+09)------TableScan: probe_constant_u projection=[a]
+physical_plan
+01)SortPreservingMergeExec: [k@0 DESC]
+02)--SortExec: expr=[k@0 DESC], preserve_partitioning=[true]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)], projection=[k@2, a@1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)--------ProjectionExec: expr=[a@0 as a, -2 as k]
+07)----------NestedLoopJoinExec: join_type=Inner, filter=b@0 != x@1, projection=[a@1]
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+query ITI
+SELECT s.a, s.k, row_number() OVER (PARTITION BY s.a ORDER BY s.k) AS r
+FROM probe_constant_u JOIN (SELECT a, 'x' AS k FROM probe_constant_t) AS s
+  ON s.a = probe_constant_u.a;
+----
+1 x 1
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE probe_constant_t;
+
+statement ok
+DROP TABLE probe_constant_u;
+
+statement ok
+DROP TABLE probe_constant_v;
