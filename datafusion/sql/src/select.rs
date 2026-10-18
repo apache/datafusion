@@ -34,7 +34,8 @@ use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, HashMap, Result, not_impl_err, plan_err,
+    Column, DFSchema, DFSchemaRef, DataFusionError, HashMap, Result, not_impl_err,
+    plan_err,
 };
 use datafusion_common::{NullHandling, RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
@@ -55,9 +56,9 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, Ident, NamedWindowExpr, OrderBy,
-    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowSpec, WindowType,
-    visit_expressions_mut,
+    Distinct, Expr as SQLExpr, GroupByExpr, Ident, NamedWindowExpr, OrderBy, Query,
+    SelectItemQualifiedWildcardKind, VisitMut, VisitorMut, WildcardAdditionalOptions,
+    WindowSpec, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -99,7 +100,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn select_to_plan(
         &self,
         mut select: Select,
-        query_order_by: Option<OrderBy>,
+        mut query_order_by: Option<OrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // Check for unsupported syntax first
@@ -131,6 +132,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
         self.match_window_definitions(&mut select.projection, &select.named_window)?;
+        self.match_window_definitions(&mut select.qualify, &select.named_window)?;
+        self.match_window_definitions(&mut query_order_by, &select.named_window)?;
 
         // Process the SELECT expressions
         let select_exprs = self.prepare_select_exprs(
@@ -1420,52 +1423,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         })
     }
 
-    // If the projection is done over a named window, that window
-    // name must be defined. Otherwise, it gives an error.
+    /// Replaces every window that references a named window, as in `OVER w`
+    /// or `OVER (w ...)`, with the resolved window specification.
+    ///
+    /// Subqueries are skipped: each resolves names against its own `WINDOW`
+    /// clause when it is planned.
     fn match_window_definitions(
         &self,
-        projection: &mut [SelectItem],
+        node: &mut impl VisitMut,
         named_windows: &[NamedWindowDefinition],
     ) -> Result<()> {
         let named_windows: Vec<(&NamedWindowDefinition, String)> = named_windows
             .iter()
             .map(|w| (w, self.ident_normalizer.normalize(w.0.clone())))
             .collect();
-        for proj in projection.iter_mut() {
-            if let SelectItem::ExprWithAlias { expr, alias: _ }
-            | SelectItem::UnnamedExpr(expr) = proj
-            {
-                let mut err = None;
-                let _ = visit_expressions_mut(expr, |expr| {
-                    if let SQLExpr::Function(f) = expr {
-                        let resolved = match &f.over {
-                            Some(WindowType::NamedWindow(ident)) => {
-                                Some(self.resolve_named_window(ident, &named_windows))
-                            }
-                            Some(WindowType::WindowSpec(spec))
-                                if spec.window_name.is_some() =>
-                            {
-                                Some(self.resolve_window_spec(spec, &named_windows))
-                            }
-                            _ => None,
-                        };
-                        match resolved {
-                            Some(Ok(spec)) => f.over = Some(WindowType::WindowSpec(spec)),
-                            Some(Err(e)) => {
-                                err = Some(e);
-                                return ControlFlow::Break(());
-                            }
-                            None => {}
-                        }
-                    }
-                    ControlFlow::Continue(())
-                });
-                if let Some(err) = err {
-                    return Err(err);
-                }
-            }
+        let mut resolver = NamedWindowResolver {
+            planner: self,
+            named_windows: &named_windows,
+            query_depth: 0,
+        };
+        match node.visit(&mut resolver) {
+            ControlFlow::Break(e) => Err(e),
+            ControlFlow::Continue(()) => Ok(()),
         }
-        Ok(())
     }
 
     /// Returns the window specification of the named window `ident`.
@@ -1536,6 +1516,53 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             order_by,
             window_frame: spec.window_frame.clone(),
         })
+    }
+}
+
+/// Resolves named window references in the expressions of a single `SELECT`.
+struct NamedWindowResolver<'a, 'b, S: ContextProvider> {
+    planner: &'a SqlToRel<'b, S>,
+    named_windows: &'a [(&'a NamedWindowDefinition, String)],
+    /// Number of subqueries enclosing the expression being visited.
+    query_depth: usize,
+}
+
+impl<S: ContextProvider> VisitorMut for NamedWindowResolver<'_, '_, S> {
+    type Break = DataFusionError;
+
+    fn pre_visit_query(&mut self, _query: &mut Query) -> ControlFlow<Self::Break> {
+        self.query_depth += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &mut Query) -> ControlFlow<Self::Break> {
+        self.query_depth -= 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_expr(&mut self, expr: &mut SQLExpr) -> ControlFlow<Self::Break> {
+        if self.query_depth > 0 {
+            return ControlFlow::Continue(());
+        }
+        let SQLExpr::Function(f) = expr else {
+            return ControlFlow::Continue(());
+        };
+        let resolved = match &f.over {
+            Some(WindowType::NamedWindow(ident)) => {
+                self.planner.resolve_named_window(ident, self.named_windows)
+            }
+            Some(WindowType::WindowSpec(spec)) if spec.window_name.is_some() => {
+                self.planner.resolve_window_spec(spec, self.named_windows)
+            }
+            _ => return ControlFlow::Continue(()),
+        };
+        match resolved {
+            Ok(spec) => {
+                f.over = Some(WindowType::WindowSpec(spec));
+                ControlFlow::Continue(())
+            }
+            Err(e) => ControlFlow::Break(e),
+        }
     }
 }
 

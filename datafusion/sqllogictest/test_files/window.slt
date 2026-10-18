@@ -3574,6 +3574,61 @@ FROM named_window_prices
 WINDOW w1 AS (w2 ROWS UNBOUNDED PRECEDING),
   w2 AS (PARTITION BY ticker ORDER BY ts)
 
+# Named windows are resolved in QUALIFY
+query TIR
+SELECT ticker, ts, price
+FROM named_window_prices
+QUALIFY MAX(price) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) = price
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ticker, ts
+----
+BTC 1 100
+BTC 2 105
+DOGE 1 0.1
+DOGE 2 0.2
+
+query TI
+SELECT ticker, ts
+FROM named_window_prices
+QUALIFY ROW_NUMBER() OVER w = 1
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ticker
+----
+BTC 1
+DOGE 1
+
+# Named windows are resolved in ORDER BY
+query TI
+SELECT ticker, ts
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ROW_NUMBER() OVER (w ROWS UNBOUNDED PRECEDING) DESC, ticker
+----
+BTC 3
+DOGE 3
+BTC 2
+DOGE 2
+BTC 1
+DOGE 1
+
+# A subquery resolves window names against its own WINDOW clause
+query I
+SELECT (SELECT MAX(rn) FROM (
+  SELECT ROW_NUMBER() OVER (w ROWS UNBOUNDED PRECEDING) AS rn
+  FROM named_window_prices
+  WINDOW w AS (PARTITION BY ticker ORDER BY ts)))
+FROM named_window_prices
+WINDOW w AS (ORDER BY ts)
+LIMIT 1
+----
+3
+
+statement error DataFusion error: Error during planning: The window w is not defined!
+SELECT (SELECT MAX(rn) FROM (
+  SELECT ROW_NUMBER() OVER w AS rn FROM named_window_prices))
+FROM named_window_prices
+WINDOW w AS (ORDER BY ts)
+
 statement ok
 DROP TABLE named_window_prices;
 
