@@ -154,6 +154,76 @@ impl KeyRangeBitmap {
     }
 }
 
+/// The keys of one build partition, for [`KeyRangeBitmap::try_union`].
+pub enum KeyRangePart<'a> {
+    /// The partition's own bitmap.
+    Bitmap(&'a KeyRangeBitmap),
+    /// The partition's keys (for a partition without a bitmap).
+    Keys(&'a dyn Array),
+}
+
+impl KeyRangeBitmap {
+    /// One bitmap over `[min, max]` that holds the keys of all `parts`.
+    ///
+    /// `min` and `max` must bound the keys of every part. A bucket of the result
+    /// is set when a set bucket of a part bitmap, or a key of a part, overlaps it.
+    /// Thus the result never excludes a container that a part can match. `None`
+    /// when the key type has no `u64` ordering, or when the result could not
+    /// exclude anything that the `[min, max]` bounds do not already exclude.
+    pub fn try_union(
+        parts: &[KeyRangePart<'_>],
+        min: &ScalarValue,
+        max: &ScalarValue,
+    ) -> Option<Self> {
+        let offset = ArrayMap::key_to_u64(min)?;
+        let span = ArrayMap::key_to_u64(max)?.wrapping_sub(offset);
+        let buckets = span.saturating_add(1).min(MAX_BUCKETS).next_power_of_two();
+        let shift = (0u32..63).find(|s| (span >> s) < buckets).unwrap_or(63);
+        let bucket_of = |key: u64| (key.wrapping_sub(offset) >> shift).min(buckets - 1);
+
+        let mut words = MutableBuffer::new_null(buckets as usize);
+        for part in parts {
+            match part {
+                KeyRangePart::Bitmap(bitmap) => {
+                    let bytes = words.as_slice_mut();
+                    let reachable = ((bitmap.span >> bitmap.shift) + 1) as usize;
+                    for i in bitmap.bits.slice(0, reachable).set_indices() {
+                        // Keys `first..=last` of the part map to bucket `i`
+                        let first = (i as u64) << bitmap.shift;
+                        let last = (((i as u64) + 1) << bitmap.shift)
+                            .wrapping_sub(1)
+                            .min(bitmap.span);
+                        let lo = bucket_of(bitmap.offset.wrapping_add(first));
+                        let hi = bucket_of(bitmap.offset.wrapping_add(last));
+                        for bucket in lo..=hi {
+                            bit_util::set_bit(bytes, bucket as usize);
+                        }
+                    }
+                }
+                KeyRangePart::Keys(keys) => {
+                    if !ArrayMap::is_supported_type(keys.data_type()) {
+                        return None;
+                    }
+                    let bits = bucket_bits(*keys, offset, shift, buckets);
+                    for (word, part) in
+                        words.as_slice_mut().iter_mut().zip(bits.inner().as_slice())
+                    {
+                        *word |= part;
+                    }
+                }
+            }
+        }
+        let bits = BooleanBuffer::new(words.into(), 0, buckets as usize);
+        let reachable = ((span >> shift) + 1) as usize;
+        bits.slice(0, reachable).has_false().then_some(Self {
+            offset,
+            span,
+            shift,
+            bits,
+        })
+    }
+}
+
 /// One bit per bucket, set for each bucket holding a non-null key of `keys`.
 fn bucket_bits(keys: &dyn Array, offset: u64, shift: u32, buckets: u64) -> BooleanBuffer {
     let mut words = MutableBuffer::new_null(buckets as usize);
@@ -212,6 +282,40 @@ mod tests {
             kept += got as usize;
         }
         assert!(kept <= 220, "expected ~200 kept, got {kept}");
+    }
+
+    #[test]
+    fn union_never_drops_a_key() {
+        let a: Vec<i64> = (0..1_000_000).filter(|k| k % 10000 < 100).collect();
+        let b: Vec<i64> = (3_000_000..4_000_000).filter(|k| k % 7000 < 50).collect();
+        let (bitmap_a, bitmap_b) = (bitmap(&a).unwrap(), bitmap(&b).unwrap());
+        let keys = Int64Array::from(vec![5_500_000i64, 5_500_001]);
+        let union = KeyRangeBitmap::try_union(
+            &[
+                KeyRangePart::Bitmap(&bitmap_a),
+                KeyRangePart::Bitmap(&bitmap_b),
+                KeyRangePart::Keys(&keys),
+            ],
+            &ScalarValue::Int64(Some(0)),
+            &ScalarValue::Int64(Some(5_500_001)),
+        )
+        .unwrap();
+        for k in a.iter().chain(&b).chain(&[5_500_000, 5_500_001]) {
+            assert!(may(&union, *k, *k), "dropped {k}");
+        }
+        assert!(!may(&union, 2_000_000, 2_500_000));
+        assert!(!may(&union, 4_500_000, 5_000_000));
+    }
+
+    #[test]
+    fn union_of_dense_keys_is_none() {
+        let keys = Int64Array::from((0..1000i64).collect::<Vec<_>>());
+        let union = KeyRangeBitmap::try_union(
+            &[KeyRangePart::Keys(&keys)],
+            &ScalarValue::Int64(Some(0)),
+            &ScalarValue::Int64(Some(999)),
+        );
+        assert!(union.is_none());
     }
 
     #[test]

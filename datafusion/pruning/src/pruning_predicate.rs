@@ -51,7 +51,8 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
-use datafusion_physical_plan::joins::HashTableLookupExpr;
+use datafusion_physical_plan::joins::key_range_bitmap::KeyRangeBitmap;
+use datafusion_physical_plan::joins::{BloomFilterExpr, HashTableLookupExpr};
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
@@ -1546,18 +1547,19 @@ fn min_max_non_null_exprs(
     statistics
 }
 
-/// Builds a "may match" expression for a [`HashTableLookupExpr`] (a large join
-/// build side pushed down as an opaque hash-table lookup): tests container
+/// Builds a "may match" expression for a [`HashTableLookupExpr`] or a
+/// [`BloomFilterExpr`] (a large join build side pushed down as an opaque
+/// membership test) with key-range bitmap `bitmap`: tests container
 /// min/max stats against the build side's key-range bitmap, which is fixed size
 /// and built once with the join's hash table.
 fn build_hash_lookup_pruning_expr(
-    lookup: &HashTableLookupExpr,
+    bitmap: &Arc<KeyRangeBitmap>,
+    on_columns: &[&Arc<dyn PhysicalExpr>],
     schema: &Schema,
     required_columns: &mut RequiredColumns,
 ) -> Option<Arc<dyn PhysicalExpr>> {
-    let bitmap = Arc::clone(lookup.pruning_bitmap()?);
-    let on_columns = lookup.children();
-    let [column_expr] = on_columns[..] else {
+    let bitmap = Arc::clone(bitmap);
+    let [column_expr] = on_columns else {
         return None;
     };
     // The schema adapter often wraps the column in a same-type or widening cast
@@ -1865,7 +1867,29 @@ fn build_predicate_expression(
         }
     }
     if let Some(lookup) = expr.downcast_ref::<HashTableLookupExpr>() {
-        return build_hash_lookup_pruning_expr(lookup, schema, required_columns)
+        return lookup
+            .pruning_bitmap()
+            .and_then(|bitmap| {
+                build_hash_lookup_pruning_expr(
+                    bitmap,
+                    &lookup.children(),
+                    schema,
+                    required_columns,
+                )
+            })
+            .unwrap_or_else(|| unhandled_hook.handle(expr));
+    }
+    if let Some(bloom) = expr.downcast_ref::<BloomFilterExpr>() {
+        return bloom
+            .pruning_bitmap()
+            .and_then(|bitmap| {
+                build_hash_lookup_pruning_expr(
+                    bitmap,
+                    &bloom.children(),
+                    schema,
+                    required_columns,
+                )
+            })
             .unwrap_or_else(|| unhandled_hook.handle(expr));
     }
     // A partitioned hash join hides its per-partition filters under a `CASE` on the
