@@ -159,6 +159,7 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// datafusion.optimizer.enable_distinct_aggregation_soft_limit = false`
 /// disables the distinct aggregation soft-limit optimization. These variations
 /// are tested and preserve both correctness and optimization coverage.
+/// See <https://github.com/apache/datafusion/issues/26481> for more details.
 ///
 /// If you do build a custom pipeline:
 ///
