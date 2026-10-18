@@ -434,6 +434,8 @@ where
 
 struct BitXorAccumulator<T: ArrowNumericType> {
     value: Option<T::Native>,
+    /// Number of non-NULL values currently accumulated (inserted minus retracted)
+    non_null_count: usize,
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for BitXorAccumulator<T> {
@@ -444,7 +446,10 @@ impl<T: ArrowNumericType> std::fmt::Debug for BitXorAccumulator<T> {
 
 impl<T: ArrowNumericType> Default for BitXorAccumulator<T> {
     fn default() -> Self {
-        Self { value: None }
+        Self {
+            value: None,
+            non_null_count: 0,
+        }
     }
 }
 
@@ -457,12 +462,19 @@ where
             let v = self.value.get_or_insert_with(|| T::Native::usize_as(0));
             *v = *v ^ x;
         }
+        self.non_null_count += values[0].len() - values[0].null_count();
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // XOR is it's own inverse
-        self.update_batch(values)
+        // XOR is its own inverse, so the value is updated as in `update_batch`;
+        // only the count of non-NULL values moves the other way
+        if let Some(x) = arrow::compute::bit_xor(values[0].as_primitive::<T>()) {
+            let v = self.value.get_or_insert_with(|| T::Native::usize_as(0));
+            *v = *v ^ x;
+        }
+        self.non_null_count -= values[0].len() - values[0].null_count();
+        Ok(())
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -470,7 +482,13 @@ where
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
+        // All non-NULL values may have been retracted, in which case the result is NULL
+        let value = if self.non_null_count == 0 {
+            None
+        } else {
+            self.value
+        };
+        ScalarValue::new_primitive::<T>(value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
@@ -580,7 +598,7 @@ mod tests {
 
     #[test]
     fn test_bit_xor_accumulator() {
-        let mut accumulator = BitXorAccumulator::<UInt64Type> { value: None };
+        let mut accumulator = BitXorAccumulator::<UInt64Type>::default();
         let batches: Vec<_> = vec![vec![1, 2], vec![1]]
             .into_iter()
             .map(|b| Arc::new(b.into_iter().collect::<UInt64Array>()) as ArrayRef)
@@ -601,6 +619,53 @@ mod tests {
         assert_eq!(
             accumulator.evaluate().unwrap(),
             ScalarValue::UInt64(Some(2))
+        );
+    }
+
+    #[test]
+    fn test_bit_xor_accumulator_retract_to_all_null() {
+        let mut accumulator = BitXorAccumulator::<UInt64Type>::default();
+        let five = [Arc::new(UInt64Array::from(vec![Some(5)])) as ArrayRef];
+        let nulls = [Arc::new(UInt64Array::from(vec![None])) as ArrayRef];
+        let seven = [Arc::new(UInt64Array::from(vec![Some(7)])) as ArrayRef];
+
+        accumulator.update_batch(&five).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(5))
+        );
+
+        accumulator.update_batch(&nulls).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(5))
+        );
+
+        // All non-NULL values left the frame, so the result is NULL
+        accumulator.retract_batch(&five).unwrap();
+        assert_eq!(accumulator.evaluate().unwrap(), ScalarValue::UInt64(None));
+
+        // Retracting NULLs must not move the count
+        accumulator.retract_batch(&nulls).unwrap();
+        assert_eq!(accumulator.evaluate().unwrap(), ScalarValue::UInt64(None));
+
+        accumulator.update_batch(&seven).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(7))
+        );
+    }
+
+    #[test]
+    fn test_bit_xor_accumulator_legitimate_zero() {
+        let mut accumulator = BitXorAccumulator::<UInt64Type>::default();
+        let values = [Arc::new(UInt64Array::from(vec![Some(5), Some(5)])) as ArrayRef];
+
+        // 5 ^ 5 is a real zero, not NULL
+        accumulator.update_batch(&values).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(0))
         );
     }
 }
