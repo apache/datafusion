@@ -559,9 +559,13 @@ fn get_valid_types_with_udf<F: UDFCoercionExt>(
                 }
             }
 
-            // Every signature failed, return the joined error
+            // Every signature failed. That means the caller passed the wrong
+            // number or types of arguments, which is a user mistake rather than
+            // a bug in DataFusion, so report it as a planning error. Reporting it
+            // as an internal error told users to file a bug report for their own
+            // typo, and the caller appends the candidate signatures anyway.
             if res.is_empty() {
-                return internal_err!(
+                return plan_err!(
                     "Function '{}' failed to match any signature, errors: {}",
                     func.name(),
                     errors.join(",")
