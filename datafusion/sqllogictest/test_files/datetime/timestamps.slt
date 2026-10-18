@@ -6039,8 +6039,14 @@ query I
 COPY (
     SELECT column1::BIGINT AS micros, column2::INT AS id,
            arrow_cast(column1, 'Timestamp(Microsecond, None)') AS ts,
-           column3::DOUBLE AS epoch_seconds
-    FROM (VALUES (-1, 1, 1.1), (0, 0, 1.9), (1000000, 2, 2.0), (NULL, 3, NULL))
+           column3::DOUBLE AS epoch_seconds,
+           arrow_cast(column1, 'Date32') AS d,
+           arrow_cast(column1, 'Timestamp(Second, Some("America/New_York"))') AS ts_seconds,
+           arrow_cast(column1, 'Timestamp(Millisecond, None)') AS ts_millis,
+           arrow_cast(column1, 'Timestamp(Nanosecond, None)') AS ts_nanos,
+           column4 AS date_text, arrow_cast(column5, 'UInt64') AS u
+    FROM (VALUES (-1, 1, 1.1, '01-01-1971', 0), (0, 0, 1.9, '12-31-1970', 1),
+                 (1000000, 2, 2.0, '12-31-1971', 9223372036854775807), (NULL, 3, NULL, NULL, NULL))
     ORDER BY micros ASC NULLS LAST, id
 ) TO 'test_files/scratch/timestamps/conversion_asc.parquet' STORED AS PARQUET;
 ----
@@ -6051,6 +6057,12 @@ CREATE EXTERNAL TABLE ordered_timestamps STORED AS PARQUET
 WITH ORDER (micros ASC NULLS LAST, id ASC)
 WITH ORDER (ts ASC NULLS LAST, id ASC)
 WITH ORDER (epoch_seconds ASC NULLS LAST, id ASC)
+WITH ORDER (d ASC NULLS LAST, id ASC)
+WITH ORDER (ts_seconds ASC NULLS LAST, id ASC)
+WITH ORDER (ts_millis ASC NULLS LAST, id ASC)
+WITH ORDER (ts_nanos ASC NULLS LAST, id ASC)
+WITH ORDER (date_text ASC NULLS LAST, id ASC)
+WITH ORDER (u ASC NULLS LAST, id ASC)
 LOCATION 'test_files/scratch/timestamps/conversion_asc.parquet';
 
 # The conversion chain preserves order: no SortExec is needed.
@@ -6094,14 +6106,63 @@ FROM ordered_timestamps ORDER BY t ASC NULLS LAST, id;
 ----
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[to_timestamp_nanos(micros@0) as t, id], file_type=parquet
 
-# Truncation creates ties, so sorting by seconds then id still needs SortExec.
+# Lossless Unix-time conversions preserve subsequent sort keys.
 query TT
-EXPLAIN SELECT to_unixtime(ts) AS seconds, id FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
+EXPLAIN SELECT to_unixtime(micros) AS seconds, id
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
 ----
-physical_plan
-01)SortExec: expr=[seconds@0 ASC NULLS LAST, id@1 ASC NULLS LAST], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[to_unixtime(ts@2) as seconds, id], file_type=parquet
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[to_unixtime(micros@0) as seconds, id], file_type=parquet
 
+query TT
+EXPLAIN SELECT to_unixtime(d) AS seconds, id
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[to_unixtime(d@4) as seconds, id], file_type=parquet
+
+query TT
+EXPLAIN SELECT to_unixtime(ts_seconds) AS seconds, id
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[to_unixtime(ts_seconds@5) as seconds, id], file_type=parquet
+
+# Include UInt64's largest valid value without formatting an out-of-range timestamp.
+query IIIIII
+SELECT to_unixtime(micros) AS seconds, to_unixtime(d), to_unixtime(ts_seconds),
+       arrow_cast(to_timestamp_micros(u), 'Int64'), to_unixtime(u), id
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
+----
+-1 -86400 -1 0 0 1
+0 0 0 1 1 0
+1000000 86400000000 1000000 9223372036854775807 9223372036854775807 2
+NULL NULL NULL NULL NULL 3
+
+query TT
+EXPLAIN SELECT to_unixtime(u) AS seconds, id
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[to_unixtime(u@9) as seconds, id], file_type=parquet
+
+# A lossy conversion still preserves ordering by its first key.
+query TT
+EXPLAIN SELECT to_unixtime(arrow_cast(micros, 'Date64')) AS seconds
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[to_unixtime(CAST(micros@0 AS Date64)) as seconds], file_type=parquet
+
+# A converted suffix key need not be independently ordered.
+query TT
+EXPLAIN SELECT micros, to_unixtime(id) AS seconds
+FROM ordered_timestamps ORDER BY micros ASC NULLS LAST, seconds;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[micros, to_unixtime(id@1) as seconds], output_ordering=[micros@0 ASC NULLS LAST], file_type=parquet
+
+query TT
+EXPLAIN SELECT micros, to_timestamp_micros(id) AS t
+FROM ordered_timestamps ORDER BY micros ASC NULLS LAST, t;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[micros, to_timestamp_micros(id@1) as t], output_ordering=[micros@0 ASC NULLS LAST], file_type=parquet
+
+# Truncation creates ties, so sorting by seconds then id still needs SortExec.
 query II
 SELECT to_unixtime(ts) AS seconds, id FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
 ----
@@ -6110,15 +6171,81 @@ SELECT to_unixtime(ts) AS seconds, id FROM ordered_timestamps ORDER BY seconds A
 1 2
 NULL 3
 
-# Casting fractional Unix seconds to BIGINT creates ties (1.1 and 1.9 -> 1).
-# All four conversions must retain SortExec to reorder the tied ids from 1, 0.
+# Date64 and the other sub-second units also merge -1 and 0 into one group.
+query II
+SELECT to_unixtime(arrow_cast(micros, 'Date64')) AS seconds, id
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
+----
+0 0
+0 1
+1000 2
+NULL 3
+
+query II
+SELECT to_unixtime(ts_millis) AS seconds, id
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
+----
+0 0
+0 1
+1000 2
+NULL 3
+
+query II
+SELECT to_unixtime(ts_nanos) AS seconds, id
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
+----
+0 0
+0 1
+0 2
+NULL 3
+
+# Float inputs create ties too, without an explicit cast in the query.
+query II
+SELECT to_unixtime(epoch_seconds) AS seconds, id
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
+----
+1 0
+1 1
+2 2
+NULL 3
+
 query TT
-EXPLAIN SELECT to_timestamp_seconds(CAST(epoch_seconds AS BIGINT)) AS t, id
+EXPLAIN SELECT to_timestamp_seconds(epoch_seconds) AS t, id
 FROM ordered_timestamps ORDER BY t ASC NULLS LAST, id;
 ----
 physical_plan
 01)SortExec: expr=[t@0 ASC NULLS LAST, id@1 ASC NULLS LAST], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[to_timestamp_seconds(CAST(epoch_seconds@3 AS Int64)) as t, id], file_type=parquet
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[to_timestamp_seconds(epoch_seconds@3) as t, id], file_type=parquet
+
+# Lexically sorted date strings are not necessarily sorted after parsing.
+# Format arguments must not enable ordering propagation.
+query II
+SELECT to_unixtime(date_text, '%m-%d-%Y') AS seconds, id
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
+----
+31449600 0
+31536000 1
+62985600 2
+NULL 3
+
+query TT
+EXPLAIN SELECT to_timestamp_seconds(date_text, '%m-%d-%Y') AS t, id
+FROM ordered_timestamps ORDER BY t ASC NULLS LAST, id;
+----
+physical_plan
+01)SortExec: expr=[t@0 ASC NULLS LAST, id@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_asc.parquet]]}, projection=[to_timestamp_seconds(date_text@8, %m-%d-%Y) as t, id], file_type=parquet
+
+# Casting fractional Unix seconds to BIGINT creates ties (1.1 and 1.9 -> 1).
+# The conversions must retain SortExec to reorder the tied ids from 1, 0.
+query II
+SELECT to_unixtime(CAST(epoch_seconds AS BIGINT)) AS seconds, id
+FROM ordered_timestamps ORDER BY seconds ASC NULLS LAST, id;
+----
+1 0
+1 1
+2 2
+NULL 3
 
 query TT
 EXPLAIN SELECT to_timestamp_millis(CAST(epoch_seconds AS BIGINT)) AS t, id
@@ -6169,98 +6296,48 @@ WITH ORDER (value DESC NULLS FIRST, id ASC)
 LOCATION 'test_files/scratch/timestamps/conversion_desc.parquet';
 
 query TT
+EXPLAIN SELECT to_unixtime(value) AS seconds, id
+FROM ordered_timestamps_desc ORDER BY seconds DESC NULLS FIRST, id;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_desc.parquet]]}, projection=[to_unixtime(value@0) as seconds, id], file_type=parquet
+
+query TT
 EXPLAIN SELECT to_timestamp_micros(value) AS t, id
 FROM ordered_timestamps_desc ORDER BY t DESC NULLS FIRST, id;
 ----
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_desc.parquet]]}, projection=[to_timestamp_micros(value@0) as t, id], file_type=parquet
 
-query PI
-SELECT to_timestamp_micros(value) AS t, id
-FROM ordered_timestamps_desc ORDER BY t DESC NULLS FIRST, id;
+query IPI
+SELECT to_unixtime(value) AS seconds, to_timestamp_micros(value), id
+FROM ordered_timestamps_desc ORDER BY seconds DESC NULLS FIRST, id;
 ----
-NULL 0
-NULL 1
-1970-01-01T00:00:00.000001 0
-1970-01-01T00:00:00.000001 1
-1970-01-01T00:00:00 0
-1969-12-31T23:59:59.999999 0
-
-# INT32, UInt64, Date32 and Date64 conversions also preserve order.
-query I
-COPY (
-    SELECT column1::INT AS i, arrow_cast(column2, 'UInt64') AS u, column3::DATE AS d
-    FROM (VALUES (-1, 0, '1969-12-31'), (0, 1, '1970-01-01'),
-                 (1, 9223372036854775807, '1970-01-02'), (NULL, NULL, NULL))
-    ORDER BY i ASC NULLS LAST
-) TO 'test_files/scratch/timestamps/conversion_integers.parquet' STORED AS PARQUET;
-----
-4
-
-statement ok
-CREATE EXTERNAL TABLE ordered_conversions STORED AS PARQUET
-WITH ORDER (i ASC NULLS LAST)
-WITH ORDER (u ASC NULLS LAST)
-WITH ORDER (d ASC NULLS LAST)
-LOCATION 'test_files/scratch/timestamps/conversion_integers.parquet';
-
-query TT
-EXPLAIN SELECT to_timestamp_micros(i) AS t FROM ordered_conversions ORDER BY t ASC NULLS LAST;
-----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_integers.parquet]]}, projection=[to_timestamp_micros(i@0) as t], file_type=parquet
-
-query TT
-EXPLAIN SELECT to_timestamp_seconds(i) AS t FROM ordered_conversions ORDER BY t ASC NULLS LAST;
-----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_integers.parquet]]}, projection=[to_timestamp_seconds(i@0) as t], file_type=parquet
-
-query TT
-EXPLAIN SELECT to_timestamp_millis(i) AS t FROM ordered_conversions ORDER BY t ASC NULLS LAST;
-----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_integers.parquet]]}, projection=[to_timestamp_millis(i@0) as t], file_type=parquet
-
-query TT
-EXPLAIN SELECT to_timestamp_nanos(i) AS t FROM ordered_conversions ORDER BY t ASC NULLS LAST;
-----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_integers.parquet]]}, projection=[to_timestamp_nanos(i@0) as t], file_type=parquet
-
-query PPPP
-SELECT to_timestamp_seconds(i) AS seconds, to_timestamp_millis(i) AS millis,
-       to_timestamp_micros(i) AS micros, to_timestamp_nanos(i) AS nanos
-FROM ordered_conversions ORDER BY seconds ASC NULLS LAST;
-----
-1969-12-31T23:59:59 1969-12-31T23:59:59.999 1969-12-31T23:59:59.999999 1969-12-31T23:59:59.999999999
-1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00
-1970-01-01T00:00:01 1970-01-01T00:00:00.001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000000001
-NULL NULL NULL NULL
-
-query TT
-EXPLAIN SELECT to_unixtime(u) AS seconds FROM ordered_conversions ORDER BY seconds ASC NULLS LAST;
-----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_integers.parquet]]}, projection=[to_unixtime(u@1) as seconds], file_type=parquet
-
-query TT
-EXPLAIN SELECT to_unixtime(d) AS seconds FROM ordered_conversions ORDER BY seconds ASC NULLS LAST;
-----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_integers.parquet]]}, projection=[to_unixtime(d@2) as seconds], file_type=parquet
-
-query TT
-EXPLAIN SELECT to_unixtime(arrow_cast(d, 'Date64')) AS seconds FROM ordered_conversions ORDER BY seconds ASC NULLS LAST;
-----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_integers.parquet]]}, projection=[to_unixtime(CAST(d@2 AS Date64)) as seconds], file_type=parquet
-
-# Check UInt64's largest valid value using raw microseconds, and both date results.
-query IIII
-SELECT arrow_cast(to_timestamp_micros(u), 'Int64') AS micros, to_unixtime(u) AS seconds,
-       to_unixtime(d) AS date32_seconds, to_unixtime(arrow_cast(d, 'Date64')) AS date64_seconds
-FROM ordered_conversions ORDER BY u ASC NULLS LAST;
-----
-0 0 -86400 -86400
-1 1 0 0
-9223372036854775807 9223372036854775807 86400 86400
-NULL NULL NULL NULL
+NULL NULL 0
+NULL NULL 1
+1 1970-01-01T00:00:00.000001 0
+1 1970-01-01T00:00:00.000001 1
+0 1970-01-01T00:00:00 0
+-1 1969-12-31T23:59:59.999999 0
 
 query error Can't cast value 9223372036854775808 to type Int64
 SELECT to_timestamp_micros(arrow_cast(9223372036854775808, 'UInt64'));
+
+query error Can't cast value 9223372036854775808 to type Int64
+SELECT to_unixtime(arrow_cast(9223372036854775808, 'UInt64'));
+
+# Epoch-unit conversions remain valid at the underlying integer boundaries.
+query IIIIII
+SELECT to_unixtime(arrow_cast(v, 'Timestamp(Second, None)')),
+       to_unixtime(arrow_cast(v, 'Timestamp(Millisecond, None)')),
+       to_unixtime(arrow_cast(v, 'Timestamp(Microsecond, None)')),
+       to_unixtime(arrow_cast(v, 'Timestamp(Nanosecond, None)')),
+       to_unixtime(arrow_cast(v, 'Date64')), to_unixtime(arrow_cast(d, 'Date32'))
+FROM (VALUES ('-9223372036854775808'::BIGINT, -2147483648),
+             (9223372036854775807::BIGINT, 2147483647), (NULL::BIGINT, NULL)) AS t(v, d)
+ORDER BY v ASC NULLS LAST;
+----
+-9223372036854775808 -9223372036854775 -9223372036854 -9223372036 -9223372036854775 -185542587187200
+9223372036854775807 9223372036854775 9223372036854 9223372036 9223372036854775 185542587100800
+NULL NULL NULL NULL NULL NULL
 
 statement ok
 RESET datafusion.explain.physical_plan_only;
