@@ -950,6 +950,22 @@ fn select_scalar_func_with_expr_planner() -> Result<()> {
 }
 
 #[test]
+fn select_like_any_plans_as_or_chain() {
+    let sql = "SELECT id FROM person \
+               WHERE first_name LIKE ANY ('a%', 'b%') \
+               AND last_name NOT ILIKE ANY ('c%', last_name, 'd%')";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: person.id
+      Filter: (person.first_name LIKE Utf8("a%") OR person.first_name LIKE Utf8("b%")) AND (person.last_name NOT ILIKE Utf8("c%") OR person.last_name NOT ILIKE person.last_name OR person.last_name NOT ILIKE Utf8("d%"))
+        TableScan: person
+    "#
+    );
+}
+
+#[test]
 fn select_simple_filter() {
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE state = 'CO'";

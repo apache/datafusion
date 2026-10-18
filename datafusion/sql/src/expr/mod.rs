@@ -29,6 +29,7 @@ use sqlparser::ast::{
 };
 use sqlparser::ast::{Query, Visit, Visitor};
 
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     DFSchema, Diagnostic, HashMap, Result, ScalarValue, Span, internal_datafusion_err,
     internal_err, not_impl_err, plan_err,
@@ -36,7 +37,7 @@ use datafusion_common::{
 
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::SetQuantifier;
-use datafusion_expr::expr::{InList, WildcardOptions};
+use datafusion_expr::expr::{Exists, InList, InSubquery, SetComparison, WildcardOptions};
 use datafusion_expr::utils::{find_window_exprs, window_function_not_allowed_err};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
@@ -1130,10 +1131,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         case_insensitive: bool,
         any: bool,
     ) -> Result<Expr> {
-        if any {
-            return not_impl_err!("ANY in LIKE expression");
-        }
-        let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let escape_char = match escape_char.map(|e| *e) {
             Some(SQLExpr::Value(ValueWithSpan {
                 value: Value::SingleQuotedString(char),
@@ -1146,6 +1143,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             None => None,
         };
+        if any {
+            return self.sql_like_any_to_expr(
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                schema,
+                planner_context,
+                case_insensitive,
+            );
+        }
+        let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         Ok(Expr::Like(Like::new(
             negated,
             Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
@@ -1153,6 +1162,70 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             escape_char,
             case_insensitive,
         )))
+    }
+
+    /// Plans `expr [NOT] [I]LIKE ANY (p1, ..., pn)` as
+    /// `expr [NOT] [I]LIKE p1 OR ... OR expr [NOT] [I]LIKE pn`.
+    ///
+    /// `NOT` applies to each pattern, so `expr NOT LIKE ANY (...)` is true when
+    /// `expr` fails to match at least one pattern. This follows Spark and the
+    /// SQL `ANY` rules: a NULL pattern gives NULL only when no pattern matches.
+    ///
+    /// `expr` must evaluate once. It is refused when volatile; otherwise every
+    /// copy gives the same value and common subexpression elimination computes
+    /// a non-trivial `expr` once.
+    #[expect(clippy::too_many_arguments)]
+    fn sql_like_any_to_expr(
+        &self,
+        negated: bool,
+        expr: SQLExpr,
+        pattern: SQLExpr,
+        escape_char: Option<char>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+        case_insensitive: bool,
+    ) -> Result<Expr> {
+        let patterns = match pattern {
+            SQLExpr::Tuple(patterns) => patterns,
+            SQLExpr::Nested(pattern) if !matches!(*pattern, SQLExpr::Array(_)) => {
+                vec![*pattern]
+            }
+            pattern => {
+                return not_impl_err!(
+                    "ANY in LIKE expression is only supported with a parenthesized list of patterns, got {pattern}"
+                );
+            }
+        };
+        let expr = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
+        // Every pattern compares against its own copy of `expr`, so the copies
+        // must agree. A volatile `expr` could give each pattern a different value.
+        if is_volatile_with_subqueries(&expr)? {
+            return not_impl_err!(
+                "ANY in LIKE expression does not support a volatile left-hand side, got {expr}"
+            );
+        }
+        patterns
+            .into_iter()
+            .map(|pattern| {
+                let pattern =
+                    self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
+                if let Ok(DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(..)) =
+                    pattern.get_type(schema)
+                {
+                    return not_impl_err!(
+                        "ANY in LIKE expression does not support an array of patterns, got {pattern}"
+                    );
+                }
+                Ok(Expr::Like(Like::new(
+                    negated,
+                    Box::new(expr.clone()),
+                    Box::new(pattern),
+                    escape_char,
+                    case_insensitive,
+                )))
+            })
+            .reduce(|acc, like| Ok(acc?.or(like?)))
+            .unwrap_or_else(|| plan_err!("ANY in LIKE expression requires at least one pattern"))
     }
 
     fn sql_similarto_to_expr(
@@ -1616,6 +1689,34 @@ fn plan_all_op(
         .when(decisive_condition, lit(false))
         .when(has_nulls, null_bool)
         .otherwise(lit(true))
+}
+
+/// Returns true if `expr` is volatile, including any volatile expression inside
+/// the plan of a subquery it contains.
+///
+/// [`Expr::is_volatile`] treats subqueries as leaves, so it misses a subquery
+/// such as `(SELECT random())`.
+fn is_volatile_with_subqueries(expr: &Expr) -> Result<bool> {
+    expr.exists(|e| match e {
+        Expr::Exists(Exists { subquery, .. })
+        | Expr::InSubquery(InSubquery { subquery, .. })
+        | Expr::SetComparison(SetComparison { subquery, .. })
+        | Expr::ScalarSubquery(subquery) => {
+            let mut volatile = false;
+            subquery.subquery.apply_with_subqueries(|plan| {
+                plan.apply_expressions(|e| {
+                    volatile = e.is_volatile();
+                    Ok(if volatile {
+                        TreeNodeRecursion::Stop
+                    } else {
+                        TreeNodeRecursion::Continue
+                    })
+                })
+            })?;
+            Ok(volatile)
+        }
+        e => Ok(e.is_volatile_node()),
+    })
 }
 
 #[cfg(test)]

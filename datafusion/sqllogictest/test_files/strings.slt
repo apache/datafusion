@@ -374,6 +374,126 @@ p2
 p2e1
 p2m1e1
 
+# LIKE ANY
+query T rowsort
+SELECT s FROM test WHERE s LIKE ANY ('p1%', '%m1%');
+----
+P1m1e1
+p1
+p1e1
+p1m1e1
+p2m1e1
+
+query T rowsort
+SELECT s FROM test WHERE s LIKE ANY ('e1');
+----
+e1
+
+# NOT applies to each pattern: true when s fails to match at least one
+query T rowsort
+SELECT s FROM test WHERE s NOT LIKE ANY ('p%', '%e1');
+----
+P1
+P1e1
+P1m1e1
+e1
+p1
+p2
+
+# NOT before the subject negates the whole match
+query T rowsort
+SELECT s FROM test WHERE NOT s LIKE ANY ('p%', '%e1');
+----
+P1
+
+# ILIKE ANY
+query T rowsort
+SELECT s FROM test WHERE s ILIKE ANY ('p1', 'E%');
+----
+P1
+e1
+p1
+
+query T rowsort
+SELECT s FROM test WHERE s NOT ILIKE ANY ('p%', '%e1');
+----
+P1
+e1
+p1
+p2
+
+query B
+SELECT 'a_c' LIKE ANY ('a\_c', 'x%') ESCAPE '\';
+----
+true
+
+# A NULL pattern gives NULL only when no other pattern matches
+query BBBB
+SELECT 'ab' LIKE ANY ('a%', NULL), 'ab' LIKE ANY ('x%', NULL), 'ab' LIKE ANY ('x%', 'y%'), NULL LIKE ANY ('a%', 'c%');
+----
+true NULL false NULL
+
+query BBB
+SELECT 'ab' NOT LIKE ANY ('a%', 'c%'), 'ab' NOT LIKE ANY ('a%', '%b'), NOT 'ab' LIKE ANY ('a%', 'c%');
+----
+true false false
+
+query BB
+SELECT 'AB' ILIKE ANY ('a%', 'c%'), 'AB' LIKE ANY ('a%', 'c%');
+----
+true false
+
+query TT
+EXPLAIN SELECT s FROM test WHERE s LIKE ANY ('p1%', '%m1%');
+----
+logical_plan
+01)Filter: test.s LIKE Utf8View("p1%") OR test.s LIKE Utf8View("%m1%")
+02)--TableScan: test projection=[s]
+physical_plan
+01)FilterExec: s@0 LIKE p1% OR s@0 LIKE %m1%
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The subject is evaluated once: a shared expression is computed once
+query TT
+EXPLAIN SELECT s FROM test WHERE upper(s) LIKE ANY ('P1%', '%M1%');
+----
+logical_plan
+01)Projection: test.s
+02)--Filter: __common_expr_3 LIKE Utf8View("P1%") OR __common_expr_3 LIKE Utf8View("%M1%")
+03)----Projection: upper(test.s) AS __common_expr_3, test.s
+04)------TableScan: test projection=[s]
+physical_plan
+01)FilterExec: __common_expr_3@0 LIKE P1% OR __common_expr_3@0 LIKE %M1%, projection=[s@1]
+02)--ProjectionExec: expr=[upper(s@0) as __common_expr_3, s@0 as s]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A volatile subject would be evaluated once per pattern, so it is refused
+query error DataFusion error: This feature is not implemented: ANY in LIKE expression does not support a volatile left\-hand side
+SELECT CAST(random() AS VARCHAR) LIKE ANY ('0%', '%');
+
+# A volatile expression inside a subquery subject is refused too: the optimizer
+# can plan each copy of the subquery as its own join
+query error DataFusion error: This feature is not implemented: ANY in LIKE expression does not support a volatile left\-hand side
+SELECT (SELECT CASE WHEN random() < 0.5 THEN 'a' ELSE 'b' END) LIKE ANY ('a%', 'b%');
+
+query error DataFusion error: This feature is not implemented: ANY in LIKE expression does not support a volatile left\-hand side
+SELECT (SELECT s FROM test WHERE random() < 0.5 LIMIT 1) LIKE ANY ('p%', '%');
+
+# A subquery subject without volatile expressions is planned
+query B
+SELECT (SELECT max(s) FROM test) LIKE ANY ('p%', 'x%');
+----
+true
+
+query error DataFusion error: This feature is not implemented: ANY in LIKE expression does not support an array of patterns
+SELECT s FROM test WHERE s LIKE ANY (make_array('p1%', '%m1%'));
+
+query error DataFusion error: This feature is not implemented: ANY in LIKE expression is only supported with a parenthesized list of patterns
+SELECT s FROM test WHERE s LIKE ANY (ARRAY['p1%', '%m1%']);
+
+query error DataFusion error: This feature is not implemented: ANY in LIKE expression is only supported with a parenthesized list of patterns
+SELECT s FROM test WHERE s LIKE ANY (SELECT 'p1%');
+
 ## VARCHAR with length support
 
 # Lengths can be used by default
