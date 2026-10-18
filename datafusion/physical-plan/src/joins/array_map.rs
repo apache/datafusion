@@ -19,8 +19,9 @@ use arrow_schema::DataType;
 use num_traits::AsPrimitive;
 use std::mem::size_of;
 
-use crate::joins::MapOffset;
 use crate::joins::chain::traverse_chain;
+use crate::joins::join_hash_map::ProbeOffset;
+use crate::joins::join_hash_map::ProbeOffset::{AtRow, MidChain};
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::ArrowNumericType;
@@ -248,10 +249,10 @@ impl ArrayMap {
         &self,
         prob_side_keys: &[ArrayRef],
         limit: usize,
-        current_offset: MapOffset,
+        current_offset: ProbeOffset,
         probe_indices: &mut Vec<u32>,
         build_indices: &mut Vec<u64>,
-    ) -> Result<Option<MapOffset>> {
+    ) -> Result<Option<ProbeOffset>> {
         if prob_side_keys.len() != 1 {
             return internal_err!(
                 "ArrayMap expects 1 join key, but got {}",
@@ -287,10 +288,10 @@ impl ArrayMap {
         &self,
         array: &ArrayRef,
         limit: usize,
-        current_offset: MapOffset,
+        current_offset: ProbeOffset,
         probe_indices: &mut Vec<u32>,
         build_indices: &mut Vec<u64>,
-    ) -> Result<Option<MapOffset>>
+    ) -> Result<Option<ProbeOffset>>
     where
         T::Native: Copy + AsPrimitive<u64>,
     {
@@ -302,9 +303,17 @@ impl ArrayMap {
         let have_null = arr.null_count() > 0;
 
         if self.next.is_empty() {
-            for prob_idx in current_offset.0..arr.len() {
+            debug_assert!(
+                matches!(current_offset, AtRow { .. }),
+                "since the next offset is empty, mid-chain is not possible"
+            );
+            let rows = match current_offset {
+                AtRow { row } => row,
+                MidChain { row, .. } => row,
+            };
+            for prob_idx in rows..arr.len() {
                 if build_indices.len() == limit {
-                    return Ok(Some((prob_idx, None)));
+                    return Ok(Some(AtRow { row: prob_idx }));
                 }
 
                 // short circuit
@@ -322,14 +331,14 @@ impl ArrayMap {
         } else {
             let mut remaining_output = limit;
             let to_skip = match current_offset {
-                // None `initial_next_idx` indicates that `initial_idx` processing hasn't been started
-                (idx, None) => idx,
-                // Zero `initial_next_idx` indicates that `initial_idx` has been processed during
-                // previous iteration, and it should be skipped
-                (idx, Some(0)) => idx + 1,
-                // Otherwise, process remaining `initial_idx` matches by traversing `next_chain`,
+                // `AtRow` indicates that `idx` processing hasn't been started
+                AtRow { row: idx } => idx,
+                // Otherwise, process remaining `idx` matches by traversing `next_chain`,
                 // to start with the next index
-                (idx, Some(next_idx)) => {
+                MidChain {
+                    row: idx,
+                    next: next_idx,
+                } => {
                     let is_last = idx == arr.len() - 1;
                     if let Some(next_offset) = traverse_chain(
                         &self.next,
@@ -348,7 +357,7 @@ impl ArrayMap {
 
             for prob_side_idx in to_skip..arr.len() {
                 if remaining_output == 0 {
-                    return Ok(Some((prob_side_idx, None)));
+                    return Ok(Some(AtRow { row: prob_side_idx }));
                 }
 
                 if have_null && arr.is_null(prob_side_idx) {
@@ -433,7 +442,7 @@ mod tests {
 
         let mut prob_idx = Vec::new();
         let mut build_idx = Vec::new();
-        let mut next = Some((0, None));
+        let mut next = Some(AtRow { row: 0 });
         let mut results = vec![];
 
         while let Some(o) = next {
@@ -448,8 +457,8 @@ mod tests {
         }
 
         let expected = vec![
-            (vec![0], vec![0], Some((0, Some(2)))),
-            (vec![0], vec![1], Some((0, Some(0)))),
+            (vec![0], vec![0], Some(MidChain { row: 0, next: 2 })),
+            (vec![0], vec![1], Some(AtRow { row: 1 })),
             (vec![1], vec![2], None),
         ];
         assert_eq!(results, expected);
@@ -467,13 +476,13 @@ mod tests {
         let next = map.get_matched_indices_with_limit_offset(
             &probe,
             1,
-            (0, None),
+            AtRow { row: 0 },
             &mut p_idx,
             &mut b_idx,
         )?;
         assert_eq!(p_idx, vec![1]);
         assert_eq!(b_idx, vec![0]);
-        assert_eq!(next, Some((2, None)));
+        assert_eq!(next, Some(AtRow { row: 2 }));
 
         // Find 2, end
         let next = map.get_matched_indices_with_limit_offset(
@@ -504,14 +513,14 @@ mod tests {
         let result_offset = array_map.get_matched_indices_with_limit_offset(
             &prob_side_keys,
             3,
-            (0, None),
+            AtRow { row: 0 },
             &mut prob_indices,
             &mut build_indices,
         )?;
 
         assert_eq!(prob_indices, vec![1, 1, 3]);
         assert_eq!(build_indices, vec![0, 1, 0]);
-        assert_eq!(result_offset, Some((3, Some(2))));
+        assert_eq!(result_offset, Some(MidChain { row: 3, next: 2 }));
         Ok(())
     }
 
@@ -542,7 +551,7 @@ mod tests {
         let next = map.get_matched_indices_with_limit_offset(
             &probe,
             10,
-            (0, None),
+            AtRow { row: 0 },
             &mut matched_probe_indices,
             &mut matched_build_indices,
         )?;
@@ -579,7 +588,7 @@ mod tests {
         let result_offset = array_map.get_matched_indices_with_limit_offset(
             &prob_side_keys,
             10, // A batch size larger than number of probes
-            (0, None),
+            AtRow { row: 0 },
             &mut prob_indices,
             &mut build_indices,
         )?;

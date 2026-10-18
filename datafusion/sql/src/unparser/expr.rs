@@ -246,20 +246,14 @@ impl Unparser<'_> {
                     })
                     .collect::<Result<Vec<CaseWhen>>>()?;
 
-                let operand = match expr.as_ref() {
-                    Some(e) => match self.expr_to_sql_inner(e) {
-                        Ok(sql_expr) => Some(Box::new(sql_expr)),
-                        Err(_) => None,
-                    },
-                    None => None,
-                };
-                let else_result = match else_expr.as_ref() {
-                    Some(e) => match self.expr_to_sql_inner(e) {
-                        Ok(sql_expr) => Some(Box::new(sql_expr)),
-                        Err(_) => None,
-                    },
-                    None => None,
-                };
+                let operand = expr
+                    .as_ref()
+                    .map(|e| self.expr_to_sql_inner(e).map(Box::new))
+                    .transpose()?;
+                let else_result = else_expr
+                    .as_ref()
+                    .map(|e| self.expr_to_sql_inner(e).map(Box::new))
+                    .transpose()?;
 
                 Ok(ast::Expr::Case {
                     operand,
@@ -3455,6 +3449,28 @@ mod tests {
         assert_eq!(final_minimum, DEFAULT_RECURSIVE_RED_ZONE);
 
         Ok(())
+    }
+
+    #[test]
+    fn case_propagates_operand_and_else_errors() {
+        let unsupported = Expr::Literal(ScalarValue::DurationSecond(Some(1)), None);
+        let expressions = [
+            Expr::Case(Case::new(
+                Some(Box::new(unsupported.clone())),
+                vec![(Box::new(lit(1)), Box::new(lit(2)))],
+                None,
+            )),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(true)), Box::new(lit(1)))],
+                Some(Box::new(unsupported)),
+            )),
+        ];
+
+        for expr in expressions {
+            let error = expr_to_sql(&expr).expect_err("unsupported CASE child");
+            assert!(error.to_string().contains("Unsupported scalar"));
+        }
     }
 
     #[test]

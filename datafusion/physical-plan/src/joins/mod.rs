@@ -107,8 +107,6 @@ impl Map {
     }
 }
 
-pub(crate) type MapOffset = (usize, Option<u64>);
-
 #[cfg(test)]
 pub mod test_utils;
 
