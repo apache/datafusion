@@ -28,7 +28,7 @@ CREATE TABLE t(i INT, x INT) AS VALUES
 # Regression test for #26470: once every non-NULL value has left a sliding
 # frame, the aggregate must yield NULL, matching the whole-partition result.
 # Before the fix the sliding column returned 0 on the NULL row.
-query ???
+query III
 SELECT x,
   bit_xor(x) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND CURRENT ROW) AS sliding,
   bit_xor(x) OVER (PARTITION BY i) AS whole
@@ -45,7 +45,7 @@ CREATE TABLE t_all_null_tail(i INT, x INT) AS VALUES
   (1, 7), (2, NULL), (3, NULL);
 
 # The last frame [NULL, NULL] has seen the 7 arrive and leave
-query ?
+query I
 SELECT bit_xor(x) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
 FROM t_all_null_tail
 ORDER BY i;
@@ -59,7 +59,7 @@ statement ok
 CREATE TABLE t_null_head(i INT, x INT) AS VALUES
   (1, NULL), (2, NULL), (3, 7);
 
-query ?
+query I
 SELECT bit_xor(x) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
 FROM t_null_head
 ORDER BY i;
@@ -74,7 +74,7 @@ statement ok
 CREATE TABLE t_double(i INT, x INT) AS VALUES
   (1, 10), (2, 10), (3, NULL), (4, 4);
 
-query ?
+query I
 SELECT bit_xor(x) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
 FROM t_double
 ORDER BY i;
@@ -85,7 +85,7 @@ ORDER BY i;
 4
 
 # Values entering a frame that became all-NULL aggregate from scratch
-query ?
+query I
 SELECT bit_xor(x) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
 FROM t_all_null_tail
 ORDER BY i;
@@ -95,7 +95,7 @@ NULL
 NULL
 
 # Regression: unbounded frame still accumulates
-query ?
+query I
 SELECT bit_xor(x) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 FROM t_double
 ORDER BY i;
