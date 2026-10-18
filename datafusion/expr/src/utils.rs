@@ -862,15 +862,11 @@ fn find_exprs_in_exprs<'a, F>(
 where
     F: Fn(&Expr) -> bool,
 {
-    exprs
-        .into_iter()
-        .flat_map(|expr| find_exprs_in_expr(expr, test_fn))
-        .fold(vec![], |mut acc, expr| {
-            if !acc.contains(&expr) {
-                acc.push(expr)
-            }
-            acc
-        })
+    let mut found = IndexSet::new();
+    for expr in exprs {
+        collect_exprs_in_expr(expr, test_fn, &mut found);
+    }
+    found.into_iter().collect()
 }
 
 /// Search an `Expr`, and all of its nested `Expr`'s, for any that pass the
@@ -880,11 +876,19 @@ fn find_exprs_in_expr<F>(expr: &Expr, test_fn: &F) -> Vec<Expr>
 where
     F: Fn(&Expr) -> bool,
 {
-    let mut exprs = vec![];
+    let mut found = IndexSet::new();
+    collect_exprs_in_expr(expr, test_fn, &mut found);
+    found.into_iter().collect()
+}
+
+fn collect_exprs_in_expr<F>(expr: &Expr, test_fn: &F, found: &mut IndexSet<Expr>)
+where
+    F: Fn(&Expr) -> bool,
+{
     expr.apply(|expr| {
         if test_fn(expr) {
-            if !(exprs.contains(expr)) {
-                exprs.push(expr.clone())
+            if !found.contains(expr) {
+                found.insert(expr.clone());
             }
             // Stop recursing down this expr once we find a match
             return Ok(TreeNodeRecursion::Jump);
@@ -894,7 +898,6 @@ where
     })
     // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");
-    exprs
 }
 
 /// Recursively inspect an [`Expr`] and all its children.
@@ -1606,6 +1609,21 @@ mod tests {
         // computed, even though it is named `b.id`
         assert_eq!(index(crate::cast(col("b.id"), DataType::Int64)), None);
         Ok(())
+    }
+
+    #[test]
+    fn find_aggregate_exprs_dedups_in_order_of_appearance() {
+        use crate::test::function_stub::{count, sum};
+
+        let exprs = [
+            sum(col("a")) + count(col("b")),
+            count(col("b")) * sum(col("c")),
+            sum(col("a")) + sum(col("a")),
+        ];
+        assert_eq!(
+            find_aggregate_exprs(&exprs),
+            vec![sum(col("a")), count(col("b")), sum(col("c"))]
+        );
     }
 
     #[test]
