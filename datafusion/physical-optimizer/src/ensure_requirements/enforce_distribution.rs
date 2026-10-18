@@ -1125,6 +1125,137 @@ struct DistributionChildState {
     requirement: Distribution,
 }
 
+/// Inputs to [`ChildPolicy::new`] that are the same for every child of the
+/// operator being optimized.
+struct ChildPolicyConfig {
+    target_partitions: usize,
+    subset_satisfaction_threshold: usize,
+    /// `optimizer.preserve_file_partitions`; `0` disables it.
+    preserve_file_partitions: usize,
+    enable_round_robin: bool,
+    /// Partitioned hash joins and sort-merge joins match partition `N` of
+    /// each side, so they need exact hash satisfaction.
+    is_partitioned_join: bool,
+}
+
+/// Repartitioning decisions for one child, derived from its current
+/// partition count and its [`RepartitionRequirementStatus`].
+///
+/// These flags interact (see #18341), so they are computed in one place
+/// where they can be tested without building a plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChildPolicy {
+    /// `preserve_file_partitions` is enabled and the child already has at
+    /// least that many partitions.
+    preserve_file_partition_threshold_met: bool,
+    /// The hash requirement includes `__grouping_id`. Grouping set aggregates
+    /// (ROLLUP, CUBE, GROUPING SETS) need exact hash partitioning on all group
+    /// columns including it, so partial aggregates combine correctly.
+    requires_grouping_id: bool,
+    /// A partitioning on a subset of the required keys satisfies the
+    /// requirement.
+    allow_subset_satisfy_partitioning: bool,
+    /// Add round-robin repartitioning on top of the child to increase
+    /// parallelism.
+    add_roundrobin: bool,
+}
+
+impl ChildPolicy {
+    /// `keeps_partial_aggregate_partitioning` reports whether the parent's
+    /// partial aggregate already satisfies the final aggregate's
+    /// partitioning or keeps each group in one input partition, given
+    /// `allow_subset_satisfy_partitioning`. It is only called when the
+    /// `preserve_file_partitions` threshold is met.
+    #[expect(
+        deprecated,
+        reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+    )]
+    fn new(
+        config: &ChildPolicyConfig,
+        current_partitions: usize,
+        status: &RepartitionRequirementStatus,
+        keeps_partial_aggregate_partitioning: impl FnOnce(bool) -> bool,
+    ) -> Self {
+        let preserve_file_partition_threshold_met = config.preserve_file_partitions > 0
+            && current_partitions >= config.preserve_file_partitions;
+
+        let requires_grouping_id = matches!(&status.requirement,
+            Distribution::HashPartitioned(exprs) | Distribution::KeyPartitioned(exprs)
+            if exprs.iter().any(|expr| {
+                (expr.as_ref() as &dyn Any)
+                    .downcast_ref::<Column>()
+                    .is_some_and(|col| col.name() == Aggregate::INTERNAL_GROUPING_ID)
+            })
+        );
+
+        let increases_partition_count = current_partitions < config.target_partitions;
+
+        // Allow subset satisfaction when:
+        // 1. Current partition count >= threshold
+        // 2. Not a partitioned join since must use exact hash matching for joins
+        // 3. Not a grouping set aggregate (requires exact hash including __grouping_id)
+        //
+        // Partitioned joins still require exact satisfaction. If that
+        // exact check already passes, preserve_file_partitions can skip
+        // repartitioning whose only purpose is increasing partition count.
+        let allow_subset_satisfy_partitioning = (current_partitions
+            >= config.subset_satisfaction_threshold
+            // `preserve_file_partitions` exposes existing file-group
+            // partitioning to the optimizer. Respect it when the only
+            // reason to repartition would be to increase partition count
+            // beyond the preserved file-group count.
+            || (preserve_file_partition_threshold_met && increases_partition_count))
+            && !config.is_partitioned_join
+            && !requires_grouping_id;
+
+        let preserve_partial_aggregate_partitioning =
+            preserve_file_partition_threshold_met
+                && keeps_partial_aggregate_partitioning(
+                    allow_subset_satisfy_partitioning,
+                );
+
+        let add_roundrobin = config.enable_round_robin
+            // Operator benefits from partitioning (e.g. filter):
+            && status.roundrobin_beneficial
+            && status.roundrobin_beneficial_stats
+            // Unless partitioning increases the partition count, it is not beneficial:
+            && increases_partition_count
+            && !preserve_partial_aggregate_partitioning;
+
+        Self {
+            preserve_file_partition_threshold_met,
+            requires_grouping_id,
+            allow_subset_satisfy_partitioning,
+            add_roundrobin,
+        }
+    }
+
+    /// Whether a hash or key partitioning requirement needs a new
+    /// `RepartitionExec`, given whether the child's current partitioning
+    /// (with `child_partitions` partitions) already satisfies it.
+    fn needs_hash_repartition(
+        &self,
+        partitioning_satisfied: bool,
+        child_partitions: usize,
+        target_partitions: usize,
+    ) -> bool {
+        // When subset satisfaction is enabled, preserve an
+        // already-satisfying partitioning. Otherwise,
+        // repartition may also increase parallelism.
+        if self.allow_subset_satisfy_partitioning {
+            return !partitioning_satisfied;
+        }
+        let preserve_satisfying_file_partitioning = self
+            .preserve_file_partition_threshold_met
+            && !self.requires_grouping_id
+            && partitioning_satisfied
+            && target_partitions > child_partitions;
+        !partitioning_satisfied
+            || (target_partitions > child_partitions
+                && !preserve_satisfying_file_partitioning)
+    }
+}
+
 /// Calculates the `RepartitionRequirementStatus` for each children to generate
 /// consistent and sensible (in terms of performance) distribution requirements.
 /// As an example, a hash join's left (build) child might produce
@@ -1627,6 +1758,14 @@ pub fn ensure_distribution_with_stats(
         .is_some_and(|join| join.mode == PartitionMode::Partitioned)
         || plan.is::<SortMergeJoinExec>();
 
+    let policy_config = ChildPolicyConfig {
+        target_partitions,
+        subset_satisfaction_threshold,
+        preserve_file_partitions: config.optimizer.preserve_file_partitions,
+        enable_round_robin,
+        is_partitioned_join,
+    };
+
     let input_distributions = plan.input_distribution_requirements();
     let repartition_status_flags = get_repartition_requirement_status(
         &plan,
@@ -1647,74 +1786,24 @@ pub fn ensure_distribution_with_stats(
         repartition_status_flags.into_iter()
     )
     .map(
-        |(
-            child_idx,
-            mut child,
-            required_input_ordering,
-            maintains,
-            RepartitionRequirementStatus {
+        |(child_idx, mut child, required_input_ordering, maintains, status)| {
+            let policy = ChildPolicy::new(
+                &policy_config,
+                child.plan.output_partitioning().partition_count(),
+                &status,
+                |allow_subset| {
+                    partial_aggregate_output_satisfies_final_partitioning(
+                        &plan,
+                        allow_subset,
+                    ) || partial_aggregate_input_keeps_groups_local(&plan, allow_subset)
+                },
+            );
+            let RepartitionRequirementStatus {
                 requirement,
-                roundrobin_beneficial,
                 roundrobin_beneficial_stats,
                 hash_necessary,
-            },
-        )| {
-            // Allow subset satisfaction when:
-            // 1. Current partition count >= threshold
-            // 2. Not a partitioned join since must use exact hash matching for joins
-            // 3. Not a grouping set aggregate (requires exact hash including __grouping_id)
-            //
-            // Partitioned joins still require exact satisfaction. If that
-            // exact check already passes, preserve_file_partitions can skip
-            // repartitioning whose only purpose is increasing partition count.
-            let current_partitions = child.plan.output_partitioning().partition_count();
-            let preserve_file_partition_threshold_met =
-                config.optimizer.preserve_file_partitions > 0
-                    && current_partitions >= config.optimizer.preserve_file_partitions;
-
-            // Check if the hash partitioning requirement includes __grouping_id column.
-            // Grouping set aggregates (ROLLUP, CUBE, GROUPING SETS) require exact hash
-            // partitioning on all group columns including __grouping_id to ensure partial
-            // aggregates from different partitions are correctly combined.
-            let requires_grouping_id = matches!(&requirement,
-                Distribution::HashPartitioned(exprs) | Distribution::KeyPartitioned(exprs)
-                if exprs.iter().any(|expr| {
-                    (expr.as_ref() as &dyn Any)
-                        .downcast_ref::<Column>()
-                        .is_some_and(|col| col.name() == Aggregate::INTERNAL_GROUPING_ID)
-                })
-            );
-
-            let allow_subset_satisfy_partitioning = (current_partitions
-                >= subset_satisfaction_threshold
-                // `preserve_file_partitions` exposes existing file-group
-                // partitioning to the optimizer. Respect it when the only
-                // reason to repartition would be to increase partition count
-                // beyond the preserved file-group count.
-                || (preserve_file_partition_threshold_met
-                    && current_partitions < target_partitions))
-                && !is_partitioned_join
-                && !requires_grouping_id;
-
-            let increases_partition_count = current_partitions < target_partitions;
-
-            let preserve_partial_aggregate_partitioning =
-                preserve_file_partition_threshold_met
-                    && (partial_aggregate_output_satisfies_final_partitioning(
-                        &plan,
-                        allow_subset_satisfy_partitioning,
-                    ) || partial_aggregate_input_keeps_groups_local(
-                        &plan,
-                        allow_subset_satisfy_partitioning,
-                    ));
-
-            let add_roundrobin = enable_round_robin
-                // Operator benefits from partitioning (e.g. filter):
-                && roundrobin_beneficial
-                && roundrobin_beneficial_stats
-                // Unless partitioning increases the partition count, it is not beneficial:
-                && increases_partition_count
-                && !preserve_partial_aggregate_partitioning;
+                ..
+            } = status;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
@@ -1745,35 +1834,25 @@ pub fn ensure_distribution_with_stats(
                         .child_satisfaction(
                             child_idx,
                             child.plan.as_ref(),
-                            ChildSatisfactionOptions::new()
-                                .with_allow_subset(allow_subset_satisfy_partitioning),
+                            ChildSatisfactionOptions::new().with_allow_subset(
+                                policy.allow_subset_satisfy_partitioning,
+                            ),
                         )?
                         .is_satisfied()
                         || plan.downcast_ref::<AggregateExec>().is_some_and(
                             |aggregate| {
                                 aggregate.input_keeps_groups_local(
                                     child.plan.as_ref(),
-                                    allow_subset_satisfy_partitioning,
+                                    policy.allow_subset_satisfy_partitioning,
                                 )
                             },
                         );
-                    let preserve_satisfying_file_partitioning =
-                        preserve_file_partition_threshold_met
-                            && !requires_grouping_id
-                            && partitioning_satisfied
-                            && target_partitions > child_partitions;
-
-                    // When subset satisfaction is enabled, preserve an
-                    // already-satisfying partitioning. Otherwise,
-                    // repartition may also increase parallelism.
-                    let needs_repartition = if allow_subset_satisfy_partitioning {
-                        !partitioning_satisfied
-                    } else {
-                        !partitioning_satisfied
-                            || (target_partitions > child_partitions
-                                && !preserve_satisfying_file_partitioning)
-                    };
-                    let should_add_repartition = hash_necessary && needs_repartition;
+                    let should_add_repartition = hash_necessary
+                        && policy.needs_hash_repartition(
+                            partitioning_satisfied,
+                            child_partitions,
+                            target_partitions,
+                        );
 
                     // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
                     // Enforce unmet requirements, or increase parallelism when beneficial.
@@ -1829,7 +1908,7 @@ pub fn ensure_distribution_with_stats(
                     }
                 }
                 Distribution::UnspecifiedDistribution => {
-                    if add_roundrobin {
+                    if policy.add_roundrobin {
                         // Add round-robin repartitioning on top of the operator
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
@@ -2030,4 +2109,190 @@ fn update_children(mut dist_context: DistributionContext) -> Result<Distribution
     Ok(dist_context)
 }
 
-// See tests in datafusion/core/tests/physical_optimizer
+// Plan-level tests live in datafusion/core/tests/physical_optimizer.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TARGET: usize = 8;
+    const THRESHOLD: usize = 4;
+
+    fn base_config() -> ChildPolicyConfig {
+        ChildPolicyConfig {
+            target_partitions: TARGET,
+            subset_satisfaction_threshold: THRESHOLD,
+            preserve_file_partitions: 0,
+            enable_round_robin: true,
+            is_partitioned_join: false,
+        }
+    }
+
+    fn status(requirement: Distribution) -> RepartitionRequirementStatus {
+        RepartitionRequirementStatus {
+            requirement,
+            roundrobin_beneficial: true,
+            roundrobin_beneficial_stats: true,
+            hash_necessary: true,
+        }
+    }
+
+    fn hash_on(names: &[&str]) -> Distribution {
+        Distribution::KeyPartitioned(
+            names
+                .iter()
+                .enumerate()
+                .map(|(i, name)| Arc::new(Column::new(name, i)) as _)
+                .collect(),
+        )
+    }
+
+    fn policy(
+        config: &ChildPolicyConfig,
+        current_partitions: usize,
+        requirement: Distribution,
+    ) -> ChildPolicy {
+        ChildPolicy::new(config, current_partitions, &status(requirement), |_| false)
+    }
+
+    #[test]
+    fn subset_satisfaction_needs_threshold() {
+        let config = base_config();
+        assert!(
+            !policy(&config, THRESHOLD - 1, hash_on(&["a"]))
+                .allow_subset_satisfy_partitioning
+        );
+        assert!(
+            policy(&config, THRESHOLD, hash_on(&["a"])).allow_subset_satisfy_partitioning
+        );
+    }
+
+    #[test]
+    fn partitioned_join_never_allows_subset_satisfaction() {
+        let config = ChildPolicyConfig {
+            is_partitioned_join: true,
+            ..base_config()
+        };
+        assert!(
+            !policy(&config, TARGET, hash_on(&["a"])).allow_subset_satisfy_partitioning
+        );
+    }
+
+    #[test]
+    fn grouping_id_requires_exact_hash() {
+        let config = base_config();
+        let policy = policy(
+            &config,
+            TARGET,
+            hash_on(&["a", Aggregate::INTERNAL_GROUPING_ID]),
+        );
+        assert!(policy.requires_grouping_id);
+        assert!(!policy.allow_subset_satisfy_partitioning);
+    }
+
+    #[test]
+    fn preserved_file_partitions_allow_subset_below_threshold() {
+        let config = ChildPolicyConfig {
+            subset_satisfaction_threshold: TARGET + 1,
+            preserve_file_partitions: 2,
+            ..base_config()
+        };
+        let below = policy(&config, 1, hash_on(&["a"]));
+        assert!(!below.preserve_file_partition_threshold_met);
+        assert!(!below.allow_subset_satisfy_partitioning);
+
+        let met = policy(&config, 2, hash_on(&["a"]));
+        assert!(met.preserve_file_partition_threshold_met);
+        assert!(met.allow_subset_satisfy_partitioning);
+
+        // Only while repartitioning would increase the partition count.
+        assert!(
+            !policy(&config, TARGET, hash_on(&["a"])).allow_subset_satisfy_partitioning
+        );
+    }
+
+    #[test]
+    fn roundrobin_only_when_every_condition_holds() {
+        let config = base_config();
+        let unspecified = || Distribution::UnspecifiedDistribution;
+        assert!(policy(&config, TARGET - 1, unspecified()).add_roundrobin);
+        assert!(!policy(&config, TARGET, unspecified()).add_roundrobin);
+
+        let disabled = ChildPolicyConfig {
+            enable_round_robin: false,
+            ..base_config()
+        };
+        assert!(!policy(&disabled, 1, unspecified()).add_roundrobin);
+
+        for (beneficial, beneficial_stats) in [(false, true), (true, false)] {
+            let status = RepartitionRequirementStatus {
+                roundrobin_beneficial: beneficial,
+                roundrobin_beneficial_stats: beneficial_stats,
+                ..status(unspecified())
+            };
+            assert!(!ChildPolicy::new(&config, 1, &status, |_| false).add_roundrobin);
+        }
+    }
+
+    #[test]
+    fn preserved_partial_aggregate_suppresses_roundrobin() {
+        let config = ChildPolicyConfig {
+            preserve_file_partitions: 2,
+            ..base_config()
+        };
+        let status = status(Distribution::UnspecifiedDistribution);
+        let mut seen_allow_subset = None;
+        let policy = ChildPolicy::new(&config, 2, &status, |allow_subset| {
+            seen_allow_subset = Some(allow_subset);
+            true
+        });
+        assert!(!policy.add_roundrobin);
+        assert_eq!(
+            seen_allow_subset,
+            Some(policy.allow_subset_satisfy_partitioning)
+        );
+
+        // Below the threshold the partial aggregate check is skipped.
+        let policy = ChildPolicy::new(&config, 1, &status, |_| {
+            panic!("partial aggregate check must be lazy")
+        });
+        assert!(policy.add_roundrobin);
+    }
+
+    #[test]
+    fn hash_repartition_with_subset_satisfaction_only_when_unsatisfied() {
+        let policy = policy(&base_config(), TARGET - 1, hash_on(&["a"]));
+        assert!(policy.allow_subset_satisfy_partitioning);
+        assert!(!policy.needs_hash_repartition(true, 1, TARGET));
+        assert!(policy.needs_hash_repartition(false, TARGET, TARGET));
+    }
+
+    #[test]
+    fn hash_repartition_without_subset_satisfaction_raises_parallelism() {
+        let policy = policy(&base_config(), 1, hash_on(&["a"]));
+        assert!(!policy.allow_subset_satisfy_partitioning);
+        assert!(policy.needs_hash_repartition(false, TARGET, TARGET));
+        assert!(policy.needs_hash_repartition(true, 1, TARGET));
+        assert!(!policy.needs_hash_repartition(true, TARGET, TARGET));
+    }
+
+    #[test]
+    fn hash_repartition_keeps_satisfying_preserved_file_partitioning() {
+        // A partitioned join cannot use subset satisfaction, but an exactly
+        // satisfying preserved file partitioning is still kept.
+        let config = ChildPolicyConfig {
+            preserve_file_partitions: 2,
+            is_partitioned_join: true,
+            ..base_config()
+        };
+        let exact = policy(&config, 2, hash_on(&["a"]));
+        assert!(!exact.allow_subset_satisfy_partitioning);
+        assert!(!exact.needs_hash_repartition(true, 2, TARGET));
+        assert!(exact.needs_hash_repartition(false, 2, TARGET));
+
+        // Not for grouping sets, which need the full hash.
+        let grouping =
+            policy(&config, 2, hash_on(&["a", Aggregate::INTERNAL_GROUPING_ID]));
+        assert!(grouping.needs_hash_repartition(true, 2, TARGET));
+    }
+}
