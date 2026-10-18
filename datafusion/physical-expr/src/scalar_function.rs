@@ -501,7 +501,7 @@ mod tests {
             ),
         ] {
             let mut config = ConfigOptions::default();
-            config.execution.time_zone = session_tz.map(str::to_owned);
+            config.execution.time_zone = session_tz.map(|tz| tz.parse().unwrap());
             let udf = FromUnixtimeFunc::new_with_config(&config);
             let mut args: Vec<Arc<dyn PhysicalExpr>> =
                 vec![Arc::new(Column::new("c", 0))];

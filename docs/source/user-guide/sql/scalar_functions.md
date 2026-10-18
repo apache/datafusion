@@ -2478,7 +2478,7 @@ date_bin(interval, expression[, origin_timestamp])
 
 #### Arguments
 
-- **interval**: Bin interval.
+- **interval**: Bin interval. Must be greater than zero.
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 - **origin_timestamp**: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
 
@@ -3644,7 +3644,7 @@ array_distance(array1, array2)
 
 ### `array_distinct`
 
-Returns distinct values from the array after removing duplicates.
+Returns distinct values from the array after removing duplicates, in the order they first appear.
 
 ```sql
 array_distinct(array)
@@ -3658,11 +3658,11 @@ array_distinct(array)
 
 ```sql
 > select array_distinct([1, 3, 2, 3, 1, 2, 4]);
-+---------------------------------+
-| array_distinct(List([1,2,3,4])) |
-+---------------------------------+
-| [1, 2, 3, 4]                    |
-+---------------------------------+
++---------------------------------------+
+| array_distinct(List([1,3,2,3,1,2,4])) |
++---------------------------------------+
+| [1, 3, 2, 4]                          |
++---------------------------------------+
 ```
 
 #### Aliases

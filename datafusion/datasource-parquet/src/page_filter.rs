@@ -296,6 +296,9 @@ impl PagePruningAccessPlanFilter {
 
         // for each row group specified in the access plan
         let row_group_indexes = access_plan.row_group_indexes();
+        // Page index sets, reused across row groups
+        let mut matched_pages_in_group: HashSet<usize> = HashSet::new();
+        let mut matched_pages_indexes: HashSet<usize> = HashSet::new();
         for row_group_index in row_group_indexes {
             // Skip page pruning for fully matched row groups: all rows are
             // known to satisfy the predicate, so page-level pruning is wasted work.
@@ -318,8 +321,8 @@ impl PagePruningAccessPlanFilter {
                 .and_then(|page_index| page_index.offset_index(row_group_index, 0))
                 .map_or(0, |offset_index| offset_index.page_locations().len());
             // stores the indexes of the matched pages
-            let mut matched_pages_in_group: HashSet<usize> =
-                HashSet::from_iter(0..total_pages_in_group);
+            matched_pages_in_group.clear();
+            matched_pages_in_group.extend(0..total_pages_in_group);
 
             for predicate in page_index_predicates {
                 let selection = prune_pages_for_predicate(
@@ -342,12 +345,9 @@ impl PagePruningAccessPlanFilter {
                     predicate.predicate_expr(),
                 );
 
-                let matched_pages_indexes: HashSet<_> = pages
-                    .into_iter()
-                    .enumerate()
-                    .filter(|x| x.1)
-                    .map(|x| x.0)
-                    .collect();
+                matched_pages_indexes.clear();
+                matched_pages_indexes
+                    .extend(pages.into_iter().enumerate().filter(|x| x.1).map(|x| x.0));
                 matched_pages_in_group.retain(|x| matched_pages_indexes.contains(x));
 
                 overall_selection = update_selection(overall_selection, selection);
@@ -757,6 +757,8 @@ impl<'a> PagesPruningStatistics<'a> {
         };
         let page_offsets = offset_index_metadata.page_locations();
         let file_metadata = parquet_metadata.file_metadata();
+        let converter = converter
+            .with_column_orders(file_metadata.column_orders().map(Vec::as_slice));
         let trusted_min_max = !has_untrusted_min_max_order(
             file_metadata.schema_descr(),
             file_metadata.column_orders().map(Vec::as_slice),

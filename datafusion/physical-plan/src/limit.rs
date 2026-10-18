@@ -45,7 +45,20 @@ use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
-/// Limit execution plan
+/// Applies a limit to the entire result.
+///
+/// Requires a single input partition; otherwise, plan validation or execution fails.
+/// For input with multiple partitions, merge them before applying the limit:
+/// (For SQL interface, coalescing will be enforced automatically in physical
+/// optimizer through [`ExecutionPlan::required_input_distribution`])
+///
+/// ```text
+/// GlobalLimitExec: skip=0, fetch=10
+///   CoalescePartitionsExec                 <--- combine to 1 partition output
+///     DataSourceExec: partitions=4         <--- 4 parallel scan partitions
+/// ```
+///
+/// To enforce a per-partition limit, use [`LocalLimitExec`].
 #[derive(Debug, Clone)]
 pub struct GlobalLimitExec {
     /// Input execution plan
@@ -352,7 +365,17 @@ impl GlobalLimitExec {
     }
 }
 
-/// LocalLimitExec applies a limit to a single partition
+/// Applies a limit independently to each input partition.
+///
+/// Preserves input partitioning. With four partitions, a limit of 10 allows
+/// up to 40 rows in total:
+///
+/// ```text
+/// LocalLimitExec: fetch=10
+///   DataSourceExec: partitions=4
+/// ```
+///
+/// To enforce a limit on the entire result, use [`GlobalLimitExec`].
 #[derive(Debug, Clone)]
 pub struct LocalLimitExec {
     /// Input execution plan

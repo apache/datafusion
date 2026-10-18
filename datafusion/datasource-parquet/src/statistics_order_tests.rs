@@ -997,6 +997,212 @@ fn int96_timestamp_order_prunes_files_row_groups_and_pages() {
 }
 
 #[test]
+fn int96_row_group_reordering_uses_explicit_timestamp_order() {
+    use arrow::compute::SortOptions;
+    use datafusion_physical_expr::expressions::Column as PhysicalColumn;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+
+    let order = LexOrdering::new(vec![PhysicalSortExpr {
+        expr: Arc::new(PhysicalColumn::new("s", 0)),
+        options: SortOptions::default(),
+    }])
+    .unwrap();
+    for footer_order in [
+        Int96Order::Timestamp,
+        Int96Order::Missing,
+        Int96Order::TypeDefined,
+        Int96Order::Unknown,
+    ] {
+        let file = TestFile::int96(
+            footer_order,
+            TimeUnit::Microsecond,
+            Some(Arc::from("UTC")),
+            &[
+                vec![Some(int96(50))],
+                vec![Some(int96(10))],
+                vec![Some(int96(100))],
+            ],
+        );
+        let plan = ParquetAccessPlan::new_all(file.metadata.num_row_groups())
+            .prepare(file.metadata.row_groups())
+            .unwrap()
+            .reorder_by_statistics(&order, &file.metadata, &file.schema)
+            .unwrap();
+        assert_eq!(
+            plan.row_group_indexes(),
+            if footer_order == Int96Order::Timestamp {
+                vec![1, 0, 2]
+            } else {
+                vec![0, 1, 2]
+            },
+            "footer_order={footer_order:?}",
+        );
+    }
+}
+
+#[test]
+fn int96_order_uses_physical_leaf_after_nested_columns() {
+    use parquet::data_type::Int32Type;
+
+    for repeated in [false, true] {
+        let nested = if repeated { "repeated" } else { "required" };
+        let parquet_schema = Arc::new(
+            parse_message_type(&format!(
+                "message schema {{
+                    {nested} group ids {{ required int32 first; required int32 second; }}
+                    optional int96 s;
+                }}"
+            ))
+            .unwrap(),
+        );
+        let properties = Arc::new(
+            WriterProperties::builder()
+                .set_data_page_row_count_limit(2)
+                .set_write_batch_size(2)
+                .set_dictionary_enabled(false)
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+        let mut original = Vec::new();
+        let mut writer =
+            SerializedFileWriter::new(&mut original, parquet_schema, properties).unwrap();
+        for timestamps in [
+            [Some(-2), None, Some(0), Some(1)],
+            [Some(10), None, Some(11), Some(12)],
+            [None; 4],
+        ] {
+            let mut row_group = writer.next_row_group().unwrap();
+            for _ in 0..2 {
+                let mut column = row_group.next_column().unwrap().unwrap();
+                // A repeated group is the legacy list-of-struct encoding.
+                // Give each row one element, so both layouts have four rows.
+                column
+                    .typed::<Int32Type>()
+                    .write_batch(
+                        &[0, 1, 2, 3],
+                        repeated.then_some(&[1, 1, 1, 1]),
+                        repeated.then_some(&[0, 0, 0, 0]),
+                    )
+                    .unwrap();
+                column.close().unwrap();
+            }
+            let mut column = row_group.next_column().unwrap().unwrap();
+            let levels: Vec<_> = timestamps
+                .iter()
+                .map(|value| i16::from(value.is_some()))
+                .collect();
+            let values: Vec<_> = timestamps.into_iter().flatten().map(int96).collect();
+            column
+                .typed::<Int96Type>()
+                .write_batch(&values, Some(&levels), None)
+                .unwrap();
+            column.close().unwrap();
+            row_group.close().unwrap();
+        }
+        writer.close().unwrap();
+
+        for trusted in [true, false] {
+            let mut bytes = original.clone();
+            let end = bytes.len() - 8;
+            let encoded_orders = [0x19, 0x3c, 0x1c, 0, 0, 0x1c, 0, 0, 0x3c, 0, 0, 0];
+            let start = end - encoded_orders.len();
+            assert_eq!(&bytes[start..end], &encoded_orders);
+            if !trusted {
+                // Only the third physical leaf's order becomes unknown.
+                bytes[start + 8] = 0x4c;
+            }
+            let bytes = Bytes::from(bytes);
+            let metadata = read_metadata(&bytes);
+            let schema = Arc::clone(
+                ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
+                    .unwrap()
+                    .schema(),
+            );
+            assert_eq!(schema.fields().len(), 2);
+            assert_eq!(schema.index_of("s").unwrap(), 1);
+            assert_eq!(metadata.file_metadata().schema_descr().num_columns(), 3);
+            assert_eq!(
+                metadata.file_metadata().column_order(2),
+                if trusted {
+                    ColumnOrder::INT96_TIMESTAMP_ORDER
+                } else {
+                    ColumnOrder::UNKNOWN
+                }
+            );
+            let file = TestFile {
+                bytes,
+                schema,
+                metadata: Arc::new(metadata),
+                int96_coercion: None,
+            };
+            let timestamp = |seconds: i64| {
+                ScalarValue::TimestampNanosecond(Some(seconds * 1_000_000_000), None)
+            };
+            let statistics = file.statistics();
+            assert_eq!(statistics.num_rows, Precision::Exact(12));
+            assert_eq!(
+                statistics.column_statistics[1].null_count,
+                Precision::Exact(6)
+            );
+            for (bound, seconds) in [
+                (&statistics.column_statistics[1].min_value, -2),
+                (&statistics.column_statistics[1].max_value, 12),
+            ] {
+                assert_eq!(
+                    bound,
+                    &if trusted {
+                        Precision::Exact(timestamp(seconds))
+                    } else {
+                        Precision::Absent
+                    },
+                    "repeated={repeated}, trusted={trusted}"
+                );
+            }
+
+            let (_, absent) = file.predicate(&col("s").eq(lit(timestamp(20))));
+            assert_eq!(file.file_matches(&absent), !trusted);
+            let (physical, predicate) = file.predicate(&col("s").eq(lit(timestamp(0))));
+            let all = ParquetAccessPlan::new_all(file.metadata.num_row_groups());
+            assert_eq!(file.matching_rows(&physical, all.clone()), 1);
+            let row_groups = file.row_group_plan(&predicate);
+            assert_eq!(
+                row_groups.row_group_indexes(),
+                if trusted { vec![0] } else { vec![0, 1] }
+            );
+            assert_eq!(file.matching_rows(&physical, row_groups), 1);
+
+            let page_metrics = metrics();
+            let pages =
+                PagePruningAccessPlanFilter::new(&physical, Arc::clone(&file.schema))
+                    .prune_plan_with_page_index(
+                        all,
+                        &file.schema,
+                        file.metadata.file_metadata().schema_descr(),
+                        &file.metadata,
+                        &page_metrics,
+                    );
+            assert_eq!(
+                page_metrics.page_index_rows_pruned.pruned(),
+                if trusted { 10 } else { 4 }
+            );
+            assert_eq!(file.matching_rows(&physical, pages), 1);
+
+            let mut runtime_pruner = RowGroupPruner::new(
+                physical,
+                Arc::clone(&file.schema),
+                Arc::clone(&file.metadata),
+                Count::new(),
+                Count::new(),
+                MAX_IN_LIST_SIZE,
+            );
+            assert!(!runtime_pruner.should_prune(&[0]));
+            assert_eq!(runtime_pruner.should_prune(&[1]), trusted);
+            assert!(runtime_pruner.should_prune(&[2]));
+        }
+    }
+}
+
+#[test]
 fn int96_overflow_keeps_wrapped_rows_and_coerced_bounds() {
     // The second timestamp wraps to a negative nanosecond value when read.
     // Neither endpoint is a safe bound for the resulting nanosecond interval.

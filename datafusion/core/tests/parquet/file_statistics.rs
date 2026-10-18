@@ -54,6 +54,7 @@ async fn int96_format_statistics_use_configured_resolution() {
     use datafusion::datasource::file_format::FileFormat;
     use datafusion_common::ScalarValue;
     use datafusion_common::config::TableParquetOptions;
+    use datafusion_common::parquet_config::DFTimeUnit;
     use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
     use parquet::data_type::{Int96, Int96Type};
     use parquet::file::properties::WriterProperties;
@@ -95,7 +96,7 @@ async fn int96_format_statistics_use_configured_resolution() {
     let object = store.head(&path).await.unwrap();
     let state = SessionContext::new().state();
     let mut options = TableParquetOptions::default();
-    options.global.coerce_int96 = Some("us".into());
+    options.global.coerce_int96 = Some(DFTimeUnit::Microsecond);
     options.global.coerce_int96_tz = Some("UTC".into());
     let configured = ParquetFormat::default().with_options(options);
     let schema = configured

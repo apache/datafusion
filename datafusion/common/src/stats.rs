@@ -524,10 +524,13 @@ impl Statistics {
         }
 
         // Convert to Vec<Slot> so we can avoid copying the statistics
-        let mut columns: Vec<_> = std::mem::take(&mut self.column_statistics)
-            .into_iter()
-            .map(Slot::Present)
-            .collect();
+        let mut columns: Vec<_> = std::mem::replace(
+            &mut self.column_statistics,
+            Vec::with_capacity(projection.len()),
+        )
+        .into_iter()
+        .map(Slot::Present)
+        .collect();
 
         for idx in projection.iter() {
             let next_idx = self.column_statistics.len();
