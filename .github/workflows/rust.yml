@@ -159,6 +159,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -399,14 +400,14 @@ jobs:
           save-if: false # The workspace and functions checks save this cache on main.
           shared-key: "amd-ci-check"
       - name: Check datafusion-spark (default features)
-        run: cargo check --profile ci --all-targets -p datafusion-spark
+        run: cargo xtask ci step check datafusion-spark default
       #
       # Note: Only check libraries (not --all-targets) to cover end user APIs
       #
       - name: Check datafusion-spark (no-default-features)
-        run: cargo check --profile ci --no-default-features -p datafusion-spark
+        run: cargo xtask ci step check datafusion-spark no-default
       - name: Check datafusion-spark (core)
-        run: cargo check --profile ci --no-default-features -p datafusion-spark --features=core
+        run: cargo xtask ci step check datafusion-spark core
 
   # Library and integration tests
   linux-test:
@@ -430,7 +431,7 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe  # v2.87.27
         with:
           tool: cargo-llvm-cov
       - name: Rust Dependency Cache
@@ -598,7 +599,7 @@ jobs:
               clang-18 --version
               clang++-18 --version
           - name: Setup wasm-pack
-            uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
+            uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe  # v2.87.27
             with:
               tool: wasm-pack
       - name: Run tests with headless mode
@@ -833,7 +834,7 @@ jobs:
         with:
           rust-version: stable
       - name: Install taplo
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe  # v2.87.27
         with:
           tool: taplo-cli@0.9
       # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
@@ -857,7 +858,7 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: "20"
       - name: Check generated config and function docs
@@ -891,7 +892,7 @@ jobs:
 
           - name: Set up Node.js (required for prettier)
             # doc_prettier_check.sh uses npx to run prettier for Markdown formatting
-            uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+            uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
             with:
               node-version: '18'
 
@@ -925,7 +926,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe  # v2.87.27
         with:
           tool: cargo-msrv
 
