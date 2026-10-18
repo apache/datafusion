@@ -156,6 +156,23 @@ Dictionary(Int32, Utf8)
 statement ok
 DROP TABLE regexp_replace_dict;
 
+statement ok
+CREATE TABLE regexp_replace_dict_runtime_scalars AS
+SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS s,
+       column2 AS p
+FROM (VALUES ('abc', 'a'), ('abd', 'b')) AS v;
+
+query T
+SELECT regexp_replace(s, 'a', arrow_typeof(p))
+FROM regexp_replace_dict_runtime_scalars
+ORDER BY p;
+----
+Utf8bc
+Utf8bd
+
+statement ok
+DROP TABLE regexp_replace_dict_runtime_scalars;
+
 query TTT
 select
     regexp_replace(col, NULL, 'c'),

@@ -167,6 +167,8 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let preserve_dictionary =
+            matches!(args.return_field.data_type(), DataType::Dictionary(_, _));
         let mut args = args.args;
 
         let scalar_dict_key = if let Some(ColumnarValue::Scalar(
@@ -175,7 +177,7 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
         {
             let key = key_type.clone();
             args[0] = ColumnarValue::Scalar(value.as_ref().clone());
-            Some(key)
+            preserve_dictionary.then_some(key)
         } else {
             None
         };
@@ -183,10 +185,7 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
         if let ColumnarValue::Array(array) = &args[0]
             && let DataType::Dictionary(_, value_type) = array.data_type().clone()
         {
-            let others_scalar = args[1..]
-                .iter()
-                .all(|a| matches!(a, ColumnarValue::Scalar(_)));
-            if others_scalar {
+            if preserve_dictionary {
                 let dict = array.as_any_dictionary();
                 let mut inner: Vec<ColumnarValue> = Vec::with_capacity(args.len());
                 inner.push(ColumnarValue::Array(Arc::clone(dict.values())));
