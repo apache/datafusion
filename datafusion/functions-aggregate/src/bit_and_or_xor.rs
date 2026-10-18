@@ -434,6 +434,13 @@ where
 
 struct BitXorAccumulator<T: ArrowNumericType> {
     value: Option<T::Native>,
+    /// Number of non-NULL values that are currently part of the aggregate.
+    ///
+    /// Once `retract_batch` removes every value that `update_batch` added,
+    /// `value` is still `Some(0)` (anything XORed with itself is zero), so
+    /// the count is what tells an all-NULL frame apart from a frame whose
+    /// values XOR to zero.
+    count: u64,
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for BitXorAccumulator<T> {
@@ -444,7 +451,10 @@ impl<T: ArrowNumericType> std::fmt::Debug for BitXorAccumulator<T> {
 
 impl<T: ArrowNumericType> Default for BitXorAccumulator<T> {
     fn default() -> Self {
-        Self { value: None }
+        Self {
+            value: None,
+            count: 0,
+        }
     }
 }
 
@@ -453,7 +463,9 @@ where
     T::Native: std::ops::BitXor<Output = T::Native>,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if let Some(x) = arrow::compute::bit_xor(values[0].as_primitive::<T>()) {
+        let array = values[0].as_primitive::<T>();
+        self.count += (array.len() - array.null_count()) as u64;
+        if let Some(x) = arrow::compute::bit_xor(array) {
             let v = self.value.get_or_insert_with(|| T::Native::usize_as(0));
             *v = *v ^ x;
         }
@@ -461,8 +473,15 @@ where
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // XOR is it's own inverse
-        self.update_batch(values)
+        let array = values[0].as_primitive::<T>();
+        self.count -= (array.len() - array.null_count()) as u64;
+        // XOR is its own inverse, so removing a batch mirrors adding it, but
+        // the count must move in the opposite direction.
+        if let Some(x) = arrow::compute::bit_xor(array) {
+            let v = self.value.get_or_insert_with(|| T::Native::usize_as(0));
+            *v = *v ^ x;
+        }
+        Ok(())
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -470,7 +489,12 @@ where
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
+        // In sliding-window mode `retract_batch` can bring `count` back to 0
+        // while `value` remains `Some(..)`: everything that entered the
+        // frame also left it, and x ^ x is zero. A frame with no non-NULL
+        // values must yield NULL rather than that zero.
+        let value = if self.count == 0 { None } else { self.value };
+        ScalarValue::new_primitive::<T>(value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
@@ -580,7 +604,7 @@ mod tests {
 
     #[test]
     fn test_bit_xor_accumulator() {
-        let mut accumulator = BitXorAccumulator::<UInt64Type> { value: None };
+        let mut accumulator = BitXorAccumulator::<UInt64Type>::default();
         let batches: Vec<_> = vec![vec![1, 2], vec![1]]
             .into_iter()
             .map(|b| Arc::new(b.into_iter().collect::<UInt64Array>()) as ArrayRef)
@@ -601,6 +625,66 @@ mod tests {
         assert_eq!(
             accumulator.evaluate().unwrap(),
             ScalarValue::UInt64(Some(2))
+        );
+    }
+
+    #[test]
+    fn test_bit_xor_accumulator_retracts_to_null() {
+        // Regression for #26470: once every non-NULL value has left the
+        // frame, the aggregate must yield NULL, not zero.
+        let mut accumulator = BitXorAccumulator::<UInt64Type>::default();
+        let added = &[Arc::new(UInt64Array::from(vec![Some(1), Some(2)])) as ArrayRef];
+        let retracted =
+            &[Arc::new(UInt64Array::from(vec![Some(1), Some(2)])) as ArrayRef];
+
+        accumulator.update_batch(added).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(3))
+        );
+
+        accumulator.retract_batch(retracted).unwrap();
+        assert_eq!(accumulator.evaluate().unwrap(), ScalarValue::UInt64(None));
+    }
+
+    #[test]
+    fn test_bit_xor_accumulator_retracts_only_non_null_values() {
+        // An all-NULL batch leaving the frame changes nothing
+        let mut accumulator = BitXorAccumulator::<UInt64Type>::default();
+        let added = &[Arc::new(UInt64Array::from(vec![Some(1), Some(2)])) as ArrayRef];
+        let nulls =
+            &[Arc::new(UInt64Array::from(vec![Option::<u64>::None, None])) as ArrayRef];
+
+        accumulator.update_batch(added).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(3))
+        );
+
+        accumulator.retract_batch(nulls).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(3))
+        );
+    }
+
+    #[test]
+    fn test_bit_xor_accumulator_aggregates_again_after_empty_frame() {
+        // Values entering an all-NULL frame XOR from scratch, not onto the
+        // zero left behind by the values that were retracted
+        let mut accumulator = BitXorAccumulator::<UInt64Type>::default();
+        let first = &[Arc::new(UInt64Array::from(vec![Some(5)])) as ArrayRef];
+        let gone = &[Arc::new(UInt64Array::from(vec![Some(5)])) as ArrayRef];
+        let next = &[Arc::new(UInt64Array::from(vec![Some(3)])) as ArrayRef];
+
+        accumulator.update_batch(first).unwrap();
+        accumulator.retract_batch(gone).unwrap();
+        assert_eq!(accumulator.evaluate().unwrap(), ScalarValue::UInt64(None));
+
+        accumulator.update_batch(next).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(3))
         );
     }
 }
