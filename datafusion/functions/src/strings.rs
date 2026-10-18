@@ -422,8 +422,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
 
     /// See [`BulkNullStringArrayBuilder::append_value`].
     ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_value`].
+    /// Prefer [`Self::try_append_value`], which returns an error instead of
+    /// panicking.
     ///
     /// # Panics
     ///
@@ -436,8 +436,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
 
     /// See [`BulkNullStringArrayBuilder::append_placeholder`].
     ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_placeholder`].
+    /// Prefer [`Self::try_append_placeholder`], which returns an error instead
+    /// of panicking.
     #[inline]
     pub fn append_placeholder(&mut self) {
         self.try_append_placeholder()
@@ -462,14 +462,20 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         mut map: F,
     ) -> Result<()> {
         self.try_append_bytes(src.len(), |value_buffer| {
-            value_buffer.extend(src.iter().map(|&b| map(b)));
+            // Copy, then map the bytes in place: a plain loop over a slice,
+            // which the compiler can vectorize.
+            let old_len = value_buffer.len();
+            value_buffer.extend_from_slice(src);
+            for b in &mut value_buffer.as_slice_mut()[old_len..] {
+                *b = map(*b);
+            }
         })
     }
 
     /// See [`BulkNullStringArrayBuilder::append_byte_map`].
     ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_byte_map`].
+    /// Prefer [`Self::try_append_byte_map`], which returns an error instead of
+    /// panicking.
     ///
     /// # Safety
     ///
@@ -517,8 +523,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
 
     /// See [`BulkNullStringArrayBuilder::append_with`].
     ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_with`].
+    /// Prefer [`Self::try_append_with`], which returns an error instead of
+    /// panicking.
     ///
     /// # Panics
     ///
@@ -731,8 +737,8 @@ impl StringViewArrayBuilder {
 
     /// See [`BulkNullStringArrayBuilder::append_value`].
     ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_value`].
+    /// Prefer [`Self::try_append_value`], which returns an error instead of
+    /// panicking.
     ///
     /// # Panics
     ///
@@ -757,9 +763,6 @@ impl StringViewArrayBuilder {
     }
 
     /// See [`BulkNullStringArrayBuilder::append_placeholder`].
-    ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_placeholder`].
     #[inline]
     pub fn append_placeholder(&mut self) {
         // Zero-length inline view — `length` field is 0, no buffer ref.
@@ -829,7 +832,62 @@ impl StringViewArrayBuilder {
         Self::make_long_view_checked(length, buffer_index, offset, prefix_bytes)
     }
 
+    /// Fallible variant of [`Self::append_byte_map`].
+    ///
+    /// # Safety
+    ///
+    /// The bytes produced by applying `map` to each byte of `src`, in order,
+    /// must form valid UTF-8.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as
+    /// [`Self::try_append_value`].
+    #[inline]
+    pub unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
+        &mut self,
+        src: &[u8],
+        mut map: F,
+    ) -> Result<()> {
+        if src.len() <= MAX_INLINE_LEN {
+            // An inline view holds the length in its low 4 bytes, followed by
+            // the value zero-padded to 12 bytes. Writing the mapped bytes
+            // straight into it is faster than going through `inline_view`.
+            let mut view = (src.len() as u128).to_le_bytes();
+            for (d, &b) in view[4..].iter_mut().zip(src) {
+                *d = map(b);
+            }
+            self.views.push(u128::from_le_bytes(view));
+            return Ok(());
+        }
+
+        let length: u32 = i32::try_from(src.len())
+            .map_err(|_| string_view_overflow_error("value length"))?
+            as u32;
+        self.try_ensure_long_capacity(length)?;
+
+        let cursor = self.in_progress.len();
+        let offset: u32 = i32::try_from(cursor)
+            .map_err(|_| string_view_overflow_error("offset"))?
+            as u32;
+        let buffer_index: u32 = i32::try_from(self.completed.len())
+            .map_err(|_| string_view_overflow_error("buffer count"))?
+            as u32;
+        self.in_progress.extend(src.iter().map(|&b| map(b)));
+        // The prefix comes from the mapped bytes, not from `src`.
+        self.views.push(Self::make_long_view_checked(
+            length,
+            buffer_index,
+            offset,
+            &self.in_progress[cursor..],
+        ));
+        Ok(())
+    }
+
     /// See [`BulkNullStringArrayBuilder::append_byte_map`].
+    ///
+    /// Prefer [`Self::try_append_byte_map`], which returns an error instead of
+    /// panicking.
     ///
     /// # Safety
     ///
@@ -842,25 +900,10 @@ impl StringViewArrayBuilder {
     /// `src.len()`, the in-progress buffer offset, or the number of completed
     /// buffers exceeds `i32::MAX`.
     #[inline]
-    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], mut map: F) {
-        let length: u32 =
-            i32::try_from(src.len()).expect("value length exceeds i32::MAX") as u32;
-        if length <= 12 {
-            let mut bytes = [0u8; 12];
-            for (d, &b) in bytes[..src.len()].iter_mut().zip(src) {
-                *d = map(b);
-            }
-            self.views.push(make_view(&bytes[..src.len()], 0, 0));
-            return;
-        }
-
-        self.ensure_long_capacity(length);
-
-        let cursor = self.in_progress.len();
-        let offset: u32 = i32::try_from(cursor).expect("offset exceeds i32::MAX") as u32;
-        self.in_progress.extend(src.iter().map(|&b| map(b)));
-        self.views
-            .push(self.make_long_view(length, offset, &self.in_progress[cursor..]));
+    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
+        // SAFETY: caller upholds this method's UTF-8 contract.
+        unsafe { self.try_append_byte_map(src, map) }
+            .expect("byte array offset overflow");
     }
 
     /// See [`BulkNullStringArrayBuilder::append_with`].
@@ -1753,16 +1796,28 @@ mod tests {
 
     #[test]
     fn string_view_builder_try_append_success_path() {
-        let mut builder = StringViewArrayBuilder::with_capacity(3);
+        let mut builder = StringViewArrayBuilder::with_capacity(5);
         builder.try_append_value("abc").unwrap();
         builder.try_append_placeholder().unwrap();
         builder.try_append_value("a long string value").unwrap();
+        // SAFETY: ASCII inputs and ASCII outputs.
+        unsafe {
+            builder
+                .try_append_byte_map(b"de", |b| b.to_ascii_uppercase())
+                .unwrap();
+            builder
+                .try_append_byte_map(b"a long mapped value", |b| b.to_ascii_uppercase())
+                .unwrap();
+        }
 
-        let nulls = Some(NullBuffer::from(vec![true, false, true]));
+        let nulls = Some(NullBuffer::from(vec![true, false, true, true, true]));
         let array = builder.finish(nulls).unwrap();
+        array.to_data().validate_full().unwrap();
         assert_eq!(array.value(0), "abc");
         assert!(array.is_null(1));
         assert_eq!(array.value(2), "a long string value");
+        assert_eq!(array.value(3), "DE");
+        assert_eq!(array.value(4), "A LONG MAPPED VALUE");
     }
 
     #[test]

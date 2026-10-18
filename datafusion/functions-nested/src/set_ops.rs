@@ -234,15 +234,15 @@ impl ScalarUDFImpl for ArrayIntersect {
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns distinct values from the array after removing duplicates.",
+    description = "Returns distinct values from the array after removing duplicates, in the order they first appear.",
     syntax_example = "array_distinct(array)",
     sql_example = r#"```sql
 > select array_distinct([1, 3, 2, 3, 1, 2, 4]);
-+---------------------------------+
-| array_distinct(List([1,2,3,4])) |
-+---------------------------------+
-| [1, 2, 3, 4]                    |
-+---------------------------------+
++---------------------------------------+
+| array_distinct(List([1,3,2,3,1,2,4])) |
++---------------------------------------+
+| [1, 3, 2, 4]                          |
++---------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -297,7 +297,7 @@ impl ScalarUDFImpl for ArrayDistinct {
 }
 
 /// array_distinct SQL function
-/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
+/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 3, 2, 4]
 fn array_distinct_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_distinct", args)?;
     match array.data_type() {

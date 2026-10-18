@@ -24,8 +24,11 @@ use crate::physical_optimizer::test_utils::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_common::stats::Precision;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
@@ -33,11 +36,16 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
+use datafusion_physical_plan::operator_statistics::{
+    ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
+};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::{ExecutionPlan, get_plan_string};
 
 fn create_schema() -> SchemaRef {
@@ -832,5 +840,45 @@ fn outer_offset_with_same_sort_key_still_pushes_limit() -> Result<()> {
     "
     );
 
+    Ok(())
+}
+
+/// `LimitPushdown` trusts an `Exact(0)` row count from a registered
+/// provider: it removes a limit over that input
+#[tokio::test]
+async fn limit_pushdown_consults_statistics_providers() -> Result<()> {
+    let provider = ClosureStatisticsProvider::with_matches(
+        |plan| plan.is::<AggregateExec>(),
+        |plan, child_stats| {
+            let child_stats = child_stats
+                .iter()
+                .map(|c| Arc::clone(c.base_arc()))
+                .collect::<Vec<_>>();
+            let mut stats = Arc::unwrap_or_clone(
+                plan.statistics_from_inputs(&child_stats, &StatisticsArgs::new())?,
+            );
+            stats.num_rows = Precision::Exact(0);
+            Ok(StatisticsResult::Computed(stats.into()))
+        },
+    );
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_config(SessionConfig::new().with_target_partitions(1))
+        .with_statistics_registry(StatisticsRegistry::with_providers(vec![Arc::new(
+            provider,
+        )]))
+        .build();
+    let ctx = SessionContext::new_with_state(state);
+    ctx.sql("CREATE TABLE t AS VALUES (1), (2), (3)")
+        .await?
+        .collect()
+        .await?;
+
+    let batches = ctx
+        .sql("SELECT column1, count(*) FROM t GROUP BY column1 LIMIT 1")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
     Ok(())
 }

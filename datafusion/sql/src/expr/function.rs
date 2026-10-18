@@ -352,7 +352,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             for planner in self.context_provider.get_expr_planners().iter() {
-                match planner.plan_scalar(scalar_expr)? {
+                match planner.plan_scalar(scalar_expr, schema)? {
                     PlannerResult::Planned(expr) => return Ok(expr),
                     PlannerResult::Original(expr) => scalar_expr = expr,
                 }
@@ -608,7 +608,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if let Expr::Column(col) = &orderby_expr.expr {
                     let idx = schema.index_of_column(col).ok()?;
                     return if func_deps.iter().any(|dep| {
-                        dep.source_indices == vec![idx] && dep.mode == Dependency::Single
+                        dep.source_indices == [idx] && dep.mode == Dependency::Single
                     }) {
                         Some(true)
                     } else {

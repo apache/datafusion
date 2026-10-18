@@ -45,6 +45,9 @@ use crate::physical_plan::joins::{
     PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use crate::physical_plan::materialized_cte::{
+    MaterializedCteBuffer, MaterializedCteExec, MaterializedCteScanExec,
+};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
@@ -64,6 +67,7 @@ use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::Column;
 use datafusion_common::HashMap as DFHashMap;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeCategories;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
@@ -103,9 +107,11 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
+use datafusion_physical_plan::statistics::StatisticsContext;
 use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 
@@ -123,17 +129,33 @@ pub use datafusion_session::{ExtensionPlanner, PhysicalPlanner};
 
 struct SessionOptimizerContext<'a> {
     session: &'a dyn Session,
+    statistics_context: StatisticsContext,
+}
+
+impl<'a> SessionOptimizerContext<'a> {
+    fn new(session: &'a dyn Session) -> Self {
+        let statistics_context = match session.statistics_registry() {
+            Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
+            None => StatisticsContext::new(),
+        };
+        Self {
+            session,
+            statistics_context,
+        }
+    }
 }
 
 impl PhysicalOptimizerContext for SessionOptimizerContext<'_> {
-    fn config_options(&self) -> &datafusion_common::config::ConfigOptions {
+    fn config_options(&self) -> &ConfigOptions {
         self.session.config_options()
     }
 
-    fn statistics_registry(
-        &self,
-    ) -> Option<&datafusion_physical_plan::operator_statistics::StatisticsRegistry> {
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
         self.session.statistics_registry()
+    }
+
+    fn statistics_context(&self) -> Option<&StatisticsContext> {
+        Some(&self.statistics_context)
     }
 }
 
@@ -211,12 +233,158 @@ impl DefaultPhysicalPlanner {
         {
             return Ok(plan);
         }
+        let renumbered = renumber_materialized_ctes(logical_plan)?;
+        let logical_plan = renumbered.as_ref().unwrap_or(logical_plan);
         let plan = self
             .create_initial_plan(logical_plan, session_state)
             .await?;
+        let plan = bind_materialized_cte_scans(plan)?;
 
         self.optimize_physical_plan(plan, session_state, |_, _| {})
     }
+}
+
+/// Give each occurrence of a [`MaterializedCte`] in `plan` a new id, and
+/// update the scans in its continuation, including the scans in subqueries.
+///
+/// The id is copied when a logical plan is cloned, so one CTE can occur more
+/// than once, for example when a view that declares it is referenced two
+/// times, or when a DataFrame is joined to itself. Each occurrence is a
+/// separate CTE, as in PostgreSQL.
+///
+/// The ids must also be new for each planning run, not only unique within
+/// `plan`. A table provider can plan a saved logical plan in its `scan`, as a
+/// [`ViewTable`] that is not inlined does. Each such scan is a separate
+/// planning run of the same saved plan, and its CTEs end up in the same
+/// physical plan as the CTEs of the outer run.
+///
+/// Returns `None` when `plan` has no materialized CTE.
+///
+/// [`MaterializedCte`]: datafusion_expr::MaterializedCte
+/// [`ViewTable`]: crate::datasource::ViewTable
+fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
+    fn as_cte(plan: &LogicalPlan) -> Option<&datafusion_expr::MaterializedCte> {
+        match plan {
+            LogicalPlan::Extension(Extension { node }) => node.as_any().downcast_ref(),
+            _ => None,
+        }
+    }
+
+    let mut has_cte = false;
+    plan.apply_with_subqueries(|node| {
+        if as_cte(node).is_some() {
+            has_cte = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    if !has_cte {
+        return Ok(None);
+    }
+
+    plan.clone()
+        .transform_down_with_subqueries(|node| {
+            let Some(cte) = as_cte(&node) else {
+                return Ok(Transformed::no(node));
+            };
+            let old_id = cte.id;
+            let new_id = datafusion_expr::MaterializedCteId::next();
+            let continuation = cte
+                .continuation
+                .clone()
+                .transform_down_with_subqueries(|node| {
+                    // A nested occurrence of the same CTE owns the scans below
+                    // it, and is renumbered on its own.
+                    if as_cte(&node).is_some_and(|nested| nested.id == old_id) {
+                        return Ok(Transformed::new(
+                            node,
+                            false,
+                            TreeNodeRecursion::Jump,
+                        ));
+                    }
+                    let LogicalPlan::Extension(Extension { node: scan }) = &node else {
+                        return Ok(Transformed::no(node));
+                    };
+                    match scan
+                        .as_any()
+                        .downcast_ref::<datafusion_expr::MaterializedCteScan>()
+                    {
+                        Some(scan) if scan.id == old_id => {
+                            let scan = datafusion_expr::MaterializedCteScan {
+                                id: new_id,
+                                ..scan.clone()
+                            };
+                            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                                node: Arc::new(scan),
+                            })))
+                        }
+                        _ => Ok(Transformed::no(node)),
+                    }
+                })?
+                .data;
+            let cte = datafusion_expr::MaterializedCte {
+                id: new_id,
+                name: cte.name.clone(),
+                cte: cte.cte.clone(),
+                continuation,
+            };
+            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(cte),
+            })))
+        })
+        .map(|t| Some(t.data))
+}
+
+/// Point every [`MaterializedCteScanExec`] at the buffer of the
+/// [`MaterializedCteExec`] with the same id.
+///
+/// [`renumber_materialized_ctes`] makes the ids unique before the physical
+/// plan is created.
+///
+/// A scan that is already bound was planned and bound by a separate planning
+/// run, such as the `scan` of a [`ViewTable`], and is left as is. Binding it
+/// again would count its partitions twice in the buffer.
+///
+/// Scans are planned before the node that owns their CTE, and a scan inside a
+/// scalar subquery is planned in a separate subtree, so the binding is done
+/// once on the whole initial plan.
+///
+/// [`ViewTable`]: crate::datasource::ViewTable
+fn bind_materialized_cte_scans(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let mut buffers = HashMap::new();
+    plan.apply(|node| {
+        if let Some(cte) = node.downcast_ref::<MaterializedCteExec>()
+            && buffers
+                .insert(cte.buffer().id(), Arc::clone(cte.buffer()))
+                .is_some()
+        {
+            return internal_err!(
+                "Two MaterializedCteExec nodes have the id {}",
+                cte.buffer().id()
+            );
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    if buffers.is_empty() {
+        return Ok(plan);
+    }
+    plan.transform_up(|node| {
+        let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>() else {
+            return Ok(Transformed::no(node));
+        };
+        if scan.is_bound() {
+            return Ok(Transformed::no(node));
+        }
+        let Some(buffer) = buffers.get(&scan.id()) else {
+            return internal_err!("MaterializedCteScanExec {} has no CTE", scan.id());
+        };
+        Ok(Transformed::yes(
+            Arc::new(scan.bind(Arc::clone(buffer))) as Arc<dyn ExecutionPlan>
+        ))
+    })
+    .map(|t| t.data)
 }
 
 #[derive(Debug)]
@@ -988,193 +1156,13 @@ impl DefaultPhysicalPlanner {
                     )?)
                 }
             }
-            LogicalPlan::Aggregate(Aggregate {
-                input,
-                group_expr,
-                aggr_expr,
-                ..
-            }) => {
-                let options = session_state.config().options();
-                // Initially need to perform the aggregate and then merge the partitions
-                let input_exec = children.one()?;
-                let physical_input_schema = input_exec.schema();
-                let logical_input_schema = input.as_ref().schema();
-                let physical_input_schema_from_logical = logical_input_schema.inner();
-
-                if !options.execution.skip_physical_aggregate_schema_check
-                    && !schema_satisfied_by(
-                        physical_input_schema_from_logical,
-                        &physical_input_schema,
-                    )
-                {
-                    let mut differences = Vec::new();
-
-                    if physical_input_schema.metadata()
-                        != physical_input_schema_from_logical.metadata()
-                    {
-                        differences.push(format!(
-                            "schema metadata differs: (physical) {:?} vs (logical) {:?}",
-                            physical_input_schema.metadata(),
-                            physical_input_schema_from_logical.metadata()
-                        ));
-                    }
-
-                    if physical_input_schema.fields().len()
-                        != physical_input_schema_from_logical.fields().len()
-                    {
-                        differences.push(format!(
-                            "Different number of fields: (physical) {} vs (logical) {}",
-                            physical_input_schema.fields().len(),
-                            physical_input_schema_from_logical.fields().len()
-                        ));
-                    }
-                    for (i, (physical_field, logical_field)) in physical_input_schema
-                        .fields()
-                        .iter()
-                        .zip(physical_input_schema_from_logical.fields())
-                        .enumerate()
-                    {
-                        if physical_field.name() != logical_field.name() {
-                            differences.push(format!(
-                                "field name at index {}: (physical) {} vs (logical) {}",
-                                i,
-                                physical_field.name(),
-                                logical_field.name()
-                            ));
-                        }
-                        if physical_field.data_type() != logical_field.data_type() {
-                            differences.push(format!("field data type at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.data_type(), logical_field.data_type()));
-                        }
-                        if physical_field.is_nullable() && !logical_field.is_nullable() {
-                            differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
-                        }
-                        if physical_field.metadata() != logical_field.metadata() {
-                            differences.push(format!(
-                                "field metadata at index {} [{}]: (physical) {:?} vs (logical) {:?}",
-                                i,
-                                physical_field.name(),
-                                physical_field.metadata(),
-                                logical_field.metadata()
-                            ));
-                        }
-                    }
-                    return internal_err!(
-                        "Physical input schema should be the same as the one converted from logical input schema. Differences: {}",
-                        differences.iter().map(|s| format!("\n\t- {s}")).join("")
-                    );
-                }
-
-                let groups = self.create_grouping_physical_expr(
-                    group_expr,
-                    logical_input_schema,
-                    &physical_input_schema,
-                    execution_props,
-                    planning_ctx,
-                )?;
-
-                let agg_filter = aggr_expr
-                    .iter()
-                    .map(|e| {
-                        LoweredAggregateBuilder::new(
-                            e,
-                            logical_input_schema,
-                            &physical_input_schema,
-                            execution_props,
-                            planning_ctx,
-                        )
-                        .build()
-                        .map(lowered_aggregate_to_tuple)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                let (mut aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
-                    multiunzip(agg_filter);
-
-                let mut async_exprs = Vec::new();
-                let num_input_columns = physical_input_schema.fields().len();
-
-                for agg_func in &mut aggregates {
-                    match self.try_plan_async_exprs(
-                        num_input_columns,
-                        PlannedExprResult::Expr(agg_func.expressions()),
-                        physical_input_schema.as_ref(),
-                    )? {
-                        PlanAsyncExpr::Async(
-                            async_map,
-                            PlannedExprResult::Expr(physical_exprs),
-                        ) => {
-                            async_exprs.extend(async_map.async_exprs);
-
-                            if let Some(new_agg_func) = agg_func.with_new_expressions(
-                                physical_exprs,
-                                agg_func
-                                    .order_bys()
-                                    .iter()
-                                    .cloned()
-                                    .map(|x| x.expr)
-                                    .collect(),
-                            ) {
-                                *agg_func = Arc::new(new_agg_func);
-                            } else {
-                                return internal_err!("Failed to plan async expression");
-                            }
-                        }
-                        PlanAsyncExpr::Sync(PlannedExprResult::Expr(_)) => {
-                            // Do nothing
-                        }
-                        _ => {
-                            return internal_err!(
-                                "Unexpected result from try_plan_async_exprs"
-                            );
-                        }
-                    }
-                }
-                let input_exec = if !async_exprs.is_empty() {
-                    Arc::new(AsyncFuncExec::try_new(async_exprs, input_exec)?)
-                } else {
-                    input_exec
-                };
-
-                let initial_aggr = Arc::new(AggregateExec::try_new(
-                    AggregateMode::Partial,
-                    groups.clone(),
-                    aggregates,
-                    filters.clone(),
-                    input_exec,
-                    Arc::clone(&physical_input_schema),
-                )?);
-
-                let can_repartition = !groups.is_empty()
-                    && session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_aggregations();
-
-                // Some aggregators may be modified during initialization for
-                // optimization purposes. For example, a FIRST_VALUE may turn
-                // into a LAST_VALUE with the reverse ordering requirement.
-                // To reflect such changes to subsequent stages, use the updated
-                // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
-                let updated_aggregates = initial_aggr.aggr_expr().to_vec();
-
-                let next_partition_mode = if can_repartition {
-                    // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                    AggregateMode::FinalPartitioned
-                } else {
-                    // construct a second aggregation, keeping the final column name equal to the
-                    // first aggregation and the expressions corresponding to the respective aggregate
-                    AggregateMode::Final
-                };
-
-                let final_grouping_set = initial_aggr.group_expr().as_final();
-
-                Arc::new(AggregateExec::try_new(
-                    next_partition_mode,
-                    final_grouping_set,
-                    updated_aggregates,
-                    filters,
-                    initial_aggr,
-                    Arc::clone(&physical_input_schema),
-                )?)
-            }
+            LogicalPlan::Aggregate(aggregate) => self.plan_aggregate(
+                aggregate,
+                session_state,
+                planning_ctx,
+                execution_props,
+                children,
+            )?,
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
                 .create_project_physical_exec_with_props(
                     execution_props,
@@ -1885,15 +1873,67 @@ impl DefaultPhysicalPlanner {
 
             // N Children
             LogicalPlan::Union(_) => UnionExec::try_new(children.vec())?,
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<datafusion_expr::MaterializedCte>() =>
+            {
+                let cte = node
+                    .as_any()
+                    .downcast_ref::<datafusion_expr::MaterializedCte>()
+                    .unwrap();
+                let [body, continuation] = children.two()?;
+                // A CTE that nothing reads is never evaluated.
+                let mut is_referenced = false;
+                cte.continuation.apply_with_subqueries(|node| {
+                    if let LogicalPlan::Extension(Extension { node }) = node
+                        && let Some(scan) =
+                            node.as_any()
+                                .downcast_ref::<datafusion_expr::MaterializedCteScan>()
+                        && scan.id == cte.id
+                    {
+                        is_referenced = true;
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+                if !is_referenced {
+                    return Ok(continuation);
+                }
+                // The body is fully buffered before a scan yields a row, so an
+                // unbounded body would never produce output.
+                if body.boundedness().is_unbounded() {
+                    return plan_err!(
+                        "MATERIALIZED CTE {} reads an unbounded source, which cannot be materialized",
+                        cte.name
+                    );
+                }
+                let buffer =
+                    Arc::new(MaterializedCteBuffer::new(cte.id.as_u64(), &cte.name));
+                Arc::new(MaterializedCteExec::new(body, continuation, buffer))
+            }
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<datafusion_expr::MaterializedCteScan>() =>
+            {
+                let scan = node
+                    .as_any()
+                    .downcast_ref::<datafusion_expr::MaterializedCteScan>()
+                    .unwrap();
+                // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
+                Arc::new(MaterializedCteScanExec::new(
+                    scan.id.as_u64(),
+                    &scan.name,
+                    Arc::clone(scan.schema.inner()),
+                    session_state.config().target_partitions(),
+                ))
+            }
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();
+                let logical_input = node.inputs();
                 for planner in &self.extension_planners {
                     if maybe_plan.is_some() {
                         break;
                     }
 
-                    let logical_input = node.inputs();
                     maybe_plan = planner
                         .plan_extension(
                             self,
@@ -1956,6 +1996,206 @@ impl DefaultPhysicalPlanner {
             }
         };
         Ok(exec_node)
+    }
+
+    fn plan_aggregate(
+        &self,
+        aggregate: &Aggregate,
+        session_state: &dyn Session,
+        planning_ctx: &PhysicalPlanningContext,
+        execution_props: &ExecutionProps,
+        children: ChildrenContainer,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let Aggregate {
+            input,
+            group_expr,
+            aggr_expr,
+            ..
+        } = aggregate;
+        let options = session_state.config().options();
+        // Initially need to perform the aggregate and then merge the partitions
+        let input_exec = children.one()?;
+        let physical_input_schema = input_exec.schema();
+        let logical_input_schema = input.as_ref().schema();
+        let physical_input_schema_from_logical = logical_input_schema.inner();
+
+        if !options.execution.skip_physical_aggregate_schema_check
+            && !schema_satisfied_by(
+                physical_input_schema_from_logical,
+                &physical_input_schema,
+            )
+        {
+            let mut differences = Vec::new();
+
+            if physical_input_schema.metadata()
+                != physical_input_schema_from_logical.metadata()
+            {
+                differences.push(format!(
+                    "schema metadata differs: (physical) {:?} vs (logical) {:?}",
+                    physical_input_schema.metadata(),
+                    physical_input_schema_from_logical.metadata()
+                ));
+            }
+
+            if physical_input_schema.fields().len()
+                != physical_input_schema_from_logical.fields().len()
+            {
+                differences.push(format!(
+                    "Different number of fields: (physical) {} vs (logical) {}",
+                    physical_input_schema.fields().len(),
+                    physical_input_schema_from_logical.fields().len()
+                ));
+            }
+            for (i, (physical_field, logical_field)) in physical_input_schema
+                .fields()
+                .iter()
+                .zip(physical_input_schema_from_logical.fields())
+                .enumerate()
+            {
+                if physical_field.name() != logical_field.name() {
+                    differences.push(format!(
+                        "field name at index {}: (physical) {} vs (logical) {}",
+                        i,
+                        physical_field.name(),
+                        logical_field.name()
+                    ));
+                }
+                if physical_field.data_type() != logical_field.data_type() {
+                    differences.push(format!(
+                        "field data type at index {} [{}]: (physical) {} vs (logical) {}",
+                        i,
+                        physical_field.name(),
+                        physical_field.data_type(),
+                        logical_field.data_type()
+                    ));
+                }
+                if physical_field.is_nullable() && !logical_field.is_nullable() {
+                    differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
+                }
+                if physical_field.metadata() != logical_field.metadata() {
+                    differences.push(format!(
+                        "field metadata at index {} [{}]: (physical) {:?} vs (logical) {:?}",
+                        i,
+                        physical_field.name(),
+                        physical_field.metadata(),
+                        logical_field.metadata()
+                    ));
+                }
+            }
+            return internal_err!(
+                "Physical input schema should be the same as the one converted from logical input schema. Differences: {}",
+                differences.iter().map(|s| format!("\n\t- {s}")).join("")
+            );
+        }
+
+        let groups = self.create_grouping_physical_expr(
+            group_expr,
+            logical_input_schema,
+            &physical_input_schema,
+            execution_props,
+            planning_ctx,
+        )?;
+
+        let agg_filter = aggr_expr
+            .iter()
+            .map(|e| {
+                LoweredAggregateBuilder::new(
+                    e,
+                    logical_input_schema,
+                    &physical_input_schema,
+                    execution_props,
+                    planning_ctx,
+                )
+                .build()
+                .map(lowered_aggregate_to_tuple)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let (mut aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
+            multiunzip(agg_filter);
+
+        let mut async_exprs = Vec::new();
+        let num_input_columns = physical_input_schema.fields().len();
+
+        for agg_func in &mut aggregates {
+            match self.try_plan_async_exprs(
+                num_input_columns,
+                PlannedExprResult::Expr(agg_func.expressions()),
+                physical_input_schema.as_ref(),
+            )? {
+                PlanAsyncExpr::Async(
+                    async_map,
+                    PlannedExprResult::Expr(physical_exprs),
+                ) => {
+                    async_exprs.extend(async_map.async_exprs);
+
+                    if let Some(new_agg_func) = agg_func.with_new_expressions(
+                        physical_exprs,
+                        agg_func
+                            .order_bys()
+                            .iter()
+                            .cloned()
+                            .map(|x| x.expr)
+                            .collect(),
+                    ) {
+                        *agg_func = Arc::new(new_agg_func);
+                    } else {
+                        return internal_err!("Failed to plan async expression");
+                    }
+                }
+                PlanAsyncExpr::Sync(PlannedExprResult::Expr(_)) => {
+                    // Do nothing
+                }
+                _ => {
+                    return internal_err!("Unexpected result from try_plan_async_exprs");
+                }
+            }
+        }
+        let input_exec = if !async_exprs.is_empty() {
+            Arc::new(AsyncFuncExec::try_new(async_exprs, input_exec)?)
+        } else {
+            input_exec
+        };
+
+        let initial_aggr = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            aggregates,
+            filters.clone(),
+            input_exec,
+            Arc::clone(&physical_input_schema),
+        )?);
+
+        let can_repartition = !groups.is_empty()
+            && session_state.config().target_partitions() > 1
+            && session_state.config().repartition_aggregations();
+
+        // Some aggregators may be modified during initialization for
+        // optimization purposes. For example, a FIRST_VALUE may turn
+        // into a LAST_VALUE with the reverse ordering requirement.
+        // To reflect such changes to subsequent stages, use the updated
+        // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
+        let updated_aggregates = initial_aggr.aggr_expr().to_vec();
+
+        let next_partition_mode = if can_repartition {
+            // construct a second aggregation with 'AggregateMode::FinalPartitioned'
+            AggregateMode::FinalPartitioned
+        } else {
+            // construct a second aggregation, keeping the final column name equal to the
+            // first aggregation and the expressions corresponding to the respective aggregate
+            AggregateMode::Final
+        };
+
+        let final_grouping_set = initial_aggr.group_expr().as_final();
+
+        Ok(Arc::new(AggregateExec::try_new(
+            next_partition_mode,
+            final_grouping_set,
+            updated_aggregates,
+            filters,
+            initial_aggr,
+            Arc::clone(&physical_input_schema),
+        )?))
     }
 
     fn create_grouping_physical_expr(
@@ -2519,10 +2759,11 @@ fn extract_dml_filters(
     //
     // Deduplication is necessary because filters may appear in both Filter nodes
     // and TableScan.filters when the optimizer performs partial (Inexact) pushdown.
-    let mut seen_filters = HashSet::new();
-    filters
-        .into_iter()
-        .try_fold(Vec::new(), |mut deduped, filter| {
+    let num_filters = filters.len();
+    let mut seen_filters = HashSet::with_capacity(num_filters);
+    filters.into_iter().try_fold(
+        Vec::with_capacity(num_filters),
+        |mut deduped, filter| {
             let unqualified = strip_column_qualifiers(filter).map_err(|e| {
                 e.context(format!(
                     "Failed to strip column qualifiers for DML filter on table '{target}'"
@@ -2532,7 +2773,8 @@ fn extract_dml_filters(
                 deduped.push(unqualified);
             }
             Ok(deduped)
-        })
+        },
+    )
 }
 
 /// Determine whether a predicate references only columns from the target table
@@ -3123,9 +3365,7 @@ impl DefaultPhysicalPlanner {
         InvariantChecker(InvariantLevel::Always).check(&plan)?;
 
         let mut new_plan = Arc::clone(&plan);
-        let optimizer_context = SessionOptimizerContext {
-            session: session_state,
-        };
+        let optimizer_context = SessionOptimizerContext::new(session_state);
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
@@ -3536,6 +3776,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Int32Type};
     use arrow_schema::{FieldRef, SchemaRef};
     use datafusion_catalog::CatalogProviderList;
+    use datafusion_common::Statistics;
     use datafusion_common::config::{ConfigOptions, TableOptions};
     use datafusion_common::{
         DFSchemaRef, ScalarValue, SplitPoint, TableReference, ToDFSchema as _,
@@ -3558,12 +3799,16 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
+    use datafusion_physical_plan::statistics::StatisticsArgs;
     use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use datafusion_session::QueryPlanner;
+    use parking_lot::Mutex as SyncMutex;
 
+    /// Records the root statistics computed with the shared statistics context
     #[derive(Debug)]
     struct ContextCheckingRule {
-        invoked: Arc<AtomicBool>,
+        recorded: Arc<SyncMutex<Vec<Arc<Statistics>>>>,
     }
 
     impl PhysicalOptimizerRule for ContextCheckingRule {
@@ -3581,7 +3826,12 @@ mod tests {
             context: &dyn PhysicalOptimizerContext,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             assert!(context.statistics_registry().is_some());
-            self.invoked.store(true, AtomicOrdering::Relaxed);
+            let statistics_context = context
+                .statistics_context()
+                .expect("the planner shares a statistics context");
+            let statistics =
+                statistics_context.compute_arc(&plan, &StatisticsArgs::new())?;
+            self.recorded.lock().push(statistics);
             Ok(plan)
         }
 
@@ -3644,10 +3894,7 @@ mod tests {
             self.inner.physical_optimizers()
         }
 
-        fn statistics_registry(
-            &self,
-        ) -> Option<&datafusion_physical_plan::operator_statistics::StatisticsRegistry>
-        {
+        fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
             self.inner.statistics_registry()
         }
 
@@ -3816,15 +4063,13 @@ mod tests {
 
     #[tokio::test]
     async fn plans_with_non_session_state_implementation() -> Result<()> {
-        let invoked = Arc::new(AtomicBool::new(false));
+        let recorded = Arc::new(SyncMutex::new(vec![]));
         let inner = SessionStateBuilder::new()
             .with_default_features()
             .with_physical_optimizer_rules(vec![Arc::new(ContextCheckingRule {
-                invoked: Arc::clone(&invoked),
+                recorded: Arc::clone(&recorded),
             })])
-            .with_statistics_registry(
-                datafusion_physical_plan::operator_statistics::StatisticsRegistry::new(),
-            )
+            .with_statistics_registry(StatisticsRegistry::new())
             .build();
         let query_planner_invoked = Arc::new(AtomicBool::new(false));
         let session = TestSession {
@@ -3839,7 +4084,31 @@ mod tests {
         let physical_plan = session.create_physical_plan(&logical_plan).await?;
         assert!(physical_plan.is::<EmptyExec>());
         assert!(query_planner_invoked.load(AtomicOrdering::Relaxed));
-        assert!(invoked.load(AtomicOrdering::Relaxed));
+        assert_eq!(recorded.lock().len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn optimizer_rules_share_statistics_context() -> Result<()> {
+        let recorded = Arc::new(SyncMutex::new(vec![]));
+        let rule = || -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
+            Arc::new(ContextCheckingRule {
+                recorded: Arc::clone(&recorded),
+            })
+        };
+        let session_state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_physical_optimizer_rules(vec![rule(), rule()])
+            .with_statistics_registry(StatisticsRegistry::new())
+            .build();
+
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        session_state.create_physical_plan(&logical_plan).await?;
+
+        // The second rule reads the statistics the first rule cached
+        let recorded = recorded.lock();
+        assert_eq!(recorded.len(), 2);
+        assert!(Arc::ptr_eq(&recorded[0], &recorded[1]));
         Ok(())
     }
 
