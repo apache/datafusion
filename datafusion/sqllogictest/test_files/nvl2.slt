@@ -159,3 +159,30 @@ SELECT nvl2('a', ts1, ts2) AS v, arrow_typeof(nvl2('a', ts1, ts2)) AS v_type FRO
 
 statement ok
 DROP TABLE t;
+
+# nvl2 should pick the same timezone as the equivalent CASE expression
+# when its branches have different timezones
+statement ok
+CREATE TABLE t_tz AS
+SELECT i, a, arrow_cast(a, 'Timestamp(Nanosecond, Some("+05:00"))') AS b
+FROM (SELECT 1 AS i,
+             arrow_cast(TIMESTAMP '2024-01-01 22:00:00', 'Timestamp(Nanosecond, Some("+00:00"))') AS a);
+
+query PTD
+SELECT CASE WHEN i IS NOT NULL THEN a ELSE b END AS v,
+       arrow_typeof(CASE WHEN i IS NOT NULL THEN a ELSE b END) AS v_type,
+       CAST(CASE WHEN i IS NOT NULL THEN a ELSE b END AS DATE) AS v_date
+FROM t_tz;
+----
+2024-01-02T03:00:00+05:00 Timestamp(ns, "+05:00") 2024-01-02
+
+query PTD
+SELECT nvl2(i, a, b) AS v,
+       arrow_typeof(nvl2(i, a, b)) AS v_type,
+       CAST(nvl2(i, a, b) AS DATE) AS v_date
+FROM t_tz;
+----
+2024-01-02T03:00:00+05:00 Timestamp(ns, "+05:00") 2024-01-02
+
+statement ok
+DROP TABLE t_tz;

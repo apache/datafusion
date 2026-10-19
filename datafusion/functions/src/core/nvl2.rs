@@ -125,8 +125,12 @@ impl ScalarUDFImpl for NVL2Func {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [tested, if_non_null, if_null] = take_function_args(self.name(), arg_types)?;
-        let Some(new_type) = type_union_coercion(if_non_null, if_null) else {
-            return plan_err!("Coercion from {if_non_null} to {if_null} failed.");
+        // `type_union_coercion` is order-sensitive (e.g. for timezones); start from
+        // `if_null` to match `CASE`, which coerces starting from the ELSE type.
+        let Some(new_type) = type_union_coercion(if_null, if_non_null) else {
+            return plan_err!(
+                "nvl2 cannot coerce {if_non_null} and {if_null} to a common type"
+            );
         };
 
         Ok(vec![tested.clone(), new_type.clone(), new_type])
