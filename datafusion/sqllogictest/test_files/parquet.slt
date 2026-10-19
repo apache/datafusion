@@ -898,8 +898,36 @@ drop table int96_from_spark;
 statement ok
 reset datafusion.execution.time_zone;
 
+# A non-UTC offset keeps the stored instant and renders it at that offset,
+# eight hours ahead of the UTC values above.
 statement ok
 set datafusion.execution.parquet.coerce_int96 = ns;
+
+statement ok
+set datafusion.execution.parquet.coerce_int96_tz = '+08:00';
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+query TTT
+describe int96_from_spark;
+----
+a Timestamp(ns, "+08:00") YES
+
+query P
+select * from int96_from_spark
+----
+2024-01-02T04:34:56.123456+08:00
+2024-01-01T09:00:00+08:00
+1816-03-29T16:56:08.066277376+08:00
+2024-12-31T07:00:00+08:00
+NULL
+1815-11-09T00:01:01.191053312+08:00
+
+statement ok
+drop table int96_from_spark;
 
 statement ok
 reset datafusion.execution.parquet.coerce_int96_tz;
