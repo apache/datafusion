@@ -72,7 +72,9 @@ fn parquet_metadata_statistics(c: &mut Criterion) {
         MetadataState::Mixed,
         MetadataState::None,
     ];
-    let column_counts = [8, 64, 256];
+    // 1024 covers wide schemas, where the cost of resolving each field to a
+    // parquet leaf column dominates.
+    let column_counts = [8, 64, 256, 1024];
     let row_group_counts = [1, 32, 128];
 
     let mut group = c.benchmark_group("parquet_metadata_statistics");
