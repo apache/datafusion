@@ -996,10 +996,12 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
 
     /// Returns a variant of this `ExecutionPlan` that is aware of order-sensitivity.
     ///
-    /// This is used to signal to data sources that the output ordering must be
-    /// preserved, even if it might be more efficient to ignore it (e.g. by
-    /// skipping some row groups in Parquet).
-    ///
+    /// No longer called by DataFusion: a data source that advertises an output
+    /// ordering always preserves it, so no optimizer rule needs to request it.
+    #[deprecated(
+        since = "56.0.0",
+        note = "no longer called: a scan that advertises an output ordering always preserves it"
+    )]
     fn with_preserve_order(
         &self,
         _preserve_order: bool,
@@ -1615,7 +1617,7 @@ impl<'a> DefaultInvariantChecker<'a> {
         &self,
         dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<()> {
-        let mut produced_ids = HashSet::new();
+        let mut produced_ids = HashSet::with_capacity(dynamic_expressions.len());
         for expr in dynamic_expressions {
             let Some(expression_id) = expr.expression_id() else {
                 return internal_err!(
@@ -1835,7 +1837,7 @@ pub async fn collect_partitioned(
         });
     });
 
-    let mut batches = vec![];
+    let mut batches = Vec::with_capacity(join_set.len());
     // Note that currently this doesn't identify the thread that panicked
     //
     // TODO: Replace with [join_next_with_id](https://docs.rs/tokio/latest/tokio/task/struct.JoinSet.html#method.join_next_with_id

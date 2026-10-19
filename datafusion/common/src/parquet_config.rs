@@ -107,6 +107,58 @@ impl From<parquet::file::properties::WriterVersion> for DFParquetWriterVersion {
     }
 }
 
+/// Which byte range of a split Parquet file reads each row group
+///
+/// Each row group maps to one offset, so ranges that cover a file read every
+/// row group exactly once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RowGroupRangeAssignment {
+    /// The start of the row group's first column chunk
+    #[default]
+    StartOffset,
+    /// That start plus half of the row group's compressed size, as parquet-java
+    /// (and therefore Spark) computes it
+    Midpoint,
+}
+
+impl FromStr for RowGroupRangeAssignment {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "start_offset" => Ok(Self::StartOffset),
+            "midpoint" => Ok(Self::Midpoint),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid parquet row group range assignment: {other}. Expected one of: start_offset, midpoint"
+            ))),
+        }
+    }
+}
+
+impl Display for RowGroupRangeAssignment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::StartOffset => "start_offset",
+            Self::Midpoint => "midpoint",
+        };
+        f.write_str(s)
+    }
+}
+
+impl RowGroupRangeAssignment {
+    /// Parses the protobuf form, where an empty string (options encoded before
+    /// this setting existed) means the default
+    pub fn from_proto_str(s: &str) -> Result<Self> {
+        if s.is_empty() {
+            Ok(Self::default())
+        } else {
+            s.parse()
+        }
+    }
+}
+
+crate::config_field!(RowGroupRangeAssignment, value => RowGroupRangeAssignment::from_str(value)?);
+
 /// Parquet statistics levels supported by the writer
 ///
 /// This enum validates statistics settings at configuration time, ensuring only
@@ -218,6 +270,123 @@ impl From<parquet::file::properties::EnabledStatistics> for DFParquetStatistics 
             parquet::file::properties::EnabledStatistics::None => Self::None,
             parquet::file::properties::EnabledStatistics::Chunk => Self::Chunk,
             parquet::file::properties::EnabledStatistics::Page => Self::Page,
+        }
+    }
+}
+
+/// Parquet encodings accepted by the writer.
+///
+/// Parsing the encoding when it is configured rejects unsupported values before
+/// a Parquet write begins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DFParquetEncoding {
+    /// Plain encoding
+    Plain,
+    /// Deprecated plain dictionary encoding
+    PlainDictionary,
+    /// Run-length encoding
+    Rle,
+    /// Deprecated bit-packed encoding
+    BitPacked,
+    /// Delta encoding for integers
+    DeltaBinaryPacked,
+    /// Delta length encoding for byte arrays
+    DeltaLengthByteArray,
+    /// Delta encoding for byte arrays
+    DeltaByteArray,
+    /// Run-length dictionary encoding
+    RleDictionary,
+    /// Byte stream split encoding
+    ByteStreamSplit,
+}
+
+impl FromStr for DFParquetEncoding {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "plain" => Ok(Self::Plain),
+            "plain_dictionary" => Ok(Self::PlainDictionary),
+            "rle" => Ok(Self::Rle),
+            "bit_packed" => Ok(Self::BitPacked),
+            "delta_binary_packed" => Ok(Self::DeltaBinaryPacked),
+            "delta_length_byte_array" => Ok(Self::DeltaLengthByteArray),
+            "delta_byte_array" => Ok(Self::DeltaByteArray),
+            "rle_dictionary" => Ok(Self::RleDictionary),
+            "byte_stream_split" => Ok(Self::ByteStreamSplit),
+            _ => Err(DataFusionError::Configuration(format!(
+                "Unknown or unsupported parquet encoding: \
+                {s}. Valid values are: plain, plain_dictionary, rle, \
+                bit_packed, delta_binary_packed, delta_length_byte_array, \
+                delta_byte_array, rle_dictionary, and byte_stream_split."
+            ))),
+        }
+    }
+}
+
+impl Display for DFParquetEncoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Plain => "plain",
+            Self::PlainDictionary => "plain_dictionary",
+            Self::Rle => "rle",
+            Self::BitPacked => "bit_packed",
+            Self::DeltaBinaryPacked => "delta_binary_packed",
+            Self::DeltaLengthByteArray => "delta_length_byte_array",
+            Self::DeltaByteArray => "delta_byte_array",
+            Self::RleDictionary => "rle_dictionary",
+            Self::ByteStreamSplit => "byte_stream_split",
+        })
+    }
+}
+
+impl ConfigField for Option<DFParquetEncoding> {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(encoding) => v.some(key, encoding, description),
+            None => v.none(key, description),
+        }
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return crate::error::_config_err!(
+                "Config field parquet.encoding is a scalar Option<DFParquetEncoding> and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = Some(value.parse()?);
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            *self = None;
+            Ok(())
+        } else {
+            crate::error::_config_err!(
+                "Config field parquet.encoding is a scalar Option<DFParquetEncoding> and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl From<DFParquetEncoding> for parquet::basic::Encoding {
+    fn from(value: DFParquetEncoding) -> Self {
+        match value {
+            DFParquetEncoding::Plain => Self::PLAIN,
+            DFParquetEncoding::PlainDictionary => Self::PLAIN_DICTIONARY,
+            DFParquetEncoding::Rle => Self::RLE,
+            #[expect(deprecated)]
+            DFParquetEncoding::BitPacked => Self::BIT_PACKED,
+            DFParquetEncoding::DeltaBinaryPacked => Self::DELTA_BINARY_PACKED,
+            DFParquetEncoding::DeltaLengthByteArray => Self::DELTA_LENGTH_BYTE_ARRAY,
+            DFParquetEncoding::DeltaByteArray => Self::DELTA_BYTE_ARRAY,
+            DFParquetEncoding::RleDictionary => Self::RLE_DICTIONARY,
+            DFParquetEncoding::ByteStreamSplit => Self::BYTE_STREAM_SPLIT,
         }
     }
 }
@@ -429,9 +598,174 @@ impl From<DFParquetCompression> for parquet::basic::Compression {
     }
 }
 
+/// Time unit for reading Parquet INT96 timestamps
+///
+/// This enum validates `coerce_int96` at configuration time, so only `ns`,
+/// `us`, `ms` or `s` can be set via `SET` commands or deserialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DFTimeUnit {
+    Nanosecond,
+    Microsecond,
+    Millisecond,
+    Second,
+}
+
+impl FromStr for DFTimeUnit {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "ns" => Ok(Self::Nanosecond),
+            "us" => Ok(Self::Microsecond),
+            "ms" => Ok(Self::Millisecond),
+            "s" => Ok(Self::Second),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid parquet coerce_int96 setting: {other}. Expected one of: ns, us, ms, s"
+            ))),
+        }
+    }
+}
+
+impl Display for DFTimeUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Nanosecond => "ns",
+            Self::Microsecond => "us",
+            Self::Millisecond => "ms",
+            Self::Second => "s",
+        };
+        f.write_str(s)
+    }
+}
+
+impl ConfigField for DFTimeUnit {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return crate::error::_config_err!(
+                "Config field parquet.coerce_int96 is a scalar DFTimeUnit and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = Self::from_str(value)?;
+        Ok(())
+    }
+}
+
+/// `ConfigField` for `Option<DFTimeUnit>` parses before assigning so an
+/// invalid value does not turn an unset option into the default.
+impl ConfigField for Option<DFTimeUnit> {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(time_unit) => time_unit.visit(v, key, description),
+            None => v.none(key, description),
+        }
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return crate::error::_config_err!(
+                "Config field parquet.coerce_int96 is a scalar Option<DFTimeUnit> and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = Some(DFTimeUnit::from_str(value)?);
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            *self = None;
+            Ok(())
+        } else {
+            crate::error::_config_err!(
+                "Config field parquet.coerce_int96 is a scalar Option<DFTimeUnit> and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+impl From<DFTimeUnit> for arrow::datatypes::TimeUnit {
+    fn from(value: DFTimeUnit) -> Self {
+        match value {
+            DFTimeUnit::Nanosecond => Self::Nanosecond,
+            DFTimeUnit::Microsecond => Self::Microsecond,
+            DFTimeUnit::Millisecond => Self::Millisecond,
+            DFTimeUnit::Second => Self::Second,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_encoding_parses_displays_and_converts() {
+        use parquet::basic::Encoding;
+
+        for (input, expected, parquet_encoding) in [
+            ("PLAIN", DFParquetEncoding::Plain, Encoding::PLAIN),
+            (
+                "plain_dictionary",
+                DFParquetEncoding::PlainDictionary,
+                Encoding::PLAIN_DICTIONARY,
+            ),
+            ("rle", DFParquetEncoding::Rle, Encoding::RLE),
+            #[expect(deprecated)]
+            (
+                "bit_packed",
+                DFParquetEncoding::BitPacked,
+                Encoding::BIT_PACKED,
+            ),
+            (
+                "delta_binary_packed",
+                DFParquetEncoding::DeltaBinaryPacked,
+                Encoding::DELTA_BINARY_PACKED,
+            ),
+            (
+                "delta_length_byte_array",
+                DFParquetEncoding::DeltaLengthByteArray,
+                Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            ),
+            (
+                "delta_byte_array",
+                DFParquetEncoding::DeltaByteArray,
+                Encoding::DELTA_BYTE_ARRAY,
+            ),
+            (
+                "rle_dictionary",
+                DFParquetEncoding::RleDictionary,
+                Encoding::RLE_DICTIONARY,
+            ),
+            (
+                "byte_stream_split",
+                DFParquetEncoding::ByteStreamSplit,
+                Encoding::BYTE_STREAM_SPLIT,
+            ),
+        ] {
+            let parsed: DFParquetEncoding = input.parse().unwrap();
+            assert_eq!(parsed, expected, "input: {input}");
+            assert_eq!(parsed.to_string(), input.to_ascii_lowercase());
+            assert_eq!(Encoding::from(parsed), parquet_encoding);
+        }
+
+        for input in ["", "invalid", "zstd"] {
+            let err = input.parse::<DFParquetEncoding>().unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Unknown or unsupported parquet encoding"),
+                "input {input:?}: {err}"
+            );
+        }
+    }
 
     #[test]
     fn parquet_compression_parses_and_displays() {
@@ -513,5 +847,26 @@ mod tests {
             assert!(ZstdLevel::try_new(level as i32).is_ok(), "zstd({level})");
         }
         assert!(ZstdLevel::try_new(*ZSTD_LEVELS.end() as i32 + 1).is_err());
+    }
+
+    #[test]
+    fn time_unit_parses_and_displays() {
+        for (input, expected, displayed) in [
+            ("ns", DFTimeUnit::Nanosecond, "ns"),
+            ("US", DFTimeUnit::Microsecond, "us"),
+            ("ms", DFTimeUnit::Millisecond, "ms"),
+            ("s", DFTimeUnit::Second, "s"),
+        ] {
+            let parsed: DFTimeUnit = input.parse().unwrap();
+            assert_eq!(parsed, expected, "input: {input}");
+            assert_eq!(parsed.to_string(), displayed);
+        }
+        for input in ["nanos", "", "ns "] {
+            let err = input.parse::<DFTimeUnit>().unwrap_err().to_string();
+            assert!(
+                err.contains("Invalid parquet coerce_int96 setting"),
+                "input {input:?}: {err}"
+            );
+        }
     }
 }
