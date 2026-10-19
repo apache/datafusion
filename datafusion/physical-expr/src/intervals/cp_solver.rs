@@ -921,6 +921,15 @@ mod tests {
             graph.size(),
             expected_graph_backing_size(&graph) + timezone_bytes
         );
+        // The timezone-bearing nodes are indices 1 and 2: index 0 was the
+        // string node above, and these were appended in the loop.
+        graph.graph.remove_node(NodeIndex::new(1));
+        assert_eq!(
+            graph.size(),
+            expected_graph_backing_size(&graph) + timezone_bytes
+        );
+        graph.graph.remove_node(NodeIndex::new(2));
+        assert_eq!(graph.size(), expected_graph_backing_size(&graph));
         Ok(())
     }
 

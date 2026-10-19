@@ -2300,6 +2300,14 @@ mod tests {
             size_without_graph + updated_graph_size
         );
         assert_eq!(stream.metrics.stream_memory_usage.value(), stream.size());
+
+        stream.graph = None;
+        stream.update_reservation()?;
+        assert_eq!(stream.reservation.size(), size_without_graph);
+        assert_eq!(
+            stream.metrics.stream_memory_usage.value(),
+            size_without_graph
+        );
         Ok(())
     }
 
