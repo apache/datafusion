@@ -57,6 +57,18 @@ arrow.uuid
 arrow.uuid
 arrow.uuid
 
+# Batch of multiple values (some NULL)
+statement ok
+INSERT INTO test_uuid VALUES 
+  (CAST(X'00010203040506070809000102030506' AS UUID)),
+  (NULL),
+  (CAST(X'00010203040506070809000102030507' AS UUID));
+
+query I
+SELECT COUNT(*) FROM test_uuid;
+----
+6
+
 statement ok
 DROP TABLE test_uuid;
 
@@ -146,21 +158,3 @@ INSERT INTO mix_types VALUES (CAST('{"key": "value"}' AS JSON));
 
 statement ok
 DROP TABLE mix_types;
-
-statement ok
-CREATE TABLE bulk_uuid (id UUID);
-
-# Batch of multiple values (some NULL)
-statement ok
-INSERT INTO bulk_uuid VALUES 
-  (CAST(X'00010203040506070809000102030506' AS UUID)),
-  (NULL),
-  (CAST(X'00010203040506070809000102030507' AS UUID));
-
-query I
-SELECT COUNT(*) FROM bulk_uuid;
-----
-3
-
-statement ok
-DROP TABLE bulk_uuid;
