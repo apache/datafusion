@@ -3058,6 +3058,11 @@ mod tests {
         config.output_ordering = vec![];
         assert!(!config.preserves_file_order());
         assert!(config.create_sibling_state(&options).is_some());
+
+        // An explicit `preserve_order` keeps file order without an output ordering
+        config.preserve_order = true;
+        assert!(config.preserves_file_order());
+        assert!(config.create_sibling_state(&options).is_none());
     }
 
     #[test]

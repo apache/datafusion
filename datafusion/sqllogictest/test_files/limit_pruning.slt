@@ -216,6 +216,23 @@ select a from ordered_steal order by a limit 5;
 -7
 -6
 
+# With an OFFSET, the scan gets a fetch of skip + fetch = 5 and must still
+# start with c.parquet.
+query TT
+explain select a from ordered_steal order by a limit 3 offset 2;
+----
+physical_plan
+01)GlobalLimitExec: skip=2, fetch=3
+02)--SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit_pruning/ordered_steal/a.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit_pruning/ordered_steal/b.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit_pruning/ordered_steal/c.parquet]]}, projection=[a], limit=5, output_ordering=[a@0 ASC NULLS LAST], file_type=parquet
+
+query I
+select a from ordered_steal order by a limit 3 offset 2;
+----
+-8
+-7
+-6
+
 statement ok
 drop table ordered_steal;
 
