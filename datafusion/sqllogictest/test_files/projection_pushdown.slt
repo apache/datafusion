@@ -2602,6 +2602,28 @@ SELECT get_field(s, 'x') AS x, get_field(s, 'y') AS y FROM (
 1.5 ya
 2.5 yb
 
+# Select an ordinary column alongside the extracted fields.
+query RTT
+SELECT get_field(s, 'x') AS x, get_field(s, 'y') AS y, k FROM (
+  SELECT k2 AS k, s FROM (SELECT k AS k2, s FROM union_leaf_c LIMIT 10)
+  UNION ALL
+  (SELECT k, s FROM union_leaf_d LIMIT 10)
+) ORDER BY x;
+----
+1.5 ya ka
+2.5 yb kb
+
+# Reverse the union inputs, so the other pushdown path supplies the output names.
+query RT
+SELECT get_field(s, 'x') AS x, get_field(s, 'y') AS y FROM (
+  (SELECT k, s FROM union_leaf_d LIMIT 10)
+  UNION ALL
+  SELECT k2 AS k, s FROM (SELECT k AS k2, s FROM union_leaf_c LIMIT 10)
+) ORDER BY x;
+----
+1.5 ya
+2.5 yb
+
 statement ok
 DROP TABLE union_leaf_a;
 

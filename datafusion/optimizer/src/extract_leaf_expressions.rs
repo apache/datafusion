@@ -1423,6 +1423,7 @@ fn try_push_into_inputs(
     // so if the TopDown pass later pushes a child further (changing its output
     // schema), the parent node's schema becomes stale.
     let mut new_inputs: Vec<LogicalPlan> = Vec::with_capacity(num_inputs);
+    let is_union = matches!(node, LogicalPlan::Union(_));
     for (idx, input) in inputs.into_iter().enumerate() {
         if per_input[idx].pairs.is_empty() {
             new_inputs.push(input.clone());
@@ -1462,7 +1463,7 @@ fn try_push_into_inputs(
                 Some(pushed) => pushed,
                 None => proj_plan,
             };
-            if matches!(node, LogicalPlan::Union(_)) {
+            if is_union {
                 new_inputs.push(align_union_input(pushed, &per_input[idx])?);
             } else {
                 new_inputs.push(pushed);
@@ -1504,6 +1505,19 @@ fn align_union_input(
         .map(|(_, alias)| Expr::Column(Column::new_unqualified(alias)))
         .chain(target.columns.iter().map(|col| Expr::Column(col.clone())))
         .collect();
+    // Skip the extra projection when the input already has this exact layout.
+    let fields = input.schema().fields();
+    let already_aligned = fields.len() == exprs.len()
+        && target
+            .pairs
+            .iter()
+            .map(|(_, alias)| alias.as_str())
+            .chain(target.columns.iter().map(|col| col.name.as_str()))
+            .zip(fields.iter())
+            .all(|(name, field)| field.name() == name);
+    if already_aligned {
+        return Ok(input);
+    }
     Projection::try_new(exprs, Arc::new(input)).map(LogicalPlan::Projection)
 }
 
