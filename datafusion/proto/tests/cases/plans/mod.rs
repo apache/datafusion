@@ -41,6 +41,7 @@ mod exprs;
 mod extensions;
 mod filters;
 mod joins;
+mod lazy_memory;
 mod leaves;
 mod limits;
 mod misc;
