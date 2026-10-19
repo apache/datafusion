@@ -292,6 +292,11 @@ impl AggregateUDFImpl for BitwiseOperation {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        if args.return_field.data_type().is_null() {
+            // A Null input has no integer groups accumulator (see
+            // create_groups_accumulator), so fall back to the scalar accumulator.
+            return false;
+        }
         // DISTINCT only changes the result of XOR; AND and OR are idempotent
         !(args.is_distinct && self.operation == BitwiseOperationType::Xor)
     }

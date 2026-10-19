@@ -1,0 +1,192 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Regression for https://github.com/apache/datafusion/issues/26396.
+statement ok
+SET datafusion.sql_parser.dialect = 'duckdb'
+
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+statement ok
+SET datafusion.optimizer.join_reordering = false
+
+statement ok
+CREATE TABLE lambda_lists AS
+SELECT * FROM (VALUES
+    ([1, 30], 'a', 7, 2),
+    ([40], 'b', 8, 4),
+    ([], 'empty', 9, 2),
+    (NULL, 'null', 10, 2)
+) AS v(items, k, n, threshold)
+
+statement ok
+CREATE TABLE lambda_cutoffs AS
+SELECT * FROM (VALUES (25, -3), (5, -1)) AS v(cutoff, score)
+
+# The lambda captures a column from the opposite join input.
+query TI
+SELECT s.k, s.n
+FROM (SELECT 25 AS cutoff) c
+JOIN lambda_lists s ON array_any_match(s.items, x -> x < c.cutoff)
+----
+a 7
+
+query TI
+SELECT s.k, s.n
+FROM lambda_lists s
+JOIN (SELECT 25 AS cutoff) c ON array_any_match(s.items, x -> x < c.cutoff)
+----
+a 7
+
+# Extract ordinary expressions from both inputs while preserving the lambda.
+# Growing and then pruning the filter schema must also rebase its parameters.
+query ITI rowsort
+SELECT c.cutoff, s.k, s.n
+FROM lambda_cutoffs c JOIN lambda_lists s
+ON array_any_match(s.items, x -> x < c.cutoff)
+   AND abs(c.score) > abs(s.threshold)
+----
+25 a 7
+
+# The outer high-order function spans both inputs. Its array argument is a
+# complete single-input high-order function that can still be projected out.
+query IT rowsort
+SELECT c.cutoff, s.k
+FROM lambda_cutoffs c JOIN lambda_lists s
+ON array_any_match(array_transform(s.items, y -> y + 1), x -> x < c.cutoff)
+   AND abs(c.score) > abs(s.threshold)
+----
+25 a
+
+# Nested lambdas capture both a join column and the outer lambda's parameter.
+query IT rowsort
+SELECT c.cutoff, s.k
+FROM lambda_cutoffs c JOIN lambda_lists s
+ON array_any_match(s.items,
+       x -> array_any_match(s.items, y -> y <= x AND x < c.cutoff))
+   AND abs(c.score) > abs(s.threshold)
+----
+25 a
+
+# Shadowed names and an unused outer parameter must keep their own bindings.
+query IT rowsort
+SELECT c.cutoff, s.k
+FROM lambda_cutoffs c JOIN lambda_lists s
+ON array_any_match(s.items,
+       x -> array_any_match(s.items, x -> x < c.cutoff))
+   AND abs(c.score) > abs(s.threshold)
+----
+25 a
+
+# Projecting an entire high-order function is valid when its inputs and
+# captures all belong to one side. Selected payload columns widen that input
+# beyond the filter's schema, exercising rebasing into the input projection.
+query ITII rowsort
+SELECT c.cutoff, s.k, s.n, s.threshold
+FROM lambda_cutoffs c JOIN lambda_lists s
+ON CAST(array_any_match(s.items, x -> x < s.n) AS BIGINT) < abs(c.score)
+----
+25 a 7 2
+25 b 8 4
+25 empty 9 2
+5 b 8 4
+5 empty 9 2
+
+# The same single-side extraction with nested lambdas and an outer capture.
+query ITII rowsort
+SELECT c.cutoff, s.k, s.n, s.threshold
+FROM lambda_cutoffs c JOIN lambda_lists s
+ON CAST(array_any_match(s.items,
+       x -> array_any_match(s.items, y -> y <= x AND x < s.n)) AS BIGINT) < abs(c.score)
+----
+25 a 7 2
+25 b 8 4
+25 empty 9 2
+5 b 8 4
+5 empty 9 2
+
+# Extract the complete function on the left input as well.
+query ITII rowsort
+SELECT c.cutoff, s.k, s.n, s.threshold
+FROM lambda_lists s JOIN lambda_cutoffs c
+ON CAST(array_any_match(s.items, x -> x < s.n) AS BIGINT) < abs(c.score)
+----
+25 a 7 2
+25 b 8 4
+25 empty 9 2
+5 b 8 4
+5 empty 9 2
+
+statement ok
+SET datafusion.explain.physical_plan_only = true
+
+# Both abs expressions must still be pushed below the join.
+query TT
+EXPLAIN SELECT c.cutoff, s.k, s.n
+FROM lambda_cutoffs c JOIN lambda_lists s
+ON array_any_match(s.items, x -> x < c.cutoff)
+   AND abs(c.score) > abs(s.threshold)
+----
+physical_plan
+01)ProjectionExec: expr=[cutoff@0 as cutoff, k@3 as k, n@4 as n]
+02)--NestedLoopJoinExec: join_type=Inner, filter=array_any_match(items@1, (x) -> x@4 < cutoff@0) AND join_proj_push_down_1@2 > join_proj_push_down_2@3, projection=[cutoff@0, score@1, items@3, k@4, n@5, threshold@6]
+03)----ProjectionExec: expr=[cutoff@0 as cutoff, score@1 as score, abs(score@1) as join_proj_push_down_1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----ProjectionExec: expr=[items@0 as items, k@1 as k, n@2 as n, threshold@3 as threshold, abs(threshold@3) as join_proj_push_down_2]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A whole high-order function is still eligible for projection pushdown.
+query TT
+EXPLAIN SELECT c.cutoff, s.k, s.n, s.threshold
+FROM lambda_cutoffs c JOIN lambda_lists s
+ON CAST(array_any_match(s.items, x -> x < s.n) AS BIGINT) < abs(c.score)
+----
+physical_plan
+01)ProjectionExec: expr=[cutoff@0 as cutoff, k@3 as k, n@4 as n, threshold@5 as threshold]
+02)--NestedLoopJoinExec: join_type=Inner, filter=join_proj_push_down_2@1 < join_proj_push_down_1@0, projection=[cutoff@0, score@1, items@3, k@4, n@5, threshold@6]
+03)----ProjectionExec: expr=[cutoff@0 as cutoff, score@1 as score, abs(score@1) as join_proj_push_down_1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----ProjectionExec: expr=[items@0 as items, k@1 as k, n@2 as n, threshold@3 as threshold, CAST(array_any_match(items@0, (x) -> x@4 < n@2) AS Int64) as join_proj_push_down_2]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The array argument may be extracted without extracting either lambda body.
+query TT
+EXPLAIN SELECT c.cutoff, s.k
+FROM lambda_cutoffs c JOIN lambda_lists s
+ON array_any_match(array_transform(s.items, y -> y + 1), x -> x < c.cutoff)
+   AND abs(c.score) > abs(s.threshold)
+----
+physical_plan
+01)ProjectionExec: expr=[cutoff@0 as cutoff, k@3 as k]
+02)--NestedLoopJoinExec: join_type=Inner, filter=array_any_match(join_proj_push_down_2@2, (x) -> x@4 < cutoff@0) AND join_proj_push_down_1@1 > join_proj_push_down_3@3, projection=[cutoff@0, score@1, items@3, k@4, threshold@5]
+03)----ProjectionExec: expr=[cutoff@0 as cutoff, score@1 as score, abs(score@1) as join_proj_push_down_1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----ProjectionExec: expr=[items@0 as items, k@1 as k, threshold@2 as threshold, array_transform(items@0, (y) -> y@3 + 1) as join_proj_push_down_2, abs(threshold@2) as join_proj_push_down_3]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.explain.physical_plan_only
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.optimizer.join_reordering
+
+statement ok
+RESET datafusion.sql_parser.dialect

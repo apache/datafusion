@@ -503,7 +503,8 @@ impl Unparser<'_> {
                         .iter()
                         .any(|column| column.relation.is_some())
                 });
-                let mut input_names = HashSet::new();
+                let mut input_names =
+                    HashSet::with_capacity(projection.input.schema().fields().len());
                 let unique_input_names = projection
                     .input
                     .schema()
@@ -2347,7 +2348,10 @@ impl Unparser<'_> {
     }
 
     fn is_scan_with_pushdown(scan: &TableScan) -> bool {
-        scan.projection.is_some() || !scan.filters.is_empty() || scan.fetch.is_some()
+        scan.projection.is_some()
+            || !scan.filters.is_empty()
+            || scan.fetch.is_some()
+            || scan.skip.is_some()
     }
 
     /// Returns true if a plan, when used as the direct child of a SubqueryAlias,
@@ -2579,11 +2583,11 @@ impl Unparser<'_> {
                     if project_vec.is_empty() {
                         builder = builder.project(self.empty_projection_fallback())?;
                     } else {
+                        let schema = table_scan.source.schema();
                         let project_columns = project_vec
                             .iter()
                             .copied()
                             .map(|i| {
-                                let schema = table_scan.source.schema();
                                 let field = schema.field(i);
                                 if alias.is_some() {
                                     Column::new(alias.clone(), field.name().clone())
@@ -2621,8 +2625,13 @@ impl Unparser<'_> {
                     builder = builder.filter(filter)?;
                 }
 
-                if let Some(fetch) = table_scan.fetch {
-                    builder = builder.limit(0, Some(fetch))?;
+                match (table_scan.skip, table_scan.fetch) {
+                    (Some(offset), Some(fetch)) => {
+                        builder = builder.limit(offset, Some(fetch))?
+                    }
+                    (Some(offset), None) => builder = builder.limit(offset, None)?,
+                    (None, Some(fetch)) => builder = builder.limit(0, Some(fetch))?,
+                    (None, None) => (),
                 }
 
                 // If the table scan has an alias but no projection or filters, it means no column references are rebased.
