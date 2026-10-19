@@ -2001,8 +2001,18 @@ fn constant_value_from_stats(
     num_rows: Option<usize>,
     data_type: &DataType,
 ) -> Option<ScalarValue> {
-    if let (Precision::Exact(min), Precision::Exact(max)) =
-        (&column_stats.min_value, &column_stats.max_value)
+    // Parquet floating-point min/max statistics exclude NaN (the spec
+    // requires it), so `min == max` cannot prove a float column is constant:
+    // NaN values are invisible to the statistics. Treating such a column as
+    // constant would silently replace NaN rows with the statistic value.
+    // https://github.com/apache/datafusion/issues/26490
+    let is_float = matches!(
+        data_type,
+        DataType::Float16 | DataType::Float32 | DataType::Float64
+    );
+    if !is_float
+        && let (Precision::Exact(min), Precision::Exact(max)) =
+            (&column_stats.min_value, &column_stats.max_value)
         && min == max
         && !min.is_null()
         && matches!(column_stats.null_count, Precision::Exact(0))
@@ -2720,6 +2730,44 @@ mod test {
         assert_eq!(constants.len(), 1);
         assert_eq!(constants.get("a"), Some(&ScalarValue::from(5i32)));
         assert!(!constants.contains_key("b"));
+    }
+
+    /// Parquet writers exclude NaN from float min/max statistics (the spec
+    /// requires it), so min == max for a float column does not prove the
+    /// column is constant: NaN rows are invisible to the statistics.
+    /// Regression test for https://github.com/apache/datafusion/issues/26490
+    #[test]
+    fn extract_constant_columns_float_nan_unsafe() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f64_col", DataType::Float64, true),
+            Field::new("f32_col", DataType::Float32, true),
+        ]));
+        let float_stats = |v: ScalarValue| ColumnStatistics {
+            null_count: Precision::Exact(0),
+            max_value: Precision::Exact(v.clone()),
+            min_value: Precision::Exact(v),
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+            byte_size: Precision::Absent,
+        };
+        let statistics = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                float_stats(ScalarValue::Float64(Some(-8.6e-27))),
+                float_stats(ScalarValue::Float32(Some(1.5))),
+            ],
+        };
+
+        let constants = constant_columns_from_stats(Some(&statistics), &schema);
+        assert!(
+            !constants.contains_key("f64_col"),
+            "float64 min==max stats must not be treated as constant: NaN rows are excluded from float min/max"
+        );
+        assert!(
+            !constants.contains_key("f32_col"),
+            "float32 min==max stats must not be treated as constant: NaN rows are excluded from float min/max"
+        );
     }
 
     #[test]
