@@ -82,10 +82,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_common::{
-    Column, Result, internal_err,
-    tree_node::{Transformed, TreeNode, TreeNodeRecursion},
+    Result, internal_err,
+    tree_node::{TreeNode, TreeNodeRecursion},
 };
 use datafusion_expr::expr::{Exists, InSubquery, ScalarFunction, SetComparison};
+use datafusion_expr::expr_rewriter::unnormalize_col;
 use datafusion_expr::{Expr, LogicalPlan, Volatility};
 
 /// Report a volatile call that the optimizer run made the plan evaluate at
@@ -266,19 +267,7 @@ fn is_site(func: &ScalarFunction) -> bool {
 /// printed text of a call is not stable enough to key by. `f(a)` and
 /// `f(test.a)` are the same call.
 fn structural_key(expr: &Expr) -> String {
-    expr.clone()
-        .transform(|expr| {
-            Ok(match expr {
-                Expr::Column(column) => {
-                    Transformed::yes(Expr::Column(Column::new_unqualified(column.name)))
-                }
-                other => Transformed::no(other),
-            })
-        })
-        .map(|transformed| transformed.data.to_string())
-        // The rewrite above never fails. Fall back to the printed text rather
-        // than fail an invariant check for it.
-        .unwrap_or_else(|_| expr.to_string())
+    unnormalize_col(expr.clone()).to_string()
 }
 
 /// The plans of the subqueries referenced by the expressions of `plan`.
@@ -307,6 +296,7 @@ mod tests {
     use super::*;
     use crate::test::udfs::PlacementTestUDF;
     use crate::test::{test_table_scan, test_table_scan_with_name};
+    use crate::{Optimizer, OptimizerContext};
     use datafusion_common::Result;
     use datafusion_expr::{
         ExpressionPlacement, JoinType, LogicalPlanBuilder, ScalarUDF, col, exists, lit,
@@ -478,6 +468,47 @@ mod tests {
             .project(vec![volatile(col("a")).alias("a")])?
             .build()?;
         EvaluationSites::count(&input).check(&optimized)?;
+        Ok(())
+    }
+
+    /// The machinery against a real optimizer run, with the switch off: a
+    /// filter on a volatile column defined by a projection must not be pushed
+    /// below it, so the optimized plan keeps the site count of the input.
+    #[test]
+    fn a_real_optimizer_run_adds_no_site() -> Result<()> {
+        let input = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![volatile(col("a")).alias("x"), col("b")])?
+            .filter(col("x").eq(lit(1u32)))?
+            .build()?;
+        let before = EvaluationSites::count(&input);
+        assert_eq!(sites(&input, "leaf_udf(a)"), 1);
+        let optimized =
+            Optimizer::new().optimize(input, &OptimizerContext::new(), |_, _| {})?;
+        assert_eq!(sites(&optimized, "leaf_udf(a)"), 1);
+        before.check(&optimized)?;
+        Ok(())
+    }
+
+    /// <https://github.com/apache/datafusion/issues/25457>, pinned so that the
+    /// test fails, and must be flipped to `?`, once that is fixed.
+    #[test]
+    fn reports_between_expansion_of_a_kept_volatile_call() -> Result<()> {
+        let udf = ScalarUDF::new_from_impl(
+            PlacementTestUDF::new()
+                .with_placement(ExpressionPlacement::KeepInPlace)
+                .with_volatility(Volatility::Volatile),
+        );
+        let input = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(udf.call(vec![col("a")]).between(lit(1u32), lit(5u32)))?
+            .build()?;
+        let before = EvaluationSites::count(&input);
+        let optimized =
+            Optimizer::new().optimize(input, &OptimizerContext::new(), |_, _| {})?;
+        let error = before.check(&optimized).unwrap_err().to_string();
+        assert!(
+            error.contains("is evaluated at 2 sites, against 1"),
+            "{error}"
+        );
         Ok(())
     }
 }
