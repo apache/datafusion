@@ -673,6 +673,11 @@ pub struct MaterializedCteScanExec {
     name: String,
     schema: SchemaRef,
     /// The statistics of all partitions of the body.
+    ///
+    /// These are valid only because the scan always returns every row of
+    /// the body. If an operator that changes the rows (for example a limit
+    /// or a filter) is ever pushed down into this scan, these statistics
+    /// must be updated to match.
     statistics: Option<Arc<Statistics>>,
     buffer: Option<Arc<MaterializedCteBuffer>>,
     metrics: ExecutionPlanMetricsSet,
@@ -836,6 +841,9 @@ impl ExecutionPlan for MaterializedCteScanExec {
     ///
     /// The statistics of one partition are known only when the scan has one
     /// partition.
+    ///
+    /// TODO: support multiple partitions, see
+    /// <https://github.com/apache/datafusion/issues/26424>.
     fn statistics_from_inputs(
         &self,
         _input_stats: &[Arc<Statistics>],

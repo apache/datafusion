@@ -3411,8 +3411,12 @@ impl DefaultPhysicalPlanner {
     ///
     /// Before the optimizers run, each [`MaterializedCteScanExec`] is bound
     /// to the buffer of its [`MaterializedCteExec`] and gets the statistics
-    /// of the CTE body. A rewrite of the body does not change its rows, so
-    /// these statistics stay correct.
+    /// of the CTE body, as it is before the optimizers run. A rewrite of the
+    /// body does not change its rows, so these statistics stay valid, but
+    /// they can be less precise than the statistics of the optimized body.
+    ///
+    /// TODO: snapshot the statistics after the body is optimized, see
+    /// <https://github.com/apache/datafusion/issues/26424>.
     pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,
