@@ -195,7 +195,7 @@ mod tests {
 
     use arrow::array::UInt32Array;
     use arrow::array::{
-        Array, BooleanArray, Decimal32Array, Decimal64Array, Decimal128Array,
+        Array, AsArray, BooleanArray, Decimal32Array, Decimal64Array, Decimal128Array,
         Decimal256Array, FixedSizeBinaryArray, Int32Array, Int64Array,
         IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
         StringArray,
@@ -503,6 +503,39 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_size_binary_16_common_prefix() -> Result<()> {
+        let first = [0xa5_u8; 16];
+        let mut second = first;
+        second[15] = 0xa6;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::FixedSizeBinary(16), false),
+        ]));
+        let mut clustered = GroupValuesClustered::try_new(Arc::clone(&schema))?;
+        let mut hashed = GroupValuesColumn::<true>::try_new(schema)?;
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        // Continue the first group, then distinguish a key only by its last byte.
+        for (key, group_id) in [(first, 0), (first, 0), (second, 1)] {
+            let batch: [ArrayRef; 2] = [
+                Arc::new(Int32Array::from(vec![7])),
+                Arc::new(FixedSizeBinaryArray::try_from_iter([key].into_iter())?),
+            ];
+            clustered.intern(&batch, &mut actual)?;
+            hashed.intern(&batch, &mut expected)?;
+            assert_eq!(actual, [group_id]);
+            assert_eq!(actual, expected);
+        }
+        let values = clustered.emit(EmitTo::All)?;
+        assert_eq!(values, hashed.emit(EmitTo::All)?);
+        assert_eq!(
+            values[1].as_fixed_size_binary().value_data(),
+            [first, second].concat()
+        );
         Ok(())
     }
 
