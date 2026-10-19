@@ -2273,6 +2273,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stream_reserves_retained_interval_graph() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let mut stream = create_stream(NoopBatchTransformer::new(), Arc::clone(&schema));
+        stream.update_reservation()?;
+        let size_without_graph = stream.reservation.size();
+
+        let expr: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let predicate = binary(Arc::clone(&expr), Operator::Gt, lit(0_i32), &schema)?;
+        let graph = ExprIntervalGraph::try_new(predicate, &schema)?;
+        let graph_size = graph.size();
+        stream.graph = Some(graph);
+        stream.update_reservation()?;
+        assert_eq!(stream.reservation.size(), size_without_graph + graph_size);
+        assert_eq!(stream.reservation.size(), stream.size());
+
+        let graph = stream.graph.as_mut().unwrap();
+        let indices = graph.gather_node_indices(&[expr]);
+        let mut ranges = vec![(indices[0].1, Interval::make(Some(1_i32), Some(10_i32))?)];
+        graph.update_ranges(&mut ranges, Interval::TRUE)?;
+        let updated_graph_size = graph.size();
+        stream.update_reservation()?;
+        assert_eq!(
+            stream.reservation.size(),
+            size_without_graph + updated_graph_size
+        );
+        assert_eq!(stream.metrics.stream_memory_usage.value(), stream.size());
+        Ok(())
+    }
+
     fn assert_stream_accounts_for_transformer<T: BatchTransformer>(batch_transformer: T) {
         let batch = RecordBatch::try_from_iter(vec![(
             "a",
