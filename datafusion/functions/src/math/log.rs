@@ -776,15 +776,25 @@ mod tests {
     fn test_log_simplify_typed_null() {
         // Coercion can turn a NULL argument into a typed NULL literal
         let context = SimplifyContext::default();
-        for args in [
-            vec![lit(ScalarValue::Float64(None)), lit(2.0)],
-            vec![lit(2.0), lit(ScalarValue::Float64(None))],
+        for (args, expected) in [
+            (
+                vec![lit(ScalarValue::Float64(None)), lit(2.0)],
+                ScalarValue::Float64(None),
+            ),
+            (
+                vec![lit(2.0), lit(ScalarValue::Float64(None))],
+                ScalarValue::Float64(None),
+            ),
+            (
+                vec![lit(ScalarValue::Float32(None)), lit(2.0f32)],
+                ScalarValue::Float32(None),
+            ),
         ] {
             let result = LogFunc::new().simplify(args, &context).unwrap();
             let ExprSimplifyResult::Simplified(expr) = result else {
                 panic!("Expected ExprSimplifyResult::Simplified")
             };
-            assert_eq!(expr, lit(ScalarValue::Float64(None)));
+            assert_eq!(expr, lit(expected));
         }
     }
 
@@ -1271,6 +1281,12 @@ mod tests {
         assert_eq!(coerce(&[Float32, Float16]), [Float32, Float32]);
         assert_eq!(coerce(&[Float16, Float64]), [Float64, Float64]);
         assert_eq!(coerce(&[Int64, Float32]), [Float64, Float64]);
+        assert_eq!(coerce(&[Float32, Int64]), [Float64, Float64]);
+        assert_eq!(coerce(&[Decimal128(10, 2), Float32]), [Float64, Float64]);
+        assert_eq!(
+            coerce(&[Float64, Dictionary(Box::new(Int32), Box::new(Float32))]),
+            [Float64, Float64]
+        );
         // Homogeneous inputs keep their type
         assert_eq!(coerce(&[Float16, Float16]), [Float16, Float16]);
         assert_eq!(coerce(&[Float32, Float32]), [Float32, Float32]);
@@ -1282,5 +1298,10 @@ mod tests {
             [Float32, Decimal128(10, 2)]
         );
         assert_eq!(coerce(&[Decimal128(10, 2)]), [Decimal128(10, 2)]);
+        // A NULL base is typed by the value; a NULL value matches the decimal
+        // value signature and stays untyped
+        assert_eq!(coerce(&[Null, Float32]), [Float32, Float32]);
+        assert_eq!(coerce(&[Float32, Null]), [Float32, Null]);
+        assert_eq!(coerce(&[Null, Null]), [Null, Null]);
     }
 }

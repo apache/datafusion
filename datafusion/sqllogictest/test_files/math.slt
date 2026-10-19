@@ -1339,6 +1339,12 @@ SELECT log(2.5::float, 10.9::float), arrow_typeof(log(2.5::float, 10.9::float));
 ----
 2.606992 Float32
 
+# A Float16 base is widened to a Float32 value's type
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), 10.9::float), arrow_typeof(log(arrow_cast(2.5, 'Float16'), 10.9::float));
+----
+2.606992 Float32
+
 # #22581: a Float64 base must keep full precision against a Float32 value.
 # 16777217 is not representable in Float32, so an f32 computation would round it.
 query RT
@@ -1356,6 +1362,11 @@ query RT
 SELECT log(NULL, 2.0::float), arrow_typeof(log(NULL, 2.0::float));
 ----
 NULL Float32
+
+query RT
+SELECT log(NULL, NULL), arrow_typeof(log(NULL, NULL));
+----
+NULL Float64
 
 # A Float16 base is widened to a wider value's type
 query RT
