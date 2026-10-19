@@ -1305,8 +1305,8 @@ FROM (VALUES (2000.0::double), (-2000.0::double)) t(a);
 Infinity Infinity
 -Infinity -Infinity
 
-# log result type is the widest float of base and value, so a wider base is
-# not narrowed to the value's type (#22581). Here base 2.5 is Float64.
+# log(base, value) widens float arguments to the wider of the two, so a wider
+# base is not narrowed to the value's type (#22581). Here base 2.5 is Float64.
 query RT
 SELECT log(2.5, arrow_cast(10.9, 'Float16')), arrow_typeof(log(2.5, arrow_cast(10.9, 'Float16')));
 ----
@@ -1346,15 +1346,18 @@ SELECT log(arrow_cast(16777217, 'Float64'), arrow_cast(2.0, 'Float32')), arrow_t
 ----
 0.041666666517 Float64
 
-# A NULL value takes the resolved (widest concrete) float type
+# NULL arguments keep their existing result types
 query RT
 SELECT log(2.5::float, NULL), arrow_typeof(log(2.5::float, NULL));
 ----
+NULL Float64
+
+query RT
+SELECT log(NULL, 2.0::float), arrow_typeof(log(NULL, 2.0::float));
+----
 NULL Float32
 
-# #22581: the log(base, 1) simplification must carry the resolved (widest)
-# type, or a Float16 base with a wider literal 1 fails the optimizer's
-# schema-compatibility check at planning time.
+# A Float16 base is widened to a wider value's type
 query RT
 SELECT log(arrow_cast(2.5, 'Float16'), 1.0::double), arrow_typeof(log(arrow_cast(2.5, 'Float16'), 1.0::double));
 ----

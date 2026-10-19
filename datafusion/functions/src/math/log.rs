@@ -19,14 +19,15 @@
 
 use crate::utils::calculate_binary_math;
 use arrow::array::{Array, ArrayRef};
-use arrow::compute::cast;
 use arrow::datatypes::{
     DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float16Type,
     Float32Type, Float64Type,
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
-use datafusion_common::types::NativeType;
+use datafusion_common::types::{
+    NativeType, logical_float16, logical_float32, logical_float64,
+};
 use datafusion_common::{Result, ScalarValue, exec_err, plan_datafusion_err, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
@@ -74,6 +75,20 @@ impl LogFunc {
             vec![TypeSignatureClass::Numeric],
             NativeType::Float64,
         );
+
+        // For log(base, value) with float arguments, both are widened to the
+        // widest float so a wider base is not narrowed to the value's type
+        // (issue #22581)
+        let float16 = Coercion::new_exact(TypeSignatureClass::Native(logical_float16()));
+        let float32 = Coercion::new_implicit_native(
+            logical_float32(),
+            vec![TypeSignatureClass::Native(logical_float16())],
+        );
+        let float64 = Coercion::new_implicit_native(
+            logical_float64(),
+            vec![TypeSignatureClass::Numeric],
+        );
+
         Self {
             signature: Signature::one_of(
                 // Ensure decimals have precedence over floats since we have
@@ -86,38 +101,19 @@ impl LogFunc {
                     TypeSignature::Coercible(vec![as_float.clone()]),
                     // log(base, value)
                     TypeSignature::Coercible(vec![
-                        as_float.clone(),
+                        as_float,
                         Coercion::new_exact(TypeSignatureClass::Decimal),
                     ]),
-                    TypeSignature::Coercible(vec![as_float.clone(), as_float.clone()]),
+                    // Only (Float16, Float16)
+                    TypeSignature::Coercible(vec![float16.clone(), float16]),
+                    // Any mix of Float16 and Float32, promoted to Float32
+                    TypeSignature::Coercible(vec![float32.clone(), float32]),
+                    // All other numeric inputs, promoted to Float64
+                    TypeSignature::Coercible(vec![float64.clone(), float64]),
                 ],
                 Volatility::Immutable,
             ),
         }
-    }
-}
-
-/// The float type `log` computes and returns for the given argument types: the
-/// widest float present, so a wider base is never narrowed to a narrower value
-/// (issue #22581). Integer and decimal arguments are coerced to `Float64` by the
-/// signature, and null arguments do not constrain the width. When no concrete
-/// float is present the result is `Float64`.
-fn log_float_type(arg_types: &[DataType]) -> DataType {
-    let mut rank = 0u8;
-    for arg_type in arg_types {
-        let arg_rank = match arg_type {
-            DataType::Float16 => 1,
-            DataType::Float32 => 2,
-            DataType::Null => continue,
-            // Float64 and any coerced integer/decimal argument.
-            _ => 3,
-        };
-        rank = rank.max(arg_rank);
-    }
-    match rank {
-        1 => DataType::Float16,
-        2 => DataType::Float32,
-        _ => DataType::Float64,
     }
 }
 
@@ -224,12 +220,12 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.is_empty() {
-            return Err(plan_datafusion_err!("No args"));
+        // Check last argument (value)
+        match &arg_types.last().ok_or(plan_datafusion_err!("No args"))? {
+            DataType::Float16 => Ok(DataType::Float16),
+            DataType::Float32 => Ok(DataType::Float32),
+            _ => Ok(DataType::Float64),
         }
-        // Compute in the widest float of all arguments so a wider base is not
-        // narrowed to the value's type (issue #22581).
-        Ok(log_float_type(arg_types))
     }
 
     fn is_strict(&self) -> bool {
@@ -280,9 +276,6 @@ impl ScalarUDFImpl for LogFunc {
                 .cast_to(args.return_type(), None);
         }
 
-        // Keep execution aligned with the type resolved during planning.
-        let target = args.return_type().clone();
-
         let (base, value) = if args.args.len() == 2 {
             (args.args[0].clone(), &args.args[1])
         } else {
@@ -295,35 +288,26 @@ impl ScalarUDFImpl for LogFunc {
         let value = value.to_array(args.number_rows)?;
 
         let output: ArrayRef = match value.data_type() {
-            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
-                let value = if value.data_type() == &target {
-                    value
-                } else {
-                    cast(&value, &target)?
-                };
-                match target {
-                    DataType::Float16 => {
-                        calculate_binary_math::<Float16Type, Float16Type, Float16Type, _>(
-                            &value,
-                            &base,
-                            |value, base| Ok(value.log(base)),
-                        )?
-                    }
-                    DataType::Float32 => {
-                        calculate_binary_math::<Float32Type, Float32Type, Float32Type, _>(
-                            &value,
-                            &base,
-                            |value, base| Ok(value.log(base)),
-                        )?
-                    }
-                    _ => {
-                        calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
-                            &value,
-                            &base,
-                            |value, base| Ok(value.log(base)),
-                        )?
-                    }
-                }
+            DataType::Float16 => {
+                calculate_binary_math::<Float16Type, Float16Type, Float16Type, _>(
+                    &value,
+                    &base,
+                    |value, base| Ok(value.log(base)),
+                )?
+            }
+            DataType::Float32 => {
+                calculate_binary_math::<Float32Type, Float32Type, Float32Type, _>(
+                    &value,
+                    &base,
+                    |value, base| Ok(value.log(base)),
+                )?
+            }
+            DataType::Float64 => {
+                calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
+                    &value,
+                    &base,
+                    |value, base| Ok(value.log(base)),
+                )?
             }
             DataType::Decimal32(_, scale) => {
                 calculate_binary_math::<Decimal32Type, Float64Type, Float64Type, _>(
@@ -376,8 +360,13 @@ impl ScalarUDFImpl for LogFunc {
             .collect::<Result<Vec<_>>>()?;
         let return_type = self.return_type(&arg_types)?;
 
-        // Null propagation
-        if arg_types.iter().any(|dt| dt.is_null()) {
+        // Null propagation. Coercion may have already turned a NULL argument
+        // into a typed NULL literal, e.g. `log(NULL, float64_col)`
+        if arg_types.iter().any(|dt| dt.is_null())
+            || args
+                .iter()
+                .any(|arg| matches!(arg, Expr::Literal(value, _) if value.is_null()))
+        {
             return Ok(ExprSimplifyResult::Simplified(lit(
                 ScalarValue::Null.cast_to(&return_type)?
             )));
@@ -420,6 +409,8 @@ mod tests {
     use arrow::datatypes::{DECIMAL256_MAX_PRECISION, Field};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::ScalarUDF;
+    use datafusion_expr::type_coercion::functions::fields_with_udf;
 
     #[test]
     fn test_log_decimal_native() {
@@ -778,6 +769,22 @@ mod tests {
                 panic!("Expected ExprSimplifyResult::Original")
             };
             assert_eq!(actual, args);
+        }
+    }
+
+    #[test]
+    fn test_log_simplify_typed_null() {
+        // Coercion can turn a NULL argument into a typed NULL literal
+        let context = SimplifyContext::default();
+        for args in [
+            vec![lit(ScalarValue::Float64(None)), lit(2.0)],
+            vec![lit(2.0), lit(ScalarValue::Float64(None))],
+        ] {
+            let result = LogFunc::new().simplify(args, &context).unwrap();
+            let ExprSimplifyResult::Simplified(expr) = result else {
+                panic!("Expected ExprSimplifyResult::Simplified")
+            };
+            assert_eq!(expr, lit(ScalarValue::Float64(None)));
         }
     }
 
@@ -1242,70 +1249,38 @@ mod tests {
     }
 
     #[test]
-    fn test_log_return_type_uses_widest_float() {
+    fn test_log_coerces_floats_to_widest() {
         use DataType::*;
-        let f = LogFunc::new();
-
-        // A wider base must not be narrowed to the value's type (#22581).
-        assert_eq!(f.return_type(&[Float64, Float32]).unwrap(), Float64);
-        assert_eq!(f.return_type(&[Float32, Float64]).unwrap(), Float64);
-        assert_eq!(f.return_type(&[Float32, Float16]).unwrap(), Float32);
-        assert_eq!(f.return_type(&[Float16, Float32]).unwrap(), Float32);
-        // Homogeneous inputs keep their type.
-        assert_eq!(f.return_type(&[Float16, Float16]).unwrap(), Float16);
-        assert_eq!(f.return_type(&[Float32, Float32]).unwrap(), Float32);
-        assert_eq!(f.return_type(&[Float64, Float64]).unwrap(), Float64);
-        assert_eq!(f.return_type(&[Float32]).unwrap(), Float32);
-        // Null does not constrain the width; all-null falls back to Float64.
-        assert_eq!(f.return_type(&[Float32, Null]).unwrap(), Float32);
-        assert_eq!(f.return_type(&[Null, Float32]).unwrap(), Float32);
-        assert_eq!(f.return_type(&[Null, Null]).unwrap(), Float64);
-    }
-
-    #[test]
-    fn test_log_mixed_width_preserves_base_precision() {
-        // Issue #22581: log(Float64 base, Float32 value) narrowed the base to
-        // Float32, losing precision. 16777217 is not representable in f32.
-        let arg_fields = vec![
-            Field::new("a", DataType::Float64, false).into(),
-            Field::new("a", DataType::Float32, false).into(),
-        ];
-        let args = ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Float64(Some(16777217.0))), // base
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))),        // value
-            ],
-            arg_fields,
-            number_rows: 1,
-            return_field: Field::new("f", DataType::Float64, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+        let udf = ScalarUDF::from(LogFunc::new());
+        let coerce = |types: &[DataType]| -> Vec<DataType> {
+            let fields = types
+                .iter()
+                .map(|t| Arc::new(Field::new("a", t.clone(), true)))
+                .collect::<Vec<_>>();
+            fields_with_udf(&fields, &udf)
+                .unwrap()
+                .iter()
+                .map(|f| f.data_type().clone())
+                .collect()
         };
-        let result = LogFunc::new()
-            .invoke_with_args(args)
-            .expect("failed to initialize function log");
 
-        match result {
-            ColumnarValue::Array(arr) => {
-                let floats = as_float64_array(&arr)
-                    .expect("result should be a Float64Array, not narrowed to Float32");
-                assert_eq!(floats.len(), 1);
-
-                let expected = 2.0_f64.log(16777217.0);
-                assert!(
-                    (floats.value(0) - expected).abs() < 1e-15,
-                    "got {}, expected f64-precision {expected}",
-                    floats.value(0)
-                );
-                // The lossy f32 computation differs in the 8th decimal; the
-                // result must not match it.
-                let lossy = 2.0_f32.log(16777217.0_f32) as f64;
-                assert!(
-                    (floats.value(0) - lossy).abs() > 1e-9,
-                    "result {} still matches the lossy f32 value {lossy}",
-                    floats.value(0)
-                );
-            }
-            ColumnarValue::Scalar(_) => panic!("Expected an array value"),
-        }
+        // A wider base must not be narrowed to the value's type (#22581)
+        assert_eq!(coerce(&[Float64, Float32]), [Float64, Float64]);
+        assert_eq!(coerce(&[Float32, Float64]), [Float64, Float64]);
+        assert_eq!(coerce(&[Float16, Float32]), [Float32, Float32]);
+        assert_eq!(coerce(&[Float32, Float16]), [Float32, Float32]);
+        assert_eq!(coerce(&[Float16, Float64]), [Float64, Float64]);
+        assert_eq!(coerce(&[Int64, Float32]), [Float64, Float64]);
+        // Homogeneous inputs keep their type
+        assert_eq!(coerce(&[Float16, Float16]), [Float16, Float16]);
+        assert_eq!(coerce(&[Float32, Float32]), [Float32, Float32]);
+        assert_eq!(coerce(&[Float64, Float64]), [Float64, Float64]);
+        assert_eq!(coerce(&[Float32]), [Float32]);
+        // Decimal values keep the native decimal implementation
+        assert_eq!(
+            coerce(&[Float32, Decimal128(10, 2)]),
+            [Float32, Decimal128(10, 2)]
+        );
+        assert_eq!(coerce(&[Decimal128(10, 2)]), [Decimal128(10, 2)]);
     }
 }
