@@ -42,6 +42,8 @@
 //! ```text
 //! EnsureRequirements::optimize(plan)
 //! │
+//! ├─ Phase 0: top-down Interleave → Union      (replace_interleave_with_union)
+//! │
 //! ├─ Phase 1: top-down join-key reorder        (adjust_input_keys_ordering)
 //! │
 //! ├─ Phase 2: combined distribution + sorting  (single bottom-up pass)
@@ -148,6 +150,9 @@ pub mod enforce_sorting;
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::optimizer::{
+    ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
+};
 
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -178,6 +183,22 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+    }
+
+    fn optimize_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config = context.config_options();
+        // Phase 0: Normalize `InterleaveExec` back to `UnionExec` (top-down).
+        // Interleaves are distribution artifacts of Phase 2, which re-derives
+        // them from the children's final partitioning. Keeping them would
+        // fail as soon as a child loses the partitioning they depend on.
+        use super::enforce_distribution::replace_interleave_with_union;
+        let plan = plan.transform_down(replace_interleave_with_union).data()?;
+
         // Phase 1: Join key reordering (top-down, from EnforceDistribution)
         use super::enforce_distribution::{
             PlanWithKeyRequirements, adjust_input_keys_ordering,
@@ -194,14 +215,20 @@ impl PhysicalOptimizerRule for EnsureRequirements {
 
         // Phase 2: Combined distribution + sorting enforcement (single bottom-up pass)
         // For each node: distribution first, then sorting.
-        use super::enforce_distribution::{DistributionContext, ensure_distribution};
+        use super::enforce_distribution::{
+            DistributionContext, ensure_distribution_with_stats,
+        };
         use super::enforce_sorting::{PlanWithCorrespondingSort, ensure_sorting};
 
         // Step 2a: Distribution enforcement (bottom-up)
         let dist_ctx = DistributionContext::new_default(plan);
-        let dist_ctx = dist_ctx
-            .transform_up(|ctx| ensure_distribution(ctx, config))
-            .data()?;
+        let dist_ctx = with_statistics_context(context, |stats_ctx| {
+            dist_ctx
+                .transform_up(|ctx| {
+                    ensure_distribution_with_stats(ctx, config, stats_ctx)
+                })
+                .data()
+        })?;
 
         // Step 2b: Sorting enforcement (bottom-up) — runs on distribution-fixed plan
         let sort_ctx = PlanWithCorrespondingSort::new_default(dist_ctx.plan);

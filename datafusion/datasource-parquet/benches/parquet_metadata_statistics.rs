@@ -28,6 +28,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_datasource_parquet::metadata::DFParquetMetadata;
 use parquet::arrow::ArrowSchemaConverter;
+use parquet::basic::ColumnOrder;
 use parquet::data_type::ByteArray;
 use parquet::file::metadata::{
     ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData,
@@ -71,7 +72,9 @@ fn parquet_metadata_statistics(c: &mut Criterion) {
         MetadataState::Mixed,
         MetadataState::None,
     ];
-    let column_counts = [8, 64, 256];
+    // 1024 covers wide schemas, where the cost of resolving each field to a
+    // parquet leaf column dominates.
+    let column_counts = [8, 64, 256, 1024];
     let row_group_counts = [1, 32, 128];
 
     let mut group = c.benchmark_group("parquet_metadata_statistics");
@@ -169,13 +172,19 @@ fn make_synthetic_metadata(
         })
         .collect::<Vec<_>>();
 
+    // Model a modern writer so byte-array bounds have a trustworthy order.
+    let column_orders = schema_descr
+        .columns()
+        .iter()
+        .map(|column| ColumnOrder::TYPE_DEFINED_ORDER(column.sort_order()))
+        .collect();
     let file_metadata = FileMetaData::new(
         1,
         (spec.row_groups * ROWS_PER_GROUP) as i64,
         Some("datafusion parquet metadata benchmark".to_string()),
         None,
         schema_descr,
-        None,
+        Some(column_orders),
     );
 
     ParquetMetaData::new(file_metadata, row_groups)

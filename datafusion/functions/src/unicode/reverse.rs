@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::strings::{
     BulkNullStringArrayBuilder, GenericStringArrayBuilder, StringViewArrayBuilder,
 };
@@ -22,10 +24,12 @@ use crate::utils::make_scalar_function;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{Array, ArrayRef, AsArray, StringArrayType};
 use arrow::datatypes::DataType;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::Result;
+use datafusion_common::types::logical_string;
+use datafusion_common::utils::offset_span_len;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -56,11 +60,15 @@ impl Default for ReverseFunc {
 
 impl ReverseFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8View, Utf8, LargeUtf8],
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_implicit_native(
+                        logical_string(),
+                        vec![TypeSignatureClass::Any],
+                    )
+                    .with_encoding_preservation(EncodingPreservation::dictionary()),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -81,13 +89,7 @@ impl ScalarUDFImpl for ReverseFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let args = &args.args;
-        match args[0].data_type() {
-            Utf8 | Utf8View | LargeUtf8 => make_scalar_function(reverse, vec![])(args),
-            other => {
-                exec_err!("Unsupported data type {other:?} for function reverse")
-            }
-        }
+        make_scalar_function(reverse, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -101,18 +103,35 @@ fn reverse(args: &[ArrayRef]) -> Result<ArrayRef> {
     let len = args[0].len();
 
     match args[0].data_type() {
-        LargeUtf8 => reverse_impl(
-            &args[0].as_string::<i64>(),
-            GenericStringArrayBuilder::<i64>::with_capacity(len, 1024),
-        ),
-        Utf8 => reverse_impl(
-            &args[0].as_string::<i32>(),
-            GenericStringArrayBuilder::<i32>::with_capacity(len, 1024),
-        ),
+        LargeUtf8 => {
+            let string_array = args[0].as_string::<i64>();
+            reverse_impl(
+                &string_array,
+                GenericStringArrayBuilder::<i64>::with_capacity(
+                    len,
+                    offset_span_len(string_array.offsets()),
+                ),
+            )
+        }
+        Utf8 => {
+            let string_array = args[0].as_string::<i32>();
+            reverse_impl(
+                &string_array,
+                GenericStringArrayBuilder::<i32>::with_capacity(
+                    len,
+                    offset_span_len(string_array.offsets()),
+                ),
+            )
+        }
         Utf8View => reverse_impl(
             &args[0].as_string_view(),
             StringViewArrayBuilder::with_capacity(len),
         ),
+        DataType::Dictionary(_, _) => {
+            let dictionary = args[0].as_any_dictionary();
+            let converted = reverse(&[Arc::clone(dictionary.values())])?;
+            Ok(dictionary.with_values(converted))
+        }
         _ => unreachable!(
             "Reverse can only be applied to Utf8View, Utf8 and LargeUtf8 types"
         ),
@@ -221,8 +240,10 @@ mod tests {
     #[test]
     fn test_functions() -> Result<()> {
         test_reverse!(Some("abcde".into()), Ok(Some("edcba")));
-        test_reverse!(Some("loẅks".into()), Ok(Some("sk̈wol")));
-        test_reverse!(Some("loẅks".into()), Ok(Some("sk̈wol")));
+        // `reverse` works per `char`, so a decomposed grapheme is split from its base char ...
+        test_reverse!(Some("low\u{308}ks".into()), Ok(Some("sk\u{308}wol")));
+        // ... while the composed form is a single `char` and stays intact.
+        test_reverse!(Some("lo\u{1e85}ks".into()), Ok(Some("sk\u{1e85}ol")));
         test_reverse!(None, Ok(None));
         #[cfg(not(feature = "unicode_expressions"))]
         test_reverse!(

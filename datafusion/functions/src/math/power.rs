@@ -16,8 +16,6 @@
 // under the License.
 
 //! Math function: `power()`.
-use super::log::LogFunc;
-
 use crate::utils::calculate_binary_math;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Float64Type};
@@ -25,10 +23,9 @@ use arrow::error::ArrowError;
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, internal_err};
-use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Cast, Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
+    Cast, Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility, lit,
 };
 use datafusion_macros::user_doc;
@@ -131,7 +128,6 @@ impl ScalarUDFImpl for PowerFunc {
     /// Simplify the `power` function by the relevant rules:
     /// 1. Power(a, 0) ===> 1
     /// 2. Power(a, 1) ===> a
-    /// 3. Power(a, Log(a, b)) ===> b
     fn simplify(
         &self,
         args: Vec<Expr>,
@@ -140,6 +136,7 @@ impl ScalarUDFImpl for PowerFunc {
         let [base, exponent] = take_function_args("power", args)?;
         let base_type = info.get_data_type(&base)?;
         let exponent_type = info.get_data_type(&exponent)?;
+        let base_nullable = info.nullable(&base)?;
         let return_type =
             self.return_type(&[base_type.clone(), exponent_type.clone()])?;
 
@@ -150,13 +147,6 @@ impl ScalarUDFImpl for PowerFunc {
             )));
         }
 
-        // `simplify` runs on the logical expression *before* type coercion,
-        // so a simplified sub-expression may still carry its original type
-        // rather than the Float64 that `power` is declared to return. Cast it
-        // back when needed to preserve the schema the optimizer already
-        // committed to — e.g. `power(int_col, 1)` simplifies to `int_col`,
-        // and the `b` in `power(b, log(b, uint_col))` simplifies to `uint_col`,
-        // both of which must become Float64.
         let cast_to_return_type = |expr: Expr, expr_type: &DataType| {
             if expr_type == &return_type {
                 expr
@@ -167,7 +157,7 @@ impl ScalarUDFImpl for PowerFunc {
 
         match exponent {
             Expr::Literal(value, _)
-                if value == ScalarValue::new_zero(&exponent_type)? =>
+                if value == ScalarValue::new_zero(&exponent_type)? && !base_nullable =>
             {
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
                     &return_type,
@@ -178,15 +168,6 @@ impl ScalarUDFImpl for PowerFunc {
                     base, &base_type,
                 )))
             }
-            Expr::ScalarFunction(ScalarFunction { func, mut args })
-                if is_log(&func) && args.len() == 2 && base == args[0] =>
-            {
-                let b = args.pop().unwrap(); // length checked above
-                let b_type = info.get_data_type(&b)?;
-                Ok(ExprSimplifyResult::Simplified(cast_to_return_type(
-                    b, &b_type,
-                )))
-            }
             _ => Ok(ExprSimplifyResult::Original(vec![base, exponent])),
         }
     }
@@ -194,11 +175,6 @@ impl ScalarUDFImpl for PowerFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-}
-
-/// Return true if this function call is a call to `Log`
-fn is_log(func: &ScalarUDF) -> bool {
-    func.inner().is::<LogFunc>()
 }
 
 #[cfg(test)]

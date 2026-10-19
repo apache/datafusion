@@ -21,10 +21,15 @@ use crate::{
     EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
     expressions::UnKnownColumn, physical_exprs_contains, physical_exprs_equal,
 };
+use arrow::datatypes::Schema;
 pub use datafusion_common::SplitPoint;
-use datafusion_common::{Result, validate_range_split_points};
+use datafusion_common::{Result, plan_err, validate_range_split_points};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+#[cfg(feature = "proto")]
+use datafusion_physical_expr_common::sort_expr::{
+    sort_exprs_try_from_proto, sort_exprs_try_to_proto,
+};
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -148,15 +153,23 @@ impl Display for Partitioning {
 
 /// Physical range partitioning.
 ///
-/// [`RangePartitioning`] describes an ordered key space with split points.
+/// [`RangePartitioning`] describes an ordered key space with sampled split points.
 ///
 /// - `ordering` defines the partitioning key and ordering.
-/// - `split_points` define the boundaries between adjacent partitions.
+/// - `samples` are the maximum-resolution split points supplied by the caller.
+/// - The effective `split_points` are derived from those samples for the selected
+///   partition count; the count itself is `split_points.len() + 1` and is not
+///   stored separately.
 ///
 /// Comparisons use the lexicographic order defined by `ordering`, including
-/// `ASC`/`DESC` and null ordering. Split points must be strictly ordered
-/// according to that ordering, and each split point must have one value per
-/// ordering expression. See [`SplitPoint`] for the shared boundary convention.
+/// `ASC`/`DESC` and null ordering. Samples must be strictly ordered according
+/// to that ordering, and each sample must have one value per ordering
+/// expression. See [`SplitPoint`] for the shared boundary convention.
+///
+/// When `partition_count` is smaller than [`Self::max_partition_count`], the
+/// samples are evenly down-sampled to derive the effective split points. This
+/// allows planners to reduce or later restore the number of partitions without
+/// losing the original distribution sample.
 ///
 /// Like other user-specified data properties such as sortedness, if a source
 /// declares range partitioning, it is responsible for placing each row in the
@@ -193,40 +206,94 @@ impl Display for Partitioning {
 /// partition 2: keys at/after (2023, Allston)
 /// ```
 ///
-/// NOTE: Optimizer and execution behavior for this partitioning is intentionally
-/// not implemented and will be introduced incrementally. See
-/// <https://github.com/apache/datafusion/issues/22395>.
+/// Equality includes retained samples, since they determine which future scales
+/// are possible. Use [`Self::has_same_layout`] to compare only the current layout.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RangePartitioning {
     /// Ordered partitioning key.
     ordering: LexOrdering,
-    /// Boundaries between adjacent partitions.
-    split_points: Vec<SplitPoint>,
+    /// Caller-supplied maximum-resolution split points used to derive the
+    /// effective boundaries.
+    samples: Arc<[SplitPoint]>,
+    /// Effective boundaries for the current partition count.
+    split_points: Arc<[SplitPoint]>,
 }
 
 impl RangePartitioning {
     /// Creates range partitioning metadata without validating split points.
     ///
-    /// Use [`Self::try_new`] to validate the contract documented on
-    /// [`RangePartitioning`].
+    /// Use [`Self::try_new`] to validate exact boundaries, or
+    /// [`Self::try_new_with_samples`] to retain additional samples for scaling up.
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use RangePartitioning::try_new or try_new_with_samples instead"
+    )]
     pub fn new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Self {
+        let split_points: Arc<[SplitPoint]> = Arc::from(split_points);
         Self {
             ordering,
+            samples: Arc::clone(&split_points),
             split_points,
         }
     }
 
     /// Creates range partitioning metadata and validates split point shape and
     /// ordering.
+    ///
+    /// The exact boundaries are also the retained samples. This allows scaling
+    /// down and back up to the original count, but not beyond it. Prefer
+    /// [`Self::try_new_with_samples`] when additional sample points are available.
     pub fn try_new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Result<Self> {
+        let partition_count = split_points.len() + 1;
+        Self::try_new_with_samples(ordering, split_points, partition_count)
+    }
+
+    /// Creates sample-backed range partitioning and validates the sample shape,
+    /// ordering, and target partition count.
+    ///
+    /// `partition_count` must be at least one and no larger than
+    /// `samples.len() + 1`. When it is smaller than that maximum, the samples
+    /// are evenly down-sampled to derive the effective split points.
+    ///
+    /// For a single range key:
+    ///
+    /// ```text
+    /// ordering = [key ASC NULLS LAST]
+    /// samples = [(10), (20), (30), (40), (50)]
+    /// partition_count = 3
+    /// split_points = [(20), (40)]
+    ///
+    /// partition 0: key before 20
+    /// partition 1: key between 20 (inclusive) and 40 (exclusive)
+    /// partition 2: key at/after 40
+    ///
+    /// scale(5): split_points = [(20), (30), (40), (50)]
+    /// scale(7): None (at most 6 partitions)
+    /// ```
+    ///
+    /// Retain at least `maximum_expected_partitions - 1` distinct samples to
+    /// support that many partitions later. Small inputs may not have enough
+    /// distinct values to do so.
+    pub fn try_new_with_samples(
+        ordering: LexOrdering,
+        samples: Vec<SplitPoint>,
+        partition_count: usize,
+    ) -> Result<Self> {
         validate_range_split_points(
-            &split_points,
+            &samples,
             &ordering
                 .iter()
                 .map(|sort_expr| sort_expr.options)
                 .collect::<Vec<_>>(),
         )?;
-        Ok(Self::new(ordering, split_points))
+        validate_range_partition_count(partition_count, samples.len() + 1)?;
+        let samples: Arc<[SplitPoint]> = Arc::from(samples);
+        let split_points = downsample_split_points(&samples, partition_count);
+        Ok(Self {
+            ordering,
+            samples,
+            split_points,
+        })
     }
 
     /// Returns the ordering that defines the range key.
@@ -234,7 +301,12 @@ impl RangePartitioning {
         &self.ordering
     }
 
-    /// Returns the ordered split points between partitions.
+    /// Returns the maximum-resolution sample points.
+    pub fn samples(&self) -> &[SplitPoint] {
+        &self.samples
+    }
+
+    /// Returns the effective split points between partitions.
     pub fn split_points(&self) -> &[SplitPoint] {
         &self.split_points
     }
@@ -242,6 +314,44 @@ impl RangePartitioning {
     /// Returns the number of partitions.
     pub fn partition_count(&self) -> usize {
         self.split_points.len() + 1
+    }
+
+    /// Returns the largest partition count supported by the stored samples.
+    pub fn max_partition_count(&self) -> usize {
+        self.samples.len() + 1
+    }
+
+    /// Whether two range partitionings have the same current key ordering and
+    /// effective boundaries, irrespective of their retained samples.
+    ///
+    /// This does not imply equal scaling capacity. In particular, a plan that
+    /// combines inputs must not use this comparison to inherit one input's samples
+    /// for all inputs. Structural equality is required for that use case.
+    pub fn has_same_layout(&self, other: &Self) -> bool {
+        self.ordering == other.ordering && self.split_points == other.split_points
+    }
+
+    /// Returns this range partitioning scaled to `target_partitions`.
+    ///
+    /// Scaling retains the original samples, so a range partitioning that was
+    /// scaled down can later be scaled back up to [`Self::max_partition_count`].
+    /// Returns `None` when `target_partitions` is zero or the retained samples do
+    /// not support that many partitions. Insufficient samples are an expected
+    /// condition; callers should retain the layout or choose another partitioning.
+    /// This method changes metadata only; the caller must ensure that the actual
+    /// row distribution matches the resulting boundaries.
+    pub fn scale(&self, target_partitions: usize) -> Option<Self> {
+        if target_partitions == 0 || target_partitions > self.max_partition_count() {
+            return None;
+        }
+        if target_partitions == self.partition_count() {
+            return Some(self.clone());
+        }
+        Some(Self {
+            ordering: self.ordering.clone(),
+            samples: Arc::clone(&self.samples),
+            split_points: downsample_split_points(&self.samples, target_partitions),
+        })
     }
 
     /// Calculates the range partitioning after applying the given projection.
@@ -274,7 +384,58 @@ impl RangePartitioning {
 
         Some(Self {
             ordering,
-            split_points: self.split_points.clone(),
+            samples: Arc::clone(&self.samples),
+            split_points: Arc::clone(&self.split_points),
+        })
+    }
+
+    /// Checks whether the types of the given expressions match the data types of the split points in this range partitioning.
+    pub fn is_compatible_with_expressions(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+        schema: &Schema,
+    ) -> bool {
+        if self.ordering.len() != exprs.len() {
+            return false;
+        }
+        if let Some(first_split) = self.samples.first() {
+            exprs.iter().zip(first_split.values()).all(|(expr, val)| {
+                expr.data_type(schema)
+                    .map(|dt| dt == val.data_type())
+                    .unwrap_or(false)
+            })
+        } else {
+            true
+        }
+    }
+
+    /// Adapts this range partitioning to the given expressions, preserving split points and sort options.
+    /// Returns `None` if `exprs` count doesn't match ordering length or expression types don't match split points.
+    pub fn adapt(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+        schema: &Schema,
+    ) -> Option<Self> {
+        if !self.is_compatible_with_expressions(exprs, schema) {
+            return None;
+        }
+        let new_ordering = LexOrdering::new(
+            exprs
+                .iter()
+                .zip(&self.ordering)
+                .map(|(expr, sort_expr)| PhysicalSortExpr {
+                    expr: Arc::clone(expr),
+                    options: sort_expr.options,
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        if new_ordering.len() != self.ordering.len() {
+            return None;
+        }
+        Some(Self {
+            ordering: new_ordering,
+            samples: Arc::clone(&self.samples),
+            split_points: Arc::clone(&self.split_points),
         })
     }
 }
@@ -284,12 +445,52 @@ impl Display for RangePartitioning {
         let split_points = format_range_split_points(&self.split_points);
         write!(
             f,
-            "Range([{}], [{}], {})",
+            "Range([{}], [{}], {}",
             self.ordering,
             split_points,
             self.partition_count()
-        )
+        )?;
+        if self.max_partition_count() != self.partition_count() {
+            write!(f, ", max {}", self.max_partition_count())?;
+        }
+        write!(f, ")")
     }
+}
+
+fn downsample_split_points(
+    samples: &Arc<[SplitPoint]>,
+    partition_count: usize,
+) -> Arc<[SplitPoint]> {
+    if partition_count == samples.len() + 1 {
+        return Arc::clone(samples);
+    }
+
+    let sample_count = samples.len();
+    (1..partition_count)
+        .map(|partition| {
+            // Use a wider intermediate so valid slice lengths cannot overflow
+            // when calculating the evenly spaced sample index.
+            let sample_index = ((partition as u128 * sample_count as u128)
+                / partition_count as u128) as usize;
+            samples[sample_index].clone()
+        })
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn validate_range_partition_count(
+    partition_count: usize,
+    max_partition_count: usize,
+) -> Result<()> {
+    if partition_count == 0 {
+        return plan_err!("Range partitioning partition count must be at least 1");
+    }
+    if partition_count > max_partition_count {
+        return plan_err!(
+            "Range partitioning partition count {partition_count} exceeds maximum {max_partition_count}"
+        );
+    }
+    Ok(())
 }
 
 fn format_range_split_points(split_points: &[SplitPoint]) -> String {
@@ -513,6 +714,200 @@ impl Partitioning {
             }
         }
     }
+
+    /// Adapts this partitioning scheme to satisfy a required [`Distribution`] on the given schema.
+    ///
+    /// - For `Partitioning::Hash`: creates `Partitioning::Hash(exprs, partition_count)`.
+    /// - For `Partitioning::Range`: adapts the range partitioning to the requirement's expressions using [`RangePartitioning::adapt`].
+    /// - For other partitioning schemes: returns `None`.
+    #[expect(
+        deprecated,
+        reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+    )]
+    pub fn adapt(
+        &self,
+        child_requirement: &Distribution,
+        child_schema: &Schema,
+    ) -> Option<Self> {
+        let (Distribution::HashPartitioned(exprs) | Distribution::KeyPartitioned(exprs)) =
+            child_requirement
+        else {
+            return None;
+        };
+
+        match self {
+            Partitioning::Range(ref_range) => ref_range
+                .adapt(exprs, child_schema)
+                .map(Partitioning::Range),
+            Partitioning::Hash(_, ref_count) => {
+                Some(Partitioning::Hash(exprs.to_vec(), *ref_count))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Protobuf conversions for [`Partitioning`].
+///
+/// Child expressions (hash keys, range orderings) and `ScalarValue` split
+/// points are (de)serialized through the expression-level context, so this is
+/// the single copy of the partitioning wire format: `RepartitionExec` and
+/// `datafusion-proto`'s central serializer route through it, and the remaining
+/// per-plan migrations (`FileScanConfig` and friends) are meant to do the same
+/// rather than grow another copy.
+///
+/// [`protobuf::Partitioning`]: datafusion_proto_models::protobuf::Partitioning
+#[cfg(feature = "proto")]
+impl Partitioning {
+    /// Serialize this partitioning into its protobuf representation.
+    pub fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<datafusion_proto_models::protobuf::Partitioning> {
+        use datafusion_common::utils::usize_to_wire;
+        use datafusion_proto_models::protobuf;
+
+        let partition_count =
+            |count: usize| usize_to_wire::<u64>(count, "Partitioning", "partition_count");
+        let partition_method = match self {
+            Partitioning::RoundRobinBatch(n) => {
+                protobuf::partitioning::PartitionMethod::RoundRobin(partition_count(*n)?)
+            }
+            Partitioning::Hash(exprs, n) => {
+                protobuf::partitioning::PartitionMethod::Hash(
+                    protobuf::PhysicalHashRepartition {
+                        hash_expr: ctx.encode_children_expressions(exprs)?,
+                        partition_count: partition_count(*n)?,
+                    },
+                )
+            }
+            Partitioning::Range(range) => {
+                let sort_expr = sort_exprs_try_to_proto(range.ordering().iter(), ctx)?;
+                let encode_split_points = |split_points: &[SplitPoint]| {
+                    split_points
+                        .iter()
+                        .map(|split_point| {
+                            let value = split_point
+                                .values()
+                                .iter()
+                                .map(|value| value.try_into().map_err(Into::into))
+                                .collect::<Result<Vec<_>>>()?;
+                            Ok(protobuf::PhysicalRangeSplitPoint { value })
+                        })
+                        .collect::<Result<Vec<_>>>()
+                };
+                let split_point = encode_split_points(range.split_points())?;
+                let sample_point = encode_split_points(range.samples())?;
+                protobuf::partitioning::PartitionMethod::Range(
+                    protobuf::PhysicalRangePartitioning {
+                        sort_expr,
+                        split_point,
+                        sample_point,
+                        partition_count: partition_count(range.partition_count())?,
+                    },
+                )
+            }
+            Partitioning::UnknownPartitioning(n) => {
+                protobuf::partitioning::PartitionMethod::Unknown(partition_count(*n)?)
+            }
+        };
+        Ok(protobuf::Partitioning {
+            partition_method: Some(partition_method),
+        })
+    }
+
+    /// Reconstruct a [`Partitioning`] from its protobuf representation.
+    ///
+    /// Returns `Ok(None)` when the message carries no `partition_method`, which
+    /// the wire format uses to mean "no output partitioning declared"; callers
+    /// for which it is required should turn that into their own error.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::Partitioning,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Option<Self>> {
+        use datafusion_common::utils::usize_from_wire;
+        use datafusion_common::{ScalarValue, internal_datafusion_err, internal_err};
+        use datafusion_proto_models::protobuf;
+
+        let partition_count =
+            |count: u64| usize_from_wire(count, "Partitioning", "partition_count");
+        let protobuf::Partitioning { partition_method } = node;
+        let Some(partition_method) = partition_method.as_ref() else {
+            return Ok(None);
+        };
+        let partitioning = match partition_method {
+            protobuf::partitioning::PartitionMethod::RoundRobin(n) => {
+                Partitioning::RoundRobinBatch(partition_count(*n)?)
+            }
+            protobuf::partitioning::PartitionMethod::Hash(hash) => {
+                let protobuf::PhysicalHashRepartition {
+                    hash_expr,
+                    partition_count: hash_partition_count,
+                } = hash;
+                let exprs = hash_expr
+                    .iter()
+                    .map(|expr| ctx.decode(expr))
+                    .collect::<Result<Vec<_>>>()?;
+                Partitioning::Hash(exprs, partition_count(*hash_partition_count)?)
+            }
+            protobuf::partitioning::PartitionMethod::Unknown(n) => {
+                Partitioning::UnknownPartitioning(partition_count(*n)?)
+            }
+            protobuf::partitioning::PartitionMethod::Range(range) => {
+                let sort_exprs = sort_exprs_try_from_proto(&range.sort_expr, ctx)?;
+                let sort_expr_count = sort_exprs.len();
+                let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Range partitioning requires non-empty ordering"
+                    )
+                })?;
+                if ordering.len() != sort_expr_count {
+                    return internal_err!(
+                        "Range partitioning ordering must not contain duplicate expressions"
+                    );
+                }
+                let decode_split_points =
+                    |split_points: &[protobuf::PhysicalRangeSplitPoint]| {
+                        split_points
+                            .iter()
+                            .map(|split_point| {
+                                let values = split_point
+                                    .value
+                                    .iter()
+                                    .map(|value| {
+                                        ScalarValue::try_from(value).map_err(Into::into)
+                                    })
+                                    .collect::<Result<Vec<_>>>()?;
+                                Ok(SplitPoint::new(values))
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    };
+                let split_points = decode_split_points(&range.split_point)?;
+                if range.partition_count == 0 {
+                    // Older payloads derive their partition count from the exact
+                    // split points and do not carry this field.
+                    Partitioning::Range(RangePartitioning::try_new(
+                        ordering,
+                        split_points,
+                    )?)
+                } else {
+                    let samples = decode_split_points(&range.sample_point)?;
+                    let range_partitioning = RangePartitioning::try_new_with_samples(
+                        ordering,
+                        samples,
+                        partition_count(range.partition_count)?,
+                    )?;
+                    if range_partitioning.split_points() != split_points {
+                        return internal_err!(
+                            "Range partitioning effective split points do not match its samples and partition count"
+                        );
+                    }
+                    Partitioning::Range(range_partitioning)
+                }
+            }
+        };
+        Ok(Some(partitioning))
+    }
 }
 
 impl PartialEq for Partitioning {
@@ -694,17 +1089,6 @@ mod tests {
             split_points: Vec<SplitPoint>,
         ) -> Partitioning {
             Partitioning::Range(self.range(indices, split_points))
-        }
-
-        fn range_partitioning_with_ordering(
-            &self,
-            ordering: LexOrdering,
-            split_points: Vec<SplitPoint>,
-        ) -> Partitioning {
-            Partitioning::Range(
-                RangePartitioning::try_new(ordering, split_points)
-                    .expect("test range partitioning should be valid"),
-            )
         }
     }
 
@@ -975,6 +1359,160 @@ mod tests {
     }
 
     #[test]
+    fn test_range_partitioning_scales_from_samples() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a"])?;
+        let samples = (10..=90)
+            .step_by(10)
+            .map(|value| int_split_point([value]))
+            .collect::<Vec<_>>();
+        let range = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0]),
+            samples.clone(),
+            4,
+        )?;
+
+        assert_eq!(range.partition_count(), 4);
+        assert_eq!(range.max_partition_count(), 10);
+        assert_eq!(range.samples(), samples);
+        assert_eq!(
+            range.split_points(),
+            vec![
+                int_split_point([30]),
+                int_split_point([50]),
+                int_split_point([70]),
+            ]
+        );
+        assert_eq!(
+            range.to_string(),
+            "Range([a@0 ASC], [(30), (50), (70)], 4, max 10)"
+        );
+
+        let single = range.scale(1).expect("one partition is supported");
+        assert_eq!(single.partition_count(), 1);
+        assert!(single.split_points().is_empty());
+        assert_eq!(single.max_partition_count(), 10);
+        assert_eq!(single.to_string(), "Range([a@0 ASC], [], 1, max 10)");
+
+        let restored = single
+            .scale(single.max_partition_count())
+            .expect("retained samples support restoration");
+        assert_eq!(restored.split_points(), samples);
+        assert_eq!(restored.samples(), samples);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_rejects_invalid_partition_count() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a"])?;
+        let ordering = fixture.range_ordering([0]);
+        let samples = vec![int_split_point([10]), int_split_point([20])];
+
+        let error =
+            RangePartitioning::try_new_with_samples(ordering.clone(), samples.clone(), 0)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("must be at least 1"), "{error}");
+
+        let error =
+            RangePartitioning::try_new_with_samples(ordering.clone(), samples.clone(), 4)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("exceeds maximum 3"), "{error}");
+
+        let range = RangePartitioning::try_new(ordering, samples)?;
+        assert!(range.scale(4).is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_equality_includes_scaling_capacity() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a"])?;
+        let ordering = fixture.range_ordering([0]);
+        let sampled = RangePartitioning::try_new_with_samples(
+            ordering.clone(),
+            (10..=90)
+                .step_by(10)
+                .map(|value| int_split_point([value]))
+                .collect(),
+            4,
+        )?;
+        let exact = RangePartitioning::try_new(
+            ordering,
+            vec![
+                int_split_point([30]),
+                int_split_point([50]),
+                int_split_point([70]),
+            ],
+        )?;
+
+        assert_eq!(sampled.split_points(), exact.split_points());
+        assert!(sampled.has_same_layout(&exact));
+        assert!(exact.has_same_layout(&sampled));
+        assert!(sampled.scale(10).is_some());
+        assert!(exact.scale(10).is_none());
+        assert_ne!(sampled, exact);
+        assert_ne!(Partitioning::Range(sampled), Partitioning::Range(exact));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_layout_requires_keys_options_and_boundaries() -> Result<()>
+    {
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let range = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0]),
+            vec![int_split_point([10])],
+            2,
+        )?;
+        assert!(range.has_same_layout(&range.clone()));
+        let different_boundary = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0]),
+            vec![int_split_point([20])],
+            2,
+        )?;
+        assert!(!range.has_same_layout(&different_boundary));
+        assert!(!range.has_same_layout(&range.scale(1).unwrap()));
+        let singleton = range.scale(1).unwrap();
+        for ordering in [
+            fixture.range_ordering([1]),
+            [fixture.range_sort_expr(0, SortOptions::new(true, false))].into(),
+            [fixture.range_sort_expr(0, SortOptions::new(false, false))].into(),
+        ] {
+            let other = RangePartitioning::try_new_with_samples(ordering, vec![], 1)?;
+            assert!(!singleton.has_same_layout(&other));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_scaling_limits() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a"])?;
+        let range = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0]),
+            vec![int_split_point([10])],
+            1,
+        )?;
+        assert_eq!(range.scale(0), None);
+        for target_partitions in [3, usize::MAX] {
+            assert_eq!(range.scale(target_partitions), None);
+        }
+        assert_eq!(range.scale(1).unwrap(), range);
+        assert_eq!(range.scale(2).unwrap().scale(1).unwrap(), range);
+        assert_eq!(range.scale(2).unwrap().partition_count(), 2);
+        let empty = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0]),
+            vec![],
+            1,
+        )?;
+        assert_eq!(empty.scale(1).unwrap(), empty);
+        assert_eq!(empty.scale(2), None);
+        Ok(())
+    }
+
+    #[test]
     fn test_range_partitioning_try_new_validates_split_points() -> Result<()> {
         let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
         let asc_a = fixture.range_ordering([0]);
@@ -1023,18 +1561,29 @@ mod tests {
     #[test]
     fn test_range_partitioning_project_preserves_or_degrades() -> Result<()> {
         let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
-        let range_partitioning = fixture.range_partitioning_with_ordering(
-            [fixture.range_sort_expr(1, SortOptions::new(true, false))].into(),
-            vec![int_split_point([10])],
-        );
+        let range_partitioning =
+            Partitioning::Range(RangePartitioning::try_new_with_samples(
+                [fixture.range_sort_expr(1, SortOptions::new(true, false))].into(),
+                vec![
+                    int_split_point([30]),
+                    int_split_point([20]),
+                    int_split_point([10]),
+                ],
+                2,
+            )?);
 
         let keep_b_mapping = ProjectionMapping::from_indices(&[1], &fixture.schema)?;
         let projected =
             range_partitioning.project(&keep_b_mapping, &fixture.eq_properties);
         assert_eq!(
             projected.to_string(),
-            "Range([b@0 DESC NULLS LAST], [(10)], 2)"
+            "Range([b@0 DESC NULLS LAST], [(20)], 2, max 4)"
         );
+        let Partitioning::Range(projected_range) = &projected else {
+            panic!("expected range partitioning, got {projected:?}");
+        };
+        assert_eq!(projected_range.max_partition_count(), 4);
+        assert_eq!(projected_range.scale(4).unwrap().split_points().len(), 3);
 
         let drop_b_mapping = ProjectionMapping::from_indices(&[0], &fixture.schema)?;
         let projected =
@@ -1136,5 +1685,538 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_adapt() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("a", DataType::Int32),
+            ("b", DataType::Int64),
+            ("c", DataType::Int32),
+        ])?;
+
+        let range = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0]),
+            vec![
+                SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(15))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(20))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(25))]),
+            ],
+            3,
+        )?;
+
+        // Adapting to col_c (same type Int32) succeeds
+        let adapted = range.adapt(&[fixture.col(2)], &fixture.schema).unwrap();
+        assert_eq!(adapted.ordering().len(), 1);
+        assert!(adapted.ordering()[0].expr.eq(&fixture.col(2)));
+        assert_eq!(adapted.partition_count(), 3);
+        assert_eq!(adapted.max_partition_count(), 5);
+        assert_eq!(adapted.scale(5).unwrap().partition_count(), 5);
+
+        // Adapting to col_b (different type Int64) fails
+        assert!(range.adapt(&[fixture.col(1)], &fixture.schema).is_none());
+        // Scaling to one partition removes effective boundaries, not sample types.
+        let singleton = range.scale(1).unwrap();
+        assert!(
+            singleton
+                .adapt(&[fixture.col(1)], &fixture.schema)
+                .is_none()
+        );
+        let adapted_singleton =
+            singleton.adapt(&[fixture.col(2)], &fixture.schema).unwrap();
+        assert_eq!(
+            adapted_singleton.scale(5).unwrap().samples(),
+            range.samples()
+        );
+
+        // Adapting to empty or mismatch count fails
+        assert!(range.adapt(&[], &fixture.schema).is_none());
+        assert!(
+            range
+                .adapt(&fixture.cols([0, 2]), &fixture.schema)
+                .is_none()
+        );
+
+        // Partitioning::adapt works with Distribution::KeyPartitioned
+        let part = Partitioning::Range(range);
+        assert!(
+            part.adapt(&fixture.key_distribution([1]), &fixture.schema)
+                .is_none()
+        );
+
+        let adapted_part = part
+            .adapt(&fixture.key_distribution([2]), &fixture.schema)
+            .unwrap();
+        match adapted_part {
+            Partitioning::Range(r) => assert!(r.ordering()[0].expr.eq(&fixture.col(2))),
+            _ => panic!("expected Range partitioning"),
+        }
+
+        // Partitioning::Hash adaptation
+        let hash_part = fixture.hash_partitioning([1], 4);
+        let adapted_hash = hash_part
+            .adapt(&fixture.key_distribution([2]), &fixture.schema)
+            .unwrap();
+        match adapted_hash {
+            Partitioning::Hash(exprs, count) => {
+                assert_eq!(count, 4);
+                assert_eq!(exprs.len(), 1);
+                assert!(exprs[0].eq(&fixture.col(2)));
+            }
+            _ => panic!("expected Hash partitioning"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_adapt_rejects_duplicate_keys() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("a", DataType::Int32),
+            ("b", DataType::Int32),
+            ("c", DataType::Int32),
+        ])?;
+        let range = RangePartitioning::try_new_with_samples(
+            fixture.range_ordering([0, 1]),
+            vec![SplitPoint::new(vec![
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Int32(Some(20)),
+            ])],
+            1,
+        )?;
+        for count in [1, 2] {
+            assert!(
+                range
+                    .scale(count)
+                    .unwrap()
+                    .adapt(&fixture.cols([2, 2]), &fixture.schema)
+                    .is_none()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_adapt_multi_key() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("k1", DataType::Int32),
+            ("k2", DataType::Utf8),
+            ("t1", DataType::Int32),
+            ("t2", DataType::Utf8),
+        ])?;
+
+        let opt_k1 = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let opt_k2 = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        let ordering = LexOrdering::new(vec![
+            fixture.range_sort_expr(0, opt_k1),
+            fixture.range_sort_expr(1, opt_k2),
+        ])
+        .unwrap();
+
+        let split_points = vec![
+            SplitPoint::new(vec![ScalarValue::Int32(Some(20)), ScalarValue::Utf8(None)]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Utf8(Some("foo".to_string())),
+            ]),
+        ];
+
+        let range = RangePartitioning::try_new(ordering, split_points.clone())?;
+        let adapted = range.adapt(&fixture.cols([2, 3]), &fixture.schema).unwrap();
+
+        assert_eq!(adapted.ordering().len(), 2);
+        assert!(adapted.ordering()[0].expr.eq(&fixture.col(2)));
+        assert_eq!(adapted.ordering()[0].options, opt_k1);
+        assert!(adapted.ordering()[1].expr.eq(&fixture.col(3)));
+        assert_eq!(adapted.ordering()[1].options, opt_k2);
+        assert_eq!(adapted.split_points(), &split_points);
+        assert_eq!(adapted.partition_count(), 3);
+
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod ordering_proto_tests {
+    use std::sync::Arc;
+
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_physical_expr_common::sort_expr::{
+        LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
+        sort_exprs_try_from_proto, sort_exprs_try_to_proto,
+    };
+
+    use crate::expressions::Column;
+    use crate::proto_test_util::{StubDecoder, StubEncoder};
+
+    fn schema() -> Schema {
+        Schema::new(vec![Field::new("a", DataType::Int32, false)])
+    }
+
+    fn sort_expr(descending: bool, nulls_first: bool) -> PhysicalSortExpr {
+        PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions {
+                descending,
+                nulls_first,
+            },
+        )
+    }
+
+    #[test]
+    fn sort_exprs_round_trip_preserves_options_and_order() {
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let exprs = vec![sort_expr(true, false), sort_expr(false, true)];
+
+        let nodes = sort_exprs_try_to_proto(&exprs, &encode_ctx).unwrap();
+        // `asc` is the inverse of `descending` on the wire.
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| (node.asc, node.nulls_first))
+                .collect::<Vec<_>>(),
+            vec![(false, false), (true, true)]
+        );
+
+        let schema = schema();
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let decoded = sort_exprs_try_from_proto(&nodes, &decode_ctx).unwrap();
+        assert_eq!(
+            decoded.iter().map(|expr| expr.options).collect::<Vec<_>>(),
+            exprs.iter().map(|expr| expr.options).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn sort_exprs_accepts_owned_requirements() {
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let requirement = LexRequirement::from([PhysicalSortRequirement::new(
+            Arc::new(Column::new("a", 0)),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+        )]);
+
+        let nodes = sort_exprs_try_to_proto(
+            requirement
+                .iter()
+                .map(|req| PhysicalSortExpr::from(req.clone())),
+            &encode_ctx,
+        )
+        .unwrap();
+
+        assert_eq!(nodes.len(), 1);
+        assert!(!nodes[0].asc);
+        assert!(nodes[0].nulls_first);
+    }
+
+    #[test]
+    fn sort_exprs_propagate_encode_errors() {
+        let encoder = StubEncoder::failing_on(2);
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let exprs = vec![sort_expr(false, false), sort_expr(true, true)];
+
+        let err = sort_exprs_try_to_proto(&exprs, &encode_ctx).unwrap_err();
+        assert!(err.to_string().contains("stub encode failure on call 2"));
+    }
+
+    #[test]
+    fn sort_exprs_reject_missing_inner_expr() {
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let mut nodes =
+            sort_exprs_try_to_proto(&[sort_expr(false, false)], &encode_ctx).unwrap();
+        nodes[0].expr = None;
+
+        let schema = schema();
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = sort_exprs_try_from_proto(&nodes, &decode_ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("PhysicalSortExpr is missing required field 'expr'")
+        );
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod range_partitioning_proto_tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{Result, ScalarValue, SplitPoint};
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_proto_models::protobuf;
+
+    use super::{Partitioning, RangePartitioning};
+    use crate::expressions::Column;
+    use crate::proto_test_util::{StubDecoder, StubEncoder};
+
+    fn sampled_partitioning() -> Result<Partitioning> {
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("a", 0),
+        ))])
+        .expect("non-empty ordering");
+        let samples = [10, 20, 30, 40, 50]
+            .into_iter()
+            .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+            .collect();
+        Ok(Partitioning::Range(
+            RangePartitioning::try_new_with_samples(ordering, samples, 3)?,
+        ))
+    }
+
+    fn decode(partitioning: &protobuf::Partitioning) -> Result<Partitioning> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        Ok(Partitioning::try_from_proto(partitioning, &decode_ctx)?
+            .expect("partitioning method is present"))
+    }
+
+    #[test]
+    fn sampled_range_partitioning_round_trip_preserves_resolution() -> Result<()> {
+        let partitioning = sampled_partitioning()?;
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let encoded = partitioning.try_to_proto(&encode_ctx)?;
+        let Some(protobuf::partitioning::PartitionMethod::Range(encoded_range)) =
+            encoded.partition_method.as_ref()
+        else {
+            panic!("expected range partitioning");
+        };
+
+        // Field 2 remains the effective boundary list for older readers.
+        assert_eq!(encoded_range.split_point.len(), 2);
+        assert_eq!(encoded_range.sample_point.len(), 5);
+        assert_eq!(encoded_range.partition_count, 3);
+
+        let decoded = decode(&encoded)?;
+        let Partitioning::Range(decoded) = decoded else {
+            panic!("expected range partitioning");
+        };
+        let Partitioning::Range(original) = partitioning else {
+            panic!("expected range partitioning");
+        };
+        assert_eq!(decoded.partition_count(), original.partition_count());
+        assert_eq!(decoded.split_points(), original.split_points());
+        assert_eq!(
+            decoded.ordering()[0].options,
+            original.ordering()[0].options
+        );
+        assert_eq!(decoded.samples(), original.samples());
+        assert_eq!(decoded.max_partition_count(), 6);
+
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_range_partitioning_payload_remains_exact() -> Result<()> {
+        let partitioning = sampled_partitioning()?;
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let mut encoded = partitioning.try_to_proto(&encode_ctx)?;
+        let Some(protobuf::partitioning::PartitionMethod::Range(encoded_range)) =
+            encoded.partition_method.as_mut()
+        else {
+            panic!("expected range partitioning");
+        };
+        encoded_range.sample_point.clear();
+        encoded_range.partition_count = 0;
+
+        let decoded = decode(&encoded)?;
+        let Partitioning::Range(decoded) = decoded else {
+            panic!("expected range partitioning");
+        };
+        assert_eq!(decoded.partition_count(), 3);
+        assert_eq!(decoded.max_partition_count(), 3);
+        assert_eq!(decoded.split_points().len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn sampled_range_partitioning_rejects_inconsistent_effective_points() -> Result<()> {
+        let partitioning = sampled_partitioning()?;
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let mut encoded = partitioning.try_to_proto(&encode_ctx)?;
+        let Some(protobuf::partitioning::PartitionMethod::Range(encoded_range)) =
+            encoded.partition_method.as_mut()
+        else {
+            panic!("expected range partitioning");
+        };
+        encoded_range.split_point.pop();
+
+        let error = decode(&encoded).unwrap_err().to_string();
+        assert!(
+            error.contains("effective split points do not match"),
+            "{error}"
+        );
+
+        Ok(())
+    }
+}
+
+/// Partition counts are `usize` in memory and `u64` on the wire, so every
+/// counted [`Partitioning`] variant crosses a width boundary in both
+/// directions. These pin that neither crossing wraps or panics.
+#[cfg(all(test, feature = "proto"))]
+mod partition_count_proto_tests {
+    use std::sync::Arc;
+
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{ScalarValue, SplitPoint};
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_proto_models::protobuf;
+
+    use super::{Partitioning, RangePartitioning};
+    use crate::expressions::Column;
+    use crate::proto_test_util::{StubDecoder, StubEncoder, column_node};
+
+    fn partitioning_node(
+        method: protobuf::partitioning::PartitionMethod,
+    ) -> protobuf::Partitioning {
+        protobuf::Partitioning {
+            partition_method: Some(method),
+        }
+    }
+
+    /// The counted variants, each carrying `count`. `Range` is excluded: it
+    /// derives its partition count from its split points rather than reading
+    /// one off the wire.
+    fn counted_methods(count: u64) -> Vec<protobuf::partitioning::PartitionMethod> {
+        use protobuf::partitioning::PartitionMethod;
+
+        vec![
+            PartitionMethod::RoundRobin(count),
+            PartitionMethod::Unknown(count),
+            PartitionMethod::Hash(protobuf::PhysicalHashRepartition {
+                hash_expr: vec![column_node("a")],
+                partition_count: count,
+            }),
+        ]
+    }
+
+    #[test]
+    fn try_from_proto_narrows_every_counted_variant() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        for method in counted_methods(u64::MAX) {
+            let decoded =
+                Partitioning::try_from_proto(&partitioning_node(method), &decode_ctx);
+
+            #[cfg(target_pointer_width = "64")]
+            assert_eq!(decoded.unwrap().unwrap().partition_count(), usize::MAX);
+
+            #[cfg(not(target_pointer_width = "64"))]
+            assert!(
+                decoded
+                    .unwrap_err()
+                    .to_string()
+                    .contains("is out of range for usize")
+            );
+        }
+    }
+
+    #[test]
+    fn try_to_proto_widens_every_counted_variant() {
+        use protobuf::partitioning::PartitionMethod;
+
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let hash_key: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+        let encoded = [
+            Partitioning::RoundRobinBatch(usize::MAX),
+            Partitioning::UnknownPartitioning(usize::MAX),
+            Partitioning::Hash(vec![hash_key], usize::MAX),
+        ]
+        .iter()
+        .map(|partitioning| {
+            match partitioning
+                .try_to_proto(&encode_ctx)
+                .unwrap()
+                .partition_method
+            {
+                Some(PartitionMethod::RoundRobin(n) | PartitionMethod::Unknown(n)) => n,
+                Some(PartitionMethod::Hash(hash)) => hash.partition_count,
+                other => panic!("expected a counted partition method, got {other:?}"),
+            }
+        })
+        .collect::<Vec<_>>();
+
+        // Every variant widens to the same wire value, with no truncation.
+        assert_eq!(encoded, vec![u64::try_from(usize::MAX).unwrap(); 3]);
+    }
+
+    #[test]
+    fn range_partitioning_round_trip_preserves_split_points_and_options() {
+        // Single-column ordering so the stub encoder (which emits an identical
+        // placeholder for every expression) cannot produce duplicates that the
+        // decoder's deduplication step would collapse.
+        let sort_options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let ordering = LexOrdering::from([PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            sort_options,
+        )]);
+        let split_points = vec![
+            SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
+            SplitPoint::new(vec![ScalarValue::Int32(Some(30))]),
+        ];
+        let range =
+            RangePartitioning::try_new(ordering.clone(), split_points.clone()).unwrap();
+
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let node = Partitioning::Range(range)
+            .try_to_proto(&encode_ctx)
+            .unwrap();
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let decoded = Partitioning::try_from_proto(&node, &decode_ctx)
+            .unwrap()
+            .unwrap();
+
+        let Partitioning::Range(decoded_range) = decoded else {
+            panic!("expected Range partitioning, got {decoded:?}");
+        };
+        assert_eq!(
+            decoded_range
+                .ordering()
+                .iter()
+                .map(|e| e.options)
+                .collect::<Vec<_>>(),
+            [sort_options],
+        );
+        assert_eq!(decoded_range.split_points(), split_points);
     }
 }

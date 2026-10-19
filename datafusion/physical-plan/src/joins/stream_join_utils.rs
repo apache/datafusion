@@ -18,11 +18,12 @@
 //! This file contains common subroutines for symmetric hash join
 //! related functionality, used both in join calculations and optimization rules.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
-use crate::joins::MapOffset;
+use crate::joins::join_hash_map::ProbeOffset;
 use crate::joins::join_hash_map::{
     contain_hashes, get_matched_indices, get_matched_indices_with_limit_offset,
     update_from_iter,
@@ -73,8 +74,11 @@ impl JoinHashMapType for PruningJoinHashMap {
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
         deleted_offset: Option<usize>,
     ) -> (Vec<u32>, Vec<u64>) {
-        // Flatten the deque
-        let next: Vec<u64> = self.next.iter().copied().collect();
+        // Flatten the deque, unless it is already contiguous
+        let next = match self.next.as_slices() {
+            (head, []) => Cow::Borrowed(head),
+            _ => Cow::Owned(self.next.iter().copied().collect()),
+        };
         get_matched_indices::<u64>(&self.map, &next, iter, deleted_offset)
     }
 
@@ -83,15 +87,16 @@ impl JoinHashMapType for PruningJoinHashMap {
         hash_values: &[u64],
         valid_keys: Option<&NullBuffer>,
         limit: usize,
-        offset: MapOffset,
+        offset: ProbeOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<MapOffset> {
+    ) -> Option<ProbeOffset> {
         // Flatten the deque
         let next: Vec<u64> = self.next.iter().copied().collect();
         get_matched_indices_with_limit_offset::<u64>(
             &self.map,
             &next,
+            self.map.len() == next.len(),
             hash_values,
             valid_keys,
             limit,
@@ -235,12 +240,12 @@ impl PruningJoinHashMap {
             .collect::<Vec<_>>();
 
         // Remove the keys from the map.
-        removable_keys.into_iter().for_each(|hash_value| {
+        for hash_value in removable_keys {
             self.map
                 .find_entry(hash_value, |(hash, _)| hash_value == *hash)
                 .unwrap()
                 .remove();
-        });
+        }
 
         // Shrink the map if necessary.
         self.shrink_if_necessary(shrink_factor);
@@ -727,9 +732,8 @@ impl StreamJoinMetrics {
             input_rows,
         };
 
-        let stream_memory_usage = MetricBuilder::new(metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("stream_memory_usage", partition);
+        let stream_memory_usage =
+            MetricBuilder::new(metrics).bytes_gauge("stream_memory_usage", partition);
 
         Self {
             left,

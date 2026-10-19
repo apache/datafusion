@@ -21,7 +21,9 @@ use crate::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
 use arrow::buffer::BooleanBuffer;
 use datafusion_common::Result;
-use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{
+    EmitTo, GroupSelection, GroupsAccumulator,
+};
 
 use super::accumulate::NullState;
 
@@ -124,8 +126,33 @@ where
         Ok(Arc::new(values))
     }
 
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.values.len())?;
+        let mut values = BooleanBufferBuilder::new(selection.len());
+        for index in selection.iter() {
+            values.append(self.values.get_bit(index));
+        }
+        let nulls = self.null_state.build_preserving(selection)?;
+        Ok(Arc::new(BooleanArray::new(values.finish(), nulls)))
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
+
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         self.evaluate(emit_to).map(|arr| vec![arr])
+    }
+
+    fn state_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.evaluate_preserving(selection).map(|arr| vec![arr])
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
     }
 
     fn merge_batch(
@@ -155,5 +182,52 @@ where
         let values_filtered = BooleanArray::new(values_buf, values_null_buffer_filtered);
 
         Ok(vec![Arc::new(values_filtered)])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boolean_groups_preserving_reads() -> Result<()> {
+        let mut accumulator =
+            BooleanGroupsAccumulator::new(|current, value| current && value, true);
+        let values = Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+            Some(true),
+        ]));
+        accumulator.update_batch(&[values], &[0, 0, 1, 2], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[2, 0, 3, 2], 4)?;
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(false), None, Some(true)]);
+        for _ in 0..2 {
+            assert_eq!(
+                accumulator.evaluate_preserving(selection)?.as_boolean(),
+                &expected
+            );
+            assert_eq!(
+                accumulator.state_preserving(selection)?[0].as_boolean(),
+                &expected
+            );
+        }
+
+        let empty =
+            accumulator.evaluate_preserving(GroupSelection::try_from_indices(&[], 4)?)?;
+        assert!(empty.is_empty());
+
+        let values = Arc::new(BooleanArray::from(vec![false, true]));
+        accumulator.update_batch(&[values], &[1, 3], None, 4)?;
+        let expected = BooleanArray::from(vec![false, false, true, true]);
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(GroupSelection::all(4))?
+                .as_boolean(),
+            &expected
+        );
+        Ok(())
     }
 }

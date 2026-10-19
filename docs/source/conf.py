@@ -55,6 +55,7 @@ extensions = [
     "myst_parser",
     "sphinx_reredirects",
     "rustdoc_trim",
+    "sphinx_sitemap",
 ]
 
 source_suffix = {
@@ -89,8 +90,8 @@ html_theme = "pydata_sphinx_theme"
 
 html_theme_options = {
      "logo": {
-        "image_light": "_static/images/original.svg", 
-        "image_dark": "_static/images/original_dark.svg", 
+        "image_light": "_static/images/original.svg",
+        "image_dark": "_static/images/original_dark.svg",
     },
     "use_edit_page_button": True,
     "navbar_center": [],
@@ -111,7 +112,19 @@ html_static_path = ["_static"]
 
 # Copy agent-facing files (llms.txt) verbatim to the site root so they
 # resolve at the conventional URL `https://datafusion.apache.org/llms.txt`.
-html_extra_path = ["llms.txt"]
+html_extra_path = ["llms.txt", "robots.txt"]
+
+# Base URL of the published site. Required by sphinx-sitemap to build
+# absolute <loc> entries in the generated sitemap.xml.
+html_baseurl = "https://datafusion.apache.org/"
+
+# The site is published as a single flat, single-language tree (see
+# .github/workflows/docs.yaml, which rsyncs docs/build/html/ straight to the
+# site root) — there is no /en/ or version path segment. Override
+# sphinx-sitemap's default "{lang}{version}{link}" scheme, which assumes a
+# Read the Docs-style multi-language/multi-version layout, so <loc> entries
+# match the real URLs instead of a nonexistent /en/... prefix.
+sitemap_url_scheme = "{link}"
 
 html_logo = "_static/images/2x_bgwhite_original.png"
 

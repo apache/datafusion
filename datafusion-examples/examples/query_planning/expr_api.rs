@@ -63,7 +63,7 @@ pub fn expr_api() -> Result<()> {
     // "fluent"-style API:
     let expr = col("a") + lit(5);
 
-    // The same same expression can be created directly, with much more code:
+    // The same expression can be created directly, with much more code:
     let expr2 = Expr::BinaryExpr(BinaryExpr::new(
         Box::new(col("a")),
         Operator::Plus,

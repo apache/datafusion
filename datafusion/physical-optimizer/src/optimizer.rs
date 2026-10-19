@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical optimizer traits
+//! [`PhysicalOptimizer`] for optimizing [`ExecutionPlan`]s
+//!
+//! [`ExecutionPlan`]: datafusion_physical_plan::ExecutionPlan
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -39,43 +41,33 @@ use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
 use crate::window_topn::WindowTopN;
-use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
-use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
+use datafusion_physical_plan::statistics::StatisticsContext;
 
-/// Context available to physical optimizer rules.
-///
-/// This trait provides access to configuration options and optional statistics
-/// registry for enhanced statistics lookup. It allows optimizer rules to access
-/// extended context without changing the core [`PhysicalOptimizerRule::optimize`]
-/// signature.
-pub trait PhysicalOptimizerContext: Send + Sync {
-    /// Returns the configuration options.
-    fn config_options(&self) -> &ConfigOptions;
+// Re-export from this module for backwards compatibility.
+pub use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule};
 
-    /// Returns the statistics registry for enhanced statistics lookup.
-    ///
-    /// Returns `None` if no registry is configured, in which case rules
-    /// should fall back to using `ExecutionPlan::partition_statistics()`.
-    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
-        None
-    }
-}
+pub use datafusion_session::with_statistics_context;
 
 /// Simple context wrapping [`ConfigOptions`] for backward compatibility.
 ///
 /// This struct provides a minimal implementation of [`PhysicalOptimizerContext`]
-/// that only supplies configuration options. Used when no statistics registry
-/// is available or needed.
+/// that supplies configuration options and a [`StatisticsContext`] without a
+/// statistics registry. Used when no statistics registry is available or
+/// needed.
 pub struct ConfigOnlyContext<'a> {
     config: &'a ConfigOptions,
+    statistics_context: StatisticsContext,
 }
 
 impl<'a> ConfigOnlyContext<'a> {
     /// Create a new context wrapping the given config options.
     pub fn new(config: &'a ConfigOptions) -> Self {
-        Self { config }
+        Self {
+            config,
+            // No providers, matching `statistics_registry()`, which is `None`
+            statistics_context: StatisticsContext::new(),
+        }
     }
 }
 
@@ -83,50 +75,105 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
     fn config_options(&self) -> &ConfigOptions {
         self.config
     }
-}
 
-/// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
-/// computes the same results, but in a potentially more efficient way.
-///
-/// Use [`SessionState::add_physical_optimizer_rule`] to register additional
-/// `PhysicalOptimizerRule`s.
-///
-/// [`SessionState::add_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_physical_optimizer_rule
-pub trait PhysicalOptimizerRule: Debug + std::any::Any {
-    /// Rewrite `plan` to an optimized form.
-    ///
-    /// This is the primary optimization method. For rules that need access to
-    /// the statistics registry, override [`optimize_with_context`](Self::optimize_with_context) instead.
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
-
-    /// Rewrite `plan` with access to extended context (statistics registry, etc.).
-    ///
-    /// Override this method if you need access to the statistics registry for
-    /// enhanced statistics lookup. The default implementation simply calls
-    /// [`optimize`](Self::optimize) with the config options from the context.
-    fn optimize_with_context(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        context: &dyn PhysicalOptimizerContext,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.optimize(plan, context.config_options())
+    fn statistics_context(&self) -> Option<&StatisticsContext> {
+        Some(&self.statistics_context)
     }
-
-    /// A human readable name for this optimizer rule
-    fn name(&self) -> &str;
-
-    /// A flag to indicate whether the physical planner should validate that the rule will not
-    /// change the schema of the plan after the rewriting.
-    /// Some of the optimization rules might change the nullable properties of the schema
-    /// and should disable the schema check.
-    fn schema_check(&self) -> bool;
 }
 
 /// A rule-based physical optimizer.
+///
+/// Applies a *Pipeline* (an ordered list) of [`PhysicalOptimizerRule`]s in a single pass.
+///
+/// # Physical Optimizer Contract
+///
+/// [`PhysicalOptimizer::new`] defines the default sequence of
+/// [`PhysicalOptimizerRule`]s. The optimizer applies them in order, in a single
+/// pass. This section describes the contract between the optimizer rules, both
+/// for projects that extend or reorder the default rule list and for
+/// contributors adding new built-in rules.
+///
+/// ## Invariants
+///
+/// The following properties hold for all rules (built-in and custom):
+///
+/// 1. **Correctness.** The returned plan must a) be valid (it can be executed
+///    without internal errors) and b) produce the same results as the input
+///    plan. A rule may change the operators in the plan, such as changing
+///    which operator implements a join, but it may never change the query's
+///    semantics.
+///
+/// 2. **Reorderable.** Because each rule preserves correctness, running the
+///    rules in a different order must still yield a valid plan that produces
+///    the same results.
+///
+/// ### Exceptions
+///
+/// Some built-in rules do not yet fully satisfy the invariants above because
+/// they are responsible for making an initial plan *executable* rather than for
+/// optimizing an existing plan:
+///
+/// - [`EnsureRequirements`] inserts the repartitioning and sorting needed to
+///   satisfy the distribution and ordering requirements.
+/// - [`OutputRequirements`] records output requirements.
+/// - [`SanityCheckPlan`] rejects plans whose requirements are not satisfied.
+///   It should run last.
+///
+/// Custom pipelines must keep these rules in a compatible relative order. We
+/// are working to remove these exceptions, so that all rules can be reordered
+/// freely.
+///
+/// ## Optimization Coverage Is Not Guaranteed
+///
+/// The invariants above guarantee *correctness*, not that every optimization is
+/// applied. Built-in rules often match specific plan shapes that may only occur
+/// at a certain point in the default pipeline. Adding, removing, or reordering
+/// rules can change plan shapes, so a built-in rule may silently miss an
+/// optimization that would apply in the default order. To keep their
+/// implementations simple, built-in rules typically only recognize shapes that
+/// the default pipeline produces.
+///
+/// For example, [`CombinePartialFinalAggregate`] runs after
+/// [`EnsureRequirements`] and only merges a `Partial` aggregate that is the
+/// direct child of a `Final` aggregate.
+///
+/// ```text
+/// -- Canonical shape (default pipeline):
+/// -- built-in rules recognize and optimize this
+/// Limit
+///   Aggregate(Final)
+///     Aggregate(Partial)
+///
+/// -- Non-canonical shape (repartitioning inserted first):
+/// -- built-in rules skip the optimization
+/// Limit
+///   Aggregate(Final)
+///     Repartition
+///       Aggregate(Partial)
+/// ```
+///
+/// ## Guidance for Custom Pipelines
+///
+/// We recommend keeping the default rule order and using the supported
+/// configuration options to disable individual optimizations. For example, `SET
+/// datafusion.optimizer.enable_distinct_aggregation_soft_limit = false`
+/// disables the distinct aggregation soft-limit optimization. These variations
+/// are tested and preserve both correctness and optimization coverage.
+/// See <https://github.com/apache/datafusion/issues/26481> for more details.
+///
+/// If you do build a custom pipeline:
+///
+/// - **Reordering must still yield a valid plan.** Downstream projects are
+///   encouraged to add tests that run their pipeline end to end and check
+///   results, as DataFusion's own tests only cover the default order.
+/// - **Test for reduced optimization coverage,** as described above, and verify
+///   the plans you care about with `EXPLAIN`.
+/// - **Prefer adding a rule over extending a built-in one.** We discourage
+///   extending a built-in rule to match plan shapes it will not encounter in
+///   the default pipeline, because such extensions are difficult to test and
+///   maintain. Instead, add a custom rule that rewrites your plan into the
+///   canonical shape recognized by the built-in rules. If extending a built-in
+///   rule still seems necessary, please open a DataFusion issue to discuss it.
 #[derive(Clone, Debug)]
 pub struct PhysicalOptimizer {
     /// All rules to apply
@@ -169,6 +216,14 @@ impl PhysicalOptimizer {
             // those are handled by the later `FilterPushdown` rule.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new()),
+            // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER) with
+            // PartitionedTopKExec(fetch=K), which emits `rn` itself; the
+            // window node is kept above it only when it has other window
+            // expressions to compute.
+            // Must run before EnsureRequirements (so it can rewrite against the
+            // window's declared ordering without pattern-matching a SortExec)
+            // and before ProjectionPushdown (which embeds projections into FilterExec).
+            Arc::new(WindowTopN::new()),
             // Ensures each input plan satisfies the distribution and ordering
             // requirements declared by `ExecutionPlan::required_input_distribution`
             // and `ExecutionPlan::required_input_ordering`.
@@ -192,11 +247,6 @@ impl PhysicalOptimizer {
             Arc::new(CombinePartialFinalAggregate::new()),
             // Run once after the local sorting requirement is changed
             Arc::new(OptimizeAggregateOrder::new()),
-            // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER) → Sort
-            // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
-            // Must run after EnsureRequirements (which inserts SortExec) and before
-            // ProjectionPushdown (which embeds projections into FilterExec).
-            Arc::new(WindowTopN::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
@@ -253,6 +303,9 @@ impl PhysicalOptimizer {
     }
 
     /// Create a new optimizer with the given rules
+    ///
+    /// See the [`PhysicalOptimizer`](Self) documentation for the contract
+    /// governing non-default optimizer pipelines.
     pub fn with_rules(rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>) -> Self {
         Self { rules }
     }

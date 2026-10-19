@@ -310,7 +310,7 @@ from (
   ) as dec_list
 ) t;
 ----
-100 300 Decimal128(20, 4) Decimal128(20, 4)
+100.0000 300.0000 Decimal128(20, 4) Decimal128(20, 4)
 
 
 

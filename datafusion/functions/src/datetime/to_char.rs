@@ -57,10 +57,6 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     argument(
         name = "format",
         description = "A [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) string to use to convert the expression."
-    ),
-    argument(
-        name = "day",
-        description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -290,12 +286,11 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 
     let result = builder.finish();
-    match args[0] {
-        ColumnarValue::Scalar(_) => {
-            let val = result.is_valid(0).then(|| result.value(0).to_string());
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(val)))
-        }
-        ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef)),
+    if result.len() == 1 {
+        let val = result.is_valid(0).then(|| result.value(0).to_string());
+        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(val)))
+    } else {
+        Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
     }
 }
 

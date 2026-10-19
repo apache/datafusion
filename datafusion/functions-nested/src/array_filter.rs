@@ -18,18 +18,11 @@
 //! [`datafusion_expr::HigherOrderUDF`] definitions for array_filter function.
 
 use arrow::{
-    array::{
-        Array, ArrayRef, AsArray, BooleanArray, LargeListArray, ListArray,
-        OffsetSizeTrait, new_empty_array,
-    },
-    buffer::{OffsetBuffer, ScalarBuffer},
-    compute::{filter as arrow_filter, take_arrays},
+    array::{Array, ArrayRef, AsArray, BooleanArray, GenericListArray, OffsetSizeTrait},
+    compute::{filter as arrow_filter, prep_null_mask_filter},
     datatypes::{DataType, Field, FieldRef},
 };
-use datafusion_common::{
-    Result, ScalarValue, exec_err,
-    utils::{adjust_offsets_for_slice, list_values_row_number},
-};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
     HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda,
@@ -38,9 +31,11 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
+use crate::utils::{empty_list_values, prepare_list_filter};
+
 use crate::lambda_utils::{
-    ListValuesResult, coerce_single_list_arg, extract_list_values,
-    single_list_lambda_parameters, value_lambda_pair,
+    EvaluatedListLambda, SingleListLambdaResult, coerce_single_list_arg,
+    evaluate_single_list_predicate, single_list_lambda_parameters, value_lambda_pair,
 };
 
 make_higher_order_function_expr_and_func!(
@@ -57,11 +52,11 @@ make_higher_order_function_expr_and_func!(
     syntax_example = "array_filter(array, x -> x > 2)",
     sql_example = r#"```sql
 > select array_filter([1, 2, 3, 4, 5], x -> x > 2);
-+--------------------------------------------+
++-------------------------------------------+
 | array_filter([1, 2, 3, 4, 5], x -> x > 2) |
-+--------------------------------------------+
-| [3, 4, 5]                                  |
-+--------------------------------------------+
++-------------------------------------------+
+| [3, 4, 5]                                 |
++-------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -130,12 +125,9 @@ impl HigherOrderUDFImpl for ArrayFilter {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
-        let list_array = list.to_array(args.number_rows)?;
-
-        let list_values = match extract_list_values(&list_array, args.return_type())? {
-            ListValuesResult::EarlyReturn(v) => return Ok(v),
-            ListValuesResult::Values(v) => v,
+        let evaluated = match evaluate_single_list_predicate(self.name(), &args)? {
+            SingleListLambdaResult::EarlyReturn(v) => return Ok(v),
+            SingleListLambdaResult::Ready(v) => v,
         };
 
         let field = match args.return_field.data_type() {
@@ -149,58 +141,10 @@ impl HigherOrderUDFImpl for ArrayFilter {
             }
         };
 
-        let values_param = || Ok(Arc::clone(&list_values));
-        let predicate_output = lambda.evaluate(&[&values_param], |arrays| {
-            let indices = list_values_row_number(&list_array)?;
-            Ok(take_arrays(arrays, &indices, None)?)
-        })?;
-
-        // Scalar predicate short-circuit: x -> true or x -> false/null
-        if let ColumnarValue::Scalar(ScalarValue::Boolean(b)) = &predicate_output {
-            return match b {
-                Some(true) => Ok(ColumnarValue::Array(list_array)),
-                _ => Ok(ColumnarValue::Array(empty_filtered_list(
-                    &list_array,
-                    field,
-                )?)),
-            };
-        }
-
-        let predicate = predicate_output.into_array(list_values.len())?;
-        let Some(predicate) = predicate.as_any().downcast_ref::<BooleanArray>() else {
-            return exec_err!(
-                "{} lambda must return boolean, got {}",
-                self.name(),
-                predicate.data_type()
-            );
-        };
-
         // ListView and LargeListView are coerced to List/LargeList by coerce_value_types.
-        let filtered_list = match list_array.data_type() {
-            DataType::List(_) => {
-                let list = list_array.as_list::<i32>();
-                let adjusted_offsets = adjust_offsets_for_slice(list);
-                let (filtered_values, new_offsets) =
-                    filter_list_values(&list_values, predicate, &adjusted_offsets)?;
-                Arc::new(ListArray::new(
-                    field,
-                    new_offsets,
-                    filtered_values,
-                    list.nulls().cloned(),
-                )) as ArrayRef
-            }
-            DataType::LargeList(_) => {
-                let large_list = list_array.as_list::<i64>();
-                let adjusted_offsets = adjust_offsets_for_slice(large_list);
-                let (filtered_values, new_offsets) =
-                    filter_list_values(&list_values, predicate, &adjusted_offsets)?;
-                Arc::new(LargeListArray::new(
-                    field,
-                    new_offsets,
-                    filtered_values,
-                    large_list.nulls().cloned(),
-                ))
-            }
+        let filtered_list = match evaluated.original_list.data_type() {
+            DataType::List(_) => filter_list::<i32>(self.name(), evaluated, field)?,
+            DataType::LargeList(_) => filter_list::<i64>(self.name(), evaluated, field)?,
             other => exec_err!("expected list, got {other}")?,
         };
 
@@ -216,81 +160,84 @@ impl HigherOrderUDFImpl for ArrayFilter {
     }
 }
 
-/// Returns a list array with every non-null sublist emptied, preserving the null buffer.
-/// Used for the `x -> false` / `x -> null` scalar predicate short-circuit.
-fn empty_filtered_list(list_array: &ArrayRef, field: FieldRef) -> Result<ArrayRef> {
-    let n = list_array.len();
-    let empty_values = new_empty_array(field.data_type());
-    Ok(match list_array.data_type() {
-        DataType::List(_) => {
-            let list = list_array.as_list::<i32>();
-            Arc::new(ListArray::new(
-                field,
-                OffsetBuffer::new(ScalarBuffer::from(vec![0i32; n + 1])),
-                empty_values,
-                list.nulls().cloned(),
-            ))
-        }
-        DataType::LargeList(_) => {
-            let list = list_array.as_list::<i64>();
-            Arc::new(LargeListArray::new(
-                field,
-                OffsetBuffer::new(ScalarBuffer::from(vec![0i64; n + 1])),
-                empty_values,
-                list.nulls().cloned(),
-            ))
-        }
-        other => return exec_err!("expected list, got {other}"),
-    })
-}
-
-/// Filters flat list values using a boolean predicate, returning filtered values and
-/// recomputed per-sublist offsets. Null predicate values are treated as false.
-fn filter_list_values<O: OffsetSizeTrait>(
-    values: &ArrayRef,
-    predicate: &BooleanArray,
-    offsets: &OffsetBuffer<O>,
-) -> Result<(ArrayRef, OffsetBuffer<O>)> {
-    let num_sublists = offsets.len().saturating_sub(1);
-    let has_nulls = predicate.null_count() > 0;
-    let new_offsets = OffsetBuffer::<O>::from_lengths((0..num_sublists).map(|i| {
-        let start = offsets[i].as_usize();
-        let end = offsets[i + 1].as_usize();
-        if has_nulls {
-            (start..end)
-                .filter(|&j| predicate.is_valid(j) && predicate.value(j))
-                .count()
-        } else {
-            predicate
-                .values()
-                .slice(start, end - start)
-                .count_set_bits()
-        }
-    }));
-
-    if new_offsets.last() == offsets.last() {
-        return Ok((Arc::clone(values), offsets.clone()));
+/// Apply the evaluated predicate and rebuild the result's row offsets.
+fn filter_list<O: OffsetSizeTrait>(
+    name: &str,
+    evaluated: EvaluatedListLambda,
+    field: FieldRef,
+) -> Result<ArrayRef> {
+    let list = evaluated.original_list.as_list::<O>();
+    if let ColumnarValue::Scalar(ScalarValue::Boolean(b)) = &evaluated.evaluated_result {
+        return match b {
+            Some(true) => Ok(evaluated.original_list),
+            _ => Ok(empty_list_values(list, field)),
+        };
     }
 
-    // arrow_filter treats null predicate values as false
-    let filtered_values = arrow_filter(values.as_ref(), predicate)?;
-    Ok((filtered_values, new_offsets))
+    let predicate = evaluated.boolean_predicate(name)?;
+    // Normalize NULL predicate results to false once, so row-offset calculation
+    // and filtering use the same keep bitmap. Selected elements may still be NULL.
+    let predicate = match predicate.null_count() {
+        0 => predicate,
+        _ => prep_null_mask_filter(&predicate),
+    };
+    let (new_offsets, keep_mask) = prepare_list_filter(list, predicate.values());
+
+    let kept_count = new_offsets.last().as_usize();
+    if kept_count == evaluated.flattened_values.len() {
+        return Ok(evaluated.original_list);
+    }
+    if kept_count == 0 {
+        return Ok(empty_list_values(list, field));
+    }
+
+    let filtered_values = arrow_filter(
+        evaluated.flattened_values.as_ref(),
+        &BooleanArray::new(keep_mask, None),
+    )?;
+    Ok(Arc::new(GenericListArray::<O>::new(
+        field,
+        new_offsets,
+        filtered_values,
+        list.nulls().cloned(),
+    )))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
     use arrow::{
-        array::{Array, AsArray},
+        array::{Array, ArrayRef, AsArray, Int32Array, ListArray, OffsetSizeTrait},
         buffer::{NullBuffer, OffsetBuffer},
+        compute::cast,
+        datatypes::{DataType, Field},
     };
 
     use crate::array_filter::array_filter_higher_order_function;
-    use crate::lambda_utils::test_utils::{create_i32_list, eval_hof_on_i32_list, v};
-    use datafusion_expr::lit;
+    use crate::lambda_utils::test_utils::{
+        create_i32_large_list, create_i32_list, eval_hof_on_i32_list,
+        eval_hof_on_i32_list_with_outer, v,
+    };
+    use datafusion_expr::{Expr, col, expr::LambdaVariable, lit};
+
+    /// The result must share the input's element and offset buffers.
+    fn assert_reuses_input(actual: &ListArray, input: &ListArray) {
+        assert_eq!(actual, input);
+        assert!(Arc::ptr_eq(actual.values(), input.values()));
+        assert!(actual.offsets().ptr_eq(input.offsets()));
+    }
+
+    /// Compare physical layouts, which logical equality ignores.
+    fn assert_same_layout<O: OffsetSizeTrait>(actual: &dyn Array, expected: &dyn Array) {
+        let (actual, expected) = (actual.as_list::<O>(), expected.as_list::<O>());
+        assert_eq!(actual.offsets(), expected.offsets());
+        assert_eq!(actual.values(), expected.values());
+    }
 
     fn keep_greater_than_two(
         list: impl Array + Clone + 'static,
-    ) -> datafusion_common::Result<arrow::array::ArrayRef> {
+    ) -> datafusion_common::Result<ArrayRef> {
         eval_hof_on_i32_list(
             array_filter_higher_order_function(),
             list,
@@ -340,11 +287,11 @@ mod tests {
     }
 
     #[test]
-    fn filter_on_sliced_list_should_not_evaluate_on_unreachable_values() {
+    fn filter_sliced_list() {
         // First sublist [0] is sliced away; sliced array covers sublists [1..3]
         let list = create_i32_list(
             vec![
-                0, // unreachable after slice — if evaluated, it would appear in output
+                0, // Outside the visible list rows.
                 1, 5, 2, 4, 3, 7,
             ],
             OffsetBuffer::<i32>::from_lengths(vec![1, 3, 3]),
@@ -366,9 +313,9 @@ mod tests {
     }
 
     #[test]
-    fn filter_should_not_be_evaluated_on_values_underlying_null() {
-        // The null sublist (index 1) contains values that would pass the predicate
-        // if evaluated. We verify they do NOT appear in the output.
+    fn filter_does_not_copy_values_underlying_null_rows() {
+        // The NULL list row contains values that pass the predicate. They must
+        // not occupy space in the result's element array.
         let list = create_i32_list(
             vec![1, 5, 99, 100, 3, 7],
             OffsetBuffer::<i32>::from_lengths(vec![2, 2, 2]),
@@ -389,6 +336,39 @@ mod tests {
 
         assert_eq!(actual.data_type(), expected.data_type());
         assert_eq!(actual, &expected);
+        assert_same_layout::<i32>(actual, &expected);
+    }
+
+    #[test]
+    fn filter_passing_values_under_null_rows_are_not_kept() {
+        let nulls = Some(NullBuffer::from(vec![true, false, true]));
+        for (values, threshold, expected_values, expected_lengths) in [
+            // Only the elements stored under the NULL row pass, so the result
+            // keeps no elements.
+            (vec![1, 2, 99, 100, 3], 50, vec![], [0, 0, 0]),
+            // Every element passes, but the elements stored under the NULL row
+            // must still be dropped rather than returning the input as is.
+            (vec![3, 4, 98, 99, 5], 2, vec![3, 4, 5], [2, 0, 1]),
+        ] {
+            let list = create_i32_list(
+                values,
+                OffsetBuffer::<i32>::from_lengths([2, 2, 1]),
+                nulls.clone(),
+            );
+            let res = eval_hof_on_i32_list(
+                array_filter_higher_order_function(),
+                list,
+                v().gt(lit(threshold)),
+            )
+            .unwrap();
+            let expected = create_i32_list(
+                expected_values,
+                OffsetBuffer::<i32>::from_lengths(expected_lengths),
+                nulls.clone(),
+            );
+            assert_eq!(res.as_list::<i32>(), &expected);
+            assert_same_layout::<i32>(&res, &expected);
+        }
     }
 
     #[test]
@@ -417,7 +397,7 @@ mod tests {
         );
         // all elements > 2, so nothing is filtered — values buffer should be reused
         let res = keep_greater_than_two(list.clone()).unwrap();
-        assert_eq!(res.as_list::<i32>(), &list);
+        assert_reuses_input(res.as_list::<i32>(), &list);
     }
 
     #[test]
@@ -434,7 +414,103 @@ mod tests {
             lit(true),
         )
         .unwrap();
-        assert_eq!(res.as_list::<i32>(), &list);
+        assert_reuses_input(res.as_list::<i32>(), &list);
+    }
+
+    #[test]
+    fn filter_sliced_null_elements_and_rows() {
+        // Slice both the element array and the list rows. The visible input is
+        // [[NULL, 1, 4, NULL], NULL, [], [NULL, 3, 7]]. The NULL row retains 99,100.
+        let values = Int32Array::from(vec![
+            Some(-1),
+            Some(42),
+            None,
+            Some(1),
+            Some(4),
+            None,
+            Some(99),
+            Some(100),
+            None,
+            Some(3),
+            Some(7),
+            Some(88),
+        ])
+        .slice(1, 11);
+        let field = Arc::new(
+            Field::new("element", DataType::Int32, true)
+                .with_metadata(HashMap::from([("key".into(), "value".into())])),
+        );
+        let value = || {
+            Expr::LambdaVariable(LambdaVariable::new(
+                "v".into(),
+                Some(Arc::clone(&field)),
+            ))
+        };
+        let list = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::<i32>::from_lengths([1, 4, 2, 0, 3, 1]),
+            Arc::new(values),
+            Some(NullBuffer::from(vec![true, true, false, true, true, true])),
+        )
+        .slice(1, 4);
+
+        for large in [false, true] {
+            let data_type = if large {
+                DataType::LargeList(Arc::clone(&field))
+            } else {
+                DataType::List(Arc::clone(&field))
+            };
+            let input = cast(&list, &data_type).unwrap();
+            for (predicate, values, lengths) in [
+                (
+                    value().gt(lit(2i32)),
+                    vec![Some(4), Some(3), Some(7)],
+                    [1, 0, 0, 2],
+                ),
+                (value().is_null(), vec![None, None, None], [2, 0, 0, 1]),
+                (
+                    value().is_null().or(value().gt(lit(2i32))),
+                    vec![None, Some(4), None, None, Some(3), Some(7)],
+                    [3, 0, 0, 3],
+                ),
+            ] {
+                let result = eval_hof_on_i32_list(
+                    array_filter_higher_order_function(),
+                    Arc::clone(&input),
+                    predicate,
+                )
+                .unwrap();
+                let expected = ListArray::new(
+                    Arc::clone(&field),
+                    OffsetBuffer::<i32>::from_lengths(lengths),
+                    Arc::new(Int32Array::from(values)),
+                    list.nulls().cloned(),
+                );
+                let expected = cast(&expected, &data_type).unwrap();
+                assert_eq!(result.as_ref(), expected.as_ref());
+                if large {
+                    assert_same_layout::<i64>(&result, &expected);
+                } else {
+                    assert_same_layout::<i32>(&result, &expected);
+                }
+                result.to_data().validate_full().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn test_sliced_capacity() -> datafusion_common::Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            eval_hof_on_i32_list(
+                array_filter_higher_order_function(),
+                Arc::clone(input),
+                Expr::LambdaVariable(LambdaVariable::new(
+                    "v".into(),
+                    Some(Arc::new(Field::new("v", DataType::Float64, true))),
+                ))
+                .gt(lit(3.5)),
+            )
+        })
     }
 
     #[test]
@@ -452,6 +528,47 @@ mod tests {
         let expected = create_i32_list(
             vec![0i32; 0],
             OffsetBuffer::<i32>::from_lengths(vec![0, 0]),
+            None,
+        );
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn filter_large_list_parity() {
+        let list = create_i32_large_list(
+            vec![1, 2, 3, 4, 5],
+            OffsetBuffer::<i64>::from_lengths(vec![5]),
+            None,
+        );
+        let res = keep_greater_than_two(list).unwrap();
+        let actual = res.as_list::<i64>();
+        let expected = create_i32_large_list(
+            vec![3, 4, 5],
+            OffsetBuffer::<i64>::from_lengths(vec![3]),
+            None,
+        );
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn filter_captured_outer_column() {
+        let list = create_i32_list(
+            vec![1, 50, 4, 50, 7, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![2, 2, 2]),
+            None,
+        );
+        let number = Int32Array::from(vec![10, 40, 60]);
+        let res = eval_hof_on_i32_list_with_outer(
+            array_filter_higher_order_function(),
+            list,
+            number,
+            v().gt(col("number")),
+        )
+        .unwrap();
+        let actual = res.as_list::<i32>();
+        let expected = create_i32_list(
+            vec![50, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![1, 1, 0]),
             None,
         );
         assert_eq!(actual, &expected);

@@ -153,15 +153,35 @@ impl PhysicalExpr for Column {
         _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
+        let Self { name, index } = self;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
                 protobuf::PhysicalColumn {
-                    name: self.name.clone(),
-                    index: self.index as u32,
+                    name: name.clone(),
+                    index: *index as u32,
                 },
             )),
         }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl From<&datafusion_proto_models::protobuf::PhysicalColumn> for Column {
+    fn from(c: &datafusion_proto_models::protobuf::PhysicalColumn) -> Self {
+        let datafusion_proto_models::protobuf::PhysicalColumn { name, index } = c;
+        Column::new(name, *index as usize)
+    }
+}
+
+#[cfg(feature = "proto")]
+impl From<&Column> for datafusion_proto_models::protobuf::PhysicalColumn {
+    fn from(c: &Column) -> Self {
+        let Column { name, index } = c;
+        Self {
+            name: name.clone(),
+            index: *index as u32,
+        }
     }
 }
 

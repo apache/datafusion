@@ -27,16 +27,17 @@ use datafusion::arrow::array::{UInt8Builder, UInt64Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::assert_batches_eq;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::{TableProvider, TableType, provider_as_source};
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
-use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::logical_expr::{LogicalPlanBuilder, TableScanBuilder};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream, project_schema,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, project_schema,
 };
 use datafusion::prelude::*;
 
@@ -91,14 +92,10 @@ async fn search_accounts(
     // create local execution context
     let ctx = SessionContext::new();
 
+    let table_scan =
+        TableScanBuilder::new("accounts", provider_as_source(Arc::new(db))).build()?;
     // create logical plan composed of a single TableScan
-    let logical_plan = LogicalPlanBuilder::scan_with_filters(
-        "accounts",
-        provider_as_source(Arc::new(db)),
-        None,
-        vec![],
-    )?
-    .build()?;
+    let logical_plan = LogicalPlanBuilder::table_scan(table_scan)?.build()?;
 
     let mut dataframe = DataFrame::new(ctx.state(), logical_plan)
         .select_columns(&["id", "bank_account"])?;
@@ -147,7 +144,7 @@ impl Debug for CustomDataSource {
 impl CustomDataSource {
     pub(crate) fn create_physical_plan(
         &self,
-        projections: Option<&Vec<usize>>,
+        projections: Option<&[usize]>,
         schema: SchemaRef,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(CustomExec::new(projections, schema, self.clone())))
@@ -202,7 +199,7 @@ impl TableProvider for CustomDataSource {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         // filters and limit can be used here to inject some push-down operations if needed
         _filters: &[Expr],
         _limit: Option<usize>,
@@ -222,7 +219,7 @@ struct CustomExec {
 impl CustomExec {
     #[expect(clippy::needless_pass_by_value)]
     fn new(
-        projections: Option<&Vec<usize>>,
+        projections: Option<&[usize]>,
         schema: SchemaRef,
         db: CustomDataSource,
     ) -> Self {
@@ -230,7 +227,7 @@ impl CustomExec {
         let cache = Self::compute_properties(projected_schema.clone());
         Self {
             db,
-            projection: projections.cloned(),
+            projection: projections.map(|p| p.to_vec()),
             projected_schema,
             cache: Arc::new(cache),
         }
@@ -267,11 +264,22 @@ impl ExecutionPlan for CustomExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -313,5 +321,14 @@ impl ExecutionPlan for CustomExec {
             self.projected_schema.clone(),
             None,
         )?))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }

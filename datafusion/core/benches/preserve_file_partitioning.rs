@@ -331,7 +331,7 @@ fn run_benchmark(
     dim_path: Option<&str>,
     target_partitions: usize,
     query: &str,
-    file_sort_order: &Option<Vec<Vec<SortExpr>>>,
+    file_sort_order: Option<&Vec<Vec<SortExpr>>>,
 ) {
     if std::env::var("SAVE_PLANS").is_ok() {
         let output_path = format!("{name}_plans.txt");
@@ -341,7 +341,7 @@ fn run_benchmark(
             dim_path,
             target_partitions,
             query,
-            file_sort_order.clone(),
+            file_sort_order.cloned(),
         ));
         println!("Plans saved to {output_path}");
     }
@@ -351,7 +351,7 @@ fn run_benchmark(
     for variant in &BENCH_VARIANTS {
         let fact_path_owned = fact_path.to_string();
         let dim_path_owned = dim_path.map(|s| s.to_string());
-        let sort_order = file_sort_order.clone();
+        let sort_order = file_sort_order.cloned();
         let query_owned = query.to_string();
         let preserve_file_partitions = variant.preserve_file_partitions;
         let prefer_existing_sort = variant.prefer_existing_sort;
@@ -520,7 +520,7 @@ fn preserve_order_bench(
         None,
         target_partitions,
         query,
-        &Some(file_sort_order),
+        Some(&file_sort_order),
     );
 }
 
@@ -653,7 +653,7 @@ fn preserve_order_join_bench(
         Some(dim_path),
         target_partitions,
         query,
-        &Some(file_sort_order),
+        Some(&file_sort_order),
     );
 }
 
@@ -757,7 +757,7 @@ fn preserve_order_window_bench(
         None,
         target_partitions,
         query,
-        &Some(file_sort_order),
+        Some(&file_sort_order),
     );
 }
 

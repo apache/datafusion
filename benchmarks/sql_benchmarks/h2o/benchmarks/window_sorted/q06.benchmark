@@ -1,0 +1,11 @@
+# RANK top-2, ~1K partitions.
+
+subgroup window_sorted
+
+template sql_benchmarks/h2o/window_sorted.benchmark.template
+QPAD=06
+FN=RANK
+PK_MOD=1000
+OB_EXPR=v2
+OB_BOUND=count(DISTINCT ob) > 1000
+NAME=window_sorted_q06_rank_1k_partitions

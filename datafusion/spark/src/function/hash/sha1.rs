@@ -17,14 +17,14 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, StringArray};
+use arrow::array::{ArrayRef, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{
     as_binary_array, as_binary_view_array, as_fixed_size_binary_array,
     as_large_binary_array,
 };
 use datafusion_common::types::{NativeType, logical_string};
-use datafusion_common::utils::hex::{HexCase, encode_bytes};
+use datafusion_common::utils::hex::{HexCase, encode_bytes_into};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
@@ -91,15 +91,24 @@ impl ScalarUDFImpl for SparkSha1 {
 }
 
 #[inline]
-fn spark_sha1_digest(value: &[u8]) -> String {
-    encode_bytes(&Sha1::digest(value), HexCase::Lower)
+fn spark_sha1_digest<'b>(value: &[u8], out: &'b mut Vec<u8>) -> &'b str {
+    out.clear();
+    encode_bytes_into(&Sha1::digest(value), HexCase::Lower, out);
+    // Safe: `encode_bytes_into` only writes ASCII hex digits, which are valid UTF-8.
+    unsafe { std::str::from_utf8_unchecked(out) }
 }
 
 fn spark_sha1_impl<'a>(input: impl Iterator<Item = Option<&'a [u8]>>) -> ArrayRef {
-    let result = input
-        .map(|value| value.map(spark_sha1_digest))
-        .collect::<StringArray>();
-    Arc::new(result)
+    let len = input.size_hint().0;
+    let mut builder = StringBuilder::with_capacity(len, len * 40);
+    let mut out = Vec::with_capacity(40);
+    for value in input {
+        match value {
+            Some(value) => builder.append_value(spark_sha1_digest(value, &mut out)),
+            None => builder.append_null(),
+        }
+    }
+    Arc::new(builder.finish())
 }
 
 fn spark_sha1(args: &[ArrayRef]) -> Result<ArrayRef> {

@@ -335,6 +335,10 @@ fn assert_string_results_match(
     }
 }
 
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "The `{rows}`/`{limit}` placeholders are substituted with `str::replace`"
+)]
 fn criterion_benchmark(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let limit = LIMIT;

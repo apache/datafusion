@@ -39,11 +39,11 @@ use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::{ScalarFunctionExpr, expressions};
-use datafusion::prelude::SessionConfig;
-use datafusion::scalar::ScalarValue;
-use datafusion_physical_expr_adapter::{
+use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
+use datafusion::prelude::SessionConfig;
+use datafusion::scalar::ScalarValue;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStoreExt, PutPayload};
@@ -223,13 +223,10 @@ impl ScalarUDFImpl for JsonGetStr {
             args.args.len() == 2,
             "json_get_str requires exactly 2 arguments"
         );
-        let key = match &args.args[0] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(key))) => key,
-            _ => {
-                return Err(exec_datafusion_err!(
-                    "json_get_str first argument must be a string"
-                ));
-            }
+        let ColumnarValue::Scalar(ScalarValue::Utf8(Some(key))) = &args.args[0] else {
+            return Err(exec_datafusion_err!(
+                "json_get_str first argument must be a string"
+            ));
         };
         // We expect a string array that contains JSON strings
         let json_array = match &args.args[1] {

@@ -32,6 +32,10 @@
 //! * [`CatalogProviderList`], [`CatalogProvider`], and [`SchemaProvider`] -
 //!   Describe catalog hierarchies
 //! * [`TableProvider`] - Provides data for query planning and execution
+//! * [`QueryPlanner`], [`PhysicalPlanner`], and [`ExtensionPlanner`] - Query and
+//!   physical planning contracts
+//! * [`PhysicalOptimizerRule`] and [`PhysicalOptimizerContext`] - Physical
+//!   optimization contracts
 //! * [`SessionStore`] - Handles session persistence and retrieval
 //!
 //! The session system enables:
@@ -42,12 +46,21 @@
 //! * Query state persistence
 
 pub mod catalog;
+pub mod physical_optimizer;
+pub mod planner;
 pub mod schema;
 pub mod session;
 pub mod table;
 
 pub use crate::catalog::{
-    CatalogProvider, CatalogProviderList, EmptyCatalogProviderList,
+    CatalogProvider, CatalogProviderFactory, CatalogProviderList,
+    EmptyCatalogProviderList,
+};
+pub use crate::physical_optimizer::{
+    PhysicalOptimizerContext, PhysicalOptimizerRule, with_statistics_context,
+};
+pub use crate::planner::{
+    ExtensionPlanner, PhysicalPlanner, QueryPlanner, UnsupportedQueryPlanner,
 };
 pub use crate::schema::SchemaProvider;
 pub use crate::session::{Session, SessionStore};

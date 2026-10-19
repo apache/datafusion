@@ -1065,5 +1065,64 @@ fn with_extra_columns(batches: Vec<RecordBatch>, n: usize) -> Vec<RecordBatch> {
         .collect()
 }
 
-criterion_group!(benches, criterion_benchmark, sort_axis_benchmark);
+fn small_batches_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("small_batches");
+    group.sample_size(10);
+    group.sampling_mode(criterion::SamplingMode::Flat);
+    group.bench_function("two_keys", |b| {
+        let runtime = Runtime::new().unwrap();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new()
+                .with_target_partitions(1)
+                .with_batch_size(32),
+        );
+
+        // Store small input batches before timing, then restore normal output batches.
+        runtime.block_on(async {
+            ctx.sql(
+                "CREATE TABLE sort_input AS \
+                 SELECT value % 997 AS sort_key, value FROM range(2000000)",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+            ctx.sql("SET datafusion.execution.batch_size = 8192")
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap();
+        });
+
+        // Two keys exercise row-format merging of the small sorted runs.
+        b.iter(|| {
+            runtime.block_on(async {
+                let mut stream = ctx
+                    .sql(
+                        "SELECT sort_key, value FROM sort_input ORDER BY sort_key, value",
+                    )
+                    .await
+                    .unwrap()
+                    .execute_stream()
+                    .await
+                    .unwrap();
+                let mut row_count = 0;
+                while let Some(batch) = stream.next().await {
+                    row_count += batch.unwrap().num_rows();
+                }
+                row_count
+            })
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    criterion_benchmark,
+    sort_axis_benchmark,
+    small_batches_benchmark
+);
 criterion_main!(benches);

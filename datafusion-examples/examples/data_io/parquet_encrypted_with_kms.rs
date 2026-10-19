@@ -241,7 +241,7 @@ impl EncryptionFactory for TestEncryptionFactory {
             .with_footer_key_metadata(key_metadata.clone());
 
         let encrypted_columns: HashSet<&str> =
-            config.encrypted_columns.split(",").collect();
+            config.encrypted_columns.split(',').collect();
         if !encrypted_columns.is_empty() {
             // Set up per-column encryption.
             for field in schema.fields().iter() {

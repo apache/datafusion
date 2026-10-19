@@ -1,0 +1,50 @@
+# Shared template for the parquet_row_filter_skip suite. Each qNN.benchmark sets
+# its `subgroup` directive and includes this template with parameters:
+#   SUBGROUP  subgroup name, also the query sub-directory   (skip, control)
+#   QPAD      zero-padded query id / query file stem        (e.g. 01)
+#   DATASET   load script stem under load/                  (clustered, scrambled)
+#   NAME      criterion display name
+# Optional (consumed by the load script via ${...:-default}):
+#   PRED_ROWS  synthetic row count        (default 10_000_000)
+#   RG_SIZE    parquet max row-group size (default 1_000_000)
+#
+# The load script COPYs the Parquet dataset and init/settings.sql enables
+# `pushdown_filters` so the fully-matched RowFilter-skip path is exercised.
+# The table is always named `t`, so the asserts and cleanup are uniform.
+#
+# The queries share a fixed cutoff key of '0000100000' (row 100_000), so
+# PRED_ROWS must stay above 100_000; the second assert fails loudly otherwise.
+# Both datasets use the key domain 1..PRED_ROWS, so the asserts hold for both.
+
+load sql_benchmarks/parquet_row_filter_skip/load/${DATASET}.sql
+
+init sql_benchmarks/parquet_row_filter_skip/init/settings.sql
+
+name ${NAME}
+group parquet_row_filter_skip
+
+# The dataset has exactly PRED_ROWS rows.
+assert I
+SELECT count(*) = ${PRED_ROWS:-10000000} FROM t;
+----
+true
+
+# The cutoff predicate matches exactly PRED_ROWS - 99_999 rows. This doubles
+# as a correctness canary for the optimization under test: a RowFilter skip
+# that fires on a not-fully-matched row group returns extra rows and trips
+# this assert.
+assert I
+SELECT count(*) = ${PRED_ROWS:-10000000} - 99999 FROM t WHERE skey >= '0000100000';
+----
+true
+
+# Guard against silent config no-ops: without pushdown_filters there is no
+# RowFilter at all and the suite measures nothing.
+assert I
+SELECT value = 'true' FROM information_schema.df_settings WHERE name = 'datafusion.execution.parquet.pushdown_filters';
+----
+true
+
+run sql_benchmarks/parquet_row_filter_skip/queries/${SUBGROUP}/q${QPAD}.sql
+
+cleanup sql_benchmarks/parquet_row_filter_skip/init/cleanup.sql

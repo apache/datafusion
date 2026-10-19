@@ -26,16 +26,17 @@ use crate::coop::cooperative;
 use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
 };
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::Stream;
@@ -105,6 +106,17 @@ impl Stream for MemoryStream {
             None => batch.clone(),
         };
 
+        // MemoryStream advertises `self.schema`, therefore emitted RecordBatches
+        // must conform to it when batches were provided with stricter nested types
+        // (e.g. MemTable accepts stricter batches via Schema::contains).
+        let batch = if batch.schema().as_ref() != self.schema.as_ref()
+            && self.schema.contains(batch.schema().as_ref())
+        {
+            datafusion_common::nested_struct::adapt_batch_to_schema(batch, &self.schema)?
+        } else {
+            batch
+        };
+
         let Some(&fetch) = self.fetch.as_ref() else {
             return Poll::Ready(Some(Ok(batch)));
         };
@@ -147,6 +159,23 @@ pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
 
     /// Returns a new instance with the state reset.
     fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>>;
+
+    /// Encode this generator using the built-in generate-series wire format.
+    ///
+    /// The returned node carries the generator's arguments and batch size;
+    /// [`LazyMemoryExec`] supplies its output schema. The current wire format
+    /// only represents a single generate-series generator. Returning `Some(node)`
+    /// opts into reconstruction as a built-in series generator: its rows, batch
+    /// boundaries, and schema must match this generator after `reset_state()`.
+    /// The payload must describe the initial state, not the current cursor.
+    /// Returning `Ok(None)` leaves serialization to the execution plan's extension
+    /// codec. Returning `Err` stops serialization without extension fallback.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+    ) -> Result<Option<datafusion_proto_models::protobuf::GenerateSeriesNode>> {
+        Ok(None)
+    }
 }
 
 /// Execution plan for lazy in-memory batches of data
@@ -311,15 +340,33 @@ impl ExecutionPlan for LazyMemoryExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_or_internal_err!(
             children.is_empty(),
             "Children cannot be replaced in LazyMemoryExec"
         );
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -351,6 +398,29 @@ impl ExecutionPlan for LazyMemoryExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Preserve the existing single-generator wire format. Multiple
+        // generators still require a plan extension codec.
+        let [generator] = self.batch_generators.as_slice() else {
+            return Ok(None);
+        };
+        let Some(mut node) = generator.read().try_to_proto()? else {
+            return Ok(None);
+        };
+        node.schema = Some(self.schema.as_ref().try_into()?);
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::GenerateSeries(node),
+            ),
+        }))
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -651,6 +721,130 @@ mod lazy_memory_tests {
 
         // if the reset_state is not correct, the batches_reset will be empty
         assert_eq!(batches, batches_reset);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_memory_stream_emitted_batch_matches_declared_schema() -> Result<()> {
+        use arrow::array::{ArrayRef, BooleanArray, StructArray};
+        use arrow::datatypes::{DataType, Field, Fields, Schema};
+        use futures::StreamExt;
+
+        // Declared schema expects nullable struct field colA
+        let declared_fields =
+            Fields::from(vec![Field::new("colA", DataType::Boolean, true)]);
+        let declared_schema = Arc::new(Schema::new(vec![Field::new(
+            "b",
+            DataType::Struct(declared_fields),
+            false,
+        )]));
+
+        // Runtime batch has stricter non-nullable struct field colA
+        let source_fields =
+            Fields::from(vec![Field::new("colA", DataType::Boolean, false)]);
+        let source_schema = Arc::new(Schema::new(vec![Field::new(
+            "b",
+            DataType::Struct(source_fields.clone()),
+            false,
+        )]));
+
+        let struct_array: ArrayRef = Arc::new(StructArray::new(
+            source_fields,
+            vec![Arc::new(BooleanArray::from(vec![true, false]))],
+            None,
+        ));
+        let stricter_batch = RecordBatch::try_new(source_schema, vec![struct_array])?;
+
+        let mut stream = MemoryStream::try_new(
+            vec![stricter_batch],
+            Arc::clone(&declared_schema),
+            None,
+        )?;
+
+        assert_eq!(stream.schema(), declared_schema);
+
+        let emitted_batch = stream.next().await.unwrap()?;
+        assert_eq!(emitted_batch.schema(), declared_schema);
+
+        let struct_col = emitted_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert!(struct_col.fields()[0].is_nullable());
+        let bool_child = struct_col
+            .column(0)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        assert!(bool_child.value(0));
+        assert!(!bool_child.value(1));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_memory_stream_emitted_batch_matches_declared_schema_with_projection()
+    -> Result<()> {
+        use arrow::array::{ArrayRef, BooleanArray, Int32Array, StructArray};
+        use arrow::datatypes::{DataType, Field, Fields, Schema};
+        use futures::StreamExt;
+
+        // Declared full schema: col a (Int32), col b (Struct<colA: nullable Boolean>)
+        let declared_fields =
+            Fields::from(vec![Field::new("colA", DataType::Boolean, true)]);
+        let full_declared_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Struct(declared_fields), false),
+        ]));
+
+        // Projected schema for column "b" (projection = [1])
+        let projected_schema = Arc::new(full_declared_schema.project(&[1])?);
+
+        // Runtime batch has stricter struct
+        let source_fields =
+            Fields::from(vec![Field::new("colA", DataType::Boolean, false)]);
+        let source_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Struct(source_fields.clone()), false),
+        ]));
+
+        let struct_array: ArrayRef = Arc::new(StructArray::new(
+            source_fields,
+            vec![Arc::new(BooleanArray::from(vec![true, false]))],
+            None,
+        ));
+        let stricter_batch = RecordBatch::try_new(
+            source_schema,
+            vec![Arc::new(Int32Array::from(vec![10, 20])), struct_array],
+        )?;
+
+        let mut stream = MemoryStream::try_new(
+            vec![stricter_batch],
+            Arc::clone(&projected_schema),
+            Some(vec![1]),
+        )?;
+
+        assert_eq!(stream.schema(), projected_schema);
+
+        let emitted_batch = stream.next().await.unwrap()?;
+        assert_eq!(emitted_batch.schema(), projected_schema);
+        assert_eq!(emitted_batch.num_columns(), 1);
+
+        let struct_col = emitted_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert!(struct_col.fields()[0].is_nullable());
+        let bool_child = struct_col
+            .column(0)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        assert!(bool_child.value(0));
+        assert!(!bool_child.value(1));
 
         Ok(())
     }

@@ -21,6 +21,7 @@ pub mod char;
 pub mod concat;
 pub mod concat_ws;
 pub mod elt;
+pub mod encode;
 pub mod format_string;
 pub mod ilike;
 pub mod is_valid_utf8;
@@ -32,6 +33,7 @@ pub mod quote;
 pub mod soundex;
 pub mod space;
 pub mod substring;
+pub mod to_binary;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -45,6 +47,7 @@ make_udf_function!(concat_ws::SparkConcatWs, concat_ws);
 make_udf_function!(ilike::SparkILike, ilike);
 make_udf_function!(length::SparkLengthFunc, length);
 make_udf_function!(elt::SparkElt, elt);
+make_udf_function!(encode::SparkEncode, encode);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 make_udf_function!(format_string::FormatStringFunc, format_string);
@@ -55,6 +58,8 @@ make_udf_function!(soundex::SparkSoundex, soundex);
 make_udf_function!(make_valid_utf8::SparkMakeValidUtf8, make_valid_utf8);
 make_udf_function!(is_valid_utf8::SparkIsValidUtf8, is_valid_utf8);
 make_udf_function!(quote::SparkQuote, quote);
+make_udf_function!(to_binary::SparkToBinary, to_binary);
+make_udf_function!(to_binary::SparkTryToBinary, try_to_binary);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -88,6 +93,11 @@ pub mod expr_fn {
         elt,
         "Returns the n-th input (1-indexed), e.g. returns 2nd input when n is 2. The function returns NULL if the index is 0 or exceeds the length of the array.",
         select_col arg1 arg2 argn
+    ));
+    export_functions!((
+        encode,
+        "Encodes a string or binary value into binary using the specified character encoding.",
+        string_or_binary charset
     ));
     export_functions!((
         ilike,
@@ -141,6 +151,16 @@ pub mod expr_fn {
         "Returns str enclosed by single quotes and each instance of single quote in it is preceded by a backslash",
         str
     ));
+    export_functions!((
+        to_binary,
+        "Converts the input str to a binary value based on the supplied fmt, which must be a case-insensitive literal of 'hex', 'utf-8', 'utf8' or 'base64'. Defaults to 'hex'.",
+        str fmt
+    ));
+    export_functions!((
+        try_to_binary,
+        "Like to_binary, but returns NULL instead of raising an error when the conversion cannot be performed.",
+        str fmt
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -151,6 +171,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         concat(),
         concat_ws(),
         elt(),
+        encode(),
         ilike(),
         length(),
         like(),
@@ -163,5 +184,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         make_valid_utf8(),
         is_valid_utf8(),
         quote(),
+        to_binary(),
+        try_to_binary(),
     ]
 }

@@ -70,6 +70,10 @@ impl TableSource for DefaultTableSource {
         self.table_provider.supports_filters_pushdown(filter)
     }
 
+    fn supports_skip_pushdown(&self) -> bool {
+        self.table_provider.supports_skip_pushdown()
+    }
+
     fn get_logical_plan(&'_ self) -> Option<Cow<'_, datafusion_expr::LogicalPlan>> {
         self.table_provider.get_logical_plan()
     }
@@ -118,7 +122,7 @@ fn preserves_table_type() {
         async fn scan(
             &self,
             _: &dyn crate::Session,
-            _: Option<&Vec<usize>>,
+            _: Option<&[usize]>,
             _: &[Expr],
             _: Option<usize>,
         ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>, DataFusionError>

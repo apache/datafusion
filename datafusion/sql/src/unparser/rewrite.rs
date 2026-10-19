@@ -194,7 +194,7 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         return None;
     };
 
-    let mut map = HashMap::new();
+    let mut map = HashMap::with_capacity(inner_p.expr.len());
     let inner_exprs = inner_p
         .expr
         .iter()
@@ -377,7 +377,7 @@ pub(super) fn subquery_alias_inner_query_and_columns(
 
         if outer_alias.expr.to_string() != inner_expr_string {
             return (plan, vec![]);
-        };
+        }
 
         columns.push(outer_alias.name.as_str().into());
     }

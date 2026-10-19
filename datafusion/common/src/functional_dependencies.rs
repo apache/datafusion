@@ -23,7 +23,7 @@ use std::ops::Deref;
 use std::vec::IntoIter;
 
 use crate::utils::{merge_and_order_indices, set_difference};
-use crate::{DFSchema, HashSet, JoinType};
+use crate::{DFSchema, HashSet, JoinType, NullEquality};
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -144,6 +144,13 @@ pub struct FunctionalDependence {
     /// such as after LEFT JOIN or RIGHT JOIN operations, this property may
     /// change.
     pub nullable: bool,
+    /// The NULL-comparison semantics under which this dependency holds. The
+    /// conservative default, [`NullEquality::NullEqualsNothing`], means it
+    /// holds only across rows whose determinant contains no NULLs; e.g. a
+    /// nullable `UNIQUE` constraint permits multiple NULL rows that may differ.
+    /// [`NullEquality::NullEqualsNull`] means it also holds when NULL
+    /// determinant values are treated as equal; e.g. a `GROUP BY` key.
+    pub null_equality: NullEquality,
     // The functional dependency mode:
     pub mode: Dependency,
 }
@@ -168,6 +175,8 @@ impl FunctionalDependence {
             source_indices,
             target_indices,
             nullable,
+            // Assume the dependency does not hold across NULL rows by default:
+            null_equality: NullEquality::NullEqualsNothing,
             // Start with the least restrictive mode by default:
             mode: Dependency::Multi,
         }
@@ -176,6 +185,25 @@ impl FunctionalDependence {
     pub fn with_mode(mut self, mode: Dependency) -> Self {
         self.mode = mode;
         self
+    }
+
+    pub fn with_null_equality(mut self, null_equality: NullEquality) -> Self {
+        self.null_equality = null_equality;
+        self
+    }
+
+    /// Returns `true` if this dependency remains usable for operations that
+    /// treat NULL determinant values as equal (`GROUP BY`, `DISTINCT` and
+    /// sorting, which place all NULL keys together): it must hold under
+    /// NULLs-are-equal semantics, have a non-nullable determinant (e.g. a
+    /// `PRIMARY KEY`), or have no nullable source field in the given `schema`.
+    pub fn is_valid_across_nulls(&self, schema: &DFSchema) -> bool {
+        self.null_equality == NullEquality::NullEqualsNull
+            || !self.nullable
+            || self
+                .source_indices
+                .iter()
+                .all(|&source_idx| !schema.field(source_idx).is_nullable())
     }
 }
 
@@ -296,11 +324,12 @@ impl FunctionalDependencies {
         // to correctly associate a `Single`-mode dependence with the whole table.
         n_out: usize,
     ) -> FunctionalDependencies {
-        let mut projected_func_dependencies = vec![];
+        let mut projected_func_dependencies = Vec::with_capacity(self.deps.len());
         for FunctionalDependence {
             source_indices,
             target_indices,
             nullable,
+            null_equality,
             mode,
         } in &self.deps
         {
@@ -321,7 +350,8 @@ impl FunctionalDependencies {
                     new_target_indices,
                     *nullable,
                 )
-                .with_mode(*mode);
+                .with_mode(*mode)
+                .with_null_equality(*null_equality);
                 projected_func_dependencies.push(new_func_dependence);
             }
         }
@@ -386,7 +416,12 @@ impl FunctionalDependencies {
     fn downgrade_dependencies(&mut self) {
         // Delete nullable dependencies, since they are no longer valid:
         self.deps.retain(|item| !item.nullable);
-        self.deps.iter_mut().for_each(|item| item.nullable = true);
+        // Survivors had a non-null determinant, so every new NULL comes from a
+        // padded row whose targets are all NULL too:
+        self.deps.iter_mut().for_each(|item| {
+            item.nullable = true;
+            item.null_equality = NullEquality::NullEqualsNull;
+        });
     }
 
     /// This function ensures that functional dependencies involving uniquely
@@ -417,74 +452,94 @@ impl Deref for FunctionalDependencies {
 }
 
 /// Calculates functional dependencies for aggregate output, when there is a GROUP BY expression.
+///
+/// `group_by_input_indices[i]` is the index of the input field that GROUP BY
+/// expression `i` passes through unchanged (a column reference), or `None` if
+/// the expression computes a new value. Only a column reference can carry an
+/// input dependency; a computed expression such as `CAST(pk AS INT)` cannot,
+/// even though its output name may equal the column's name.
 pub fn aggregate_functional_dependencies(
     aggr_input_schema: &DFSchema,
-    group_by_expr_names: &[String],
+    group_by_input_indices: &[Option<usize>],
     aggr_schema: &DFSchema,
 ) -> FunctionalDependencies {
     let mut aggregate_func_dependencies = vec![];
-    let aggr_input_fields = aggr_input_schema.field_names();
     let aggr_fields = aggr_schema.fields();
     // Association covers the whole table:
     let target_indices = (0..aggr_schema.fields().len()).collect::<Vec<_>>();
     // Get functional dependencies of the schema:
     let func_dependencies = aggr_input_schema.functional_dependencies();
-    for FunctionalDependence {
-        source_indices,
-        nullable,
-        mode,
-        ..
-    } in &func_dependencies.deps
-    {
-        // Keep source indices in a `HashSet` to prevent duplicate entries:
-        let mut new_source_indices = vec![];
-        let mut new_source_field_names = vec![];
-        let source_field_names = source_indices
-            .iter()
-            .map(|&idx| &aggr_input_fields[idx])
-            .collect::<Vec<_>>();
-
-        for (idx, group_by_expr_name) in group_by_expr_names.iter().enumerate() {
-            // When one of the input determinant expressions matches with
-            // the GROUP BY expression, add the index of the GROUP BY
-            // expression as a new determinant key:
-            if source_field_names.contains(&group_by_expr_name) {
-                new_source_indices.push(idx);
-                new_source_field_names.push(group_by_expr_name.clone());
-            }
-        }
+    // The loop below only re-expresses input dependencies. Skip it when the
+    // input has none. The GROUP BY-key dependency below always runs.
+    if !func_dependencies.is_empty() {
+        // Compute once: this does not change in the loop.
         let existing_target_indices =
-            get_target_functional_dependencies(aggr_input_schema, group_by_expr_names);
-        let new_target_indices = get_target_functional_dependencies(
-            aggr_input_schema,
-            &new_source_field_names,
-        );
-        let mode = if existing_target_indices == new_target_indices
-            && new_target_indices.is_some()
+            get_target_functional_dependencies(aggr_input_schema, group_by_input_indices);
+        for FunctionalDependence {
+            source_indices,
+            nullable,
+            null_equality,
+            mode,
+            ..
+        } in &func_dependencies.deps
         {
-            // If dependency covers all GROUP BY expressions, mode will be `Single`:
-            Dependency::Single
-        } else {
-            // Otherwise, existing mode is preserved:
-            *mode
-        };
-        // All of the composite indices occur in the GROUP BY expression:
-        if new_source_indices.len() == source_indices.len() {
-            aggregate_func_dependencies.push(
-                FunctionalDependence::new(
-                    new_source_indices,
-                    target_indices.clone(),
-                    *nullable,
-                )
-                .with_mode(mode),
+            // Indices into the GROUP BY list for this determinant:
+            let mut new_source_indices = vec![];
+            let mut new_source_input_indices = vec![];
+            for (idx, input_idx) in group_by_input_indices.iter().enumerate() {
+                // When one of the input determinant columns is a GROUP BY
+                // expression, add the index of the GROUP BY expression as a new
+                // determinant key:
+                if let Some(input_idx) = input_idx
+                    && source_indices.contains(input_idx)
+                    // A key column can be in the GROUP BY list more than one
+                    // time (`x, x AS k`). Count it one time.
+                    && !new_source_input_indices.contains(&Some(*input_idx))
+                {
+                    new_source_indices.push(idx);
+                    new_source_input_indices.push(Some(*input_idx));
+                }
+            }
+            let new_target_indices = get_target_functional_dependencies(
+                aggr_input_schema,
+                &new_source_input_indices,
             );
+            let mode = if existing_target_indices == new_target_indices
+                && new_target_indices.is_some()
+            {
+                // If dependency covers all GROUP BY expressions, mode will be `Single`:
+                Dependency::Single
+            } else {
+                // Otherwise, existing mode is preserved:
+                *mode
+            };
+            // All of the composite indices occur in the GROUP BY expression:
+            if new_source_indices.len() == source_indices.len() {
+                // GROUP BY treats NULLs as equal: a determinant covering the
+                // complete grouping key gets at most one output row per NULL too.
+                let output_null_equality =
+                    if new_source_indices.len() == group_by_input_indices.len() {
+                        NullEquality::NullEqualsNull
+                    } else {
+                        *null_equality
+                    };
+                aggregate_func_dependencies.push(
+                    FunctionalDependence::new(
+                        new_source_indices,
+                        target_indices.clone(),
+                        *nullable,
+                    )
+                    .with_mode(mode)
+                    .with_null_equality(output_null_equality),
+                );
+            }
         }
     }
 
     // When we have a GROUP BY key, we can guarantee uniqueness after
     // aggregation:
-    if !group_by_expr_names.is_empty() {
-        let count = group_by_expr_names.len();
+    if !group_by_input_indices.is_empty() {
+        let count = group_by_input_indices.len();
         let source_indices = (0..count).collect::<Vec<_>>();
         let nullable = source_indices
             .iter()
@@ -497,13 +552,17 @@ pub fn aggregate_functional_dependencies(
             // The following simple comparison is working well because
             // GROUP BY expressions come here as a prefix.
             item.source_indices.iter().all(|idx| idx < &count)
+                // A dependency that is not valid across NULLs cannot replace
+                // the whole GROUP BY key dependency:
+                && item.is_valid_across_nulls(aggr_schema)
         }) {
             // Add a new functional dependency associated with the whole table:
             // Use nullable property of the GROUP BY expression:
             aggregate_func_dependencies.push(
-                // Use nullable property of the GROUP BY expression:
                 FunctionalDependence::new(source_indices, target_indices, nullable)
-                    .with_mode(Dependency::Single),
+                    .with_mode(Dependency::Single)
+                    // Grouping collapses NULL keys into a single group:
+                    .with_null_equality(NullEquality::NullEqualsNull),
             );
         }
     }
@@ -512,58 +571,58 @@ pub fn aggregate_functional_dependencies(
 
 /// Returns target indices, for the determinant keys that are inside
 /// group by expressions.
+///
+/// `group_by_input_indices` holds, for each GROUP BY expression, the index of
+/// the `schema` field it references, or `None` for a computed expression.
 pub fn get_target_functional_dependencies(
     schema: &DFSchema,
-    group_by_expr_names: &[String],
+    group_by_input_indices: &[Option<usize>],
 ) -> Option<Vec<usize>> {
-    let mut combined_target_indices = HashSet::new();
     let dependencies = schema.functional_dependencies();
-    let field_names = schema.field_names();
+    if dependencies.is_empty() {
+        return None;
+    }
+    let mut combined_target_indices = HashSet::new();
     for FunctionalDependence {
         source_indices,
         target_indices,
         ..
     } in &dependencies.deps
     {
-        let source_key_names = source_indices
-            .iter()
-            .map(|id_key_idx| &field_names[*id_key_idx])
-            .collect::<Vec<_>>();
         // If the GROUP BY expression contains a determinant key, we can use
         // the associated fields after aggregation even if they are not part
         // of the GROUP BY expression.
-        if source_key_names
+        if source_indices
             .iter()
-            .all(|source_key_name| group_by_expr_names.contains(source_key_name))
+            .all(|source_idx| group_by_input_indices.contains(&Some(*source_idx)))
         {
             combined_target_indices.extend(target_indices.iter());
         }
     }
     (!combined_target_indices.is_empty()).then_some({
         let mut result = combined_target_indices.into_iter().collect::<Vec<_>>();
-        result.sort();
+        result.sort_unstable();
         result
     })
 }
 
 /// Returns indices for the minimal subset of GROUP BY expressions that are
 /// functionally equivalent to the original set of GROUP BY expressions.
+///
+/// `group_by_input_indices` holds, for each GROUP BY expression, the index of
+/// the `schema` field it references, or `None` for a computed expression. If
+/// any GROUP BY expression is computed, returns `None`.
 pub fn get_required_group_by_exprs_indices(
     schema: &DFSchema,
-    group_by_expr_names: &[String],
+    group_by_input_indices: &[Option<usize>],
 ) -> Option<Vec<usize>> {
     let dependencies = schema.functional_dependencies();
-    let field_names = schema.field_names();
-    let mut groupby_expr_indices = group_by_expr_names
+    let mut groupby_expr_indices = group_by_input_indices
         .iter()
-        .map(|group_by_expr_name| {
-            field_names
-                .iter()
-                .position(|field_name| field_name == group_by_expr_name)
-        })
+        .copied()
         .collect::<Option<Vec<_>>>()?;
 
-    groupby_expr_indices.sort();
+    groupby_expr_indices.sort_unstable();
     for FunctionalDependence {
         source_indices,
         target_indices,
@@ -585,47 +644,46 @@ pub fn get_required_group_by_exprs_indices(
     groupby_expr_indices
         .iter()
         .map(|idx| {
-            group_by_expr_names
+            group_by_input_indices
                 .iter()
-                .position(|name| &field_names[*idx] == name)
+                .position(|input_idx| *input_idx == Some(*idx))
         })
         .collect()
 }
 
 /// Returns indices for the minimal subset of ORDER BY expressions that are
 /// functionally equivalent to the original set of ORDER BY expressions.
+///
+/// `sort_input_indices` holds, for each ORDER BY expression, the index of the
+/// `schema` field it references, or `None` for a computed expression.
 pub fn get_required_sort_exprs_indices(
     schema: &DFSchema,
-    sort_expr_names: &[String],
+    sort_input_indices: &[Option<usize>],
 ) -> Vec<usize> {
     let dependencies = schema.functional_dependencies();
-    let field_names = schema.field_names();
 
-    let mut known_field_indices = HashSet::new();
-    let mut required_sort_expr_indices = Vec::new();
+    let mut known_field_indices = HashSet::with_capacity(sort_input_indices.len());
+    let mut required_sort_expr_indices = Vec::with_capacity(sort_input_indices.len());
 
-    for (sort_expr_idx, sort_expr_name) in sort_expr_names.iter().enumerate() {
-        // If the sort expression doesn't correspond to a known schema field
-        // (e.g. a computed expression), we can't reason about it via functional
+    for (sort_expr_idx, field_idx) in sort_input_indices.iter().enumerate() {
+        // If the sort expression doesn't reference a schema field (e.g. a
+        // computed expression), we can't reason about it via functional
         // dependencies, so conservatively keep it.
-        let Some(field_idx) = field_names
-            .iter()
-            .position(|field_name| field_name == sort_expr_name)
-        else {
+        let Some(field_idx) = *field_idx else {
             required_sort_expr_indices.push(sort_expr_idx);
             continue;
         };
 
         // A sort expression is removable if its value is functionally determined
-        // by fields that already appear earlier in the sort order: if the earlier
-        // fields are fixed, this one's value is fixed too, so it adds no ordering
-        // information.
+        // by fields that already appear earlier in the sort order (and the
+        // dependency remains valid across NULL rows).
         let removable = dependencies.deps.iter().any(|dependency| {
             dependency.target_indices.contains(&field_idx)
                 && dependency
                     .source_indices
                     .iter()
                     .all(|source_idx| known_field_indices.contains(source_idx))
+                && dependency.is_valid_across_nulls(schema)
         });
 
         if removable {

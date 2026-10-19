@@ -24,9 +24,9 @@
 //! ```
 //!
 //! Instead of sorting the entire dataset, this operator delegates to a
-//! per-partition heap-of-K implementation (one variant for `ROW_NUMBER`
-//! and a sibling variant for `RANK`), both of which maintain one heap per
-//! distinct partition key while sharing a single [`arrow::row::RowConverter`],
+//! per-partition top-K implementation — one variant each for `ROW_NUMBER`,
+//! `RANK`, and `DENSE_RANK` — all of which keep per-partition state while
+//! sharing a single [`arrow::row::RowConverter`],
 //! [`MemoryReservation`](datafusion_execution::memory_pool::MemoryReservation),
 //! and metrics set across all partitions, and emit only the top-K rows
 //! per partition in sorted order `(partition_keys, order_keys)`.
@@ -34,19 +34,27 @@
 use std::fmt::{self, Formatter};
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::compute::SortOptions;
+use arrow::datatypes::{FieldRef, SchemaRef};
 use arrow::row::SortField;
 use datafusion_common::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_execution::TaskContext;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr::equivalence::EquivalenceProperties;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use futures::StreamExt;
 use futures::TryStreamExt;
 
 use crate::execution_plan::{Boundedness, EmissionType};
-use crate::metrics::ExecutionPlanMetricsSet;
-use crate::topk::{PartitionedTopK, PartitionedTopKRank, build_sort_fields};
+use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::topk::{
+    PartitionedTopK, PartitionedTopKDenseRank, PartitionedTopKRank, build_sort_fields,
+    partitioned_topk_output_schema,
+};
+use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, stream::RecordBatchStreamAdapter,
@@ -59,12 +67,19 @@ use crate::{
 /// - [`Rank`](Self::Rank): K rows plus any rows tied at the boundary
 ///   ORDER BY value (RANK semantics — `WHERE rk <= K` may keep more
 ///   than K rows when ties straddle the boundary).
+/// - [`DenseRank`](Self::DenseRank): every row whose ORDER BY value is
+///   among the K distinct-smallest ORDER BY values in the partition
+///   (DENSE_RANK semantics — total kept rows is unbounded in
+///   rows-per-distinct-value).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowFnKind {
     /// `ROW_NUMBER()` — keep exactly K rows per partition.
     RowNumber,
     /// `RANK()` — keep K rows plus any rows tied at the boundary.
     Rank,
+    /// `DENSE_RANK()` — keep every row whose ob value is among the K
+    /// distinct-smallest ob values seen in the partition.
+    DenseRank,
 }
 
 /// Per-partition Top-K operator for window function queries.
@@ -108,9 +123,10 @@ pub enum WindowFnKind {
 /// ```
 ///
 /// Instead of sorting the entire dataset, this operator reads unsorted input
-/// and delegates to a per-partition heap-of-K implementation (`PartitionedTopK`
-/// for `ROW_NUMBER` and `PartitionedTopKRank` for `RANK`), each maintaining
-/// one heap per distinct partition key while sharing a single
+/// and delegates to a per-partition top-K implementation (`PartitionedTopK`
+/// for `ROW_NUMBER`, `PartitionedTopKRank` for `RANK`, and
+/// `PartitionedTopKDenseRank` for `DENSE_RANK`), each maintaining
+/// per-partition state while sharing a single
 /// [`arrow::row::RowConverter`] /
 /// [`MemoryReservation`](datafusion_execution::memory_pool::MemoryReservation)
 /// across all partitions, and emits only the top-K rows per partition in
@@ -162,11 +178,12 @@ pub enum WindowFnKind {
 ///
 /// # Limitations
 ///
-/// - Only activated when the window function is `ROW_NUMBER` or `RANK` with
-///   a `PARTITION BY` clause. `RANK` additionally requires a non-empty
-///   `ORDER BY` (with an empty `ORDER BY`, every row ties at rank 1 and the
-///   heap-of-K rewrite doesn't apply). Global top-K (no `PARTITION BY`) is
-///   already handled efficiently by `SortExec` with `fetch`.
+/// - Only activated when the window function is `ROW_NUMBER`, `RANK`, or
+///   `DENSE_RANK` with a `PARTITION BY` clause. `RANK` and `DENSE_RANK`
+///   additionally require a non-empty `ORDER BY` (with an empty `ORDER BY`
+///   every row ties at rank 1 and the rewrite doesn't apply). Global top-K
+///   (no `PARTITION BY`) is already handled efficiently by `SortExec` with
+///   `fetch`.
 /// - For very high cardinality partition keys (millions of distinct values),
 ///   both memory usage and runtime overhead can become significant. In such
 ///   cases, the sort-based plan is more robust. Therefore, this optimization
@@ -192,6 +209,18 @@ pub struct PartitionedTopKExec {
     /// Which window function this operator is optimizing. Selects the
     /// per-partition retention policy (see [`WindowFnKind`]).
     fn_kind: WindowFnKind,
+    /// When set, the operator appends this column to its output, holding each
+    /// retained row's value for [`Self::fn_kind`]'s ranking function.
+    ///
+    /// Every policy already knows those values at emit time — the retained
+    /// rows leave in `(partition_keys, order_keys)` order, and the retained set
+    /// is a complete order-prefix of each partition, so `ROW_NUMBER` is the
+    /// emit position, `RANK` follows from comparing adjacent ORDER BY keys, and
+    /// `DENSE_RANK` is the index of the row's distinct-ORDER-BY-value group.
+    /// Filling them in here lets the rewrite drop the `BoundedWindowAggExec`
+    /// entirely instead of leaving it to re-derive the same numbers over the
+    /// operator's output.
+    ranking_field: Option<FieldRef>,
     /// Execution metrics
     metrics_set: ExecutionPlanMetricsSet,
     /// Cached plan properties (output ordering, partitioning, etc.)
@@ -210,7 +239,8 @@ impl PartitionedTopKExec {
     ///   that form the partition key. Must be >= 1.
     /// * `fetch` - Maximum rows to retain per partition (the K in "top-K").
     /// * `fn_kind` - Which ranking window function this operator optimizes
-    ///   ([`WindowFnKind::RowNumber`] or [`WindowFnKind::Rank`]).
+    ///   ([`WindowFnKind::RowNumber`], [`WindowFnKind::Rank`], or
+    ///   [`WindowFnKind::DenseRank`]).
     ///
     /// # Example
     ///
@@ -231,15 +261,37 @@ impl PartitionedTopKExec {
         fetch: usize,
         fn_kind: WindowFnKind,
     ) -> Result<Self> {
-        let cache = Self::compute_properties(&input, expr.clone())?;
+        let cache =
+            Self::compute_properties(&input, expr.clone(), partition_prefix_len, None)?;
         Ok(Self {
             input,
             expr,
             partition_prefix_len,
             fetch,
             fn_kind,
+            ranking_field: None,
             metrics_set: ExecutionPlanMetricsSet::new(),
             cache: Arc::new(cache),
+        })
+    }
+
+    /// Append `field` to the output, holding each retained row's value for
+    /// [`Self::fn_kind`]'s ranking function, so the caller can drop the
+    /// `BoundedWindowAggExec` that would otherwise compute it.
+    ///
+    /// The output schema widens by that one column, so the plan properties
+    /// are recomputed under it.
+    pub fn with_ranking_field(self, field: FieldRef) -> Result<Self> {
+        let cache = Self::compute_properties(
+            &self.input,
+            self.expr.clone(),
+            self.partition_prefix_len,
+            Some(&field),
+        )?;
+        Ok(Self {
+            ranking_field: Some(field),
+            cache: Arc::new(cache),
+            ..self
         })
     }
 
@@ -269,17 +321,66 @@ impl PartitionedTopKExec {
         self.fn_kind
     }
 
+    /// Returns the ranking column this operator appends to its output, or
+    /// `None` when it emits only its input's columns.
+    pub fn ranking_field(&self) -> Option<&FieldRef> {
+        self.ranking_field.as_ref()
+    }
+
     /// Compute [`PlanProperties`] for this operator.
     ///
     /// The output is sorted by `sort_exprs` (partition keys then order keys),
     /// uses the same partitioning as the input, emits all output at once
     /// (`EmissionType::Final`), and is bounded.
+    ///
+    /// When a ranking column is appended, the output is *also* sorted by
+    /// `[partition keys..., ranking column ASC NULLS LAST]`: all three
+    /// retention policies assign ranks that are non-decreasing in emit order
+    /// within a partition. `BoundedWindowAggExec` declared the same ordering
+    /// (from each ranking function's `sort_options`), so declaring it here is
+    /// what lets `ORDER BY <partition keys>, <ranking column>` stay
+    /// sort-free after the window node is removed.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,
+        partition_prefix_len: usize,
+        ranking_field: Option<&FieldRef>,
     ) -> Result<PlanProperties> {
-        let mut eq_properties = input.equivalence_properties().clone();
+        // With a ranking column appended the output schema is wider than
+        // the input's, so the input's properties have to be re-hung under the
+        // new schema rather than cloned (the same reason
+        // `window_equivalence_properties` does this for `BoundedWindowAggExec`).
+        let mut eq_properties = match ranking_field {
+            None => input.equivalence_properties().clone(),
+            Some(_) => {
+                let output_schema =
+                    partitioned_topk_output_schema(&input.schema(), ranking_field);
+                EquivalenceProperties::new(output_schema)
+                    .extend(input.equivalence_properties().clone())?
+            }
+        };
+        let partition_exprs = sort_exprs[..partition_prefix_len].to_vec();
         eq_properties.reorder(sort_exprs)?;
+
+        if let Some(field) = ranking_field {
+            // The ranking column is the last one, appended by
+            // `partitioned_topk_output_schema`.
+            let ranking_col =
+                Arc::new(Column::new(field.name(), input.schema().fields().len()))
+                    as Arc<dyn PhysicalExpr>;
+            let ranking_sort = PhysicalSortExpr::new(
+                ranking_col,
+                SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            );
+            // Mirrors `add_new_ordering_expr_with_partition_by`: the ranking
+            // value only ascends *within* a partition, so the ordering has to
+            // be prefixed by the partition keys. `reorder` above already
+            // established that prefix.
+            eq_properties.add_ordering(partition_exprs.into_iter().chain([ranking_sort]));
+        }
 
         Ok(PlanProperties::new(
             eq_properties,
@@ -295,17 +396,18 @@ impl DisplayAs for PartitionedTopKExec {
         let fn_label = match self.fn_kind {
             WindowFnKind::RowNumber => "row_number",
             WindowFnKind::Rank => "rank",
+            WindowFnKind::DenseRank => "dense_rank",
         };
+        let partition_exprs: Vec<String> = self.expr[..self.partition_prefix_len]
+            .iter()
+            .map(|e| format!("{}", e.expr))
+            .collect();
+        let order_exprs: Vec<String> = self.expr[self.partition_prefix_len..]
+            .iter()
+            .map(|e| format!("{e}"))
+            .collect();
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let partition_exprs: Vec<String> = self.expr[..self.partition_prefix_len]
-                    .iter()
-                    .map(|e| format!("{}", e.expr))
-                    .collect();
-                let order_exprs: Vec<String> = self.expr[self.partition_prefix_len..]
-                    .iter()
-                    .map(|e| format!("{e}"))
-                    .collect();
                 write!(
                     f,
                     "PartitionedTopKExec: fn={}, fetch={}, partition=[{}], order=[{}]",
@@ -313,23 +415,22 @@ impl DisplayAs for PartitionedTopKExec {
                     self.fetch,
                     partition_exprs.join(", "),
                     order_exprs.join(", "),
-                )
+                )?;
+                if let Some(field) = &self.ranking_field {
+                    write!(f, ", emit=[{}]", field.name())?;
+                }
             }
             DisplayFormatType::TreeRender => {
-                let partition_exprs: Vec<String> = self.expr[..self.partition_prefix_len]
-                    .iter()
-                    .map(|e| format!("{}", e.expr))
-                    .collect();
-                let order_exprs: Vec<String> = self.expr[self.partition_prefix_len..]
-                    .iter()
-                    .map(|e| format!("{e}"))
-                    .collect();
                 writeln!(f, "fn={fn_label}")?;
                 writeln!(f, "fetch={}", self.fetch)?;
                 writeln!(f, "partition=[{}]", partition_exprs.join(", "))?;
-                writeln!(f, "order=[{}]", order_exprs.join(", "))
+                writeln!(f, "order=[{}]", order_exprs.join(", "))?;
+                if let Some(field) = &self.ranking_field {
+                    writeln!(f, "emit=[{}]", field.name())?;
+                }
             }
         }
+        Ok(())
     }
 }
 
@@ -365,18 +466,46 @@ impl ExecutionPlan for PartitionedTopKExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
-        Ok(Arc::new(PartitionedTopKExec::try_new(
+        let mut exec = PartitionedTopKExec::try_new(
             Arc::clone(&children[0]),
             self.expr.clone(),
             self.partition_prefix_len,
             self.fetch,
             self.fn_kind,
-        )?))
+        )?;
+        // Not a `try_new` argument, so it has to be carried over by hand:
+        // dropping it would narrow the schema the nodes above were planned
+        // against.
+        if let Some(field) = &self.ranking_field {
+            exec = exec.with_ranking_field(Arc::clone(field))?;
+        }
+        Ok(Arc::new(exec))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        crate::apply_expression_roots(
+            self.expr.iter().map(|sort_expr| &sort_expr.expr),
+            f,
+        )
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -403,6 +532,11 @@ impl ExecutionPlan for PartitionedTopKExec {
         let batch_size = context.session_config().batch_size();
         let runtime = Arc::clone(&context.runtime_env());
         let metrics_set = self.metrics_set.clone();
+        let output_schema = self.schema();
+        let ranked_schema = self
+            .ranking_field
+            .is_some()
+            .then(|| Arc::clone(&output_schema));
 
         let stream = futures::stream::once(async move {
             do_partitioned_topk(
@@ -417,22 +551,27 @@ impl ExecutionPlan for PartitionedTopKExec {
                 batch_size,
                 runtime,
                 metrics_set,
+                ranked_schema,
             )
             .await
         })
         .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.input.schema(),
+            output_schema,
             stream,
         )))
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics_set.clone_inner())
     }
 }
 
 /// Read all input, feed each batch into a per-partition top-K state
-/// (either [`PartitionedTopK`] for `ROW_NUMBER` or
-/// [`PartitionedTopKRank`] for `RANK`), then emit results ordered by
-/// `(partition_keys, order_keys)`.
+/// ([`PartitionedTopK`] for `ROW_NUMBER`, [`PartitionedTopKRank`] for
+/// `RANK`, or [`PartitionedTopKDenseRank`] for `DENSE_RANK`), then emit
+/// results ordered by `(partition_keys, order_keys)`.
 ///
 /// # Phases
 ///
@@ -442,16 +581,21 @@ impl ExecutionPlan for PartitionedTopKExec {
 ///    `TopKMetrics` are shared across all distinct partition keys for
 ///    this operator instance.
 ///
-/// 2. **Emission** — `emit` drains all per-partition heaps in sorted
-///    partition-key order, returning a coalesced batch stream. For
-///    `RANK`, boundary-tied rows are materialized and emitted after
-///    each partition's heap rows.
+/// 2. **Emission** — `emit` drains all per-partition state in sorted
+///    partition-key order. `ROW_NUMBER` and `RANK` interleave the retained
+///    rows out of their shared store in `batch_size` chunks, so their output
+///    needs no coalescing; `DENSE_RANK` still coalesces. For `RANK`,
+///    boundary-tied rows are emitted after each partition's heap rows. For
+///    `DENSE_RANK`, rows are emitted from a K-bounded map of distinct ob
+///    keys, sorted ascending.
 ///
 /// # Cost
 ///
 /// - Time: O(N log K) where N = total rows, K = fetch
 /// - Memory: O(K × P × row_size) where P = number of distinct partitions
-///   plus, for RANK, the boundary ties' rows
+///   plus, for RANK, the boundary ties' rows. `ROW_NUMBER` and `RANK` hold
+///   their rows by reference into gathered batches, so their constant is the
+///   store's compaction ratio, and one in-flight gather is pinned on top.
 #[expect(clippy::too_many_arguments)]
 async fn do_partitioned_topk(
     partition_id: usize,
@@ -465,12 +609,13 @@ async fn do_partitioned_topk(
     batch_size: usize,
     runtime: Arc<RuntimeEnv>,
     metrics_set: ExecutionPlanMetricsSet,
+    ranked_schema: Option<SchemaRef>,
 ) -> Result<SendableRecordBatchStream> {
     match fn_kind {
         WindowFnKind::RowNumber => {
             let mut state = PartitionedTopK::try_new(
                 partition_id,
-                schema,
+                &schema,
                 partition_exprs,
                 partition_sort_fields,
                 order_expr,
@@ -478,6 +623,7 @@ async fn do_partitioned_topk(
                 batch_size,
                 &runtime,
                 &metrics_set,
+                ranked_schema,
             )?;
             while let Some(batch) = input.next().await {
                 state.insert_batch(&batch?)?;
@@ -488,7 +634,7 @@ async fn do_partitioned_topk(
         WindowFnKind::Rank => {
             let mut state = PartitionedTopKRank::try_new(
                 partition_id,
-                schema,
+                &schema,
                 partition_exprs,
                 partition_sort_fields,
                 order_expr,
@@ -496,6 +642,7 @@ async fn do_partitioned_topk(
                 batch_size,
                 &runtime,
                 &metrics_set,
+                ranked_schema,
             )?;
             while let Some(batch) = input.next().await {
                 state.insert_batch(&batch?)?;
@@ -503,5 +650,170 @@ async fn do_partitioned_topk(
             drop(input);
             state.emit()
         }
+        WindowFnKind::DenseRank => {
+            let mut state = PartitionedTopKDenseRank::try_new(
+                partition_id,
+                &schema,
+                partition_exprs,
+                partition_sort_fields,
+                order_expr,
+                fetch,
+                batch_size,
+                &runtime,
+                &metrics_set,
+                ranked_schema,
+            )?;
+            while let Some(batch) = input.next().await {
+                state.insert_batch(&batch?)?;
+            }
+            drop(input);
+            state.emit()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::placeholder_row::PlaceholderRowExec;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+    fn pk_val_input() -> Result<(Arc<Schema>, Arc<dyn ExecutionPlan>)> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Int64, false),
+            Field::new("val", DataType::Int64, false),
+        ]));
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(PlaceholderRowExec::new(Arc::clone(&schema)));
+        Ok((schema, input))
+    }
+
+    fn pk_then_val(schema: &Arc<Schema>) -> Result<LexOrdering> {
+        Ok(LexOrdering::new([
+            PhysicalSortExpr::new_default(col("pk", schema)?),
+            PhysicalSortExpr::new_default(col("val", schema)?),
+        ])
+        .expect("two sort expressions"))
+    }
+
+    /// Emitting the `ROW_NUMBER()` column widens the output schema by exactly
+    /// that field, and leaves it alone otherwise.
+    #[test]
+    fn ranking_field_widens_the_output_schema() -> Result<()> {
+        let (schema, input) = pk_val_input()?;
+        let rn_field = Arc::new(Field::new("rn", DataType::UInt64, false));
+
+        let without = PartitionedTopKExec::try_new(
+            input,
+            pk_then_val(&schema)?,
+            1,
+            3,
+            WindowFnKind::RowNumber,
+        )?;
+        assert_eq!(without.schema().fields().len(), 2);
+
+        let with = without.with_ranking_field(Arc::clone(&rn_field))?;
+        assert_eq!(with.schema().fields().len(), 3);
+        assert_eq!(with.schema().field(2), rn_field.as_ref());
+
+        // The ordering the operator guarantees survives the wider schema, and
+        // the appended column brings its own `[pk, rn]` ordering with it.
+        let eq = with.properties().equivalence_properties();
+        let pk = Arc::new(Column::new("pk", 0)) as Arc<dyn PhysicalExpr>;
+        let rn = Arc::new(Column::new("rn", 2)) as Arc<dyn PhysicalExpr>;
+        let asc_nulls_last = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        assert!(eq.ordering_satisfy([
+            PhysicalSortExpr::new(Arc::clone(&pk), asc_nulls_last),
+            PhysicalSortExpr::new(Arc::clone(&rn), asc_nulls_last),
+        ])?);
+        // ... but only within a partition: `rn` restarts at 1 per key, so it is
+        // not a global ordering on its own.
+        assert!(!eq.ordering_satisfy([PhysicalSortExpr::new(rn, asc_nulls_last)])?);
+        Ok(())
+    }
+
+    /// Every policy can emit its own ranking column, and each widens the
+    /// output schema the same way.
+    #[test]
+    fn every_policy_accepts_a_ranking_field() -> Result<()> {
+        let (schema, input) = pk_val_input()?;
+        let field = Arc::new(Field::new("rk", DataType::UInt64, false));
+
+        for fn_kind in [
+            WindowFnKind::RowNumber,
+            WindowFnKind::Rank,
+            WindowFnKind::DenseRank,
+        ] {
+            let exec = PartitionedTopKExec::try_new(
+                Arc::clone(&input),
+                pk_then_val(&schema)?,
+                1,
+                3,
+                fn_kind,
+            )?
+            .with_ranking_field(Arc::clone(&field))?;
+            assert_eq!(
+                exec.schema().field(2),
+                field.as_ref(),
+                "unexpected appended field for {fn_kind:?}"
+            );
+            assert_eq!(exec.ranking_field(), Some(&field));
+        }
+        Ok(())
+    }
+
+    /// The ranking field is set by `with_ranking_field` rather than passed to
+    /// `try_new`, so rebuilding the operator over a new child has to carry it
+    /// over. Dropping it would narrow the output schema under nodes that were
+    /// planned against the wider one.
+    #[test]
+    fn replace_children_keeps_the_ranking_field() -> Result<()> {
+        let (schema, input) = pk_val_input()?;
+        let rn_field = Arc::new(Field::new("rn", DataType::UInt64, false));
+        let exec: Arc<dyn ExecutionPlan> = Arc::new(
+            PartitionedTopKExec::try_new(
+                Arc::clone(&input),
+                pk_then_val(&schema)?,
+                1,
+                3,
+                WindowFnKind::RowNumber,
+            )?
+            .with_ranking_field(Arc::clone(&rn_field))?,
+        );
+
+        let rebuilt = Arc::clone(&exec).replace_children(
+            vec![input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        assert_eq!(rebuilt.schema(), exec.schema());
+        assert_eq!(
+            rebuilt
+                .downcast_ref::<PartitionedTopKExec>()
+                .expect("still a PartitionedTopKExec")
+                .ranking_field(),
+            Some(&rn_field)
+        );
+        // The ordering on the appended column is recomputed with it.
+        let pk = Arc::new(Column::new("pk", 0)) as Arc<dyn PhysicalExpr>;
+        let rn = Arc::new(Column::new("rn", 2)) as Arc<dyn PhysicalExpr>;
+        let asc_nulls_last = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        assert!(
+            rebuilt
+                .properties()
+                .equivalence_properties()
+                .ordering_satisfy([
+                    PhysicalSortExpr::new(pk, asc_nulls_last),
+                    PhysicalSortExpr::new(rn, asc_nulls_last),
+                ])?
+        );
+        Ok(())
     }
 }

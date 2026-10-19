@@ -171,6 +171,7 @@ cargo run --example dataframe -- dataframe
 | ------------------------ | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | composed_extension_codec | [`proto/composed_extension_codec.rs`](examples/proto/composed_extension_codec.rs) | Use multiple extension codecs for serialization/deserialization               |
 | expression_deduplication | [`proto/expression_deduplication.rs`](examples/proto/expression_deduplication.rs) | Example of expression caching/deduplication using the codec decorator pattern |
+| extension_plan_registry  | [`proto/extension_plan_registry.rs`](examples/proto/extension_plan_registry.rs)   | Decode two crates' extension plans by name, with no composed codec            |
 
 ## Query Planning Examples
 
@@ -213,6 +214,16 @@ cargo run --example dataframe -- dataframe
 | custom_sql_parser | [`sql_ops/custom_sql_parser.rs`](examples/sql_ops/custom_sql_parser.rs) | Implement a custom SQL parser to extend DataFusion |
 | frontend          | [`sql_ops/frontend.rs`](examples/sql_ops/frontend.rs)                   | Build LogicalPlans from SQL                        |
 | query             | [`sql_ops/query.rs`](examples/sql_ops/query.rs)                         | Query data using SQL                               |
+
+## Statistics Examples
+
+### Group: `statistics`
+
+#### Category: Single Process
+
+| Subcommand   | File Path                                                           | Description                                                          |
+| ------------ | ------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| join_reorder | [`statistics/join_reorder.rs`](examples/statistics/join_reorder.rs) | Supply catalog column statistics via a provider to flip a join order |
 
 ## UDF Examples
 

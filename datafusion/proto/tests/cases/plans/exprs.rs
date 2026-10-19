@@ -1,0 +1,1017 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Physical expressions embedded in plans, including the binary
+//! expression linearization.
+
+use super::{roundtrip_test, roundtrip_test_and_return};
+use arrow::datatypes::Fields;
+use datafusion::arrow::compute::SortOptions;
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
+use datafusion::logical_expr::Operator;
+use datafusion::physical_expr::expressions::{LambdaVariable, Literal, lambda};
+use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::expressions::{
+    BinaryExpr, Column, PhysicalSortExpr, SqlSimilarToPattern, binary, col, like, lit,
+};
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion::physical_plan::repartition::RangeExpr;
+use datafusion::physical_plan::{
+    ExecutionPlan, PhysicalExpr, RangePartitioning, SplitPoint,
+};
+use datafusion::prelude::SessionContext;
+use datafusion::scalar::ScalarValue;
+use datafusion_common::Result;
+use datafusion_proto::physical_plan::{
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
+    PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
+};
+use datafusion_proto::protobuf;
+use datafusion_proto::protobuf::PhysicalPlanNode;
+use prost::Message;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::vec;
+
+#[test]
+fn roundtrip_projection_metadata() -> Result<()> {
+    let input_schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+    let projected_schema =
+        Schema::new_with_metadata(
+            vec![Field::new("value", DataType::Int32, false).with_metadata(
+                HashMap::from([("field-key".to_string(), "field-value".to_string())]),
+            )],
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]),
+        );
+    let plan = Arc::new(ProjectionExec::try_new_with_schema_metadata(
+        vec![(col("value", &input_schema)?, "value".to_string())],
+        Arc::new(EmptyExec::new(input_schema)),
+        &projected_schema,
+    )?);
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let decoded = roundtrip_test_and_return(plan, &ctx, &codec, &converter)?;
+    assert_eq!(decoded.schema().as_ref(), &projected_schema);
+    Ok(())
+}
+
+#[test]
+fn roundtrip_projection_metadata_overrides() -> Result<()> {
+    let field_metadata =
+        HashMap::from([("field-key".to_string(), "field-value".to_string())]);
+    let extension_metadata = HashMap::from([
+        ("ARROW:extension:name".to_string(), "arrow.uuid".to_string()),
+        ("ARROW:extension:metadata".to_string(), String::new()),
+    ]);
+    for (input_field, output_field, input_metadata) in [
+        (
+            Field::new("value", DataType::Int32, false).with_metadata(field_metadata),
+            Field::new("value", DataType::Int32, false),
+            HashMap::from([("input-schema".to_string(), "input-value".to_string())]),
+        ),
+        (
+            Field::new("value", DataType::FixedSizeBinary(16), true),
+            Field::new("value", DataType::FixedSizeBinary(16), true)
+                .with_metadata(extension_metadata),
+            HashMap::new(),
+        ),
+    ] {
+        let input_schema =
+            Arc::new(Schema::new_with_metadata(vec![input_field], input_metadata));
+        let projected_schema = Schema::new(vec![output_field]);
+        let plan = Arc::new(ProjectionExec::try_new_with_schema_metadata(
+            vec![(col("value", &input_schema)?, "value".to_string())],
+            Arc::new(EmptyExec::new(input_schema)),
+            &projected_schema,
+        )?);
+        let codec = DefaultPhysicalExtensionCodec {};
+        let ctx = SessionContext::new();
+        let node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(projection)) =
+            node.physical_plan_type.as_ref()
+        else {
+            unreachable!("expected ProjectionExecNode")
+        };
+        assert!(projection.schema.is_some());
+        for node in projection_roundtrip_nodes(&node) {
+            let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+            assert_eq!(decoded.schema().as_ref(), &projected_schema);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_projection_without_schema() -> Result<()> {
+    let input_schema =
+        Arc::new(Schema::new_with_metadata(
+            vec![Field::new("value", DataType::Int32, false).with_metadata(
+                HashMap::from([("field-key".to_string(), "field-value".to_string())]),
+            )],
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]),
+        ));
+    let plan = Arc::new(ProjectionExec::try_new(
+        vec![(col("value", &input_schema)?, "value".to_string())],
+        Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+    )?);
+    let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+    let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(projection)) =
+        node.physical_plan_type.as_mut()
+    else {
+        unreachable!("expected ProjectionExecNode")
+    };
+    // Simulate a plan encoded before the schema field existed.
+    projection.schema = None;
+    for node in projection_roundtrip_nodes(&node) {
+        let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+        assert_eq!(decoded.schema(), input_schema);
+    }
+    Ok(())
+}
+
+fn projection_roundtrip_nodes(node: &PhysicalPlanNode) -> Vec<PhysicalPlanNode> {
+    vec![
+        PhysicalPlanNode::decode(node.encode_to_vec().as_slice()).unwrap(),
+        #[cfg(feature = "json")]
+        serde_json::from_str(&serde_json::to_string(node).unwrap()).unwrap(),
+    ]
+}
+
+#[test]
+fn roundtrip_projection_metadata_without_child_metadata() -> Result<()> {
+    let field_metadata =
+        HashMap::from([("field-key".to_string(), "field-value".to_string())]);
+    let schema_metadata =
+        HashMap::from([("schema-key".to_string(), "schema-value".to_string())]);
+    let extension_metadata = HashMap::from([
+        ("ARROW:extension:name".to_string(), "arrow.uuid".to_string()),
+        ("ARROW:extension:metadata".to_string(), String::new()),
+    ]);
+    for (data_type, field_metadata, schema_metadata) in [
+        (
+            DataType::Int32,
+            field_metadata.clone(),
+            schema_metadata.clone(),
+        ),
+        (DataType::Int32, field_metadata, HashMap::new()),
+        (
+            DataType::FixedSizeBinary(16),
+            extension_metadata,
+            HashMap::new(),
+        ),
+    ] {
+        let input_field = Field::new("value", data_type, false);
+        let input_without_metadata = Arc::new(Schema::new(vec![input_field.clone()]));
+        let input_schema = Arc::new(Schema::new_with_metadata(
+            vec![input_field.with_metadata(field_metadata)],
+            schema_metadata,
+        ));
+        // This constructor derives metadata from the input, without an override.
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![(col("value", &input_schema)?, "output".to_string())],
+            Arc::new(EmptyExec::new(input_schema)),
+        )?);
+        let expected_schema = plan.schema();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let ctx = SessionContext::new();
+        let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(projection)) =
+            node.physical_plan_type.as_mut()
+        else {
+            unreachable!("expected ProjectionExecNode")
+        };
+        // The child cannot supply metadata when the projection is reconstructed.
+        projection.input = Some(Box::new(PhysicalPlanNode::try_from_physical_plan(
+            Arc::new(EmptyExec::new(input_without_metadata)),
+            &codec,
+        )?));
+        for node in projection_roundtrip_nodes(&node) {
+            let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+            assert_eq!(decoded.schema(), expected_schema);
+            assert!(decoded.children()[0].schema().metadata().is_empty());
+            assert!(
+                decoded.children()[0]
+                    .schema()
+                    .field(0)
+                    .metadata()
+                    .is_empty()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_projection_inherited_schema_metadata_from_child() -> Result<()> {
+    let schema_metadata =
+        HashMap::from([("schema-key".to_string(), "schema-value".to_string())]);
+    let input_schema = Arc::new(Schema::new_with_metadata(
+        vec![Field::new("value", DataType::Int32, false)],
+        schema_metadata,
+    ));
+    let plan = Arc::new(ProjectionExec::try_new(
+        vec![(col("value", &input_schema)?, "output".to_string())],
+        Arc::new(EmptyExec::new(input_schema)),
+    )?);
+    let expected_schema = plan.schema();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+    let node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(projection)) =
+        node.physical_plan_type.as_ref()
+    else {
+        unreachable!("expected ProjectionExecNode")
+    };
+    assert!(projection.schema.is_none());
+    for node in projection_roundtrip_nodes(&node) {
+        let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+        assert_eq!(decoded.schema(), expected_schema);
+    }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_projection_without_metadata() -> Result<()> {
+    let input_schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+    let plan = Arc::new(ProjectionExec::try_new(
+        vec![(col("value", &input_schema)?, "value".to_string())],
+        Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+    )?);
+    let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+    let node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(projection)) =
+        node.physical_plan_type.as_ref()
+    else {
+        unreachable!("expected ProjectionExecNode")
+    };
+    assert!(projection.schema.is_none());
+    for node in projection_roundtrip_nodes(&node) {
+        let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+        assert_eq!(decoded.schema(), input_schema);
+    }
+    Ok(())
+}
+
+#[test]
+fn decode_projection_schema_only_replaces_metadata() -> Result<()> {
+    let input_schema = Arc::new(Schema::new(vec![Field::new(
+        "input",
+        DataType::Int32,
+        false,
+    )]));
+    let plan = Arc::new(ProjectionExec::try_new(
+        vec![(col("input", &input_schema)?, "output".to_string())],
+        Arc::new(EmptyExec::new(input_schema)),
+    )?);
+    let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+    let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(projection)) =
+        node.physical_plan_type.as_mut()
+    else {
+        unreachable!("expected ProjectionExecNode")
+    };
+    let field_metadata =
+        HashMap::from([("field-key".to_string(), "field-value".to_string())]);
+    let schema_metadata =
+        HashMap::from([("schema-key".to_string(), "schema-value".to_string())]);
+    let metadata_schema = Schema::new_with_metadata(
+        vec![
+            Field::new("ignored", DataType::Utf8, true)
+                .with_metadata(field_metadata.clone()),
+        ],
+        schema_metadata.clone(),
+    );
+    projection.schema = Some((&metadata_schema).try_into()?);
+    let expected_schema = Schema::new_with_metadata(
+        vec![Field::new("output", DataType::Int32, false).with_metadata(field_metadata)],
+        schema_metadata,
+    );
+    for node in projection_roundtrip_nodes(&node) {
+        let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+        assert_eq!(decoded.schema().as_ref(), &expected_schema);
+    }
+    for field_count in [0, 2] {
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::Projection(projection)) =
+            node.physical_plan_type.as_mut()
+        else {
+            unreachable!("expected ProjectionExecNode")
+        };
+        let metadata_schema =
+            Schema::new(vec![
+                Field::new("ignored", DataType::Utf8, true);
+                field_count
+            ]);
+        projection.schema = Some((&metadata_schema).try_into()?);
+        for node in projection_roundtrip_nodes(&node) {
+            let error = node
+                .try_into_physical_plan(&ctx.task_ctx(), &codec)
+                .unwrap_err();
+            assert!(error.strip_backtrace().contains(&format!(
+                "Projection has 1 output fields but metadata schema has {field_count} fields"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_literal_metadata() -> Result<()> {
+    use datafusion_common::metadata::FieldMetadata;
+    use datafusion_proto::bytes::{physical_plan_from_bytes, physical_plan_to_bytes};
+
+    let schema = Arc::new(Schema::empty());
+    let metadata = FieldMetadata::from(HashMap::from([
+        ("ARROW:extension:name".to_string(), "example.id".to_string()),
+        ("ARROW:extension:metadata".to_string(), "{}".to_string()),
+        ("description".to_string(), "identifier".to_string()),
+    ]));
+    let ctx = SessionContext::new();
+    for value in [ScalarValue::Int32(Some(42)), ScalarValue::Int32(None)] {
+        let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new_with_metadata(
+            value.clone(),
+            Some(metadata.clone()),
+        ));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![ProjectionExpr::new(Arc::clone(&literal), "result")],
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        )?);
+        let bytes = physical_plan_to_bytes(Arc::clone(&plan))?;
+        let decoded = physical_plan_from_bytes(&bytes, ctx.task_ctx().as_ref())?;
+        assert_eq!(decoded.schema(), plan.schema());
+        let projection = decoded.downcast_ref::<ProjectionExec>().unwrap();
+        let decoded_literal = &projection.expr()[0].expr;
+        assert_eq!(
+            decoded_literal.return_field(&schema)?,
+            literal.return_field(&schema)?
+        );
+        assert_eq!(
+            decoded_literal.downcast_ref::<Literal>().unwrap().value(),
+            &value
+        );
+
+        #[cfg(feature = "json")]
+        {
+            use datafusion_proto::bytes::{
+                physical_plan_from_json, physical_plan_to_json,
+            };
+            let json = physical_plan_to_json(Arc::clone(&plan))?;
+            let decoded = physical_plan_from_json(&json, ctx.task_ctx().as_ref())?;
+            assert_eq!(decoded.schema(), plan.schema());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_date_time_interval() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("some_date", DataType::Date32, false),
+        Field::new(
+            "some_interval",
+            DataType::Interval(IntervalUnit::DayTime),
+            false,
+        ),
+    ]);
+    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
+    let date_expr = col("some_date", &schema)?;
+    let literal_expr = col("some_interval", &schema)?;
+    let date_time_interval_expr =
+        binary(date_expr, Operator::Plus, literal_expr, &schema)?;
+    let plan = Arc::new(ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: date_time_interval_expr,
+            alias: "result".to_string(),
+        }],
+        input,
+    )?);
+    roundtrip_test(plan)
+}
+
+#[test]
+fn roundtrip_like() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]);
+    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
+    let like_expr = like(
+        false,
+        false,
+        col("a", &schema)?,
+        col("b", &schema)?,
+        &schema,
+    )?;
+    let plan = Arc::new(ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: like_expr,
+            alias: "result".to_string(),
+        }],
+        input,
+    )?);
+    roundtrip_test(plan)
+}
+
+/// Test that HashTableLookupExpr serializes to lit(true)
+///
+/// HashTableLookupExpr contains a runtime hash table that cannot be serialized.
+/// The serialization code replaces it with lit(true) which is safe because
+/// it's a performance optimization filter, not a correctness requirement.
+#[test]
+fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
+    use datafusion::physical_plan::joins::join_hash_map::JoinHashMapU32;
+    use datafusion::physical_plan::joins::{HashTableLookupExpr, Map};
+
+    // Create a simple schema and input plan
+    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    // Create a HashTableLookupExpr - it will be replaced with lit(true) during serialization
+    let hash_map = Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(0))));
+    let on_columns = vec![col("col", &schema)?];
+    let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
+        on_columns,
+        datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
+        hash_map,
+        "test_lookup".to_string(),
+        None,
+    ));
+
+    // Create a filter with the lookup expression
+    let filter = Arc::new(FilterExec::try_new(lookup_expr, input)?);
+
+    // Serialize
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+
+    let proto: PhysicalPlanNode =
+        PhysicalPlanNode::try_from_physical_plan(filter.clone(), &codec)
+            .expect("serialization should succeed");
+
+    // Deserialize
+    let result: Arc<dyn ExecutionPlan> = proto
+        .try_into_physical_plan(&ctx.task_ctx(), &codec)
+        .expect("deserialization should succeed");
+
+    // The deserialized plan should have lit(true) instead of HashTableLookupExpr
+    // Verify the filter predicate is a Literal(true)
+    let result_filter = result.downcast_ref::<FilterExec>().unwrap();
+    let predicate = result_filter.predicate();
+    let literal = predicate.downcast_ref::<Literal>().unwrap();
+    assert_eq!(*literal.value(), ScalarValue::Boolean(Some(true)));
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_hash_expr() -> Result<()> {
+    use datafusion::physical_plan::joins::{HashExpr, SeededRandomState};
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+
+    // Create a HashExpr with test columns and seeds
+    let on_columns = vec![col("a", &schema)?, col("b", &schema)?];
+    let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(HashExpr::new(
+        on_columns,
+        SeededRandomState::with_seed(0), // arbitrary random seed for testing
+        "test_hash".to_string(),
+    ));
+
+    // Wrap in a filter by comparing hash value to a literal
+    // hash_expr > 0 is always boolean
+    let filter_expr = binary(hash_expr, Operator::Gt, lit(0u64), &schema)?;
+    let filter = Arc::new(FilterExec::try_new(
+        filter_expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?);
+
+    // Confirm that the debug string contains the random state seeds
+    assert!(
+        format!("{filter:?}").contains("test_hash(a@0, b@1, [0])"),
+        "Debug string missing seeds: {filter:?}"
+    );
+    roundtrip_test(filter)
+}
+
+#[test]
+fn roundtrip_range_expr() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Float64, false),
+        Field::new("b", DataType::Float64, false),
+    ]));
+    let options = [SortOptions::new(true, true), SortOptions::new(false, false)];
+    let range_partitioning = RangePartitioning::try_new(
+        [
+            PhysicalSortExpr::new(col("a", &schema)?, options[0]),
+            PhysicalSortExpr::new(col("b", &schema)?, options[1]),
+        ]
+        .into(),
+        vec![SplitPoint::new(vec![
+            ScalarValue::Float64(Some(0.0)),
+            ScalarValue::Float64(Some(1.0)),
+        ])],
+    )?;
+    let range_expr: Arc<dyn PhysicalExpr> = Arc::new(RangeExpr::try_new_with_schema(
+        // Expression remapping may produce duplicate children. Preserve both
+        // so their sort options stay aligned with the split-point values.
+        vec![col("a", &schema)?, col("a", &schema)?],
+        &range_partitioning,
+        &schema,
+    )?);
+    let filter_expr = binary(range_expr, Operator::Eq, lit(0u64), &schema)?;
+    let plan = Arc::new(FilterExec::try_new(
+        filter_expr,
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+    )?);
+
+    let ctx = SessionContext::new();
+    let result = roundtrip_test_and_return(
+        plan,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let filter = result.downcast_ref::<FilterExec>().unwrap();
+    let binary = filter.predicate().downcast_ref::<BinaryExpr>().unwrap();
+    let range_expr = binary.left().downcast_ref::<RangeExpr>().unwrap();
+    assert_eq!(range_expr.split_points(), range_partitioning.split_points());
+    assert_eq!(range_expr.sort_options(), &options);
+    let children = range_expr.on_columns();
+    assert_eq!(children.len(), 2);
+    for child in children {
+        let column = child.downcast_ref::<Column>().unwrap();
+        assert_eq!((column.name(), column.index()), ("a", 0));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_sql_similar_to_pattern() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+    let expr: Arc<dyn PhysicalExpr> =
+        Arc::new(SqlSimilarToPattern::new(col("a", &schema)?));
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let proto = converter.physical_expr_to_proto(&expr, &codec)?;
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let decoded = converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+
+    assert_eq!(format!("{expr:?}"), format!("{decoded:?}"));
+    Ok(())
+}
+
+#[test]
+fn roundtrip_lambda_with_variable_dispatch() -> Result<()> {
+    let field = Arc::new(Field::new("v", DataType::Int32, true));
+    let expr = lambda(["v"], Arc::new(LambdaVariable::new(0, field)))?;
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let proto = converter.physical_expr_to_proto(&expr, &codec)?;
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let decoded =
+        converter.proto_to_physical_expr(&proto, &Schema::empty(), &decode_ctx)?;
+
+    assert!(decoded.as_ref().eq(expr.as_ref()));
+    Ok(())
+}
+
+#[test]
+fn roundtrip_call_null_scalar_struct_dict() -> Result<()> {
+    let data_type = DataType::Struct(Fields::from(vec![Field::new(
+        "item",
+        DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
+        true,
+    )]));
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", data_type.clone(), true)]));
+    let scan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let scalar = lit(ScalarValue::try_from(data_type)?);
+    let filter = Arc::new(FilterExec::try_new(
+        Arc::new(BinaryExpr::new(scalar, Operator::Eq, col("a", &schema)?)),
+        scan,
+    )?);
+
+    roundtrip_test(filter)
+}
+
+#[test]
+fn roundtrip_binary_expr_overflow() -> Result<()> {
+    use arrow::record_batch::RecordBatch;
+    use datafusion_proto::bytes::{physical_plan_from_bytes, physical_plan_to_bytes};
+
+    let schema = Arc::new(Schema::empty());
+    let batch = RecordBatch::new_empty(Arc::clone(&schema));
+    for inner_checked in [false, true] {
+        for outer_checked in [false, true] {
+            // Overflow occurs in the inner addition. A different outer policy
+            // must not overwrite it when the encoder linearizes the chain.
+            let inner = Arc::new(
+                BinaryExpr::new(lit(i32::MAX), Operator::Plus, lit(1i32))
+                    .with_fail_on_overflow(inner_checked),
+            );
+            let expr: Arc<dyn PhysicalExpr> = Arc::new(
+                BinaryExpr::new(inner, Operator::Plus, lit(0i32))
+                    .with_fail_on_overflow(outer_checked),
+            );
+            let plan = Arc::new(ProjectionExec::try_new(
+                vec![(Arc::clone(&expr), "result".to_string())],
+                Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            )?);
+            let bytes = physical_plan_to_bytes(plan)?;
+            let decoded =
+                physical_plan_from_bytes(&bytes, &SessionContext::new().task_ctx())?;
+            let decoded = decoded.downcast_ref::<ProjectionExec>().unwrap();
+            for expression in [&expr, &decoded.expr()[0].expr] {
+                let result = expression.evaluate(&batch);
+                if inner_checked {
+                    assert!(result.unwrap_err().to_string().contains("overflow"));
+                } else {
+                    assert_eq!(
+                        result?.into_array(1)?.as_ref(),
+                        ScalarValue::Int32(Some(i32::MIN)).to_array()?.as_ref()
+                    );
+                }
+            }
+            assert!(expr.eq(&decoded.expr()[0].expr));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "json")]
+fn roundtrip_binary_expr_overflow_legacy() -> Result<()> {
+    use arrow::record_batch::RecordBatch;
+
+    let schema = Schema::empty();
+    let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let task_ctx = SessionContext::new().task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+    // An older message has l/r operands and no overflow policy field.
+    let mut json = serde_json::json!({
+        "binaryExpr": {
+            "l": converter.physical_expr_to_proto(&lit(i32::MAX), &codec)?,
+            "r": converter.physical_expr_to_proto(&lit(1i32), &codec)?,
+            "op": "Plus"
+        }
+    });
+    for checked in [false, true] {
+        if checked {
+            json["binaryExpr"]["failOnOverflow"] = true.into();
+        }
+        let proto: protobuf::PhysicalExprNode =
+            serde_json::from_value(json.clone()).unwrap();
+        let decoded = converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+        let result = decoded.evaluate(&batch);
+        if checked {
+            assert!(result.unwrap_err().to_string().contains("overflow"));
+        } else {
+            assert_eq!(
+                result?.into_array(1)?.as_ref(),
+                ScalarValue::Int32(Some(i32::MIN)).to_array()?.as_ref()
+            );
+        }
+        let encoded = converter.physical_expr_to_proto(&decoded, &codec)?;
+        let json = serde_json::to_value(encoded).unwrap();
+        assert_eq!(
+            json["binaryExpr"]["failOnOverflow"]
+                .as_bool()
+                .unwrap_or(false),
+            checked
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "json")]
+fn roundtrip_binary_expr_overflow_json() -> Result<()> {
+    use arrow::record_batch::RecordBatch;
+
+    let schema = Schema::empty();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(
+        BinaryExpr::new(lit(i32::MAX), Operator::Plus, lit(1i32))
+            .with_fail_on_overflow(true),
+    );
+
+    let proto = converter.physical_expr_to_proto(&expr, &codec)?;
+    let json = serde_json::to_value(proto).unwrap();
+    assert_eq!(json["binaryExpr"]["operands"].as_array().unwrap().len(), 2);
+    assert_eq!(json["binaryExpr"]["failOnOverflow"], true);
+
+    let proto: protobuf::PhysicalExprNode = serde_json::from_value(json).unwrap();
+    let task_ctx = SessionContext::new().task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+    let decoded = converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+    let batch = RecordBatch::new_empty(Arc::new(schema));
+    assert!(
+        decoded
+            .evaluate(&batch)
+            .unwrap_err()
+            .to_string()
+            .contains("overflow")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_cast_safe_option_execution() -> Result<()> {
+    use arrow::array::{Array, Int32Array};
+    use arrow::compute::CastOptions;
+    use datafusion::physical_plan::collect;
+    use datafusion::physical_plan::expressions::CastExpr;
+    use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
+    use datafusion_common::assert_contains;
+    use datafusion_common::format::DEFAULT_CAST_OPTIONS;
+    use datafusion_proto::bytes::{physical_plan_from_bytes, physical_plan_to_bytes};
+
+    let ctx = SessionContext::new();
+    // `safe: false` matches DataFusion's default cast options, which the encoder
+    // omits from the wire; `safe: true` must be carried by the encoded options.
+    for safe in [true, false] {
+        let cast_options = CastOptions {
+            safe,
+            ..DEFAULT_CAST_OPTIONS
+        };
+        // A safe cast can turn a non-null input into NULL. Use an explicit
+        // nullable target: a type-only cast would inherit the literal's
+        // non-nullability, and the projection would reject the NULL.
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new_with_target_field(
+            lit("9.1"),
+            Arc::new(Field::new("result", DataType::Int32, true)),
+            Some(cast_options),
+        ));
+        let original: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![(expr, "result".to_string())],
+            Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))),
+        )?);
+        let bytes = physical_plan_to_bytes(Arc::clone(&original))?;
+        let decoded = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+        for (label, plan) in [("original", original), ("decoded", decoded)] {
+            match (safe, collect(plan, ctx.task_ctx()).await) {
+                (true, Ok(batches)) => {
+                    assert_eq!(batches.len(), 1, "{label} plan batch count");
+                    assert_eq!(
+                        batches[0].column(0).as_any().downcast_ref::<Int32Array>(),
+                        Some(&Int32Array::new_null(1)),
+                        "{label} plan should cast '9.1' to NULL"
+                    );
+                }
+                (false, Err(e)) => {
+                    assert_contains!(e.to_string(), "Cannot cast string '9.1'");
+                }
+                (_, other) => {
+                    panic!("{label} plan with safe={safe} returned {other:?}")
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Test that a chain of the same operator (a AND b AND c) is linearized
+/// and roundtrips correctly.
+#[test]
+fn roundtrip_binary_expr_chain_same_op() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Boolean, false);
+    let field_c = Field::new("c", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c]));
+    let ab = binary(
+        col("a", &schema)?,
+        Operator::And,
+        col("b", &schema)?,
+        &schema,
+    )?;
+    let abc = binary(ab, Operator::And, col("c", &schema)?, &schema)?;
+    roundtrip_test(Arc::new(FilterExec::try_new(
+        abc,
+        Arc::new(EmptyExec::new(schema)),
+    )?))
+}
+
+/// Test that mixed operators (a AND b OR c) are NOT linearized together —
+/// only chains of the same operator are flattened.
+#[test]
+fn roundtrip_binary_expr_mixed_ops() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Boolean, false);
+    let field_c = Field::new("c", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c]));
+    // (a AND b) OR c — AND and OR are different operators, so linearization stops
+    let a_and_b = binary(
+        col("a", &schema)?,
+        Operator::And,
+        col("b", &schema)?,
+        &schema,
+    )?;
+    let expr = binary(a_and_b, Operator::Or, col("c", &schema)?, &schema)?;
+    roundtrip_test(Arc::new(FilterExec::try_new(
+        expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?))
+}
+
+/// Test that a deeply nested chain of AND expressions (like many WHERE conditions)
+/// roundtrips correctly. This is the scenario from issue #18602.
+#[test]
+fn roundtrip_binary_expr_deeply_nested_and_chain() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+
+    // Build a chain: a AND a AND a AND ... (100 times)
+    let col_a = col("a", &schema)?;
+    let mut expr = Arc::clone(&col_a);
+    for _ in 0..99 {
+        expr = binary(expr, Operator::And, Arc::clone(&col_a), &schema)?;
+    }
+
+    roundtrip_test(Arc::new(FilterExec::try_new(
+        expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?))
+}
+
+/// Test that a deeply nested chain of OR expressions roundtrips correctly.
+#[test]
+fn roundtrip_binary_expr_deeply_nested_or_chain() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+
+    let col_a = col("a", &schema)?;
+    let mut expr = Arc::clone(&col_a);
+    for _ in 0..99 {
+        expr = binary(expr, Operator::Or, Arc::clone(&col_a), &schema)?;
+    }
+
+    roundtrip_test(Arc::new(FilterExec::try_new(
+        expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?))
+}
+
+/// Test that alternating AND/OR operators produce correct results —
+/// each sub-chain gets linearized independently.
+#[test]
+fn roundtrip_binary_expr_alternating_and_or() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Boolean, false);
+    let field_c = Field::new("c", DataType::Boolean, false);
+    let field_d = Field::new("d", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c, field_d]));
+
+    // (a AND b) OR (c AND d)
+    let a_and_b = binary(
+        col("a", &schema)?,
+        Operator::And,
+        col("b", &schema)?,
+        &schema,
+    )?;
+    let c_and_d = binary(
+        col("c", &schema)?,
+        Operator::And,
+        col("d", &schema)?,
+        &schema,
+    )?;
+    let expr = binary(a_and_b, Operator::Or, c_and_d, &schema)?;
+
+    roundtrip_test(Arc::new(FilterExec::try_new(
+        expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?))
+}
+
+/// Verify that the linearized proto format has a flat operands list
+/// rather than deeply nested l/r fields.
+#[test]
+fn test_linearization_produces_flat_operands() -> Result<()> {
+    // Build: a AND a AND a AND a (4 operands, 3 levels of nesting)
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                Operator::And,
+                Arc::clone(&col_a),
+            )),
+            Operator::And,
+            Arc::clone(&col_a),
+        )),
+        Operator::And,
+        Arc::clone(&col_a),
+    ));
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let proto = proto_converter.physical_expr_to_proto(&expr, &codec)?;
+
+    // The top-level should use the operands field with 4 entries
+    match &proto.expr_type {
+        Some(protobuf::physical_expr_node::ExprType::BinaryExpr(b)) => {
+            assert!(
+                b.l.is_none(),
+                "l should be None when using linearized operands"
+            );
+            assert!(
+                b.r.is_none(),
+                "r should be None when using linearized operands"
+            );
+            assert_eq!(
+                b.operands.len(),
+                4,
+                "Expected 4 linearized operands for a AND a AND a AND a"
+            );
+            assert_eq!(b.op, "And");
+        }
+        other => panic!("Expected BinaryExpr, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+/// Test that linearization stops when encountering a different operator.
+/// For (a AND b) OR c, only the top-level OR should be represented, and
+/// the left-hand AND subtree should be a separate nested BinaryExpr.
+#[test]
+fn test_linearization_stops_at_different_op() -> Result<()> {
+    // (a AND b) OR c
+    let a_and_b: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("a", 0)),
+        Operator::And,
+        Arc::new(Column::new("b", 1)),
+    ));
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        a_and_b,
+        Operator::Or,
+        Arc::new(Column::new("c", 2)),
+    ));
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let proto = proto_converter.physical_expr_to_proto(&expr, &codec)?;
+
+    // The top-level OR should have only 2 operands (can't linearize through AND)
+    match &proto.expr_type {
+        Some(protobuf::physical_expr_node::ExprType::BinaryExpr(b)) => {
+            assert_eq!(
+                b.operands.len(),
+                2,
+                "Expected 2 operands for (a AND b) OR c"
+            );
+            assert_eq!(b.op, "Or");
+            // The first operand should be a nested AND BinaryExpr
+            match &b.operands[0].expr_type {
+                Some(protobuf::physical_expr_node::ExprType::BinaryExpr(inner)) => {
+                    assert_eq!(inner.op, "And");
+                    assert_eq!(inner.operands.len(), 2);
+                }
+                other => panic!("Expected inner BinaryExpr(AND), got {other:?}"),
+            }
+        }
+        other => panic!("Expected BinaryExpr, got {other:?}"),
+    }
+
+    Ok(())
+}

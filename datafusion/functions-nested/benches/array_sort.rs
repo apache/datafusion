@@ -22,6 +22,7 @@ use arrow::array::{ArrayRef, BooleanBufferBuilder, Int32Array, ListArray, String
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions_nested::sort::ArraySort;
@@ -119,9 +120,25 @@ fn create_string_list_array(num_rows: usize, elements_per_row: usize) -> ArrayRe
 }
 
 fn invoke_array_sort(udf: &ArraySort, array: &ArrayRef) -> ColumnarValue {
+    invoke_array_sort_with_order(udf, array, None)
+}
+
+/// `order` is the optional second argument (`"ASC"` / `"DESC"`); `None` leaves
+/// `array_sort` with its default (ascending) ordering.
+fn invoke_array_sort_with_order(
+    udf: &ArraySort,
+    array: &ArrayRef,
+    order: Option<&str>,
+) -> ColumnarValue {
+    let mut args = vec![ColumnarValue::Array(Arc::clone(array))];
+    let mut arg_fields = vec![Field::new("arr", array.data_type().clone(), true).into()];
+    if let Some(order) = order {
+        args.push(ColumnarValue::Scalar(ScalarValue::from(order)));
+        arg_fields.push(Field::new("order", DataType::Utf8, true).into());
+    }
     udf.invoke_with_args(ScalarFunctionArgs {
-        args: vec![ColumnarValue::Array(Arc::clone(array))],
-        arg_fields: vec![Field::new("arr", array.data_type().clone(), true).into()],
+        args,
+        arg_fields,
         number_rows: array.len(),
         return_field: Field::new("result", array.data_type().clone(), true).into(),
         config_options: Arc::new(ConfigOptions::default()),
@@ -149,6 +166,21 @@ fn bench_array_sort(c: &mut Criterion) {
         );
     }
 
+    // Same shapes, descending: `sort_row` sorts ascending and reverses, so this
+    // measures the cost of that extra pass.
+    for &elements_per_row in &[5, 20, 100, 1000] {
+        let array = create_int32_list_array(NUM_ROWS, elements_per_row, false);
+        group.bench_with_input(
+            BenchmarkId::new("int32_desc", elements_per_row),
+            &elements_per_row,
+            |b, _| {
+                b.iter(|| {
+                    black_box(invoke_array_sort_with_order(&udf, &array, Some("DESC")));
+                });
+            },
+        );
+    }
+
     // Int32 with nulls in the outer list (10% null rows), single size
     {
         let array = create_int32_list_array(NUM_ROWS, 50, true);
@@ -169,6 +201,20 @@ fn bench_array_sort(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     black_box(invoke_array_sort(&udf, &array));
+                });
+            },
+        );
+    }
+
+    for &elements_per_row in &[5, 20, 100, 1000] {
+        let array =
+            create_int32_list_array_with_null_elements(NUM_ROWS, elements_per_row);
+        group.bench_with_input(
+            BenchmarkId::new("int32_null_elements_desc", elements_per_row),
+            &elements_per_row,
+            |b, _| {
+                b.iter(|| {
+                    black_box(invoke_array_sort_with_order(&udf, &array, Some("DESC")));
                 });
             },
         );

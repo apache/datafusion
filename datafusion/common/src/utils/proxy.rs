@@ -166,7 +166,7 @@ where
         if cfg!(debug_assertions) {
             // In debug mode, check that the element is not already present
             debug_assert!(
-                self.find_entry(hash, |y| y == &x).is_err(),
+                self.find(hash, |y| y == &x).is_none(),
                 "attempted to insert duplicate element into HashTableAllocExt::insert_accounted"
             );
         }

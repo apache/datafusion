@@ -49,10 +49,6 @@ impl ExtractEquijoinPredicate {
 }
 
 impl OptimizerRule for ExtractEquijoinPredicate {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn name(&self) -> &str {
         "extract_equijoin_predicate"
     }
@@ -77,6 +73,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 schema,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
             }) => {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
@@ -119,6 +116,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                             // safe to override it
                             null_equality: NullEquality::NullEqualsNull,
                             null_aware,
+                            null_aware_value_keys,
                         })));
                     }
                 }
@@ -135,6 +133,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         schema,
                         null_equality,
                         null_aware,
+                        null_aware_value_keys,
                     })))
                 } else {
                     Ok(Transformed::no(LogicalPlan::Join(Join {
@@ -147,6 +146,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         schema,
                         null_equality,
                         null_aware,
+                        null_aware_value_keys,
                     })))
                 }
             }
@@ -174,7 +174,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
 ///
 /// According to the above rule, `expr1` is the equijoin predicate, while `expr2` and `expr3` are not.
 /// The function returns Ok(\[expr1\], Some(expr2 AND expr3))
-fn split_eq_and_noneq_join_predicate(
+pub(crate) fn split_eq_and_noneq_join_predicate(
     filter: Expr,
     left_schema: &DFSchema,
     right_schema: &DFSchema,

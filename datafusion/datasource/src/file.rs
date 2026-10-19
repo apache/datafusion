@@ -29,6 +29,7 @@ use crate::morsel::{FileOpenerMorselizer, Morselizer};
 #[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
@@ -110,6 +111,21 @@ pub trait FileSource: Any + Send + Sync {
     ///
     /// These expressions are in terms of the unprojected [`Self::table_schema`].
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        None
+    }
+
+    /// Returns the part of [`Self::filter`] that every output row is
+    /// guaranteed to satisfy.
+    ///
+    /// [`FileScanConfig`] derives equivalence properties (constants and equal
+    /// columns) from this filter. A filter that the source uses only to skip
+    /// data (for example, row group or page pruning with statistics) does not
+    /// remove every non-matching row, so it must not be returned here.
+    ///
+    /// Returns `None` by default.
+    ///
+    /// [`FileScanConfig`]: crate::file_scan_config::FileScanConfig
+    fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         None
     }
 
@@ -350,6 +366,48 @@ pub trait FileSource: Any + Send + Sync {
     #[expect(deprecated)]
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
+    }
+
+    /// Apply a function to all physical expressions used by this file source.
+    ///
+    /// This includes:
+    /// - Filter predicates (which may contain dynamic filters)
+    /// - Projection expressions
+    ///
+    /// The function `f` should be called once per expression unless the function returns
+    /// [`TreeNodeRecursion::Stop`] to stop iteration.
+    ///
+    /// See [`ExecutionPlan::apply_expressions`] for more details and implementation examples.
+    ///
+    /// [`ExecutionPlan::apply_expressions`]: datafusion_physical_plan::ExecutionPlan::apply_expressions
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion>;
+
+    /// Serialize this file source into a full [`PhysicalPlanNode`] (a
+    /// `DataSourceExec` wrapping the `FileScanConfig`), if it knows how.
+    ///
+    /// `base` is the shared [`FileScanConfig`] this source is wrapped in; the
+    /// format-agnostic parts (file groups, schema, statistics, ordering,
+    /// projection, …) are encoded via
+    /// [`FileScanConfig::try_to_proto`](crate::file_scan_config::FileScanConfig::try_to_proto),
+    /// and the concrete source appends its format-specific fields (e.g. CSV
+    /// delimiter/quote) around it.
+    ///
+    /// * `Ok(None)` (the default) — this source has no proto hook yet; the
+    ///   caller falls back to the central downcast chain in `datafusion-proto`.
+    /// * `Ok(Some(node))` — fully serialized; the caller must not fall back.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`FileScanConfig`]: crate::file_scan_config::FileScanConfig
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _base: &FileScanConfig,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
     }
 }
 

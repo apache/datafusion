@@ -1,0 +1,33 @@
+name Q25
+group hj
+
+init sql_benchmarks/hj/init/set_config_no_stats.sql
+
+load sql_benchmarks/hj/init/load.sql
+
+assert I
+SELECT count(*) > 0 FROM lineitem
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q25: skewed high-fanout multi-column string-key inner join.
+-- This tracks candidate-pair filtering for composite keys: the first key is
+-- skewed and the second long string key must also be checked before emitting
+-- each match. count(*) isolates the match path.
+-- Thresholds zeroed to force Partitioned mode (simulates absent row-count stats).
+SELECT count(*)
+FROM (
+  SELECT CAST((s_suppkey % 256) + 1 AS INT) as k1,
+         'multi_column_high_fanout_key' as k2
+  FROM supplier
+  WHERE s_suppkey <= 20000
+) s
+JOIN (
+  SELECT CAST(1 AS INT) as k1,
+         'multi_column_high_fanout_key' as k2
+  FROM lineitem
+  WHERE l_orderkey % 250 = 0
+) l ON s.k1 = l.k1 AND s.k2 = l.k2;

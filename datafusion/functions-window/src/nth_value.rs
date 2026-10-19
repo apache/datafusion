@@ -98,11 +98,7 @@ impl NthValue {
     pub fn new(kind: NthValueKind) -> Self {
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Nullary,
-                    TypeSignature::Any(1),
-                    TypeSignature::Any(2),
-                ],
+                vec![TypeSignature::Any(1), TypeSignature::Any(2)],
                 Volatility::Immutable,
             ),
             kind,
@@ -217,7 +213,9 @@ static NTH_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
     )
     .with_argument(
         "n",
-        "Integer. Specifies the row number (starting from 1) in the window frame.",
+        "Integer position in the window frame. Positive values count from the first \
+        row, starting at 1; negative values count backward from the last row, where -1 \
+        returns the last row.",
     )
     .with_sql_example(
         r#"
@@ -270,6 +268,10 @@ impl WindowUDFImpl for NthValue {
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
+        if partition_evaluator_args.input_exprs().is_empty() {
+            return exec_err!("{} requires at least one argument", self.kind.name());
+        }
+
         let state = NthValueState {
             finalized_result: None,
             kind: self.kind,
@@ -688,5 +690,23 @@ mod tests {
         assert!(err.to_string().starts_with(
             "Execution error: The second argument of nth_value must not be i64::MIN"
         ));
+    }
+
+    #[test]
+    fn zero_arguments_returns_error() {
+        let err = NthValue::first()
+            .partition_evaluator(PartitionEvaluatorArgs::new(
+                &[],
+                &[Field::new("f", DataType::Int32, true).into()],
+                false,
+                false,
+            ))
+            .unwrap_err();
+
+        assert!(
+            err.to_string().starts_with(
+                "Execution error: first_value requires at least one argument"
+            )
+        );
     }
 }

@@ -209,6 +209,8 @@ macro_rules! downcast_arg {
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
 /// $STRICT: whether the function returns NULL when any argument is NULL
 /// $GET_DOC: the function to get the documentation of the UDF
+/// $INPUT_ERROR (optional): a function that returns an error message for an
+///   argument value outside the function's domain, or `None` for a valid value
 macro_rules! make_math_unary_udf {
     ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $STRICT:expr, $GET_DOC:expr) => {
         make_math_unary_udf!(
@@ -219,10 +221,10 @@ macro_rules! make_math_unary_udf {
             $EVALUATE_BOUNDS,
             $STRICT,
             $GET_DOC,
-            None::<fn(f64) -> Result<()>>
+            None::<fn(f64) -> Option<&'static str>>
         );
     };
-    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $STRICT:expr, $GET_DOC:expr, $VALIDATOR:expr) => {
+    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $STRICT:expr, $GET_DOC:expr, $INPUT_ERROR:expr) => {
         $crate::make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
@@ -231,7 +233,6 @@ macro_rules! make_math_unary_udf {
 
             use arrow::array::{ArrayRef, AsArray};
             use arrow::datatypes::{DataType, Float32Type, Float64Type};
-            use arrow::error::ArrowError;
             use datafusion_common::{Result, exec_err};
             use datafusion_expr::interval_arithmetic::Interval;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
@@ -297,36 +298,32 @@ macro_rules! make_math_unary_udf {
                     let args = ColumnarValue::values_to_arrays(&args.args)?;
                     let arr: ArrayRef = match args[0].data_type() {
                         DataType::Float64 => {
-                            let values = args[0]
-                                .as_primitive::<Float64Type>()
-                                .try_unary::<_, Float64Type, _>(
-                                |x: f64| -> std::result::Result<f64, ArrowError> {
-                                    if let Some(validate) = $VALIDATOR {
-                                        validate(x).map_err(|error| {
-                                            ArrowError::ComputeError(error.to_string())
-                                        })?;
-                                    }
-
-                                    Ok(f64::$UNARY_FUNC(x))
-                                },
-                            )?;
-                            Arc::new(values) as ArrayRef
+                            let array = args[0].as_primitive::<Float64Type>();
+                            let result = match $INPUT_ERROR {
+                                Some(input_error) => {
+                                    $crate::math::common::unary_with_input_check(
+                                        array,
+                                        f64::$UNARY_FUNC,
+                                        input_error,
+                                    )?
+                                }
+                                None => array.unary::<_, Float64Type>(f64::$UNARY_FUNC),
+                            };
+                            Arc::new(result) as ArrayRef
                         }
                         DataType::Float32 => {
-                            let values = args[0]
-                                .as_primitive::<Float32Type>()
-                                .try_unary::<_, Float32Type, _>(
-                                |x: f32| -> std::result::Result<f32, ArrowError> {
-                                    if let Some(validate) = $VALIDATOR {
-                                        validate(x as f64).map_err(|error| {
-                                            ArrowError::ComputeError(error.to_string())
-                                        })?;
-                                    }
-
-                                    Ok(f32::$UNARY_FUNC(x))
-                                },
-                            )?;
-                            Arc::new(values) as ArrayRef
+                            let array = args[0].as_primitive::<Float32Type>();
+                            let result = match $INPUT_ERROR {
+                                Some(input_error) => {
+                                    $crate::math::common::unary_with_input_check(
+                                        array,
+                                        f32::$UNARY_FUNC,
+                                        |x: f32| input_error(x as f64),
+                                    )?
+                                }
+                                None => array.unary::<_, Float32Type>(f32::$UNARY_FUNC),
+                            };
+                            Arc::new(result) as ArrayRef
                         }
                         other => {
                             return exec_err!(

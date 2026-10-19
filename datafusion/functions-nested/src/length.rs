@@ -20,16 +20,16 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, Int64Array, LargeListArray, ListArray,
-    OffsetSizeTrait, UInt64Array,
+    UInt64Array,
 };
 use arrow::datatypes::{
     DataType,
     DataType::{FixedSizeList, LargeList, List, UInt64},
 };
 use datafusion_common::cast::{
-    as_fixed_size_list_array, as_generic_list_array, as_int64_array,
+    as_fixed_size_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -49,7 +49,7 @@ make_udf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns the length of the array dimension.",
-    syntax_example = "array_length(array, dimension)",
+    syntax_example = "array_length(array[, dimension])",
     sql_example = r#"```sql
 > select array_length([1, 2, 3, 4, 5], 1);
 +-------------------------------------------+
@@ -62,7 +62,7 @@ make_udf_expr_and_func!(
         name = "array",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     ),
-    argument(name = "dimension", description = "Array dimension.")
+    argument(name = "dimension", description = "Array dimension. Default is 1")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayLength {
@@ -114,7 +114,13 @@ impl ScalarUDFImpl for ArrayLength {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(array_length_inner)(&args.args)
+        // An explicit scalar dimension of one uses the same fast path as an
+        // omitted dimension.
+        let args = match args.args.as_slice() {
+            [_, ColumnarValue::Scalar(ScalarValue::Int64(Some(1)))] => &args.args[..1],
+            args => args,
+        };
+        make_scalar_function(array_length_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -126,43 +132,65 @@ impl ScalarUDFImpl for ArrayLength {
     }
 }
 
-macro_rules! array_length_impl {
-    ($array:expr, $dimension:expr) => {{
-        let array = $array;
-        let dimension = match $dimension {
-            Some(d) => as_int64_array(d)?.clone(),
-            None => Int64Array::from_value(1, array.len()),
-        };
-        let result = array
-            .iter()
-            .zip(dimension.iter())
-            .map(|(arr, dim)| compute_array_length(arr, dim))
-            .collect::<Result<UInt64Array>>()?;
-
-        Ok(Arc::new(result) as ArrayRef)
-    }};
+fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args {
+        [array] => first_dimension_length(array),
+        [array, dimension] => nth_dimension_length(array, as_int64_array(dimension)?),
+        _ => exec_err!("array_length expects one or two arguments"),
+    }
 }
 
-fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 && args.len() != 2 {
-        return exec_err!("array_length expects one or two arguments");
-    }
+/// Returns each row's length along the first dimension.
+///
+/// The first dimension counts a row's immediate elements, whatever their
+/// type, so the lengths come straight from the offsets or the fixed width
+/// without slicing out any row.
+fn first_dimension_length(array: &ArrayRef) -> Result<ArrayRef> {
+    let lengths: Vec<u64> = match array.data_type() {
+        List(_) => as_list_array(array)?
+            .offsets()
+            .lengths()
+            .map(|len| len as u64)
+            .collect(),
+        LargeList(_) => as_large_list_array(array)?
+            .offsets()
+            .lengths()
+            .map(|len| len as u64)
+            .collect(),
+        FixedSizeList(_, size) => vec![*size as u64; array.len()],
+        array_type => {
+            return exec_err!("array_length does not support type '{array_type}'");
+        }
+    };
+    Ok(Arc::new(UInt64Array::new(
+        lengths.into(),
+        array.nulls().cloned(),
+    )))
+}
 
-    match &args[0].data_type() {
-        List(_) => general_array_length::<i32>(args),
-        LargeList(_) => general_array_length::<i64>(args),
-        FixedSizeList(_, _) => fixed_size_array_length(args),
+/// Returns each row's length along the dimension given for that row.
+fn nth_dimension_length(array: &ArrayRef, dimension: &Int64Array) -> Result<ArrayRef> {
+    match array.data_type() {
+        List(_) => lengths_at_dimension(as_list_array(array)?.iter(), dimension),
+        LargeList(_) => {
+            lengths_at_dimension(as_large_list_array(array)?.iter(), dimension)
+        }
+        FixedSizeList(..) => {
+            lengths_at_dimension(as_fixed_size_list_array(array)?.iter(), dimension)
+        }
         array_type => exec_err!("array_length does not support type '{array_type}'"),
     }
 }
 
-fn fixed_size_array_length(array: &[ArrayRef]) -> Result<ArrayRef> {
-    array_length_impl!(as_fixed_size_list_array(&array[0])?, array.get(1))
-}
-
-/// Dispatch array length computation based on the offset type.
-fn general_array_length<O: OffsetSizeTrait>(array: &[ArrayRef]) -> Result<ArrayRef> {
-    array_length_impl!(as_generic_list_array::<O>(&array[0])?, array.get(1))
+fn lengths_at_dimension(
+    rows: impl Iterator<Item = Option<ArrayRef>>,
+    dimension: &Int64Array,
+) -> Result<ArrayRef> {
+    let result = rows
+        .zip(dimension.iter())
+        .map(|(row, dim)| compute_array_length(row, dim))
+        .collect::<Result<UInt64Array>>()?;
+    Ok(Arc::new(result))
 }
 
 /// Returns the length of a concrete array dimension
@@ -171,9 +199,8 @@ fn compute_array_length(
     dimension: Option<i64>,
 ) -> Result<Option<u64>> {
     let mut current_dimension: i64 = 1;
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
+    let Some(mut value) = arr else {
+        return Ok(None);
     };
     let dimension = match dimension {
         Some(value) => {
@@ -206,5 +233,85 @@ fn compute_array_length(
             }
             _ => return Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{GenericListArray, Int32Array, OffsetSizeTrait};
+    use arrow::buffer::{NullBuffer, OffsetBuffer};
+    use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
+
+    fn check_slices(array: &dyn Array, expected: &UInt64Array) -> Result<()> {
+        let udf = ArrayLength::new();
+        for (offset, len) in [(0, 4), (1, 3), (2, 0)] {
+            let array = array.slice(offset, len);
+            for explicit_dimension in [false, true] {
+                let mut args = vec![ColumnarValue::Array(Arc::clone(&array))];
+                if explicit_dimension {
+                    args.push(ColumnarValue::Scalar(ScalarValue::Int64(Some(1))));
+                }
+                let arg_fields = args
+                    .iter()
+                    .map(|arg| Arc::new(Field::new("arg", arg.data_type(), true)))
+                    .collect();
+                let result = udf.invoke_with_args(ScalarFunctionArgs {
+                    args,
+                    arg_fields,
+                    number_rows: len,
+                    return_field: Arc::new(Field::new("length", UInt64, true)),
+                    config_options: Arc::new(ConfigOptions::default()),
+                })?;
+                let ColumnarValue::Array(result) = result else {
+                    panic!("expected an array result");
+                };
+                assert_eq!(result.as_ref(), &expected.slice(offset, len));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn array_length_list_offsets() -> Result<()> {
+        fn check<O: OffsetSizeTrait>() -> Result<()> {
+            let values = Arc::new(Int32Array::new_null(5));
+            let array = GenericListArray::<O>::new(
+                Arc::new(Field::new_list_field(DataType::Int32, true)),
+                OffsetBuffer::from_lengths([1, 2, 0, 2]),
+                values,
+                Some(NullBuffer::from(vec![true, true, true, false])),
+            );
+            check_slices(
+                &array,
+                &UInt64Array::from(vec![Some(1), Some(2), Some(0), None]),
+            )
+        }
+        check::<i32>()?;
+        check::<i64>()
+    }
+
+    #[test]
+    fn array_length_fixed_size_lists() -> Result<()> {
+        for width in [0, 2] {
+            let array = FixedSizeListArray::try_new_with_length(
+                Arc::new(Field::new_list_field(DataType::Int32, true)),
+                width,
+                Arc::new(Int32Array::new_null(4 * width as usize)),
+                Some(NullBuffer::from(vec![true, true, false, true])),
+                4,
+            )?;
+            check_slices(
+                &array,
+                &UInt64Array::from(vec![
+                    Some(width as u64),
+                    Some(width as u64),
+                    None,
+                    Some(width as u64),
+                ]),
+            )?;
+        }
+        Ok(())
     }
 }

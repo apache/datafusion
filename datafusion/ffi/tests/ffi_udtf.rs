@@ -49,8 +49,8 @@ mod tests {
             .await?;
         let expected = create_array!(Int64, [0, 1, 2, 3, 4]) as ArrayRef;
 
-        assert!(result.len() == 1);
-        assert!(result[0].column(0) == &expected);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].column(0), &expected);
 
         Ok(())
     }

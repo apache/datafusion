@@ -18,10 +18,10 @@
 mod literal_lookup_table;
 
 use super::{Column, Literal};
-use crate::PhysicalExpr;
 use crate::expressions::{
-    CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
+    BinaryExpr, CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
 };
+use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
@@ -35,6 +35,8 @@ use datafusion_common::{
     internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
+use datafusion_expr_common::interval_arithmetic::NullableInterval;
+use datafusion_expr_common::operator::Operator;
 use indexmap::IndexMap;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -133,6 +135,7 @@ impl CaseBody {
         // Determine the set of columns that are used in all the expressions of the case body.
         // Use an ordered set so lambda variables continue to be positioned after columns
         let mut used_column_indices = BTreeSet::<usize>::new();
+        let mut supports_projection = true;
         let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
             expr.apply(|expr| {
                 if let Some(column) = expr.downcast_ref::<Column>() {
@@ -141,6 +144,12 @@ impl CaseBody {
                     expr.downcast_ref::<LambdaVariable>()
                 {
                     used_column_indices.insert(lambda_variable.index());
+                } else if expr.downcast_ref::<Literal>().is_none()
+                    && expr.downcast_ref::<ScalarFunctionExpr>().is_none()
+                    && expr.children().is_empty()
+                {
+                    // Unknown leaves may read input columns without exposing a Column child.
+                    supports_projection = false;
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
@@ -216,6 +225,7 @@ impl CaseBody {
         Ok(ProjectedCaseBody {
             projection,
             body: projected_body,
+            supports_projection,
         })
     }
 }
@@ -247,10 +257,32 @@ impl CaseBody {
 ///
 /// The projection vector and the rewritten expression (which only differs from the original in
 /// column reference indices) are held in a `ProjectedCaseBody`.
+///
+/// When `supports_projection` is false, evaluation uses the original body and full batch because
+/// the expression may depend on input columns that are not visible in its children.
 #[derive(Debug, Hash, PartialEq, Eq)]
 struct ProjectedCaseBody {
     projection: Vec<usize>,
     body: CaseBody,
+    /// Whether `body` is safe to evaluate against a projected batch.
+    ///
+    /// When false, `projection` and the rewritten `body` must not be used because an
+    /// expression may read input columns without exposing them through its children.
+    supports_projection: bool,
+}
+
+impl ProjectedCaseBody {
+    /// Returns a projection when evaluating the derived body can avoid unused input columns.
+    fn projection_for(&self, batch: &RecordBatch) -> Option<Vec<usize>> {
+        let projection = self
+            .projection
+            .iter()
+            .copied()
+            .filter(|index| *index < batch.num_columns())
+            .collect::<Vec<_>>();
+        (self.supports_projection && projection.len() < batch.num_columns())
+            .then_some(projection)
+    }
 }
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -1049,14 +1081,7 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        // projected.projection may include indexes of lambda variables not available on this batch
-        let projection = projected
-            .projection
-            .iter()
-            .copied()
-            .filter(|index| *index < batch.num_columns())
-            .collect::<Vec<_>>();
-        if projection.len() < batch.num_columns() {
+        if let Some(projection) = projected.projection_for(batch) {
             let projected_batch = batch.project(&projection)?;
             projected
                 .body
@@ -1079,14 +1104,7 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        // projected.projection may include indexes of lambda variables not available on this batch
-        let projection = projected
-            .projection
-            .iter()
-            .copied()
-            .filter(|index| *index < batch.num_columns())
-            .collect::<Vec<_>>();
-        if projection.len() < batch.num_columns() {
+        if let Some(projection) = projected.projection_for(batch) {
             let projected_batch = batch.project(&projection)?;
             projected
                 .body
@@ -1204,23 +1222,14 @@ impl CaseExpr {
                     )?))
                 }
             }
+        } else if let Some(projection) = projected.projection_for(batch) {
+            // The case expressions do not use all the columns of the input batch.
+            // Project first to reduce time spent filtering.
+            let projected_batch = batch.project(&projection)?;
+            projected.body.expr_or_expr(&projected_batch, when_value)
         } else {
-            // projected.projection may include indexes of lambda variables not available on this batch
-            let projection = projected
-                .projection
-                .iter()
-                .copied()
-                .filter(|index| *index < batch.num_columns())
-                .collect::<Vec<_>>();
-            if projection.len() < batch.num_columns() {
-                // The case expressions do not use all the columns of the input batch.
-                // Project first to reduce time spent filtering.
-                let projected_batch = batch.project(&projection)?;
-                projected.body.expr_or_expr(&projected_batch, when_value)
-            } else {
-                // All columns are used in the case expressions, so there is no need to project.
-                self.body.expr_or_expr(batch, when_value)
-            }
+            // All columns are used in the case expressions, so there is no need to project.
+            self.body.expr_or_expr(batch, when_value)
         }
     }
 
@@ -1253,57 +1262,47 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        let nullable_then = self
-            .body
-            .when_then_expr
-            .iter()
-            .filter_map(|(w, t)| {
-                let is_nullable = match t.nullable(input_schema) {
-                    // Pass on error determining nullability verbatim
-                    Err(e) => return Some(Err(e)),
-                    Ok(n) => n,
-                };
+        let nullable_then = self.body.when_then_expr.iter().find_map(|(w, t)| {
+            let is_nullable = match t.nullable(input_schema) {
+                // Pass on error determining nullability verbatim
+                Err(e) => return Some(Err(e)),
+                Ok(n) => n,
+            };
 
-                // Branches with a then expression that is not nullable do not impact the
-                // nullability of the case expression.
-                if !is_nullable {
-                    return None;
-                }
+            // Branches with a then expression that is not nullable do not impact the
+            // nullability of the case expression.
+            if !is_nullable {
+                return None;
+            }
 
-                // For case-with-expression assume all 'then' expressions are reachable
-                if self.body.expr.is_some() {
-                    return Some(Ok(()));
-                }
+            // For case-with-expression assume all 'then' expressions are reachable
+            if self.body.expr.is_some() {
+                return Some(Ok(()));
+            }
 
-                // For branches with a nullable 'then' expression, try to determine
-                // if the 'then' expression is ever reachable in the situation where
-                // it would evaluate to null.
+            // For branches with a nullable 'then' expression, try to determine
+            // if the 'then' expression is ever reachable in the situation where
+            // it would evaluate to null.
 
-                // Replace the `then` expression with `NULL` in the `when` expression
-                let with_null = match replace_with_null(
-                    w,
-                    unwrap_certainly_null_expr(t.as_ref()),
-                    input_schema,
-                ) {
-                    Err(e) => return Some(Err(e)),
-                    Ok(e) => e,
-                };
+            // Replace the `then` expression with `NULL` in the `when` expression
+            let with_null = match replace_with_null(
+                w,
+                unwrap_certainly_null_expr(t.as_ref()),
+                input_schema,
+            ) {
+                Err(e) => return Some(Err(e)),
+                Ok(e) => e,
+            };
 
-                // Try to const evaluate the modified `when` expression.
-                let predicate_result = match evaluate_predicate(&with_null) {
-                    Err(e) => return Some(Err(e)),
-                    Ok(b) => b,
-                };
+            let can_be_true = match evaluate_predicate(&with_null).and_then(|bounds| {
+                bounds.contains_value(ScalarValue::Boolean(Some(true)))
+            }) {
+                Err(e) => return Some(Err(e)),
+                Ok(b) => b,
+            };
 
-                match predicate_result {
-                    // Evaluation was inconclusive or true, so the 'then' expression is reachable
-                    None | Some(true) => Some(Ok(())),
-                    // Evaluation proves the branch will never be taken.
-                    // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
-                    Some(false) => None,
-                }
-            })
-            .next();
+            if can_be_true { Some(Ok(())) } else { None }
+        });
 
         if let Some(nullable_then) = nullable_then {
             // There is at least one reachable nullable 'then' expression, so the case
@@ -1346,7 +1345,7 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        let mut children = vec![];
+        let mut children = Vec::with_capacity(self.body.when_then_expr.len() * 2 + 2);
         if let Some(expr) = &self.body.expr {
             children.push(expr)
         }
@@ -1424,16 +1423,26 @@ impl PhysicalExpr for CaseExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self {
+            body,
+            // Derived from `body` by `try_new` on decode.
+            eval_method: _,
+        } = self;
+        let CaseBody {
+            expr,
+            when_then_expr,
+            else_expr,
+        } = body;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Case(Box::new(
                 protobuf::PhysicalCaseNode {
-                    expr: self
-                        .expr()
+                    expr: expr
+                        .as_ref()
                         .map(|expr| ctx.encode_child(expr).map(Box::new))
                         .transpose()?,
-                    when_then_expr: self
-                        .when_then_expr()
+                    when_then_expr: when_then_expr
                         .iter()
                         .map(|(when_expr, then_expr)| {
                             Ok(protobuf::PhysicalWhenThen {
@@ -1442,8 +1451,8 @@ impl PhysicalExpr for CaseExpr {
                             })
                         })
                         .collect::<Result<Vec<_>>>()?,
-                    else_expr: self
-                        .else_expr()
+                    else_expr: else_expr
+                        .as_ref()
                         .map(|expr| ctx.encode_child(expr).map(Box::new))
                         .transpose()?,
                 },
@@ -1467,30 +1476,36 @@ impl CaseExpr {
             protobuf::physical_expr_node::ExprType::Case,
             "CaseExpr",
         );
+        let protobuf::PhysicalCaseNode {
+            expr,
+            when_then_expr,
+            else_expr,
+        } = &**case;
 
         Ok(Arc::new(CaseExpr::try_new(
-            case.expr
-                .as_deref()
-                .map(|expr| ctx.decode(expr))
-                .transpose()?,
-            case.when_then_expr
+            expr.as_deref().map(|expr| ctx.decode(expr)).transpose()?,
+            when_then_expr
                 .iter()
                 .map(|when_then| {
+                    let protobuf::PhysicalWhenThen {
+                        when_expr,
+                        then_expr,
+                    } = when_then;
                     Ok((
                         ctx.decode_required_expression(
-                            when_then.when_expr.as_ref(),
+                            when_expr.as_ref(),
                             "CaseExpr",
                             "when_expr",
                         )?,
                         ctx.decode_required_expression(
-                            when_then.then_expr.as_ref(),
+                            then_expr.as_ref(),
                             "CaseExpr",
                             "then_expr",
                         )?,
                     ))
                 })
                 .collect::<Result<Vec<_>>>()?,
-            case.else_expr
+            else_expr
                 .as_deref()
                 .map(|expr| ctx.decode(expr))
                 .transpose()?,
@@ -1498,12 +1513,8 @@ impl CaseExpr {
     }
 }
 
-/// Attempts to const evaluate the given `predicate`.
-/// Returns:
-/// - `Some(true)` if the predicate evaluates to a truthy value.
-/// - `Some(false)` if the predicate evaluates to a falsy value.
-/// - `None` if the predicate could not be evaluated.
-fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<Option<bool>> {
+/// Uses three-valued bounds when input columns prevent constant evaluation.
+fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<NullableInterval> {
     // Create a dummy record with no columns and one row
     let batch = RecordBatch::try_new_with_options(
         Arc::new(Schema::empty()),
@@ -1513,15 +1524,24 @@ fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<Option<bool>>
 
     // Evaluate the predicate and interpret the result as a boolean
     let result = match predicate.evaluate(&batch) {
-        // An error during evaluation means we couldn't const evaluate the predicate, so return `None`
-        Err(_) => None,
-        Ok(ColumnarValue::Array(array)) => Some(
+        Err(_) => {
+            if let Some(expr) = predicate.downcast_ref::<BinaryExpr>()
+                && matches!(expr.op(), Operator::And | Operator::Or)
+            {
+                return evaluate_predicate(expr.left())?
+                    .apply_operator(expr.op(), &evaluate_predicate(expr.right())?);
+            }
+            if let Some(expr) = predicate.downcast_ref::<NotExpr>() {
+                return evaluate_predicate(expr.arg())?.not();
+            }
+            return Ok(NullableInterval::ANY_TRUTH_VALUE);
+        }
+        Ok(ColumnarValue::Array(array)) => {
             ScalarValue::try_from_array(array.as_ref(), 0)?
-                .cast_to(&DataType::Boolean)?,
-        ),
-        Ok(ColumnarValue::Scalar(scalar)) => Some(scalar.cast_to(&DataType::Boolean)?),
+        }
+        Ok(ColumnarValue::Scalar(scalar)) => scalar,
     };
-    Ok(result.map(|v| matches!(v, ScalarValue::Boolean(Some(true)))))
+    Ok(result.cast_to(&DataType::Boolean)?.into())
 }
 
 fn replace_with_null(
@@ -1576,17 +1596,66 @@ mod tests {
     use super::*;
 
     use crate::expressions;
-    use crate::expressions::{BinaryExpr, binary, cast, col, is_not_null};
+    use crate::expressions::{binary, cast, col, is_not_null};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::type_union_coercion;
-    use datafusion_expr_common::operator::Operator;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use half::f16;
+
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct CustomColumn {
+        inner: Column,
+    }
+
+    impl CustomColumn {
+        fn new(name: &str, index: usize) -> Self {
+            Self {
+                inner: Column::new(name, index),
+            }
+        }
+    }
+
+    impl std::fmt::Display for CustomColumn {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            std::fmt::Display::fmt(&self.inner, f)
+        }
+    }
+
+    impl PhysicalExpr for CustomColumn {
+        fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+            self.inner.data_type(input_schema)
+        }
+
+        fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+            self.inner.nullable(input_schema)
+        }
+
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            self.inner.evaluate(batch)
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            assert!(children.is_empty());
+            Ok(self)
+        }
+
+        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            self.inner.fmt_sql(f)
+        }
+    }
 
     #[test]
     fn case_with_expr() -> Result<()> {
@@ -1884,6 +1953,127 @@ mod tests {
     }
 
     #[test]
+    fn case_without_expr_with_custom_column() -> Result<()> {
+        let batch = case_test_batch()?;
+        let schema = batch.schema();
+
+        let when1 = binary(
+            Arc::new(CustomColumn::new("a", 0)),
+            Operator::Eq,
+            lit("foo"),
+            &schema,
+        )?;
+        let when2 = binary(
+            Arc::new(CustomColumn::new("a", 0)),
+            Operator::Eq,
+            lit("bar"),
+            &schema,
+        )?;
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when1, lit(123i32)), (when2, lit(456i32))],
+            None,
+            schema.as_ref(),
+        )?;
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected = Int32Array::from(vec![Some(123), None, None, Some(456)]);
+
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_with_custom_column() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+
+        let expr = CaseExpr::try_new(
+            Some(Arc::new(CustomColumn::new("a", 0))),
+            vec![(lit("foo"), col("b", &schema)?)],
+            Some(col("c", &schema)?),
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::WithExpression(projected) => {
+                assert!(!projected.supports_projection);
+            }
+            method => panic!("expected WithExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected = Int32Array::from(vec![Some(1), Some(20), Some(30), Some(40)]);
+
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_expr_or_expr_with_custom_column() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+        let when = binary(
+            Arc::new(CustomColumn::new("a", 0)),
+            Operator::Eq,
+            lit("foo"),
+            &schema,
+        )?;
+
+        let expr = CaseExpr::try_new(
+            None,
+            vec![(when, col("b", &schema)?)],
+            Some(col("c", &schema)?),
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::ExpressionOrExpression(projected) => {
+                assert!(!projected.supports_projection);
+            }
+            method => panic!("expected ExpressionOrExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected = Int32Array::from(vec![Some(1), Some(20), Some(30), Some(40)]);
+
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_expr_or_expr_keeps_nullary_scalar_functions_projectable() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+        let random: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            datafusion_functions::math::random(),
+            vec![],
+            &schema,
+            Arc::new(ConfigOptions::default()),
+        )?);
+        let when = binary(random, Operator::Gt, lit(0.5f64), &schema)?;
+
+        let expr = CaseExpr::try_new(
+            None,
+            vec![(when, col("b", &schema)?)],
+            Some(col("c", &schema)?),
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::ExpressionOrExpression(projected) => {
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![1, 2]);
+            }
+            method => panic!("expected ExpressionOrExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(result.len(), batch.num_rows());
+        Ok(())
+    }
+
+    #[test]
     fn case_with_expr_when_null() -> Result<()> {
         let batch = case_test_batch()?;
         let schema = batch.schema();
@@ -1948,6 +2138,22 @@ mod tests {
         assert_eq!(expected, result);
 
         Ok(())
+    }
+
+    fn case_test_batch_with_extra_columns() -> Result<RecordBatch> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let a = StringArray::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
+        let b = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let c = Int32Array::from(vec![Some(10), Some(20), Some(30), Some(40)]);
+        RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+        )
+        .map_err(Into::into)
     }
 
     fn case_test_batch1() -> Result<RecordBatch> {
@@ -2589,6 +2795,145 @@ mod tests {
     #[test]
     fn test_case_expression_nullability_with_not_nullable_column() -> Result<()> {
         case_expression_nullability(false)
+    }
+
+    #[rstest::rstest]
+    #[case::and(Operator::And, false, false)]
+    #[case::or(Operator::Or, false, true)]
+    #[case::not_and(Operator::And, true, true)]
+    #[case::not_or(Operator::Or, true, false)]
+    fn test_case_expression_nullability_with_independent_columns(
+        #[case] op: Operator,
+        #[case] negated: bool,
+        #[case] nullable: bool,
+        #[values(false, true)] reverse: bool,
+    ) -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let a: Arc<dyn PhysicalExpr> = col("a", &schema)?;
+        let left: Arc<dyn PhysicalExpr> =
+            binary(Arc::clone(&a), Operator::Gt, lit(1), &schema)?;
+        let right: Arc<dyn PhysicalExpr> =
+            binary(col("b", &schema)?, Operator::Lt, lit(3), &schema)?;
+        let predicate: Arc<dyn PhysicalExpr> = if reverse {
+            binary(right, op, left, &schema)?
+        } else {
+            binary(left, op, right, &schema)?
+        };
+        let predicate: Arc<dyn PhysicalExpr> = if negated {
+            expressions::not(predicate)?
+        } else {
+            predicate
+        };
+
+        assert_nullability(when_then_else(&predicate, &a, &lit(0))?, &schema, nullable);
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::and_over_or(false, false)]
+    #[case::not_and_over_or(true, true)]
+    fn test_case_expression_nullability_with_nested_predicates(
+        #[case] negated: bool,
+        #[case] nullable: bool,
+        #[values(false, true)] reverse: bool,
+    ) -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let a: Arc<dyn PhysicalExpr> = col("a", &schema)?;
+        let b: Arc<dyn PhysicalExpr> = col("b", &schema)?;
+
+        // a > 1 AND (b < 3 OR b IS NULL)
+        let a_gt_1: Arc<dyn PhysicalExpr> =
+            binary(Arc::clone(&a), Operator::Gt, lit(1), &schema)?;
+        let b_lt_3_or_null: Arc<dyn PhysicalExpr> = binary(
+            binary(Arc::clone(&b), Operator::Lt, lit(3), &schema)?,
+            Operator::Or,
+            expressions::is_null(b)?,
+            &schema,
+        )?;
+        let predicate: Arc<dyn PhysicalExpr> = if reverse {
+            binary(b_lt_3_or_null, Operator::And, a_gt_1, &schema)?
+        } else {
+            binary(a_gt_1, Operator::And, b_lt_3_or_null, &schema)?
+        };
+        let predicate: Arc<dyn PhysicalExpr> = if negated {
+            expressions::not(predicate)?
+        } else {
+            predicate
+        };
+        let expr = when_then_else(&predicate, &a, &lit(0))?;
+
+        assert_nullability(Arc::clone(&expr), &schema, nullable);
+
+        // Cross-check the inferred nullability against evaluation on every combination
+        // of NULL and non-NULL inputs. With a = NULL and b = 3 the negated predicate is
+        // TRUE, so the THEN branch yields NULL.
+        let rows: Vec<(Option<i32>, Option<i32>)> = [None, Some(1), Some(2)]
+            .into_iter()
+            .flat_map(|a| [None, Some(2), Some(3)].into_iter().map(move |b| (a, b)))
+            .collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from_iter(rows.iter().map(|(a, _)| *a))),
+                Arc::new(Int32Array::from_iter(rows.iter().map(|(_, b)| *b))),
+            ],
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(result.null_count() > 0, nullable);
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::literal(lit("invalid"))]
+    #[case::and_left(Arc::new(BinaryExpr::new(
+        lit("invalid"),
+        Operator::And,
+        make_col("flag", 0)
+    )))]
+    #[case::and_right(Arc::new(BinaryExpr::new(
+        make_col("flag", 0),
+        Operator::And,
+        lit("invalid")
+    )))]
+    #[case::or_left(Arc::new(BinaryExpr::new(
+        lit("invalid"),
+        Operator::Or,
+        make_col("flag", 0)
+    )))]
+    #[case::or_right(Arc::new(BinaryExpr::new(
+        make_col("flag", 0),
+        Operator::Or,
+        lit("invalid")
+    )))]
+    #[case::not(Arc::new(NotExpr::new(lit("invalid"))))]
+    fn test_case_expression_nullability_with_invalid_predicate(
+        #[case] predicate: Arc<dyn PhysicalExpr>,
+    ) -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "flag",
+                Arc::new(BooleanArray::from(vec![Some(true), Some(false), None]))
+                    as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef,
+            ),
+        ])?;
+        let schema = batch.schema();
+        let expr = when_then_else(&predicate, &col("value", &schema)?, &lit(0))?;
+        let error = expr
+            .nullable(&schema)
+            .expect_err("invalid predicates must fail nullability inference");
+        assert!(error.to_string().contains("invalid"), "{error}");
+        assert!(expr.evaluate(&batch).is_err());
+        Ok(())
     }
 
     fn case_expression_nullability(col_is_nullable: bool) -> Result<()> {
@@ -3295,6 +3640,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_case_when_literal_lookup_fixed_size_binary_to_int32() {
+        let lookup_map = vec![
+            (
+                ScalarValue::FixedSizeBinary(1, Some(vec![1])),
+                ScalarValue::Int32(Some(10)),
+            ),
+            (
+                ScalarValue::FixedSizeBinary(1, Some(vec![2])),
+                ScalarValue::Int32(Some(20)),
+            ),
+        ];
+
+        let input_values = ScalarValue::iter_to_array(vec![
+            ScalarValue::FixedSizeBinary(1, Some(vec![1])),
+            ScalarValue::FixedSizeBinary(1, Some(vec![2])),
+            ScalarValue::FixedSizeBinary(1, Some(vec![3])),
+            ScalarValue::FixedSizeBinary(1, None),
+        ])
+        .expect("valid fixed size binary array");
+
+        let expected_no_else =
+            Arc::new(Int32Array::from(vec![Some(10), Some(20), None, None])) as ArrayRef;
+
+        test_case_when_literal_lookup(
+            Arc::clone(&input_values),
+            &lookup_map,
+            None,
+            expected_no_else,
+        );
+
+        let expected_with_else = Arc::new(Int32Array::from(vec![
+            Some(10),
+            Some(20),
+            Some(99),
+            Some(99),
+        ])) as ArrayRef;
+
+        test_case_when_literal_lookup(
+            input_values,
+            &lookup_map,
+            Some(ScalarValue::Int32(Some(99))),
+            expected_with_else,
+        );
+    }
+
     /// Reproduces https://github.com/apache/datafusion/issues/22173
     ///
     /// Nested self-referential CASE chains (common in rewrite-style projections)
@@ -3422,6 +3813,26 @@ mod proto_tests {
         assert!(case_node.when_then_expr[0].when_expr.is_some());
         assert!(case_node.when_then_expr[0].then_expr.is_some());
         assert!(case_node.else_expr.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_distinguishes_optional_case_exprs() {
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        for (expr, else_expr) in [(None, Some(lit(0_i32))), (Some(lit(true)), None)] {
+            let case = CaseExpr::try_new(expr, vec![(lit(true), lit(1_i32))], else_expr)
+                .unwrap();
+            let node = case.try_to_proto(&ctx).unwrap().unwrap();
+            let Some(protobuf::physical_expr_node::ExprType::Case(case_node)) =
+                node.expr_type
+            else {
+                panic!("expected a CaseExpr node");
+            };
+
+            assert_eq!(case_node.expr.is_some(), case.expr().is_some());
+            assert_eq!(case_node.else_expr.is_some(), case.else_expr().is_some());
+        }
     }
 
     #[test]

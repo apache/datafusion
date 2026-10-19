@@ -19,21 +19,196 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Float64Array, GenericListArray, NullBufferBuilder,
-    OffsetSizeTrait, Scalar,
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, Float64Array, GenericListArray,
+    NullBufferBuilder, OffsetSizeTrait, Scalar, new_empty_array,
 };
-use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_float64_array, as_generic_list_array,
     as_large_list_array, as_large_list_view_array, as_list_array, as_list_view_array,
 };
+use datafusion_common::utils::{offset_span, offset_span_len};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
 use datafusion_expr::ColumnarValue;
 use itertools::Itertools as _;
+
+/// Empty every valid list row, preserving parent nulls and the given child field.
+pub(crate) fn empty_list_values<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+    field: FieldRef,
+) -> ArrayRef {
+    let values = new_empty_array(field.data_type());
+    Arc::new(GenericListArray::<O>::new(
+        field,
+        OffsetBuffer::new_zeroed(list.len()),
+        values,
+        list.nulls().cloned(),
+    ))
+}
+
+/// Build result row offsets and exclude elements stored under NULL list rows.
+///
+/// `keep` is a bitmap identifying which elements in the list's visible span
+/// should be preserved. The returned bitmap uses the same indexing, with bits
+/// for NULL list rows cleared. Selected elements may themselves be NULL; their
+/// validity is the caller's responsibility when copying values.
+pub(crate) fn prepare_list_filter<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+    keep: &BooleanBuffer,
+) -> (OffsetBuffer<O>, BooleanBuffer) {
+    let list_offsets = list.offsets();
+    let (first_offset, span_len) = offset_span(list_offsets);
+    debug_assert_eq!(keep.len(), span_len);
+    let mut offsets = Vec::with_capacity(list.len() + 1);
+    offsets.push(O::zero());
+    // Count the set bits before each row end in one pass over `keep`, which
+    // stays cheap for short rows.
+    let keep_mask = if list.null_count() == 0 {
+        // Without NULL rows, every set bit is kept.
+        let mut set_bits = SetBitCounter::new(keep.bit_chunks().iter_padded());
+        offsets.extend(list_offsets[1..].iter().map(|end| {
+            O::usize_as(set_bits.count_before(end.as_usize() - first_offset))
+        }));
+        keep.clone()
+    } else {
+        let mut set_bits = SetBitCounter::new(keep.bit_chunks().iter_padded());
+        let mut kept_count = 0;
+        // Set bits stored under NULL rows, which the result does not keep.
+        let mut hidden_count = 0;
+        // NULL list rows are usually empty, so reuse `keep` until a NULL row
+        // stores elements. Copy the bits of the preceding rows when that first
+        // happens.
+        let mut keep_mask: Option<BooleanBufferBuilder> = None;
+        for (row, window) in list_offsets.windows(2).enumerate() {
+            let start = window[0].as_usize() - first_offset;
+            let end = window[1].as_usize() - first_offset;
+            let len = end - start;
+            let bit_start = keep.offset() + start;
+            if list.is_valid(row) {
+                kept_count = set_bits.count_before(end) - hidden_count;
+                if let Some(keep_mask) = &mut keep_mask {
+                    keep_mask
+                        .append_packed_range(bit_start..bit_start + len, keep.values());
+                }
+            } else if len != 0 {
+                let set_before_row = set_bits.count_before(start);
+                hidden_count += set_bits.count_before(end) - set_before_row;
+                keep_mask
+                    .get_or_insert_with(|| {
+                        let mut builder = BooleanBufferBuilder::new(keep.len());
+                        builder
+                            .append_packed_range(keep.offset()..bit_start, keep.values());
+                        builder
+                    })
+                    .append_n(len, false);
+            }
+            offsets.push(O::usize_as(kept_count));
+        }
+        keep_mask
+            .map(BooleanBufferBuilder::build)
+            .unwrap_or_else(|| keep.clone())
+    };
+    debug_assert_eq!(keep_mask.len(), keep.len());
+    // SAFETY: offsets start at zero and never decrease, since each one counts
+    // the kept elements up to a row's end. A count cannot exceed the input's
+    // element span, which fits in `O`, so converting it to `O` cannot overflow.
+    let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+    (offsets, keep_mask)
+}
+
+/// Counts the set bits that precede a sequence of non-decreasing positions in a
+/// bitmap, reading each 64-bit word of the bitmap once.
+struct SetBitCounter<I> {
+    /// The bitmap's remaining words, with the final word padded with zeros.
+    words: I,
+    /// The word containing the most recent position.
+    word: u64,
+    /// Position of the first bit of `word`.
+    word_start: usize,
+    /// Set bits before `word_start`.
+    count_before_word: usize,
+}
+
+impl<I: Iterator<Item = u64>> SetBitCounter<I> {
+    fn new(mut words: I) -> Self {
+        let word = words.next().unwrap_or(0);
+        Self {
+            words,
+            word,
+            word_start: 0,
+            count_before_word: 0,
+        }
+    }
+
+    /// Returns the number of set bits before `end`. `end` must be no less than
+    /// in the previous call, and no greater than the bitmap's length.
+    #[inline]
+    fn count_before(&mut self, end: usize) -> usize {
+        debug_assert!(end >= self.word_start);
+        while end - self.word_start >= 64 {
+            self.count_before_word += self.word.count_ones() as usize;
+            self.word = self.words.next().unwrap_or(0);
+            self.word_start += 64;
+        }
+        let mask = (1u64 << (end - self.word_start)) - 1;
+        self.count_before_word + (self.word & mask).count_ones() as usize
+    }
+}
+
+/// Computes the return type of a function that produces a list with the same
+/// inner field as `array_type`, plus an element that may be null when
+/// `element_nullable` is set.
+///
+/// The inner field is carried over from `array_type` verbatim — name, metadata
+/// and all — so that the type promised at planning time is the one the kernel
+/// can actually build. Its nullability is widened when `element_nullable` is
+/// set, because a nullable new element may introduce nulls into a list whose
+/// elements were previously declared non-nullable.
+///
+/// Types other than `List`/`LargeList` are returned unchanged; callers handle
+/// `Null` themselves and the kernels reject anything else at execution time.
+pub(crate) fn list_type_with_element(
+    array_type: &DataType,
+    element_nullable: bool,
+) -> DataType {
+    match array_type {
+        DataType::List(field) => {
+            DataType::List(widen_nullability(field, element_nullable))
+        }
+        DataType::LargeList(field) => {
+            DataType::LargeList(widen_nullability(field, element_nullable))
+        }
+        other => other.clone(),
+    }
+}
+
+fn widen_nullability(field: &FieldRef, nullable: bool) -> FieldRef {
+    if nullable && !field.is_nullable() {
+        Arc::new(field.as_ref().clone().with_nullable(true))
+    } else {
+        Arc::clone(field)
+    }
+}
+
+/// Extracts the inner field of a `List`/`LargeList` type, so that a kernel can
+/// build a list array carrying exactly that field.
+///
+/// Used both on an input's type and on the type promised by
+/// [`ScalarUDFImpl::return_field_from_args`]. Anything else is a bug in the
+/// caller's dispatch, hence the internal error; `context` names the kernel so
+/// that error identifies where the bad dispatch happened.
+///
+/// [`ScalarUDFImpl::return_field_from_args`]: datafusion_expr::ScalarUDFImpl::return_field_from_args
+pub(crate) fn list_inner_field(context: &str, data_type: &DataType) -> Result<FieldRef> {
+    match data_type {
+        DataType::List(field) | DataType::LargeList(field) => Ok(Arc::clone(field)),
+        other => internal_err!("{context} got unexpected data type: {other}"),
+    }
+}
 
 pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
@@ -102,7 +277,7 @@ pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(
                 let mut aligned_array = Arc::clone(&array);
                 for _ in 0..(max_ndim - ndim) {
                     let data_type = aligned_array.data_type().to_owned();
-                    let array_lengths = vec![1; aligned_array.len()];
+                    let array_lengths = std::iter::repeat_n(1, aligned_array.len());
                     let offsets = OffsetBuffer::<O>::from_lengths(array_lengths);
 
                     aligned_array = Arc::new(GenericListArray::<O>::try_new(
@@ -226,9 +401,8 @@ pub(crate) fn compare_element_to_list(
 pub(crate) fn compute_array_dims(
     arr: Option<ArrayRef>,
 ) -> Result<Option<Vec<Option<u64>>>> {
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
+    let Some(mut value) = arr else {
+        return Ok(None);
     };
     if value.is_empty() {
         return Ok(None);
@@ -359,8 +533,9 @@ where
 
     let row_nulls = NullBuffer::union(lhs.nulls(), rhs.nulls());
 
-    let mut out_values: Vec<f64> = Vec::with_capacity(lhs_values.len());
-    let mut out_inner_nulls = NullBufferBuilder::new(lhs_values.len());
+    let capacity = offset_span_len(lhs.offsets());
+    let mut out_values: Vec<f64> = Vec::with_capacity(capacity);
+    let mut out_inner_nulls = NullBufferBuilder::new(capacity);
     let mut out_offsets = Vec::<O>::with_capacity(lhs.len() + 1);
     out_offsets.push(O::zero());
 
@@ -413,12 +588,190 @@ where
     )?))
 }
 
+/// Returns a power of two that brings the largest magnitude in `values` close
+/// to 1, so that squaring the scaled values neither overflows nor underflows.
+///
+/// Squaring a large finite value overflows (`1e200 * 1e200` is infinity) and
+/// squaring a small one underflows (`1e-200 * 1e-200` is zero), even when the
+/// norm itself is representable. The factor is a power of two, so scaling is
+/// exact whenever the scaled value is normal. A value that becomes subnormal is
+/// rounded, so an `array_normalize` element that is itself subnormal can differ
+/// from the unscaled result in its last bit.
+///
+/// Returns `None` when `values` is empty, all zero, or contains an infinity.
+/// The unscaled computation already gives the expected result for those inputs.
+/// NaN values are ignored, and the scaled computation still produces NaN.
+pub(crate) fn norm_scale(values: impl IntoIterator<Item = f64>) -> Option<f64> {
+    // No early return inside the loop, so that it vectorizes. `f64::max` skips
+    // NaN, so only an infinity can make `max` non-finite.
+    let mut max = 0.0_f64;
+    for value in values {
+        max = max.max(value.abs());
+    }
+    if max == 0.0 || !max.is_finite() {
+        return None;
+    }
+    // Unbiased exponent of `max`. Subnormal values store a biased exponent of 0,
+    // so clamp them to the smallest normal exponent.
+    let exponent = ((max.to_bits() >> 52) as i32 - 1023).max(-1022);
+    Some(2.0_f64.powi(-exponent))
+}
+
+/// Returns whether a sum of `len` squares computed without scaling may be
+/// wrong because a square overflowed or underflowed, in which case it should be
+/// recomputed with the factor from [`norm_scale`].
+///
+/// An overflowing square makes the sum infinite. An underflowing square is off
+/// by at most half the smallest subnormal value, so `len` of them move the sum
+/// by at most `len * 2^-1075`. A sum of at least `len * 2^-1012` is therefore
+/// off by less than `2^-63` of itself, far below its rounding precision.
+pub(crate) fn needs_norm_scale(sum_of_squares: f64, len: usize) -> bool {
+    // 2^-1012 = 2^10 * f64::MIN_POSITIVE
+    let min_unscaled = 1024.0 * len as f64 * f64::MIN_POSITIVE;
+    !(min_unscaled..f64::INFINITY).contains(&sum_of_squares)
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use arrow::array::ListArray;
     use arrow::datatypes::Int64Type;
     use datafusion_common::utils::SingleRowListArrayBuilder;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    /// Compare `prepare_list_filter` with a per-row reference, returning the
+    /// output bitmap so callers can check whether `keep` was reused.
+    fn assert_list_filter_matches_reference<O: OffsetSizeTrait>(
+        list: &GenericListArray<O>,
+        keep: &BooleanBuffer,
+    ) -> BooleanBuffer {
+        let first = list.offsets()[0].as_usize();
+        let mut expected = keep.iter().collect::<Vec<_>>();
+        let mut expected_offsets = vec![0];
+        for (row, window) in list.offsets().windows(2).enumerate() {
+            let start = window[0].as_usize() - first;
+            let end = window[1].as_usize() - first;
+            if list.is_null(row) {
+                expected[start..end].fill(false);
+            }
+            expected_offsets.push(expected[..end].iter().filter(|&&v| v).count());
+        }
+        let (offsets, mask) = prepare_list_filter(list, keep);
+        assert_eq!(mask.iter().collect::<Vec<_>>(), expected);
+        assert_eq!(
+            offsets.iter().map(|o| o.as_usize()).collect::<Vec<_>>(),
+            expected_offsets
+        );
+        mask
+    }
+
+    /// A list of NULL elements with the given row lengths and row validity,
+    /// sliced to `len` rows starting at row `offset`.
+    fn null_element_list<O: OffsetSizeTrait>(
+        lengths: &[usize],
+        nulls: Option<NullBuffer>,
+        offset: usize,
+        len: usize,
+    ) -> GenericListArray<O> {
+        GenericListArray::<O>::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::from_lengths(lengths.iter().copied()),
+            // `prepare_list_filter` must permit selecting NULL elements.
+            arrow::array::new_null_array(&DataType::Int32, lengths.iter().sum()),
+            nulls,
+        )
+        .slice(offset, len)
+    }
+
+    /// Check a list sliced to its last seven rows, returning the input and output
+    /// bitmaps so callers can check whether the input was reused.
+    fn check_list_filter<O: OffsetSizeTrait>(
+        lengths: [usize; 8],
+        valid: [bool; 8],
+    ) -> (BooleanBuffer, BooleanBuffer) {
+        let nulls = Some(NullBuffer::from(valid.to_vec()));
+        let list = null_element_list::<O>(&lengths, nulls, 1, 7);
+        let len = offset_span(list.offsets()).1;
+        // Use an offset that is not a multiple of the bitmap's three-bit period.
+        let keep = BooleanBuffer::collect_bool(len + 1, |i| i % 3 != 0).slice(1, len);
+        let mask = assert_list_filter_matches_reference(&list, &keep);
+        (keep, mask)
+    }
+
+    #[test]
+    fn list_filter_mask_handles_slices_and_hidden_elements() {
+        let valid = [true, false, true, false, false, true, true, false];
+        // After slicing off the first row, the first lengths of each pair give an
+        // empty NULL row, a NULL row storing elements after a valid row,
+        // consecutive NULL rows, and a trailing one. The second lengths store no
+        // elements under NULL rows, which leaves the bitmap untouched.
+        for (hidden, empty) in [
+            ([2, 0, 2, 1, 2, 0, 3, 2], [2, 0, 2, 0, 0, 3, 3, 0]),
+            // Rows long enough that counting and copying bits spans 64-bit words.
+            ([2, 0, 63, 65, 64, 0, 65, 2], [2, 0, 63, 0, 0, 65, 65, 0]),
+        ] {
+            let (keep, mask) = check_list_filter::<i32>(hidden, valid);
+            assert!(!mask.inner().ptr_eq(keep.inner()));
+            let (keep, mask) = check_list_filter::<i32>(empty, valid);
+            assert!(mask.inner().ptr_eq(keep.inner()));
+            check_list_filter::<i64>(hidden, valid);
+            check_list_filter::<i64>(empty, valid);
+        }
+    }
+
+    #[test]
+    fn list_filter_matches_reference_on_random_lists() {
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..500 {
+            let rows = rng.random_range(0..=24);
+            // Mostly short rows, plus some long enough to span 64-bit words.
+            let lengths = (0..rows)
+                .map(|_| {
+                    let max_len = if rng.random_bool(0.2) { 130 } else { 4 };
+                    rng.random_range(0..=max_len)
+                })
+                .collect::<Vec<_>>();
+            // Either no NULL buffer, or rows that are NULL with this probability.
+            let null_rows = [0.0, 0.3, 0.9][rng.random_range(0..3)];
+            let valid = (0..rows)
+                .map(|_| !rng.random_bool(null_rows))
+                .collect::<Vec<_>>();
+            let nulls = (null_rows > 0.0).then(|| NullBuffer::from(valid.clone()));
+            let offset = rng.random_range(0..=rows);
+            let len = rng.random_range(0..=rows - offset);
+            let span = lengths[offset..offset + len].iter().sum::<usize>();
+            let density = [0.0, 0.1, 0.5, 0.9, 1.0][rng.random_range(0..5)];
+            let keep_offset = rng.random_range(0..130);
+            let keep = BooleanBuffer::collect_bool(keep_offset + span, |_| {
+                rng.random_bool(density)
+            })
+            .slice(keep_offset, span);
+
+            let list = null_element_list::<i32>(&lengths, nulls.clone(), offset, len);
+            let mask = assert_list_filter_matches_reference(&list, &keep);
+            // `keep` is copied only when a visible NULL row stores elements.
+            let hides_elements =
+                (offset..offset + len).any(|row| !valid[row] && lengths[row] != 0);
+            assert_eq!(mask.inner().ptr_eq(keep.inner()), !hides_elements);
+            let list = null_element_list::<i64>(&lengths, nulls, offset, len);
+            assert_list_filter_matches_reference(&list, &keep);
+        }
+    }
+
+    #[test]
+    fn set_bit_counter_matches_per_position_counts() {
+        // A sliced bitmap whose length is a whole number of 64-bit words.
+        let bits =
+            BooleanBuffer::collect_bool(200, |i| i % 3 != 0 && i % 7 != 0).slice(5, 192);
+        let mut counter = SetBitCounter::new(bits.bit_chunks().iter_padded());
+        let mut expected = 0;
+        for end in 0..=bits.len() {
+            assert_eq!(counter.count_before(end), expected, "end {end}");
+            if end < bits.len() {
+                expected += usize::from(bits.value(end));
+            }
+        }
+    }
 
     /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
     #[test]
@@ -467,5 +820,98 @@ mod tests {
             datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
+    }
+
+    #[test]
+    fn norm_scale_brings_largest_magnitude_close_to_one() {
+        assert_eq!(norm_scale([3e200, -4e200]), Some(2.0_f64.powi(-666)));
+        assert_eq!(norm_scale([3.0, 4.0]), Some(0.25));
+        // 2^-1023 and 2^1022, pinned by bit pattern rather than computed
+        assert_eq!(norm_scale([f64::MAX]), Some(f64::from_bits(1 << 51)));
+        assert_eq!(
+            norm_scale([f64::MIN_POSITIVE / 4.0]),
+            Some(f64::from_bits(2045 << 52))
+        );
+        // NaN is ignored; the scaled computation still produces NaN
+        assert_eq!(norm_scale([f64::NAN, 3.0, 4.0]), Some(0.25));
+    }
+
+    #[test]
+    fn norm_scale_skips_inputs_the_unscaled_computation_handles() {
+        assert_eq!(norm_scale([]), None);
+        assert_eq!(norm_scale([0.0, -0.0]), None);
+        assert_eq!(norm_scale([f64::NAN, 0.0]), None);
+        assert_eq!(norm_scale([f64::INFINITY, 1.0]), None);
+        assert_eq!(norm_scale([1.0, f64::NAN, f64::NEG_INFINITY]), None);
+    }
+
+    #[test]
+    fn needs_norm_scale_only_for_sums_that_may_have_overflowed_or_underflowed() {
+        assert!(!needs_norm_scale(1.0, 1));
+        assert!(!needs_norm_scale(f64::MAX, 1));
+        // The square of 1e-100 is 1e-200, which is far from underflowing.
+        assert!(!needs_norm_scale(1e-200, 1));
+        assert!(!needs_norm_scale(1e-200, 1536));
+
+        let min_unscaled = 1024.0 * f64::MIN_POSITIVE;
+        assert!(!needs_norm_scale(min_unscaled, 1));
+        assert!(needs_norm_scale(min_unscaled, 2));
+        assert!(needs_norm_scale(min_unscaled / 2.0, 1));
+
+        assert!(needs_norm_scale(0.0, 1));
+        assert!(needs_norm_scale(f64::INFINITY, 1));
+        assert!(needs_norm_scale(f64::NAN, 1));
+    }
+
+    /// Tests the array function supplied via `run` on small slices of a large
+    /// list, checking two independent properties:
+    ///
+    /// 1. Correctness: results match those from equivalent inputs with compact
+    ///    child storage.
+    /// 2. Capacity: newly created outputs retain little memory, catching
+    ///    reservations based on the full child rather than the visible slice.
+    ///    Returning the original input is allowed for no-op cases.
+    pub(crate) fn check_sliced_list_behavior(
+        run: impl Fn(&ArrayRef) -> Result<ArrayRef>,
+    ) -> Result<()> {
+        let padding = 8192;
+        let visible = vec![Some(3.0), None, Some(4.0), Some(9.0), Some(9.0)];
+        let values = Float64Array::from_iter(
+            std::iter::repeat_n(Some(1.0), padding)
+                .chain(visible.iter().copied())
+                .chain(std::iter::repeat_n(Some(1.0), padding)),
+        );
+        let field = Arc::new(Field::new_list_field(DataType::Float64, true));
+        let input = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::from_lengths([padding, 3, 0, 2, padding]),
+            Arc::new(values),
+            Some(NullBuffer::from(vec![true, true, true, false, true])),
+        );
+        let compact = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::from_lengths([3, 0, 2]),
+            Arc::new(Float64Array::from(visible)),
+            Some(NullBuffer::from(vec![true, true, false])),
+        );
+        for data_type in [input.data_type().clone(), DataType::LargeList(field)] {
+            let input = arrow::compute::cast(&input, &data_type)?;
+            let compact = arrow::compute::cast(&compact, &data_type)?;
+            // Middle slice, empty slice, empty row, and null row with child data.
+            for (offset, len) in [(0, 3), (0, 0), (1, 1), (2, 1)] {
+                let sliced = input.slice(1 + offset, len);
+                let result = run(&sliced)?;
+                let expected = run(&compact.slice(offset, len))?;
+                assert_eq!(result.as_ref(), expected.as_ref());
+                // Compare buffers, since evaluating through a plan re-wraps arrays.
+                assert!(
+                    result.to_data().ptr_eq(&sliced.to_data())
+                        || result.get_buffer_memory_size() < 1024,
+                    "{data_type}: {} bytes for {len} rows",
+                    result.get_buffer_memory_size()
+                );
+            }
+        }
+        Ok(())
     }
 }

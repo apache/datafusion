@@ -30,7 +30,7 @@
 //! - `date_time`
 //!   (file: date_time.rs, desc: Examples of date-time related functions and queries)
 //!
-//! - `function_factory`  
+//! - `function_factory`
 //!   (file: function_factory.rs, desc: Register `CREATE FUNCTION` handler to implement SQL macros)
 //!
 //! - `regexp`

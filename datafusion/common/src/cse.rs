@@ -26,7 +26,7 @@ use crate::tree_node::{
     TreeNodeVisitor,
 };
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hash, Hasher, RandomState};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -176,6 +176,9 @@ pub trait CSEController {
 
     /// Splits the children to normal and conditionally evaluated ones or returns `None`
     /// if all are always evaluated.
+    ///
+    /// The returned references must point to the children of `node` themselves. The two
+    /// lists can be in any order.
     fn conditional_children(node: &Self::Node) -> Option<ChildrenList<&Self::Node>>;
 
     // Returns true if a node is valid. If a node is invalid then it can't be eliminated.
@@ -257,6 +260,9 @@ where
     /// inner states
     visit_stack: Vec<VisitRecord<'n, N>>,
 
+    /// buffer reused by `pop_enter_mark` to collect the identifiers of children
+    node_ids: Vec<Identifier<'n, N>>,
+
     /// preorder index, start from 0.
     down_index: usize,
 
@@ -316,22 +322,22 @@ where
         &mut self,
         can_normalize: bool,
     ) -> (usize, Option<Identifier<'n, N>>, bool) {
-        let mut node_ids: Vec<Identifier<'n, N>> = vec![];
         let mut is_valid = true;
 
         while let Some(item) = self.visit_stack.pop() {
             match item {
                 VisitRecord::EnterMark(down_index) => {
                     if can_normalize {
-                        node_ids.sort_by_key(|i| i.hash);
+                        self.node_ids.sort_by_key(|i| i.hash);
                     }
-                    let node_id = node_ids
-                        .into_iter()
+                    let node_id = self
+                        .node_ids
+                        .drain(..)
                         .fold(None, |accum, item| Some(item.combine(accum)));
                     return (down_index, node_id, is_valid);
                 }
                 VisitRecord::NodeItem(sub_node_id, sub_node_is_valid) => {
-                    node_ids.push(sub_node_id);
+                    self.node_ids.push(sub_node_id);
                     is_valid &= sub_node_is_valid;
                 }
             }
@@ -363,14 +369,21 @@ where
             // If we are already in a node that can short-circuit then start new
             // traversals on its normal conditional children.
             match C::conditional_children(node) {
-                Some((normal, conditional)) => {
-                    normal
+                Some((_normal, conditional)) => {
+                    // Visit the children in tree order, whatever order the
+                    // controller lists them in. `CSERewriter` reads `id_array` in
+                    // pre-order, so the indexes that this visitor assigns must
+                    // follow the same order.
+                    let conditional = conditional
                         .into_iter()
-                        .try_for_each(|n| n.visit(self).map(|_| ()))?;
-                    self.conditional = true;
-                    conditional
-                        .into_iter()
-                        .try_for_each(|n| n.visit(self).map(|_| ()))?;
+                        .map(std::ptr::from_ref)
+                        .collect::<HashSet<_>>();
+                    node.apply_children(|child| {
+                        self.conditional =
+                            conditional.contains(&std::ptr::from_ref(child));
+                        child.visit(self)?;
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
                     self.conditional = false;
 
                     TreeNodeRecursion::Jump
@@ -541,6 +554,7 @@ where
             node_stats,
             id_array,
             visit_stack: vec![],
+            node_ids: vec![],
             down_index: 0,
             up_index: 0,
             random_state: &self.random_state,
@@ -808,7 +822,7 @@ mod test {
         ) -> HashSet<u64> {
             id_array
                 .iter_mut()
-                .flat_map(|(_, id_option)| {
+                .filter_map(|(_, id_option)| {
                     id_option.as_mut().map(|node_id| {
                         let hash = node_id.hash;
                         node_id.hash = 0;

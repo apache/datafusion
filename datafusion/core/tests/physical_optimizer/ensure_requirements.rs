@@ -21,9 +21,18 @@
 //! so the tests live alongside the rest of the `physical_optimizer/` integration
 //! suite and can use real `ExecutionPlan`s where convenient.
 
+use insta::assert_snapshot;
+
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+use datafusion_physical_optimizer::ensure_requirements::enforce_sorting::{
+    PlanWithCorrespondingCoalescePartitions, parallelize_sorts,
+};
+use datafusion_physical_optimizer::ensure_requirements::enforce_sorting::sort_pushdown::{
+    SortPushDown, assign_initial_requirements, pushdown_sorts,
+};
 
 use std::sync::Arc;
 
@@ -35,12 +44,13 @@ use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::limit::GlobalLimitExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream,
 };
 
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
@@ -65,6 +75,19 @@ struct MockMultiPartitionExec {
 
 impl MockMultiPartitionExec {
     fn new(partition_count: usize) -> Self {
+        Self::with_partitioning(Partitioning::UnknownPartitioning(partition_count))
+    }
+
+    /// A source that is already partitioned on `a`, as an aggregate or a partitioned
+    /// join below the node under test would be.
+    fn hash_partitioned_on_a(partition_count: usize) -> Self {
+        Self::with_partitioning(Partitioning::Hash(
+            vec![Arc::new(Column::new("a", 0))],
+            partition_count,
+        ))
+    }
+
+    fn with_partitioning(partitioning: Partitioning) -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
@@ -81,7 +104,7 @@ impl MockMultiPartitionExec {
         }
         let properties = PlanProperties::new(
             eq,
-            Partitioning::UnknownPartitioning(partition_count),
+            partitioning,
             EmissionType::Incremental,
             Boundedness::Bounded,
         );
@@ -111,12 +134,32 @@ impl ExecutionPlan for MockMultiPartitionExec {
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
-    fn with_new_children(
+
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn execute(
         &self,
         _partition: usize,
@@ -795,6 +838,102 @@ fn test_idempotent_sort_aggregate_sort_aggregate() {
     assert_idempotent(limit);
 }
 
+/// Verifies the safe fallback for an already ordered, multi-partition plan that
+/// can neither retain a fetch nor pass it to its children. The fetch must stay
+/// above that plan in a `LocalLimitExec`, retain the ordering needed by the
+/// merge, and produce exactly the same plan on the next optimizer pass.
+///
+/// This prevents a late fallback from creating a temporary plan shape that
+/// `EnsureRequirements` rewrites when applied again.
+#[test]
+fn test_fetch_fallback_is_stable() {
+    let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(4));
+    let union = UnionExec::try_new(vec![Arc::clone(&source), source]).unwrap();
+    let ordering = sort_expr_on("a", 0, false, false);
+    let sort: Arc<dyn ExecutionPlan> = Arc::new(
+        SortExec::new(ordering.clone(), union)
+            .with_fetch(Some(10))
+            .with_preserve_partitioning(true),
+    );
+    let merge: Arc<dyn ExecutionPlan> = Arc::new(
+        SortPreservingMergeExec::new(ordering.clone(), sort).with_fetch(Some(10)),
+    );
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
+        merge,
+        Some(OrderingRequirements::from(ordering.clone())),
+        Distribution::SinglePartition,
+        Some(10),
+    ));
+
+    // Exercise sort pushdown directly so the earlier sort-cleanup phase does
+    // not canonicalize the redundant TopK before it reaches this fallback.
+    let mut sort_push_down = SortPushDown::new_default(plan);
+    assign_initial_requirements(&mut sort_push_down);
+    let pushed_down = pushdown_sorts(sort_push_down).unwrap().plan;
+
+    // This fallback runs at the end of EnsureRequirements, so its output must
+    // already be stable when the complete rule runs again.
+    let next_pass = optimize_and_sanity_check(Arc::clone(&pushed_down)).unwrap();
+
+    let output_children = pushed_down.children();
+    let merge_children = output_children[0].children();
+    let limit = merge_children[0]
+        .downcast_ref::<LocalLimitExec>()
+        .expect("the fetch should be carried by a local limit");
+    assert_eq!(limit.required_ordering(), &Some(ordering));
+
+    let pushed_down = plan_string(&pushed_down);
+    let next_pass = plan_string(&next_pass);
+    assert_snapshot!(pushed_down, @r"
+    OutputRequirementExec: order_by=[(a@0, asc)], dist_by=SinglePartition
+      SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=10
+        LocalLimitExec: fetch=10
+          UnionExec
+            MockMultiPartitionExec
+            MockMultiPartitionExec
+    ");
+    assert_eq!(pushed_down, next_pass);
+}
+
+/// Verifies the complementary safe path. Before it has a fetch, a
+/// `SortPreservingMergeExec` returns one row per input row, so it may take the
+/// parent TopK fetch and forward that fetch to its input sort. Safety must be
+/// decided before adding the fetch, which changes the merge's cardinality.
+#[test]
+fn test_unfetched_spm_absorbs_and_forwards_fetch() {
+    let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(4));
+    let ordering = sort_expr_on("a", 0, true, false);
+    let sort: Arc<dyn ExecutionPlan> = Arc::new(
+        SortExec::new(ordering.clone(), source).with_preserve_partitioning(true),
+    );
+    let merge: Arc<dyn ExecutionPlan> =
+        Arc::new(SortPreservingMergeExec::new(ordering.clone(), sort));
+    let topk: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(ordering, merge).with_fetch(Some(10)));
+
+    let mut sort_push_down = SortPushDown::new_default(topk);
+    assign_initial_requirements(&mut sort_push_down);
+    let optimized = pushdown_sorts(sort_push_down).unwrap().plan;
+
+    let merge = optimized
+        .downcast_ref::<SortPreservingMergeExec>()
+        .expect("the merge should retain the fetch");
+    assert_eq!(merge.fetch(), Some(10));
+    let sort = merge
+        .input()
+        .downcast_ref::<SortExec>()
+        .expect("the fetch should be pushed to the input sort");
+    assert_eq!(sort.fetch(), Some(10));
+
+    // The merge retains the global fetch while the input sort retains the
+    // per-partition TopK optimization.
+    assert_snapshot!(plan_string(&optimized), @r"
+    SortPreservingMergeExec: [a@0 DESC NULLS LAST], fetch=10
+      SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[true]
+        MockMultiPartitionExec
+    ");
+}
+
 /// Stress test: idempotency with ALL partition counts from 1 to 64
 #[test]
 fn test_idempotent_all_partition_counts_1_to_64() {
@@ -974,6 +1113,12 @@ impl ExecutionPlan for MockReqExec {
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
     fn input_distribution_requirements(
         &self,
     ) -> datafusion_physical_plan::InputDistributionRequirements {
@@ -991,16 +1136,26 @@ impl ExecutionPlan for MockReqExec {
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
     }
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        mut c: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert_eq!(c.len(), 1);
+        assert_eq!(children.len(), 1);
         Ok(Arc::new(MockReqExec::new(
-            c.pop().expect("1 child"),
+            children.pop().expect("1 child"),
             self.dist.clone(),
             self.ord.clone(),
         )))
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
     fn execute(
         &self,
@@ -1251,4 +1406,157 @@ fn test_idempotent_union_projection_sort() {
     let plan: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
 
     assert_idempotent(plan);
+}
+
+/// Builds the plan shape that phase 3a (`parallelize_sorts`) sees in the reproducer,
+/// i.e. the output of the distribution + sorting phases, not a freshly planned tree:
+///
+/// ```text
+/// CoalescePartitionsExec                 <- the node `parallelize_sorts` rewrites
+///   HashJoinExec: mode=CollectLeft
+///     CoalescePartitionsExec             <- satisfies `SinglePartition` on the build side
+///       <build>
+///     RepartitionExec: RoundRobinBatch
+///       CoalescePartitionsExec           <- links the join into the coalesce cascade
+///         MockMultiPartitionExec
+/// ```
+///
+/// Both coalesces below the join matter. The probe-side one is what makes
+/// `update_coalesce_ctx_children` mark the join as connected — it only skips children that
+/// require `SinglePartition`, and the probe side does not — so the walk descends into the
+/// join. The build-side one is the one that must survive.
+fn collect_left_plan_before_parallelize_sorts(
+    build: Arc<dyn ExecutionPlan>,
+    join_type: JoinType,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let build: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(build));
+    let probe: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        Arc::new(CoalescePartitionsExec::new(Arc::new(
+            MockMultiPartitionExec::new(4),
+        ))),
+        Partitioning::RoundRobinBatch(TEST_TARGET_PARTITIONS),
+    )?);
+
+    let on = vec![(
+        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+    )];
+    let join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+        build,
+        probe,
+        on,
+        None,
+        &join_type,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?);
+
+    Ok(Arc::new(CoalescePartitionsExec::new(join)))
+}
+
+/// Runs phase 3a of `EnsureRequirements` (`parallelize_sorts`) on its own, the same way
+/// the rule drives it, and checks the result with `SanityCheckPlan`.
+///
+/// The phase is driven directly rather than through `EnsureRequirements::optimize` because
+/// the earlier phases would rebuild the plan shape above into something that never reaches
+/// the code path under test.
+fn parallelize_sorts_and_sanity_check(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let ctx = PlanWithCorrespondingCoalescePartitions::new_default(plan);
+    let rewritten = ctx.transform_up(parallelize_sorts).data()?.plan;
+    SanityCheckPlan::new().optimize(Arc::clone(&rewritten), &test_config())?;
+    Ok(rewritten)
+}
+
+/// A `CollectLeft` `HashJoinExec` requires `Distribution::SinglePartition` on its build
+/// (left) child, so the distribution phase puts a `CoalescePartitionsExec` on top of a
+/// multi-partition build side. The sort-parallelization phase must not take that coalesce
+/// back out again.
+///
+/// It used to, because `remove_bottleneck_in_subplan` removed a coalesce found at
+/// `children[0]` positionally, without consulting the parent's distribution requirement for
+/// that child. The result was a build side left multi-partition with nothing to re-enforce
+/// distribution afterwards, which `SanityCheckPlan` rejected with "does not satisfy
+/// distribution requirements: SinglePartition".
+#[test]
+fn test_collect_left_join_keeps_build_side_coalesce() -> Result<()> {
+    let plan = collect_left_plan_before_parallelize_sorts(
+        Arc::new(MockMultiPartitionExec::new(4)),
+        JoinType::Left,
+    )?;
+
+    let rewritten = parallelize_sorts_and_sanity_check(plan)?;
+
+    // The build-side coalesce is retained; the probe-side one is still removed, which is
+    // the parallelization this phase exists for.
+    assert_snapshot!(plan_string(&rewritten), @r"
+    CoalescePartitionsExec
+      HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@0)]
+        CoalescePartitionsExec
+          MockMultiPartitionExec
+        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+          MockMultiPartitionExec
+    ");
+
+    Ok(())
+}
+
+/// The same removal, with a build side that is already hash-partitioned on the join key
+/// rather than `UnknownPartitioning`. This is the shape a `JoinSelection` input swap leaves
+/// behind (a `CollectLeft` join reported as `join_type=Right`) when the build subtree is the
+/// output of an aggregate or a partitioned join: the build side satisfies the join's *hash*
+/// requirement but still not `SinglePartition`, so the coalesce is just as load-bearing.
+#[test]
+fn test_collect_left_join_keeps_hash_partitioned_build_side_coalesce() -> Result<()> {
+    let plan = collect_left_plan_before_parallelize_sorts(
+        Arc::new(MockMultiPartitionExec::hash_partitioned_on_a(
+            TEST_TARGET_PARTITIONS,
+        )),
+        JoinType::Right,
+    )?;
+
+    let rewritten = parallelize_sorts_and_sanity_check(plan)?;
+
+    assert_snapshot!(plan_string(&rewritten), @r"
+    CoalescePartitionsExec
+      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, a@0)]
+        CoalescePartitionsExec
+          MockMultiPartitionExec
+        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+          MockMultiPartitionExec
+    ");
+
+    Ok(())
+}
+
+// ========================================================================
+// Limits with a `skip`
+// ========================================================================
+
+/// A sort pushed below `GlobalLimitExec` with a non-zero `skip` must ask its
+/// input for `skip + fetch` rows; asking for only `fetch` rows used to leave
+/// `LIMIT 10 OFFSET 5` with 5 result rows.
+///
+/// This checks a single pass only: the sort is inserted by `pushdown_sorts`,
+/// which runs after `parallelize_sorts`, so a second pass would additionally
+/// parallelize it into `SortPreservingMergeExec` + partitioned `SortExec`.
+#[test]
+fn test_sort_pushed_below_limit_with_skip_keeps_skip_rows() -> Result<()> {
+    let source = Arc::new(MockMultiPartitionExec::new(4));
+    let coalesce = Arc::new(CoalescePartitionsExec::new(source));
+    let limit = Arc::new(GlobalLimitExec::new(coalesce, 5, Some(10)));
+    let sort: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(sort_expr_on("a", 0, true, true), limit));
+
+    let optimized = optimize_and_sanity_check(sort)?;
+    assert_snapshot!(plan_string(&optimized), @r"
+    GlobalLimitExec: skip=5, fetch=10
+      SortExec: TopK(fetch=15), expr=[a@0 DESC], preserve_partitioning=[false]
+        CoalescePartitionsExec
+          MockMultiPartitionExec
+    ");
+    Ok(())
 }

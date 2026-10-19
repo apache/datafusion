@@ -21,6 +21,7 @@ mod distinct_count_string_fuzz;
 #[expect(clippy::needless_pass_by_value)]
 mod join_fuzz;
 mod merge_fuzz;
+mod null_aware_join_fuzz;
 #[expect(clippy::needless_pass_by_value)]
 mod sort_fuzz;
 #[expect(clippy::needless_pass_by_value)]
@@ -33,6 +34,7 @@ mod equivalence;
 
 mod pruning;
 
+mod leaf_pushdown_fuzz;
 mod limit_fuzz;
 #[expect(clippy::needless_pass_by_value)]
 mod sort_preserving_repartition_fuzz;
@@ -41,4 +43,5 @@ mod window_fuzz;
 // Utility modules
 mod once_exec;
 mod record_batch_generator;
+mod scalar_value_fuzz;
 mod spilling_fuzz_in_memory_constrained_env;

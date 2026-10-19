@@ -20,7 +20,8 @@
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-use crate::{ExecutionPlan, displayable, with_new_children_if_necessary};
+use crate::execution_plan::replace_children_if_necessary;
+use crate::{ExecutionPlan, displayable};
 
 use datafusion_common::Result;
 use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode};
@@ -35,7 +36,7 @@ impl DynTreeNode for dyn ExecutionPlan {
         arc_self: Arc<Self>,
         new_children: Vec<Arc<Self>>,
     ) -> Result<Arc<Self>> {
-        with_new_children_if_necessary(arc_self, new_children)
+        replace_children_if_necessary(arc_self, new_children)
     }
 }
 
@@ -73,7 +74,7 @@ impl<T> PlanContext<T> {
     /// if the `PlanContext.children` have been changed.
     pub fn update_plan_from_children(mut self) -> Result<Self> {
         let children_plans = self.children.iter().map(|c| Arc::clone(&c.plan)).collect();
-        self.plan = with_new_children_if_necessary(self.plan, children_plans)?;
+        self.plan = replace_children_if_necessary(self.plan, children_plans)?;
 
         Ok(self)
     }

@@ -19,13 +19,14 @@ use crate::coalesce::LimitedBatchCoalescer;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    check_if_same_properties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, ReplaceChildrenOptions,
+    validate_child_count,
 };
 use arrow::array::RecordBatch;
 use arrow_schema::{FieldRef, Fields, Schema, SchemaRef};
+use datafusion_common::Result;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
@@ -106,6 +107,10 @@ impl AsyncFuncExec {
         ))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `AsyncFuncExec` serializes itself via `AsyncFuncExec::try_to_proto`, which reads the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn async_exprs(&self) -> &[Arc<AsyncFuncExpr>] {
         &self.async_exprs
     }
@@ -153,31 +158,56 @@ impl ExecutionPlan for AsyncFuncExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        crate::apply_expression_roots(
+            self.async_exprs
+                .iter()
+                .cloned()
+                .map(|expr| expr as Arc<dyn PhysicalExpr>),
+            f,
+        )
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert_eq_or_internal_err!(
-            children.len(),
-            1,
-            "AsyncFuncExec wrong number of children"
-        );
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(AsyncFuncExec::try_new(
-            self.async_exprs.clone(),
-            children.swap_remove(0),
-        )?))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(AsyncFuncExec::try_new(
+                self.async_exprs.clone(),
+                children.swap_remove(0),
+            )?)),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -253,14 +283,22 @@ impl ExecutionPlan for AsyncFuncExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let async_exprs =
-            ctx.encode_expressions(self.async_exprs.iter().map(|e| &e.func))?;
-        let async_expr_names = self
-            .async_exprs
-            .iter()
-            .map(|e| e.name().to_string())
-            .collect();
+
+        // Exhaustive destructure: adding a field to `AsyncFuncExec` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            async_exprs,
+            input,
+            // Derived at construction by `AsyncFuncExec::compute_properties`.
+            cache: _,
+            // Runtime execution state, rebuilt empty on decode.
+            metrics: _,
+        } = self;
+
+        let input = ctx.encode_child(input)?;
+        let async_expr_names = async_exprs.iter().map(|e| e.name().to_string()).collect();
+        let async_exprs = ctx.encode_expressions(async_exprs.iter().map(|e| &e.func))?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::AsyncFunc(Box::new(
@@ -291,27 +329,32 @@ impl AsyncFuncExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::assert_eq_or_internal_err;
         use datafusion_proto_models::protobuf;
         let async_func = crate::expect_plan_variant!(
             node,
             protobuf::physical_plan_node::PhysicalPlanType::AsyncFunc,
             "AsyncFuncExec",
         );
-        let input = ctx.decode_required_child(
-            async_func.input.as_deref(),
-            "AsyncFuncExec",
-            "input",
-        )?;
+        // Exhaustive destructure: a new field on `AsyncFuncExecNode` is a
+        // compile error here rather than a silently ignored wire field.
+        let protobuf::AsyncFuncExecNode {
+            input,
+            async_exprs,
+            async_expr_names,
+        } = async_func.as_ref();
+
+        let input =
+            ctx.decode_required_child(input.as_deref(), "AsyncFuncExec", "input")?;
         let input_schema = input.schema();
         assert_eq_or_internal_err!(
-            async_func.async_exprs.len(),
-            async_func.async_expr_names.len(),
+            async_exprs.len(),
+            async_expr_names.len(),
             "AsyncFuncExecNode async_exprs length does not match async_expr_names"
         );
-        let async_exprs = async_func
-            .async_exprs
+        let async_exprs = async_exprs
             .iter()
-            .zip(async_func.async_expr_names.iter())
+            .zip(async_expr_names.iter())
             .map(|(expr, name)| {
                 let physical_expr = ctx.decode_expr(expr, input_schema.as_ref())?;
                 Ok(Arc::new(AsyncFuncExpr::try_new(

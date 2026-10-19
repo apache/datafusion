@@ -40,7 +40,7 @@ pub fn accept<V: ExecutionPlanVisitor>(
 /// after all children have been visited.
 ///
 /// To use, define a struct that implements this trait and then invoke
-/// ['accept'].
+/// [`accept`].
 ///
 /// For example, for an execution plan that looks like:
 ///

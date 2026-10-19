@@ -1,0 +1,15 @@
+# RANK top-2 per partition, mirroring the ROW_NUMBER sweep above. RANK retains
+# boundary ties, so `WHERE rnk <= 2` can keep more than 2 rows per partition and
+# the operator has to track the tied set rather than a fixed row count. `v2` is
+# near-unique, so these four measure RANK with the tie machinery idle; q09-q10
+# drive it.
+
+subgroup window_sorted
+
+template sql_benchmarks/h2o/window_sorted.benchmark.template
+QPAD=05
+FN=RANK
+PK_MOD=100
+OB_EXPR=v2
+OB_BOUND=count(DISTINCT ob) > 1000
+NAME=window_sorted_q05_rank_100_partitions

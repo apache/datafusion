@@ -17,6 +17,7 @@
 
 //! The syntax highlighter.
 
+use std::fmt::Write as _;
 use std::{
     borrow::Cow::{self, Borrowed},
     fmt::Display,
@@ -66,7 +67,9 @@ impl Highlighter for SyntaxHighlighter {
                         Token::SingleQuotedString(_) => {
                             out_line.push_str(&Color::green(token));
                         }
-                        other => out_line.push_str(&format!("{other}")),
+                        other => {
+                            write!(out_line, "{other}").ok();
+                        }
                     }
                 }
                 out_line.into()
