@@ -24,9 +24,9 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::{create_hashes, with_hashes};
-use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
@@ -251,7 +251,9 @@ impl HashExpr {
         let Some(protobuf::physical_expr_node::ExprType::HashExpr(hash_expr)) =
             &node.expr_type
         else {
-            return internal_err!("PhysicalExprNode is not a HashExpr");
+            return datafusion_common::internal_err!(
+                "PhysicalExprNode is not a HashExpr"
+            );
         };
         // Destructure exhaustively (no `..`) so that a newly added proto field
         // is a compile error here instead of being silently ignored.
@@ -653,7 +655,9 @@ mod tests {
                     Some(protobuf::physical_expr_node::ExprType::Column(_)) => {
                         Column::try_from_proto(node, &ctx)
                     }
-                    _ => internal_err!("test decoder cannot decode {node:?}"),
+                    _ => datafusion_common::internal_err!(
+                        "test decoder cannot decode {node:?}"
+                    ),
                 }
             }
         }

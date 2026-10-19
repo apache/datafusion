@@ -32,7 +32,7 @@ use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
 use crate::joins::join_hash_map::union_hash_maps;
-use crate::joins::key_range_bitmap::KeyRangeBitmap;
+use crate::joins::key_range_bitmap::{KeyRangeBitmap, KeyRangePart};
 use crate::repartition::RangeExpr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -688,8 +688,9 @@ impl SharedBuildAccumulator {
         let mut empty_partition_ids = Vec::new();
         let mut has_canceled_unknown = false;
         let mut keys_have_null = false;
-        // Every non-empty partition's hash table, merged into one membership
-        // lookup below; `None` once a partition's build side cannot be merged.
+        // Every non-empty partition's hash table, pruning bitmap, and bounds,
+        // merged into one membership lookup below; `None` once a partition's
+        // build side cannot be merged.
         let mut hash_maps = Some(Vec::with_capacity(partitions.len()));
         let mut merged_bounds: Option<PartitionBounds> = None;
 
@@ -710,10 +711,14 @@ impl SharedBuildAccumulator {
                     real_partition_ids.push(partition_id);
                     keys_have_null |= partition_keys_have_null;
                     hash_maps = match (&pushdown, hash_maps) {
-                        (PushdownStrategy::Map(map, _), Some(mut hash_maps))
+                        (PushdownStrategy::Map(map, bitmap), Some(mut hash_maps))
                             if matches!(map.as_ref(), Map::HashMap(_)) =>
                         {
-                            hash_maps.push(Arc::clone(map));
+                            hash_maps.push((
+                                Arc::clone(map),
+                                bitmap.clone(),
+                                bounds.clone(),
+                            ));
                             Some(hash_maps)
                         }
                         _ => None,
@@ -777,18 +782,44 @@ impl SharedBuildAccumulator {
             // a routing hash nor a CASE over per-partition filters.
             let tables = hash_maps
                 .iter()
-                .filter_map(|map| match map.as_ref() {
+                .filter_map(|(map, _, _)| match map.as_ref() {
                     Map::HashMap(table) => Some(table.as_ref()),
                     Map::ArrayMap(_) => None,
                 })
                 .collect::<Vec<_>>();
             let union = Arc::new(Map::HashMap(union_hash_maps(&tables)));
+            // Container pruning reads one bitmap, so merge the partitions' bitmaps.
+            // A partition without one may hold a key anywhere in its bounds. Not
+            // worth building when no partition has a bitmap to contribute gaps.
+            let pruning_bitmap = merged_bounds
+                .as_ref()
+                .and_then(|merged| merged.get_column_bounds(0))
+                .filter(|_| {
+                    self.on_right.len() == 1
+                        && hash_maps.iter().any(|(_, bitmap, _)| bitmap.is_some())
+                })
+                .and_then(|merged| {
+                    let parts = hash_maps
+                        .iter()
+                        .map(|(_, bitmap, bounds)| match bitmap {
+                            Some(bitmap) => Some(KeyRangePart::Bitmap(bitmap)),
+                            None => bounds.get_column_bounds(0).map(|bounds| {
+                                KeyRangePart::Range {
+                                    min: &bounds.min,
+                                    max: &bounds.max,
+                                }
+                            }),
+                        })
+                        .collect::<Option<Vec<_>>>()?;
+                    KeyRangeBitmap::union(&merged.min, &merged.max, &parts)
+                })
+                .map(Arc::new);
             let membership = Arc::new(HashTableLookupExpr::new(
                 self.on_right.clone(),
                 HASH_JOIN_SEED,
                 union,
                 String::from("hash_lookup"),
-                None,
+                pruning_bitmap,
             )) as Arc<dyn PhysicalExpr>;
             let bounds = merged_bounds
                 .and_then(|bounds| create_bounds_predicate(&self.on_right, &bounds));

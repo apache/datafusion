@@ -28,6 +28,17 @@ use crate::joins::array_map::ArrayMap;
 /// Largest bitmap, in bits (128 KiB), which bounds what one build side can hold.
 const MAX_BUCKETS: u64 = 1 << 20;
 
+/// One build partition's contribution to [`KeyRangeBitmap::union`].
+pub(crate) enum KeyRangePart<'a> {
+    /// The partition's own bitmap.
+    Bitmap(&'a KeyRangeBitmap),
+    /// The partition has no bitmap, so any key in `[min, max]` may be present.
+    Range {
+        min: &'a ScalarValue,
+        max: &'a ScalarValue,
+    },
+}
+
 /// Which parts of a build side's key range hold at least one key.
 ///
 /// Keys map order-preservingly onto buckets spanning `[min, max]`, one bit each,
@@ -92,6 +103,61 @@ impl KeyRangeBitmap {
         let bits = bucket_bits(array, offset, shift, buckets);
 
         // Every bucket set means nothing can be excluded.
+        let reachable = ((span >> shift) + 1) as usize;
+        bits.slice(0, reachable).has_false().then_some(Self {
+            offset,
+            span,
+            shift,
+            bits,
+        })
+    }
+
+    /// One bitmap over `[min, max]` marking every bucket that any of `parts`
+    /// may hold a key in. `[min, max]` must cover every part.
+    ///
+    /// Coarser than the parts' own bitmaps where its buckets are wider, but
+    /// never clears a bucket a part may hold a key in. `None` when the key
+    /// type has no `u64` ordering, or when nothing can be excluded.
+    pub(crate) fn union(
+        min: &ScalarValue,
+        max: &ScalarValue,
+        parts: &[KeyRangePart<'_>],
+    ) -> Option<Self> {
+        let offset = ArrayMap::key_to_u64(min)?;
+        let span = ArrayMap::key_to_u64(max)?.wrapping_sub(offset);
+        let buckets = span.saturating_add(1).min(MAX_BUCKETS).next_power_of_two();
+        let shift = (0u32..63).find(|s| (span >> s) < buckets).unwrap_or(63);
+
+        let mut words = MutableBuffer::new_null(buckets as usize);
+        let bytes = words.as_slice_mut();
+        // Sets the buckets covering keys `lo..=hi`, given as offsets from `offset`.
+        let mut set_range = |lo: u64, hi: u64| {
+            for bucket in (lo >> shift)..=(hi.min(span) >> shift) {
+                bit_util::set_bit(bytes, bucket as usize);
+            }
+        };
+        for part in parts {
+            match part {
+                KeyRangePart::Bitmap(part) => {
+                    // Every key below `part.offset` is outside `[min, max]`, so
+                    // this wrapping distance is the part's true position.
+                    let base = part.offset.wrapping_sub(offset);
+                    let width = (1u64 << part.shift) - 1;
+                    for bucket in part.bits.set_indices() {
+                        let lo = (bucket as u64) << part.shift;
+                        let hi = lo.saturating_add(width).min(part.span);
+                        set_range(base + lo, base + hi);
+                    }
+                }
+                KeyRangePart::Range { min, max } => {
+                    let lo = ArrayMap::key_to_u64(min)?.wrapping_sub(offset);
+                    let hi = ArrayMap::key_to_u64(max)?.wrapping_sub(offset);
+                    set_range(lo, hi);
+                }
+            }
+        }
+
+        let bits = BooleanBuffer::new(words.into(), 0, buckets as usize);
         let reachable = ((span >> shift) + 1) as usize;
         bits.slice(0, reachable).has_false().then_some(Self {
             offset,
@@ -212,6 +278,49 @@ mod tests {
             kept += got as usize;
         }
         assert!(kept <= 220, "expected ~200 kept, got {kept}");
+    }
+
+    /// Partitions spanning negative and positive keys, one without a bitmap:
+    /// the union must keep every container holding a key of any partition, and
+    /// still prune the gaps no partition covers.
+    #[test]
+    fn union_never_drops_a_partition_key() {
+        let clustered: Vec<i64> = (-1_000_000..-999_000).chain(0..1000).collect();
+        let sparse: Vec<i64> = (0..400).map(|i| 500_000 + 1000 * i).collect();
+        let dense = (-200_000i64, -190_000i64);
+        let a = bitmap(&clustered).expect("not saturated");
+        let b = bitmap(&sparse).expect("not saturated");
+        let (min, max) = (
+            ScalarValue::Int64(Some(-1_000_000)),
+            ScalarValue::Int64(Some(899_000)),
+        );
+        let (dense_min, dense_max) = (
+            ScalarValue::Int64(Some(dense.0)),
+            ScalarValue::Int64(Some(dense.1)),
+        );
+        let union = KeyRangeBitmap::union(
+            &min,
+            &max,
+            &[
+                KeyRangePart::Bitmap(&a),
+                KeyRangePart::Bitmap(&b),
+                KeyRangePart::Range {
+                    min: &dense_min,
+                    max: &dense_max,
+                },
+            ],
+        )
+        .expect("not saturated");
+
+        for key in clustered
+            .iter()
+            .chain(&sparse)
+            .chain(&[dense.0, -195_000, dense.1])
+        {
+            assert!(may(&union, *key, *key), "dropped key {key}");
+        }
+        assert!(!may(&union, -900_000, -800_000));
+        assert!(!may(&union, 100_000, 400_000));
     }
 
     #[test]
