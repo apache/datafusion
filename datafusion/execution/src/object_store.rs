@@ -278,8 +278,9 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 }
 
-/// Format only the scheme, host, and port for diagnostics. Registry keys may
-/// include userinfo (for example, an ABFS container), so do not reuse them here.
+/// Format only the scheme, host, and port for diagnostics. Keep this redaction
+/// policy independent of registry identity, even though [`get_url_key`] currently
+/// removes userinfo for every scheme, including ABFS/ABFSS.
 fn diagnostic_url(url: &Url) -> String {
     format!(
         "{}://{}",
@@ -394,9 +395,9 @@ mod tests {
     fn test_registry_errors_redact_userinfo_and_query() {
         let registry = DefaultObjectStoreRegistry::new();
         for url in [
-            "s3://u%40ser:p%40ss@host:123/path?token=secret#fragment",
-            "abfs://container@account.dfs.core.windows.net/path?token=secret",
-            "abfss://container@account.dfs.core.windows.net/path?token=secret",
+            "s3://u%40ser:p%40ss@host:123/private-object-path?token=secret#fragment",
+            "abfs://container@account.dfs.core.windows.net/private-object-path?token=secret",
+            "abfss://container@account.dfs.core.windows.net/private-object-path?token=secret",
         ] {
             let url = Url::parse(url).unwrap();
             let expected = format!(
@@ -407,9 +408,14 @@ mod tests {
             for err in [registry.get_store(&url), registry.deregister_store(&url)] {
                 let message = err.err().unwrap().strip_backtrace();
                 assert!(message.contains(&expected), "{message}");
-                for secret in
-                    ["u%40ser", "p%40ss", "container", "token=secret", "fragment"]
-                {
+                for secret in [
+                    "u%40ser",
+                    "p%40ss",
+                    "container",
+                    "private-object-path",
+                    "token=secret",
+                    "fragment",
+                ] {
                     assert!(!message.contains(secret), "{message}");
                 }
             }
@@ -419,18 +425,37 @@ mod tests {
     #[test]
     fn test_registry_lookup_preserves_original_url() {
         let registry = DefaultObjectStoreRegistry::new();
-        let url =
-            Url::parse("abfss://container@account.dfs.core.windows.net/path").unwrap();
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        registry.register_store(&url, Arc::clone(&store));
-        assert!(Arc::ptr_eq(&registry.get_store(&url).unwrap(), &store));
-        assert_eq!(url.username(), "container");
+        for scheme in ["s3", "abfs", "abfss"] {
+            let url = Url::parse(&format!(
+                "{scheme}://container:password@host:123/path?token=secret#fragment"
+            ))
+            .unwrap();
+            let same_key_url = Url::parse(&format!(
+                "{scheme}://other:changed@host:123/other-path?token=changed#other-fragment"
+            ))
+            .unwrap();
+            let original_url = url.as_str().to_string();
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            registry.register_store(&url, Arc::clone(&store));
+            assert!(Arc::ptr_eq(&registry.get_store(&url).unwrap(), &store));
+            assert!(Arc::ptr_eq(
+                &registry.get_store(&same_key_url).unwrap(),
+                &store
+            ));
+            assert!(Arc::ptr_eq(
+                &registry.deregister_store(&same_key_url).unwrap(),
+                &store
+            ));
+            assert!(registry.get_store(&url).is_err());
+            assert_eq!(url.as_str(), original_url);
+        }
     }
 
     #[test]
     fn test_registry_debug_redacts_userinfo_in_keys() {
         let registry = DefaultObjectStoreRegistry::new();
-        // Registry keys can include usernames (for example, ABFS containers).
+        // Public registration strips userinfo. Insert a private key directly to
+        // verify Debug's defensive redaction independently of key construction.
         registry.object_stores.insert(
             "abfss://container@account.dfs.core.windows.net".to_string(),
             Arc::new(InMemory::new()),
