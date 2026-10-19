@@ -942,23 +942,23 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             reorder_filters: value.reorder_filters,
             force_filter_selections: value.force_filter_selections,
             data_pagesize_limit: value.data_pagesize_limit as u64,
-            write_batch_size: value.write_batch_size as u64,
+            write_batch_size: value.write_batch_size.get() as u64,
             writer_version: value.writer_version.to_string(),
             compression_opt: value.compression.map(|v| protobuf::parquet_options::CompressionOpt::Compression(v.to_string())),
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
             statistics_enabled_opt: value.statistics_enabled.map(|v| protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v.to_string())),
-            max_row_group_size: value.max_row_group_size as u64,
+            max_row_group_size: value.max_row_group_size.get() as u64,
             max_in_list_size: value.max_in_list_size as u64,
             row_group_range_assignment: value.row_group_range_assignment.to_string(),
             created_by: value.created_by.clone(),
-            column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
-            statistics_truncate_length_opt: value.statistics_truncate_length.map(|v| protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v as u64)),
-            data_page_row_count_limit: value.data_page_row_count_limit as u64,
+            column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v.get() as u64)),
+            statistics_truncate_length_opt: value.statistics_truncate_length.map(|v| protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v.get() as u64)),
+            data_page_row_count_limit: value.data_page_row_count_limit.get() as u64,
             encoding_opt: value.encoding.map(|encoding| protobuf::parquet_options::EncodingOpt::Encoding(encoding.to_string())),
             bloom_filter_on_read: value.bloom_filter_on_read,
             bloom_filter_on_write: value.bloom_filter_on_write,
-            bloom_filter_fpp_opt: value.bloom_filter_fpp.map(protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp),
+            bloom_filter_fpp_opt: value.bloom_filter_fpp.map(|v| protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp(v.get())),
             bloom_filter_ndv_opt: value.bloom_filter_ndv.map(protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv),
             allow_single_file_parallelism: value.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as u64,
@@ -981,7 +981,7 @@ impl From<&ParquetCdcOptions> for protobuf::ParquetCdcOptions {
     fn from(value: &ParquetCdcOptions) -> Self {
         protobuf::ParquetCdcOptions {
             enabled: value.enabled,
-            min_chunk_size: value.min_chunk_size as u64,
+            min_chunk_size: value.min_chunk_size.get() as u64,
             max_chunk_size: value.max_chunk_size as u64,
             norm_level: value.norm_level,
         }
@@ -1013,9 +1013,11 @@ impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
             bloom_filter_enabled_opt: value
                 .bloom_filter_enabled
                 .map(protobuf::parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled),
-            bloom_filter_fpp_opt: value
-                .bloom_filter_fpp
-                .map(protobuf::parquet_column_options::BloomFilterFppOpt::BloomFilterFpp),
+            bloom_filter_fpp_opt: value.bloom_filter_fpp.map(|v| {
+                protobuf::parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(
+                    v.get(),
+                )
+            }),
             bloom_filter_ndv_opt: value
                 .bloom_filter_ndv
                 .map(protobuf::parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv),

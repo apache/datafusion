@@ -70,7 +70,7 @@ use datafusion::functions_window::rank::rank_udwf;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
-use datafusion_common::config::TableOptions;
+use datafusion_common::config::{ConfigNonZeroUsize, TableOptions};
 use datafusion_common::format::{
     ExplainAnalyzeCategories, ExplainFormat, MetricCategory, MetricType,
 };
@@ -943,11 +943,11 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     parquet_format.global.bloom_filter_on_read = true;
     parquet_format.global.created_by = "DataFusion Test".to_string();
     parquet_format.global.writer_version = DFParquetWriterVersion::V2_0;
-    parquet_format.global.write_batch_size = 111;
+    parquet_format.global.write_batch_size = ConfigNonZeroUsize::try_new(111)?;
     parquet_format.global.data_pagesize_limit = 222;
-    parquet_format.global.data_page_row_count_limit = 333;
+    parquet_format.global.data_page_row_count_limit = ConfigNonZeroUsize::try_new(333)?;
     parquet_format.global.dictionary_page_size_limit = 444;
-    parquet_format.global.max_row_group_size = 555;
+    parquet_format.global.max_row_group_size = ConfigNonZeroUsize::try_new(555)?;
 
     let file_type = format_as_file_type(Arc::new(
         ParquetFormatFactory::new_with_options(parquet_format),

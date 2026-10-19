@@ -1,0 +1,122 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Parquet writer options that the parquet crate cannot accept are rejected
+# with a configuration error instead of panicking (or hanging) on the next
+# write. See https://github.com/apache/datafusion/issues/24904
+
+statement ok
+set datafusion.catalog.information_schema = true
+
+# Zero is rejected when the option is set
+
+statement error value must be greater than 0
+SET datafusion.execution.parquet.max_row_group_size = 0
+
+statement error value must be greater than 0
+SET datafusion.execution.parquet.write_batch_size = 0
+
+statement error value must be greater than 0
+SET datafusion.execution.parquet.data_page_row_count_limit = 0
+
+statement error value must be greater than 0
+SET datafusion.execution.parquet.column_index_truncate_length = 0
+
+statement error value must be greater than 0
+SET datafusion.execution.parquet.statistics_truncate_length = 0
+
+statement error value must be greater than 0
+SET datafusion.execution.parquet.content_defined_chunking.min_chunk_size = 0
+
+# A rejected value leaves the previous setting in place
+
+query T
+SELECT value FROM information_schema.df_settings WHERE name = 'datafusion.execution.parquet.statistics_truncate_length'
+----
+64
+
+# The false positive probability must be strictly between 0 and 1
+
+statement error bloom_filter_fpp must be between 0 and 1 \(exclusive\), got 1\.5
+SET datafusion.execution.parquet.bloom_filter_fpp = 1.5
+
+statement error bloom_filter_fpp must be between 0 and 1 \(exclusive\), got 0
+SET datafusion.execution.parquet.bloom_filter_fpp = 0
+
+statement error bloom_filter_fpp must be between 0 and 1 \(exclusive\), got 1
+SET datafusion.execution.parquet.bloom_filter_fpp = 1
+
+statement error bloom_filter_fpp must be between 0 and 1 \(exclusive\), got -0\.1
+SET datafusion.execution.parquet.bloom_filter_fpp = -0.1
+
+statement error bloom_filter_fpp must be between 0 and 1 \(exclusive\), got NaN
+SET datafusion.execution.parquet.bloom_filter_fpp = 'NaN'
+
+statement error Invalid bloom_filter_fpp: 'abc'
+SET datafusion.execution.parquet.bloom_filter_fpp = 'abc'
+
+# Valid values are still accepted and used for writing
+
+statement ok
+SET datafusion.execution.parquet.bloom_filter_fpp = 0.05
+
+query T
+SELECT value FROM information_schema.df_settings WHERE name = 'datafusion.execution.parquet.bloom_filter_fpp'
+----
+0.05
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 2
+
+query I
+COPY (VALUES (1), (2), (3)) TO 'test_files/scratch/parquet_writer_options_validation/valid.parquet'
+----
+3
+
+statement ok
+RESET datafusion.execution.parquet.bloom_filter_fpp
+
+statement ok
+RESET datafusion.execution.parquet.max_row_group_size
+
+# The same checks apply to options passed to COPY
+
+statement error value must be greater than 0
+COPY (VALUES (1)) TO 'test_files/scratch/parquet_writer_options_validation/zero_row_group.parquet'
+OPTIONS ('format.max_row_group_size' 0)
+
+statement error bloom_filter_fpp must be between 0 and 1 \(exclusive\), got 1\.5
+COPY (VALUES (1)) TO 'test_files/scratch/parquet_writer_options_validation/global_fpp.parquet'
+OPTIONS ('format.bloom_filter_fpp' 1.5)
+
+statement error bloom_filter_fpp must be between 0 and 1 \(exclusive\), got 1\.5
+COPY (VALUES (1)) TO 'test_files/scratch/parquet_writer_options_validation/column_fpp.parquet'
+OPTIONS ('format.bloom_filter_fpp::column1' 1.5)
+
+# max_chunk_size must be greater than min_chunk_size. Each is valid on its own,
+# so this is checked when the writer is built
+
+statement error content_defined_chunking\.max_chunk_size \(1024\) must be greater than content_defined_chunking\.min_chunk_size \(1024\)
+COPY (VALUES (1)) TO 'test_files/scratch/parquet_writer_options_validation/cdc.parquet'
+OPTIONS (
+  'format.content_defined_chunking.enabled' true,
+  'format.content_defined_chunking.min_chunk_size' 1024,
+  'format.content_defined_chunking.max_chunk_size' 1024
+)
+
+statement ok
+RESET datafusion.catalog.information_schema

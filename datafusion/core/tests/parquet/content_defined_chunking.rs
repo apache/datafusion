@@ -25,7 +25,9 @@ use arrow::array::{AsArray, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
-use datafusion_common::config::{ParquetCdcOptions, TableParquetOptions};
+use datafusion_common::config::{
+    ConfigNonZeroUsize, ParquetCdcOptions, TableParquetOptions,
+};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ArrowReaderMetadata;
 use parquet::file::properties::WriterProperties;
@@ -147,7 +149,7 @@ async fn cdc_affects_page_boundaries() {
     let mut cdc_opts = TableParquetOptions::default();
     cdc_opts.global.content_defined_chunking = ParquetCdcOptions {
         enabled: true,
-        min_chunk_size: 512,
+        min_chunk_size: ConfigNonZeroUsize::try_new(512).unwrap(),
         max_chunk_size: 2048,
         norm_level: 0,
     };

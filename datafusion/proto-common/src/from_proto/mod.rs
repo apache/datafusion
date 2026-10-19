@@ -40,8 +40,8 @@ use datafusion_common::{
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
     arrow_datafusion_err,
     config::{
-        CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
-        ParquetColumnOptions, ParquetOptions, TableParquetOptions,
+        BloomFilterFpp, ConfigNonZeroUsize, CsvOptions, JsonOptions, MaxRowGroupBytes,
+        ParquetCdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
     parquet_config::RowGroupRangeAssignment,
@@ -1180,6 +1180,22 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
     }
 }
 
+/// Decodes a non-optional, must-be-positive `usize` option from the wire.
+///
+/// Proto3 decodes an omitted scalar field as 0, which is never a valid value
+/// for these options, so 0 is read as "absent" and replaced by `default`.
+fn non_zero_usize_from_wire(
+    value: u64,
+    message: &str,
+    field: &str,
+    default: ConfigNonZeroUsize,
+) -> datafusion_common::Result<ConfigNonZeroUsize> {
+    if value == 0 {
+        return Ok(default);
+    }
+    ConfigNonZeroUsize::try_new(usize_from_wire(value, message, field)?)
+}
+
 impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     type Error = DataFusionError;
 
@@ -1188,6 +1204,10 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     ) -> datafusion_common::Result<Self, Self::Error> {
         let to_usize =
             |value: u64, field: &str| usize_from_wire(value, "ParquetOptions", field);
+        let defaults = ParquetOptions::default();
+        let to_non_zero = |value: u64, field: &str, default: ConfigNonZeroUsize| {
+            non_zero_usize_from_wire(value, "ParquetOptions", field, default)
+        };
         Ok(ParquetOptions {
             enable_page_index: value.enable_page_index,
             pruning: value.pruning,
@@ -1207,7 +1227,11 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 value.data_pagesize_limit,
                 "data_pagesize_limit",
             )?,
-            write_batch_size: to_usize(value.write_batch_size, "write_batch_size")?,
+            write_batch_size: to_non_zero(
+                value.write_batch_size,
+                "write_batch_size",
+                defaults.write_batch_size,
+            )?,
             writer_version: value.writer_version.parse().map_err(|e| {
                 DataFusionError::Internal(format!("Failed to parse writer_version: {e}"))
             })?,
@@ -1226,7 +1250,11 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                     protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => v.parse(),
                 })
                 .transpose()?,
-            max_row_group_size: to_usize(value.max_row_group_size, "max_row_group_size")?,
+            max_row_group_size: to_non_zero(
+                value.max_row_group_size,
+                "max_row_group_size",
+                defaults.max_row_group_size,
+            )?,
             max_in_list_size: to_usize(value.max_in_list_size, "max_in_list_size")?,
             row_group_range_assignment: RowGroupRangeAssignment::from_proto_str(
                 &value.row_group_range_assignment,
@@ -1236,7 +1264,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 .column_index_truncate_length_opt.as_ref()
                 .map(|opt| match opt {
                     protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => {
-                        to_usize(*v, "column_index_truncate_length")
+                        ConfigNonZeroUsize::try_new(to_usize(*v, "column_index_truncate_length")?)
                     }
                 })
                 .transpose()?,
@@ -1244,13 +1272,14 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 .statistics_truncate_length_opt.as_ref()
                 .map(|opt| match opt {
                     protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v) => {
-                        to_usize(*v, "statistics_truncate_length")
+                        ConfigNonZeroUsize::try_new(to_usize(*v, "statistics_truncate_length")?)
                     }
                 })
                 .transpose()?,
-            data_page_row_count_limit: to_usize(
+            data_page_row_count_limit: to_non_zero(
                 value.data_page_row_count_limit,
                 "data_page_row_count_limit",
+                defaults.data_page_row_count_limit,
             )?,
             encoding: value
                 .encoding_opt
@@ -1264,9 +1293,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             bloom_filter_fpp: value.clone()
                 .bloom_filter_fpp_opt
                 .map(|opt| match opt {
-                    protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
+                    protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp(v) => BloomFilterFpp::try_new(v),
                 })
-                .unwrap_or(None),
+                .transpose()?,
             bloom_filter_ndv: value.clone()
                 .bloom_filter_ndv_opt
                 .map(|opt| match opt {
@@ -1318,7 +1347,12 @@ impl TryFrom<protobuf::ParquetCdcOptions> for ParquetCdcOptions {
             |value: u64, field: &str| usize_from_wire(value, "ParquetCdcOptions", field);
         Ok(ParquetCdcOptions {
             enabled: value.enabled,
-            min_chunk_size: to_usize(value.min_chunk_size, "min_chunk_size")?,
+            min_chunk_size: non_zero_usize_from_wire(
+                value.min_chunk_size,
+                "ParquetCdcOptions",
+                "min_chunk_size",
+                ParquetCdcOptions::default().min_chunk_size,
+            )?,
             max_chunk_size: to_usize(value.max_chunk_size, "max_chunk_size")?,
             norm_level: value.norm_level,
         })
@@ -1354,9 +1388,9 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
             bloom_filter_fpp: value
                 .bloom_filter_fpp_opt
                 .map(|opt| match opt {
-                    protobuf::parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
+                    protobuf::parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(v) => BloomFilterFpp::try_new(v),
                 })
-                .unwrap_or(None),
+                .transpose()?,
             bloom_filter_ndv: value
                 .bloom_filter_ndv_opt
                 .map(|opt| match opt {
@@ -1452,7 +1486,8 @@ where
 mod tests {
     use datafusion_common::TableReference;
     use datafusion_common::config::{
-        MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
+        ConfigNonZeroUsize, MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions,
+        TableParquetOptions,
     };
     use datafusion_common::parquet_config::{
         DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFTimeUnit,
@@ -1618,6 +1653,39 @@ mod tests {
                 "Error during planning: ParquetOptions: data_pagesize_limit wire value 18446744073709551615 is out of range for usize"
             );
         }
+    }
+
+    #[test]
+    fn parquet_options_read_zero_non_zero_fields_as_absent() {
+        // Proto3 omits zero-valued scalars, so 0 means "not set"
+        let proto = crate::protobuf_common::ParquetOptions {
+            writer_version: "1.0".to_string(),
+            ..Default::default()
+        };
+        let recovered = ParquetOptions::try_from(&proto).unwrap();
+        let defaults = ParquetOptions::default();
+        assert_eq!(recovered.write_batch_size, defaults.write_batch_size);
+        assert_eq!(recovered.max_row_group_size, defaults.max_row_group_size);
+        assert_eq!(
+            recovered.data_page_row_count_limit,
+            defaults.data_page_row_count_limit
+        );
+    }
+
+    #[test]
+    fn parquet_options_reject_explicit_zero_truncate_length() {
+        let proto = crate::protobuf_common::ParquetOptions {
+            writer_version: "1.0".to_string(),
+            statistics_truncate_length_opt: Some(
+                crate::protobuf_common::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(0),
+            ),
+            ..Default::default()
+        };
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Invalid or Unsupported Configuration: value must be greater than 0"
+        );
     }
 
     #[test]
@@ -1846,7 +1914,7 @@ mod tests {
         let opts = ParquetOptions {
             content_defined_chunking: ParquetCdcOptions {
                 enabled: true,
-                min_chunk_size: 128 * 1024,
+                min_chunk_size: ConfigNonZeroUsize::try_new(128 * 1024).unwrap(),
                 max_chunk_size: 512 * 1024,
                 norm_level: 2,
             },
@@ -1855,7 +1923,7 @@ mod tests {
         let recovered = parquet_options_proto_round_trip(opts.clone());
         let cdc = recovered.content_defined_chunking;
         assert!(cdc.enabled);
-        assert_eq!(cdc.min_chunk_size, 128 * 1024);
+        assert_eq!(cdc.min_chunk_size.get(), 128 * 1024);
         assert_eq!(cdc.max_chunk_size, 512 * 1024);
         assert_eq!(cdc.norm_level, 2);
     }
@@ -1879,7 +1947,7 @@ mod tests {
         let mut opts = TableParquetOptions::default();
         opts.global.content_defined_chunking = ParquetCdcOptions {
             enabled: true,
-            min_chunk_size: 64 * 1024,
+            min_chunk_size: ConfigNonZeroUsize::try_new(64 * 1024).unwrap(),
             max_chunk_size: 2 * 1024 * 1024,
             norm_level: -1,
         };
@@ -1887,7 +1955,7 @@ mod tests {
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
         let cdc = recovered.global.content_defined_chunking;
         assert!(cdc.enabled);
-        assert_eq!(cdc.min_chunk_size, 64 * 1024);
+        assert_eq!(cdc.min_chunk_size.get(), 64 * 1024);
         assert_eq!(cdc.max_chunk_size, 2 * 1024 * 1024);
         assert_eq!(cdc.norm_level, -1);
     }

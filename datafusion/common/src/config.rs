@@ -666,6 +666,28 @@ impl Display for ConfigNonZeroUsize {
     }
 }
 
+/// `ConfigField` for `Option<ConfigNonZeroUsize>`. A custom impl (rather than
+/// the blanket `Option<F>` one) so an invalid value is rejected without leaving
+/// the option in an invalid intermediate state on error.
+impl ConfigField for Option<ConfigNonZeroUsize> {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(s) => v.some(key, s, description),
+            None => v.none(key, description),
+        }
+    }
+
+    fn set(&mut self, _key: &str, value: &str) -> Result<()> {
+        *self = Some(ConfigNonZeroUsize::from_str(value)?);
+        Ok(())
+    }
+
+    fn reset(&mut self, _key: &str) -> Result<()> {
+        *self = None;
+        Ok(())
+    }
+}
+
 /// A `usize` configuration value that rejects 0 and 1 when set from strings.
 ///
 /// Use this for options whose consumer divides the value in half to size an
@@ -1236,11 +1258,13 @@ config_namespace! {
         pub enabled: bool, default = false
 
         /// Minimum chunk size in bytes. The rolling hash will not trigger a split
-        /// until this many bytes have been accumulated. Default is 256 KiB.
-        pub min_chunk_size: usize, default = 256 * 1024
+        /// until this many bytes have been accumulated. Must be greater than 0.
+        /// Default is 256 KiB.
+        pub min_chunk_size: ConfigNonZeroUsize, default = non_zero_usize_default(256 * 1024)
 
         /// Maximum chunk size in bytes. A split is forced when the accumulated
-        /// size exceeds this value. Default is 1 MiB.
+        /// size exceeds this value. Must be greater than `min_chunk_size`.
+        /// Default is 1 MiB.
         pub max_chunk_size: usize, default = 1024 * 1024
 
         /// Normalization level. Increasing this improves deduplication ratio
@@ -1326,6 +1350,72 @@ impl ConfigField for Option<MaxRowGroupBytes> {
 
     fn set(&mut self, _key: &str, value: &str) -> Result<()> {
         *self = Some(MaxRowGroupBytes::from_str(value)?);
+        Ok(())
+    }
+
+    fn reset(&mut self, _key: &str) -> Result<()> {
+        *self = None;
+        Ok(())
+    }
+}
+
+/// Parquet bloom filter false positive probability.
+///
+/// Wraps an `f64` so the "strictly between 0 and 1" constraint (arrow-rs
+/// panics on any other value, including NaN) is validated when the config is
+/// set, rather than when the writer properties are built.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BloomFilterFpp(f64);
+
+impl BloomFilterFpp {
+    /// Creates a `BloomFilterFpp`, rejecting values outside `(0.0, 1.0)`.
+    pub fn try_new(value: f64) -> Result<Self> {
+        // Written so that NaN, which fails every comparison, is rejected too
+        if !(value > 0.0 && value < 1.0) {
+            return Err(DataFusionError::Configuration(format!(
+                "bloom_filter_fpp must be between 0 and 1 (exclusive), got {value}"
+            )));
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the configured false positive probability.
+    pub fn get(&self) -> f64 {
+        self.0
+    }
+}
+
+impl FromStr for BloomFilterFpp {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let value = s.parse::<f64>().map_err(|_| {
+            DataFusionError::Configuration(format!(
+                "Invalid bloom_filter_fpp: '{s}'. Expected a number between 0 and 1 (exclusive)."
+            ))
+        })?;
+        Self::try_new(value)
+    }
+}
+
+impl Display for BloomFilterFpp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// `ConfigField` for `Option<BloomFilterFpp>`, for the same reason as the
+/// `Option<MaxRowGroupBytes>` impl above.
+impl ConfigField for Option<BloomFilterFpp> {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(s) => v.some(key, s, description),
+            None => v.none(key, description),
+        }
+    }
+
+    fn set(&mut self, _key: &str, value: &str) -> Result<()> {
+        *self = Some(BloomFilterFpp::from_str(value)?);
         Ok(())
     }
 
@@ -1472,8 +1562,8 @@ config_namespace! {
         /// (writing) Sets best effort maximum size of data page in bytes
         pub data_pagesize_limit: usize, default = 1024 * 1024
 
-        /// (writing) Sets write_batch_size in rows
-        pub write_batch_size: usize, default = 1024
+        /// (writing) Sets write_batch_size in rows. Must be greater than 0.
+        pub write_batch_size: ConfigNonZeroUsize, default = non_zero_usize_default(1024)
 
         /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
@@ -1512,8 +1602,8 @@ config_namespace! {
         /// rows). Writing larger row groups requires more memory to write, but
         /// can get better compression and be faster to read. When
         /// `max_row_group_bytes` is also set, the writer flushes a row group when
-        /// either limit is reached, whichever comes first.
-        pub max_row_group_size: usize, default =  1024 * 1024
+        /// either limit is reached, whichever comes first. Must be greater than 0.
+        pub max_row_group_size: ConfigNonZeroUsize, default = non_zero_usize_default(1024 * 1024)
 
         /// (writing) Target maximum size of each row group in bytes. When set,
         /// the writer flushes whenever either this limit or `max_row_group_size`
@@ -1528,15 +1618,17 @@ config_namespace! {
         /// (writing) Sets "created by" property
         pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
 
-        /// (writing) Sets column index truncate length
-        pub column_index_truncate_length: Option<usize>, default = Some(64)
+        /// (writing) Sets column index truncate length. Must be greater than 0.
+        /// If NULL, column index values are not truncated
+        pub column_index_truncate_length: Option<ConfigNonZeroUsize>, default = Some(non_zero_usize_default(64))
 
-        /// (writing) Sets statistics truncate length. If NULL, uses
-        /// default parquet writer setting
-        pub statistics_truncate_length: Option<usize>, default = Some(64)
+        /// (writing) Sets statistics truncate length. Must be greater than 0.
+        /// If NULL, uses default parquet writer setting
+        pub statistics_truncate_length: Option<ConfigNonZeroUsize>, default = Some(non_zero_usize_default(64))
 
-        /// (writing) Sets best effort maximum number of rows in data page
-        pub data_page_row_count_limit: usize, default = 20_000
+        /// (writing) Sets best effort maximum number of rows in data page.
+        /// Must be greater than 0.
+        pub data_page_row_count_limit: ConfigNonZeroUsize, default = non_zero_usize_default(20_000)
 
         /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,
@@ -1549,9 +1641,9 @@ config_namespace! {
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
 
-        /// (writing) Sets bloom filter false positive probability. If NULL, uses
-        /// default parquet writer setting
-        pub bloom_filter_fpp: Option<f64>, default = None
+        /// (writing) Sets bloom filter false positive probability. Must be
+        /// between 0 and 1 (exclusive). If NULL, uses default parquet writer setting
+        pub bloom_filter_fpp: Option<BloomFilterFpp>, default = None
 
         /// (writing) Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet writer setting
@@ -3504,9 +3596,9 @@ config_namespace_with_hashmap! {
         /// default parquet options
         pub statistics_enabled: Option<String>, default = None
 
-        /// Sets bloom filter false positive probability for the column path. If NULL, uses
-        /// default parquet options
-        pub bloom_filter_fpp: Option<f64>, default = None
+        /// Sets bloom filter false positive probability for the column path. Must be
+        /// between 0 and 1 (exclusive). If NULL, uses default parquet options
+        pub bloom_filter_fpp: Option<BloomFilterFpp>, default = None
 
         /// Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet options
@@ -5101,7 +5193,7 @@ mod tests {
             .unwrap();
         let cdc = &config.execution.parquet.content_defined_chunking;
         assert!(cdc.enabled);
-        assert_eq!(cdc.min_chunk_size, 256 * 1024);
+        assert_eq!(cdc.min_chunk_size.get(), 256 * 1024);
         assert_eq!(cdc.max_chunk_size, 1024 * 1024);
         assert_eq!(cdc.norm_level, 0);
 
@@ -5132,7 +5224,7 @@ mod tests {
             .unwrap();
         let cdc = &config.execution.parquet.content_defined_chunking;
         assert!(!cdc.enabled);
-        assert_eq!(cdc.min_chunk_size, 1024);
+        assert_eq!(cdc.min_chunk_size.get(), 1024);
         assert_eq!(cdc.max_chunk_size, 1024 * 1024);
         assert_eq!(cdc.norm_level, 0);
     }

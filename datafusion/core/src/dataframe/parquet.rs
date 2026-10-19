@@ -115,6 +115,7 @@ mod tests {
     use crate::execution::options::ParquetReadOptions;
     use crate::test_util::{self, register_aggregate_csv};
 
+    use datafusion_common::config::ConfigNonZeroUsize;
     use datafusion_common::file_options::parquet_writer::parse_compression_string;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::{col, lit};
@@ -238,7 +239,7 @@ mod tests {
             let ctx = &test_df.session_state;
             ctx.runtime_env().register_object_store(&local_url, local);
             let mut options = TableParquetOptions::default();
-            options.global.max_row_group_size = rg_size;
+            options.global.max_row_group_size = ConfigNonZeroUsize::try_new(rg_size)?;
             options.global.allow_single_file_parallelism = true;
             df.write_parquet(
                 output_path,

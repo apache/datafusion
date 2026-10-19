@@ -714,7 +714,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             reorder_filters: global_options.global.reorder_filters,
             force_filter_selections: global_options.global.force_filter_selections,
             data_pagesize_limit: global_options.global.data_pagesize_limit as u64,
-            write_batch_size: global_options.global.write_batch_size as u64,
+            write_batch_size: global_options.global.write_batch_size.get() as u64,
             writer_version: global_options.global.writer_version.to_string(),
             compression_opt: global_options.global.compression.map(|compression| {
                 parquet_options::CompressionOpt::Compression(compression.to_string())
@@ -727,24 +727,24 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             statistics_enabled_opt: global_options.global.statistics_enabled.map(|enabled| {
                 parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled.to_string())
             }),
-            max_row_group_size: global_options.global.max_row_group_size as u64,
+            max_row_group_size: global_options.global.max_row_group_size.get() as u64,
             max_in_list_size: global_options.global.max_in_list_size as u64,
             row_group_range_assignment: global_options.global.row_group_range_assignment.to_string(),
             created_by: global_options.global.created_by.clone(),
             column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
-                parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)
+                parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length.get() as u64)
             }),
             statistics_truncate_length_opt: global_options.global.statistics_truncate_length.map(|length| {
-                parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length as u64)
+                parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length.get() as u64)
             }),
-            data_page_row_count_limit: global_options.global.data_page_row_count_limit as u64,
+            data_page_row_count_limit: global_options.global.data_page_row_count_limit.get() as u64,
             encoding_opt: global_options.global.encoding.map(|encoding| {
                 parquet_options::EncodingOpt::Encoding(encoding.to_string())
             }),
             bloom_filter_on_read: global_options.global.bloom_filter_on_read,
             bloom_filter_on_write: global_options.global.bloom_filter_on_write,
             bloom_filter_fpp_opt: global_options.global.bloom_filter_fpp.map(|fpp| {
-                parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp)
+                parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp.get())
             }),
             bloom_filter_ndv_opt: global_options.global.bloom_filter_ndv.map(|ndv| {
                 parquet_options::BloomFilterNdvOpt::BloomFilterNdv(ndv)
@@ -772,7 +772,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             }),
             content_defined_chunking: Some(protobuf::ParquetCdcOptions {
                 enabled: global_options.global.content_defined_chunking.enabled,
-                min_chunk_size: global_options.global.content_defined_chunking.min_chunk_size as u64,
+                min_chunk_size: global_options.global.content_defined_chunking.min_chunk_size.get() as u64,
                 max_chunk_size: global_options.global.content_defined_chunking.max_chunk_size as u64,
                 norm_level: global_options.global.content_defined_chunking.norm_level,
             }),
@@ -797,7 +797,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
                         parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
                     }),
                     bloom_filter_fpp_opt: options.bloom_filter_fpp.map(|fpp| {
-                        parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(fpp)
+                        parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(fpp.get())
                     }),
                     bloom_filter_ndv_opt: options.bloom_filter_ndv.map(|ndv| {
                         parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(ndv)

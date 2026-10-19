@@ -21,7 +21,10 @@ use std::sync::Arc;
 
 use crate::{
     _internal_datafusion_err, DataFusionError, Result,
-    config::{ParquetCdcOptions, ParquetOptions, TableParquetOptions},
+    config::{
+        ConfigNonZeroUsize, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
+    },
+    error::_config_err,
     parquet_config::{DFParquetCompression, DFParquetEncoding},
 };
 
@@ -152,8 +155,8 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             }
 
             if let Some(bloom_filter_fpp) = options.bloom_filter_fpp {
-                builder =
-                    builder.set_column_bloom_filter_fpp(path.clone(), bloom_filter_fpp);
+                builder = builder
+                    .set_column_bloom_filter_fpp(path.clone(), bloom_filter_fpp.get());
             }
 
             if let Some(bloom_filter_ndv) = options.bloom_filter_ndv {
@@ -176,7 +179,7 @@ impl From<&ParquetCdcOptions> for Option<parquet::file::properties::CdcOptions> 
         value
             .enabled
             .then_some(parquet::file::properties::CdcOptions {
-                min_chunk_size: value.min_chunk_size,
+                min_chunk_size: value.min_chunk_size.get(),
                 max_chunk_size: value.max_chunk_size,
                 norm_level: value.norm_level,
             })
@@ -193,7 +196,10 @@ impl From<Option<&parquet::file::properties::CdcOptions>> for ParquetCdcOptions 
         match value {
             Some(cdc) => ParquetCdcOptions {
                 enabled: true,
-                min_chunk_size: cdc.min_chunk_size,
+                // parquet-rs rejects a zero `min_chunk_size` when the options
+                // are set, so the fallback is never taken in practice
+                min_chunk_size: ConfigNonZeroUsize::try_new(cdc.min_chunk_size)
+                    .unwrap_or_else(|_| ParquetCdcOptions::default().min_chunk_size),
                 max_chunk_size: cdc.max_chunk_size,
                 norm_level: cdc.norm_level,
             },
@@ -254,9 +260,22 @@ impl ParquetOptions {
             row_group_range_assignment: _,
         } = self;
 
+        // Each chunk size is validated when it is set, but the relation between
+        // them can only be checked once both are known
+        if content_defined_chunking.enabled
+            && content_defined_chunking.max_chunk_size
+                <= content_defined_chunking.min_chunk_size.get()
+        {
+            return _config_err!(
+                "content_defined_chunking.max_chunk_size ({}) must be greater than content_defined_chunking.min_chunk_size ({})",
+                content_defined_chunking.max_chunk_size,
+                content_defined_chunking.min_chunk_size
+            );
+        }
+
         let mut builder = WriterProperties::builder()
             .set_data_page_size_limit(*data_pagesize_limit)
-            .set_write_batch_size(*write_batch_size)
+            .set_write_batch_size(write_batch_size.get())
             .set_writer_version((*writer_version).into())
             .set_dictionary_page_size_limit(*dictionary_page_size_limit)
             .set_statistics_enabled(
@@ -264,19 +283,23 @@ impl ParquetOptions {
                     .map(Into::into)
                     .unwrap_or(DEFAULT_STATISTICS_ENABLED),
             )
-            .set_max_row_group_row_count(Some(*max_row_group_size))
+            .set_max_row_group_row_count(Some(max_row_group_size.get()))
             .set_max_row_group_bytes(max_row_group_bytes.as_ref().map(|v| v.get()))
             .set_created_by(created_by.clone())
-            .set_column_index_truncate_length(*column_index_truncate_length)
-            .set_statistics_truncate_length(*statistics_truncate_length)
-            .set_data_page_row_count_limit(*data_page_row_count_limit)
+            .set_column_index_truncate_length(
+                column_index_truncate_length.map(ConfigNonZeroUsize::get),
+            )
+            .set_statistics_truncate_length(
+                statistics_truncate_length.map(ConfigNonZeroUsize::get),
+            )
+            .set_data_page_row_count_limit(data_page_row_count_limit.get())
             .set_bloom_filter_enabled(*bloom_filter_on_write)
             .set_write_row_group_number_distinct_values(
                 *write_row_group_number_distinct_values,
             );
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
-            builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
+            builder = builder.set_bloom_filter_fpp(bloom_filter_fpp.get());
         }
         if let Some(bloom_filter_ndv) = bloom_filter_ndv {
             builder = builder.set_bloom_filter_max_ndv(*bloom_filter_ndv);
@@ -333,7 +356,7 @@ mod tests {
     #[cfg(feature = "parquet_encryption")]
     use crate::config::ConfigFileEncryptionProperties;
     use crate::config::{
-        MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions,
+        BloomFilterFpp, MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions,
         ParquetEncryptionOptions, ParquetOptions,
     };
     use crate::parquet_config::{
@@ -349,6 +372,14 @@ mod tests {
 
     const COL_NAME: &str = "configured";
 
+    fn nz(value: usize) -> ConfigNonZeroUsize {
+        ConfigNonZeroUsize::try_new(value).unwrap()
+    }
+
+    fn fpp(value: f64) -> BloomFilterFpp {
+        BloomFilterFpp::try_new(value).unwrap()
+    }
+
     /// Take the column defaults provided in [`ParquetOptions`], and generate a non-default col config.
     fn column_options_with_non_defaults(
         src_col_defaults: &ParquetOptions,
@@ -359,7 +390,7 @@ mod tests {
             statistics_enabled: Some("none".into()),
             encoding: Some("RLE".into()),
             bloom_filter_enabled: Some(true),
-            bloom_filter_fpp: Some(0.72),
+            bloom_filter_fpp: Some(fpp(0.72)),
             bloom_filter_ndv: Some(72),
         }
     }
@@ -375,21 +406,21 @@ mod tests {
 
         ParquetOptions {
             data_pagesize_limit: 42,
-            write_batch_size: 42,
+            write_batch_size: nz(42),
             writer_version,
             compression: Some(DFParquetCompression::Zstd(22)),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
             dictionary_page_size_limit: 43,
             statistics_enabled: Some(DFParquetStatistics::Chunk),
-            max_row_group_size: 42,
+            max_row_group_size: nz(42),
             max_row_group_bytes: Some(MaxRowGroupBytes::try_new(42).unwrap()),
             created_by: "wordy".into(),
-            column_index_truncate_length: Some(42),
-            statistics_truncate_length: Some(42),
-            data_page_row_count_limit: 42,
+            column_index_truncate_length: Some(nz(42)),
+            statistics_truncate_length: Some(nz(42)),
+            data_page_row_count_limit: nz(42),
             encoding: Some(DFParquetEncoding::ByteStreamSplit),
             bloom_filter_on_write: !defaults.bloom_filter_on_write,
-            bloom_filter_fpp: Some(0.42),
+            bloom_filter_fpp: Some(fpp(0.42)),
             bloom_filter_ndv: Some(42),
             write_row_group_number_distinct_values: !defaults
                 .write_row_group_number_distinct_values,
@@ -445,7 +476,7 @@ mod tests {
                 }
                 .into(),
             ),
-            bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp()),
+            bloom_filter_fpp: bloom_filter_default_props.map(|p| fpp(p.fpp())),
             bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv()),
         }
     }
@@ -491,19 +522,21 @@ mod tests {
             global: ParquetOptions {
                 // global options
                 data_pagesize_limit: props.data_page_size_limit(),
-                write_batch_size: props.write_batch_size(),
+                write_batch_size: nz(props.write_batch_size()),
                 writer_version: props.writer_version().into(),
                 dictionary_page_size_limit: props.dictionary_page_size_limit(),
-                max_row_group_size: props
+                max_row_group_size: nz(props
                     .max_row_group_row_count()
-                    .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT),
+                    .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT)),
                 max_row_group_bytes: props
                     .max_row_group_bytes()
                     .and_then(|v| MaxRowGroupBytes::try_new(v).ok()),
                 created_by: props.created_by().to_string(),
-                column_index_truncate_length: props.column_index_truncate_length(),
-                statistics_truncate_length: props.statistics_truncate_length(),
-                data_page_row_count_limit: props.data_page_row_count_limit(),
+                column_index_truncate_length: props
+                    .column_index_truncate_length()
+                    .map(nz),
+                statistics_truncate_length: props.statistics_truncate_length().map(nz),
+                data_page_row_count_limit: nz(props.data_page_row_count_limit()),
 
                 // global options which set the default column props
                 encoding: default_col_props
@@ -736,7 +769,7 @@ mod tests {
         // the TableParquetOptions::default, with only fpp set
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
-        default_table_writer_opts.global.bloom_filter_fpp = Some(0.42);
+        default_table_writer_opts.global.bloom_filter_fpp = Some(fpp(0.42));
         default_table_writer_opts.arrow_schema(&Arc::new(Schema::empty())); // add the required arrow schema
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
@@ -771,7 +804,7 @@ mod tests {
         let mut opts = TableParquetOptions::default();
         opts.global.content_defined_chunking = ParquetCdcOptions {
             enabled: true,
-            min_chunk_size: 128 * 1024,
+            min_chunk_size: nz(128 * 1024),
             max_chunk_size: 512 * 1024,
             norm_level: 2,
         };
@@ -799,7 +832,7 @@ mod tests {
         let mut opts = TableParquetOptions::default();
         opts.global.content_defined_chunking = ParquetCdcOptions {
             enabled: false,
-            min_chunk_size: 128 * 1024,
+            min_chunk_size: nz(128 * 1024),
             max_chunk_size: 512 * 1024,
             norm_level: 2,
         };
@@ -814,7 +847,7 @@ mod tests {
         let mut opts = TableParquetOptions::default();
         opts.global.content_defined_chunking = ParquetCdcOptions {
             enabled: true,
-            min_chunk_size: 64 * 1024,
+            min_chunk_size: nz(64 * 1024),
             max_chunk_size: 2 * 1024 * 1024,
             norm_level: -1,
         };
@@ -825,7 +858,7 @@ mod tests {
 
         let cdc = recovered.global.content_defined_chunking;
         assert!(cdc.enabled);
-        assert_eq!(cdc.min_chunk_size, 64 * 1024);
+        assert_eq!(cdc.min_chunk_size.get(), 64 * 1024);
         assert_eq!(cdc.max_chunk_size, 2 * 1024 * 1024);
         assert_eq!(cdc.norm_level, -1);
     }

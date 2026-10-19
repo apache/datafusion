@@ -131,7 +131,7 @@ fn file_format_option_conversions_are_std_traits() {
     assert_datafusion_try_from::<&protobuf::CsvOptions, CsvOptions>();
     assert_datafusion_try_from::<&protobuf::JsonOptions, JsonOptions>();
     assert_datafusion_try_from::<&protobuf::ParquetOptions, ParquetOptions>();
-    assert_from::<protobuf::ParquetColumnOptions, ParquetColumnOptions>();
+    assert_datafusion_try_from::<protobuf::ParquetColumnOptions, ParquetColumnOptions>();
     assert_datafusion_try_from::<protobuf::ParquetCdcOptions, ParquetCdcOptions>();
     assert_datafusion_try_from::<&protobuf::TableParquetOptions, TableParquetOptions>();
     assert_from::<&CsvFormatFactory, protobuf::CsvOptions>();

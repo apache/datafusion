@@ -26,8 +26,8 @@
 use std::sync::Arc;
 
 use datafusion_common::config::{
-    CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions,
-    ParquetOptions, TableParquetOptions,
+    BloomFilterFpp, ConfigNonZeroUsize, CsvOptions, JsonOptions, MaxRowGroupBytes,
+    ParquetCdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
 };
 use datafusion_common::display::{PlanType, StringifiedPlan};
 use datafusion_common::parquet_config::RowGroupRangeAssignment;
@@ -326,6 +326,23 @@ impl TryFrom<&JsonOptionsProto> for JsonOptions {
     }
 }
 
+/// Decodes a non-optional, must-be-positive `usize` option from the wire.
+///
+/// Proto3 decodes an omitted scalar field as 0, which is never a valid value
+/// for these options, so 0 is read as "absent" and replaced by `default`, the
+/// same way an empty `writer_version` is.
+fn non_zero_usize_from_wire(
+    value: u64,
+    message: &str,
+    field: &str,
+    default: ConfigNonZeroUsize,
+) -> datafusion_common::Result<ConfigNonZeroUsize> {
+    if value == 0 {
+        return Ok(default);
+    }
+    ConfigNonZeroUsize::try_new(usize_from_wire(value, message, field)?)
+}
+
 impl TryFrom<ParquetCdcOptionsProto> for ParquetCdcOptions {
     type Error = datafusion_common::DataFusionError;
 
@@ -336,7 +353,12 @@ impl TryFrom<ParquetCdcOptionsProto> for ParquetCdcOptions {
             |value: u64, field: &str| usize_from_wire(value, "ParquetCdcOptions", field);
         Ok(ParquetCdcOptions {
             enabled: value.enabled,
-            min_chunk_size: to_usize(value.min_chunk_size, "min_chunk_size")?,
+            min_chunk_size: non_zero_usize_from_wire(
+                value.min_chunk_size,
+                "ParquetCdcOptions",
+                "min_chunk_size",
+                ParquetCdcOptions::default().min_chunk_size,
+            )?,
             max_chunk_size: to_usize(value.max_chunk_size, "max_chunk_size")?,
             norm_level: value.norm_level,
         })
@@ -358,6 +380,10 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
         };
         let to_usize =
             |value: u64, field: &str| usize_from_wire(value, "ParquetOptions", field);
+        let defaults = ParquetOptions::default();
+        let to_non_zero = |value: u64, field: &str, default: ConfigNonZeroUsize| {
+            non_zero_usize_from_wire(value, "ParquetOptions", field, default)
+        };
 
         Ok(ParquetOptions {
             enable_page_index: proto.enable_page_index,
@@ -379,7 +405,11 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 proto.data_pagesize_limit,
                 "data_pagesize_limit",
             )?,
-            write_batch_size: to_usize(proto.write_batch_size, "write_batch_size")?,
+            write_batch_size: to_non_zero(
+                proto.write_batch_size,
+                "write_batch_size",
+                defaults.write_batch_size,
+            )?,
             writer_version,
             compression: proto
                 .compression_opt
@@ -411,7 +441,11 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                     ) => statistics.parse(),
                 })
                 .transpose()?,
-            max_row_group_size: to_usize(proto.max_row_group_size, "max_row_group_size")?,
+            max_row_group_size: to_non_zero(
+                proto.max_row_group_size,
+                "max_row_group_size",
+                defaults.max_row_group_size,
+            )?,
             max_in_list_size: to_usize(proto.max_in_list_size, "max_in_list_size")?,
             row_group_range_assignment: RowGroupRangeAssignment::from_proto_str(
                 &proto.row_group_range_assignment,
@@ -422,7 +456,7 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .as_ref()
                 .map(|opt| match opt {
                     parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length) => {
-                        to_usize(*length, "column_index_truncate_length")
+                        ConfigNonZeroUsize::try_new(to_usize(*length, "column_index_truncate_length")?)
                     }
                 })
                 .transpose()?,
@@ -431,13 +465,14 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .as_ref()
                 .map(|opt| match opt {
                     parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length) => {
-                        to_usize(*length, "statistics_truncate_length")
+                        ConfigNonZeroUsize::try_new(to_usize(*length, "statistics_truncate_length")?)
                     }
                 })
                 .transpose()?,
-            data_page_row_count_limit: to_usize(
+            data_page_row_count_limit: to_non_zero(
                 proto.data_page_row_count_limit,
                 "data_page_row_count_limit",
+                defaults.data_page_row_count_limit,
             )?,
             encoding: proto
                 .encoding_opt
@@ -452,8 +487,11 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .bloom_filter_fpp_opt
                 .as_ref()
                 .map(|opt| match opt {
-                    parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp) => *fpp,
-                }),
+                    parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp) => {
+                        BloomFilterFpp::try_new(*fpp)
+                    }
+                })
+                .transpose()?,
             bloom_filter_ndv: proto
                 .bloom_filter_ndv_opt
                 .as_ref()
@@ -518,9 +556,13 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
     }
 }
 
-impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
-    fn from(proto: ParquetColumnOptionsProto) -> Self {
-        ParquetColumnOptions {
+impl TryFrom<ParquetColumnOptionsProto> for ParquetColumnOptions {
+    type Error = datafusion_common::DataFusionError;
+
+    fn try_from(
+        proto: ParquetColumnOptionsProto,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(ParquetColumnOptions {
             bloom_filter_enabled: proto.bloom_filter_enabled_opt.map(
                 |parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v)| v,
             ),
@@ -538,11 +580,16 @@ impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
             ),
             bloom_filter_fpp: proto
                 .bloom_filter_fpp_opt
-                .map(|parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(v)| v),
+                .map(
+                    |parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(v)| {
+                        BloomFilterFpp::try_new(v)
+                    },
+                )
+                .transpose()?,
             bloom_filter_ndv: proto
                 .bloom_filter_ndv_opt
                 .map(|parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v)| v),
-        }
+        })
     }
 }
 
@@ -563,14 +610,14 @@ impl TryFrom<&TableParquetOptionsProto> for TableParquetOptions {
                 .column_specific_options
                 .iter()
                 .map(|parquet_column_options| {
-                    (
+                    Ok((
                         parquet_column_options.column_name.clone(),
-                        ParquetColumnOptions::from(
+                        ParquetColumnOptions::try_from(
                             parquet_column_options.options.clone().unwrap_or_default(),
-                        ),
-                    )
+                        )?,
+                    ))
                 })
-                .collect(),
+                .collect::<datafusion_common::Result<_>>()?,
             key_value_metadata: proto
                 .key_value_metadata
                 .iter()
