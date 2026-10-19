@@ -132,7 +132,7 @@ impl CountRollup {
 /// |        +- No  -> SKIP     (faster and uses less memory)
 /// |
 /// +- Yes -> Does the distinct aggregate have its own fast grouped accumulator?
-///          +- Yes (count(DISTINCT <integer>)) -> SKIP (faster or a tie, less memory)
+///          +- Yes (count(DISTINCT `<integer>`)) -> SKIP (faster or a tie, less memory)
 ///          +- No (sum/avg DISTINCT, floats, decimals, strings, user-defined) -> REWRITE (1.4-20x faster)
 ///                +- config option to skip it when memory matters more (few groups: 2.4-6x more memory)
 fn is_single_distinct_agg(
