@@ -895,10 +895,10 @@ mod tests {
         // across nodes. Charge the Arc allocation only once.
         let timezone: Arc<str> = Arc::from("UTC");
         let timezone_bytes = 2 * size_of::<usize>() + timezone.len();
+        let mut timezone_nodes = Vec::with_capacity(2);
         for _ in 0..2 {
-            graph
-                .graph
-                .add_node(ExprIntervalGraphNode::new_with_interval(
+            timezone_nodes.push(graph.graph.add_node(
+                ExprIntervalGraphNode::new_with_interval(
                     Arc::clone(&expr),
                     Interval::try_new(
                         ScalarValue::TimestampNanosecond(
@@ -910,7 +910,8 @@ mod tests {
                             Some(Arc::clone(&timezone)),
                         ),
                     )?,
-                ));
+                ),
+            ));
         }
         assert_eq!(
             graph.size(),
@@ -921,14 +922,12 @@ mod tests {
             graph.size(),
             expected_graph_backing_size(&graph) + timezone_bytes
         );
-        // The timezone-bearing nodes are indices 1 and 2: index 0 was the
-        // string node above, and these were appended in the loop.
-        graph.graph.remove_node(NodeIndex::new(1));
+        graph.graph.remove_node(timezone_nodes[0]);
         assert_eq!(
             graph.size(),
             expected_graph_backing_size(&graph) + timezone_bytes
         );
-        graph.graph.remove_node(NodeIndex::new(2));
+        graph.graph.remove_node(timezone_nodes[1]);
         assert_eq!(graph.size(), expected_graph_backing_size(&graph));
         Ok(())
     }
