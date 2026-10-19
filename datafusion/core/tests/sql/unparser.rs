@@ -759,6 +759,26 @@ async fn optimized_filter_with_subquery_alias() -> Result<()> {
     Ok(())
 }
 
+/// `optimize_projections` prunes every column under `count(*)` when the
+/// filter column isn't needed above the filter, leaving a `Projection` with
+/// no expressions. Dialects without empty select list support must not
+/// receive `SELECT FROM`.
+#[tokio::test]
+async fn optimized_count_over_filter_empty_projection() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("create table t (id int)").await?.collect().await?;
+    let plan = ctx
+        .sql("select count(*) from t where id > 10")
+        .await?
+        .into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        r#"SELECT count(1) AS "count(*)" FROM (SELECT 1 FROM t WHERE (t.id > 10))"#
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn optimized_filter_after_projection() -> Result<()> {
     let ctx = SessionContext::new();
