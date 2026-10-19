@@ -146,8 +146,48 @@ logical_plan
 02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(CAST(t.v AS Int64)), count(DISTINCT t.xi)]]
 03)----TableScan: t projection=[g, xi, v]
 
+########
+# Lone-distinct queries and single_distinct_aggregation_prefer_memory
+########
+
+# By default (prefer_memory = false), lone-distinct queries are always rewritten
+# into the two-phase GROUP BY to allow parallel accumulation across partitions.
+query TT
+EXPLAIN SELECT g, sum(DISTINCT v) AS distinct_v FROM t GROUP BY g;
+----
+logical_plan
+01)Projection: t.g, sum(alias1) AS distinct_v
+02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(alias1)]]
+03)----Aggregate: groupBy=[[t.g, CAST(t.v AS Int64) AS alias1]], aggr=[[]]
+04)------TableScan: t projection=[g, v]
+
+# When single_distinct_aggregation_prefer_memory = true, lone-distinct queries
+# whose aggregate has a native GroupsAccumulator skip the rewrite to reduce peak memory.
+statement ok
+set datafusion.optimizer.single_distinct_aggregation_prefer_memory = true;
+
+query TT
+EXPLAIN SELECT g, sum(DISTINCT v) AS distinct_v FROM t GROUP BY g;
+----
+logical_plan
+01)Projection: t.g, sum(DISTINCT t.v) AS distinct_v
+02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(DISTINCT CAST(t.v AS Int64))]]
+03)----TableScan: t projection=[g, v]
+
+# Both paths produce identical query results
+query II
+SELECT g, sum(DISTINCT v) AS distinct_v FROM t GROUP BY g ORDER BY g;
+----
+1 112
+2 3
+3 1
+
+statement ok
+set datafusion.optimizer.single_distinct_aggregation_prefer_memory = false;
+
 statement ok
 set datafusion.explain.logical_plan_only = false;
+
 
 ########
 # count(*) vs count(col) vs count(1), grouped

@@ -121,18 +121,26 @@ impl CountRollup {
 }
 
 /// Check whether all aggregate exprs are distinct on a single field.
+///
+/// `prefer_memory` mirrors `OptimizerOptions::single_distinct_aggregation_prefer_memory`.
+/// When `false` (default) the cost guard is only applied when companion non-distinct
+/// aggregates are present; lone-distinct queries are always rewritten so they can
+/// fan out across partitions.  When `true` the guard is applied universally: the
+/// rewrite is skipped even for lone-distinct queries when the distinct function
+/// already has a native `GroupsAccumulator`, trading throughput for lower peak memory.
 fn is_single_distinct_agg(
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
     count_rollup: Option<&CountRollup>,
+    prefer_memory: bool,
 ) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
     let mut distinct_aggs = vec![];
     // Track whether any non-distinct companion aggregate (sum/min/max/count) is
     // present alongside the distinct one.  This drives the rewrite_pays check
-    // below: lone-distinct queries must always be rewritten (see comment there),
-    // while mixed queries need the cost guard.
+    // below: lone-distinct queries must always be rewritten in the default path
+    // (see comment below), while mixed queries need the cost guard.
     let mut has_companion_non_distinct = false;
     for expr in aggr_expr {
         if let Expr::AggregateFunction(AggregateFunction {
@@ -175,15 +183,20 @@ fn is_single_distinct_agg(
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
         return Ok(false);
     }
-    // Only apply the cost guard when companion non-distinct aggregates are
-    // present.  Those aggregates move to the inner group-by (finer grain), and
-    // if they already have a native GroupsAccumulator the extra work may not pay
-    // off.  Lone-distinct queries (all aggregates DISTINCT on the same
-    // expression, no companion sum/min/max/count) must *always* be rewritten:
-    // without the two-phase GROUP BY the engine falls back to serial
-    // accumulation and cannot fan out across partitions — producing the 2.5x
-    // slowdown seen on ClickBench Q4/Q10/Q11 for COUNT(DISTINCT int64).
-    if has_companion_non_distinct && !rewrite_pays(&distinct_aggs, input_schema) {
+    // Apply the cost guard when:
+    //   - companion non-distinct aggregates are present (they move to the finer-grained
+    //     inner group-by and, if they already have a native GroupsAccumulator, the extra
+    //     work is unlikely to pay off), OR
+    //   - the caller has opted in to memory-saving mode via `prefer_memory`, in which
+    //     case even lone-distinct queries skip the rewrite when the distinct function
+    //     has a native GroupsAccumulator.
+    //
+    // Without the guard, lone-distinct queries are always rewritten: the two-phase GROUP
+    // BY enables parallel deduplication across partitions, avoiding the 2–3× slowdown
+    // that serial per-group accumulation produces for COUNT(DISTINCT int64) etc.
+    if (has_companion_non_distinct || prefer_memory)
+        && !rewrite_pays(&distinct_aggs, input_schema)
+    {
         return Ok(false);
     }
     Ok(true)
@@ -249,6 +262,10 @@ impl OptimizerRule for SingleDistinctToGroupBy {
         if !matches!(plan, LogicalPlan::Aggregate(_)) {
             return Ok(Transformed::no(plan));
         }
+        let prefer_memory = config
+            .options()
+            .optimizer
+            .single_distinct_aggregation_prefer_memory;
         let count_rollup = CountRollup::try_new(config);
         match plan {
             LogicalPlan::Aggregate(Aggregate {
@@ -261,6 +278,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 &aggr_expr,
                 input.schema(),
                 count_rollup.as_ref(),
+                prefer_memory,
             )? && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();
@@ -592,11 +610,22 @@ mod tests {
 
     impl RegistryOptimizerContext {
         fn new() -> Self {
+            Self::with_prefer_memory(false)
+        }
+
+        /// Build a context that exposes a function registry and optionally turns on
+        /// `single_distinct_aggregation_prefer_memory` so tests can verify both sides
+        /// of the memory / throughput trade-off.
+        fn with_prefer_memory(prefer_memory: bool) -> Self {
             let mut registry = MemoryFunctionRegistry::new();
             registry.register_udaf(count_udaf()).unwrap();
             registry.register_udaf(sum_udaf()).unwrap();
+
+            let mut opts = ConfigOptions::new();
+            opts.optimizer.single_distinct_aggregation_prefer_memory = prefer_memory;
+
             Self {
-                inner: OptimizerContext::new(),
+                inner: OptimizerContext::new_with_config_options(Arc::new(opts)),
                 registry,
             }
         }
@@ -630,6 +659,24 @@ mod tests {
             let optimizer = Optimizer::with_rules(vec![rule]);
             let optimized_plan = optimizer
                 .optimize($plan, &RegistryOptimizerContext::new(), |_, _| {})
+                .expect("failed to optimize plan");
+            insta::assert_snapshot!(optimized_plan.display_indent_schema(), @ $expected);
+
+            Ok::<(), DataFusionError>(())
+        }};
+    }
+
+    macro_rules! assert_optimized_plan_equal_with_context {
+        (
+            $ctx:expr,
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> =
+                Arc::new(SingleDistinctToGroupBy::new());
+            let optimizer = Optimizer::with_rules(vec![rule]);
+            let optimized_plan = optimizer
+                .optimize($plan, &$ctx, |_, _| {})
                 .expect("failed to optimize plan");
             insta::assert_snapshot!(optimized_plan.display_indent_schema(), @ $expected);
 
@@ -1355,5 +1402,78 @@ mod tests {
               TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         ",
         ).unwrap();
+    }
+
+    #[test]
+    fn single_distinct_aggregation_prefer_memory_default_rewrites_lone_distinct()
+    -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![sum_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(false);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Projection: test.a, sum(alias1) AS sum(DISTINCT test.b) [a:UInt32, sum(DISTINCT test.b):UInt64;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[sum(alias1)]] [a:UInt32, sum(alias1):UInt64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn single_distinct_aggregation_prefer_memory_true_skips_rewrite_for_groups_accumulator()
+    -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![sum_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(true);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[sum(DISTINCT test.b)]] [a:UInt32, sum(DISTINCT test.b):UInt64;N]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn single_distinct_aggregation_prefer_memory_true_still_rewrites_unsupported()
+    -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let aggr_expr = Expr::AggregateFunction(AggregateFunction::new_udf(
+            datafusion_functions_aggregate::approx_median::approx_median_udaf(),
+            vec![col("b")],
+            true,
+            None,
+            vec![],
+            None,
+        ));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![aggr_expr])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(true);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Projection: test.a, approx_median(alias1) AS approx_median(DISTINCT test.b) [a:UInt32, approx_median(DISTINCT test.b):Float64;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[approx_median(alias1)]] [a:UInt32, approx_median(alias1):Float64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 }
