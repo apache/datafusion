@@ -1488,6 +1488,42 @@ the API breaks.</p>
 <p><code class="docutils literal notranslate"><span class="pre">PhysicalExtensionCodec</span></code> is not deprecated: extension <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code>s and UDF payloads still need it, and it remains the fallback for unmigrated plans.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24625">issue #24625</a> for details.</p>
 </section>
+<section id="order-preservation-hooks-for-limit-pushdown-are-deprecated">
+<h3>Order-preservation hooks for limit pushdown are deprecated<a class="headerlink" href="#order-preservation-hooks-for-limit-pushdown-are-deprecated" title="Link to this heading">#</a></h3>
+<p>A file scan that advertises an output ordering now always reads its files in
+order, so <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">...</span> <span class="pre">LIMIT</span></code> queries no longer depend on <code class="docutils literal notranslate"><span class="pre">LimitPushdown</span></code>
+telling the scan to keep its order. Before this change, pushing the fetch of a
+<code class="docutils literal notranslate"><span class="pre">SortPreservingMergeExec</span></code> into an ordered Parquet scan could return the wrong
+rows, because the scan then shared files between partitions or skipped row
+groups based on its limit.</p>
+<p>The plumbing that carried this request is deprecated and no longer used:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_preserve_order</span></code> and <code class="docutils literal notranslate"><span class="pre">DataSource::with_preserve_order</span></code>
+are never called. Built-in operators no longer override them. Overrides in
+custom <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> or <code class="docutils literal notranslate"><span class="pre">DataSource</span></code> implementations are now dead code,
+and the compiler does not warn about them, because <code class="docutils literal notranslate"><span class="pre">#[deprecated]</span></code> on a
+trait method only warns callers.</p></li>
+<li><p>A custom scan that advertises an output ordering must keep that order by
+itself, also when a limit is pushed into it with <code class="docutils literal notranslate"><span class="pre">with_fetch</span></code>. DataFusion no
+longer tells it whether the limit is order-sensitive.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">GlobalLimitExec::required_ordering</span></code> and <code class="docutils literal notranslate"><span class="pre">LocalLimitExec::required_ordering</span></code>
+always return <code class="docutils literal notranslate"><span class="pre">None</span></code>, and their <code class="docutils literal notranslate"><span class="pre">set_required_ordering</span></code> methods do nothing.
+The <code class="docutils literal notranslate"><span class="pre">required_ordering</span></code> protobuf fields are no longer written and are
+ignored when read.</p></li>
+</ul>
+<p>A plain <code class="docutils literal notranslate"><span class="pre">LIMIT</span></code> without <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> over a table with a declared ordering now
+also reads files in order, so it no longer uses file work stealing or Parquet
+limit pruning. Other queries over such tables already read files in order. If
+the file groups are uneven, for example a few large files next to many small
+ones, a selective <code class="docutils literal notranslate"><span class="pre">WHERE</span> <span class="pre">...</span> <span class="pre">LIMIT</span></code> can be slower than before.</p>
+<p><strong>Migration guide:</strong></p>
+<p>To keep a file scan’s order, give it an output ordering
+(<code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_output_ordering</span></code>). To read files in group order
+without declaring one, use <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_preserve_order(true)</span></code>.
+Code that reads <code class="docutils literal notranslate"><span class="pre">FileScanConfig::preserve_order</span></code> to decide whether files may be
+reordered should call <code class="docutils literal notranslate"><span class="pre">FileScanConfig::preserves_file_order()</span></code> instead, which
+also accounts for the output ordering.</p>
+</section>
 </section>
 </section>
 
@@ -1590,6 +1626,7 @@ the API breaks.</p>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#extension-executionplans-can-decode-without-a-physicalextensioncodec">Extension <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>s can decode without a <code class="docutils literal notranslate"><span class="pre">PhysicalExtensionCodec</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#order-preservation-hooks-for-limit-pushdown-are-deprecated">Order-preservation hooks for limit pushdown are deprecated</a></li>
 </ul>
 </li>
 </ul>
