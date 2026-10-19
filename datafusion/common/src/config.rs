@@ -24,8 +24,8 @@ use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::{
-    DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion,
-    RowGroupRangeAssignment,
+    DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFParquetWriterVersion,
+    DFTimeUnit, RowGroupRangeAssignment,
 };
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
@@ -925,6 +925,29 @@ config_namespace! {
         /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
         pub perfect_hash_join_min_key_density: f64, default = 0.15
 
+        /// Enable an exact integer membership prefilter for hash joins with a single
+        /// integer key when the build side uses a hash table and the join is not
+        /// null-aware. It skips lookups for absent keys while retaining NULLs and
+        /// probe rows for the original join logic.
+        pub enable_join_integer_prefilter: bool, default = false
+
+        /// Maximum number of integer values covered by the join prefilter bitmap
+        /// (`max_key - min_key + 1`). Zero disables bitmap construction.
+        /// Larger ranges fall back to normal hash table lookups.
+        pub join_integer_prefilter_max_key_range: u64, default = 262144
+
+        /// The integer prefilter must prune more than this fraction of all sampled
+        /// probe rows, including NULLs, to keep filtering. Must be finite and in
+        /// [0, 1], validated when executing the join.
+        pub join_integer_prefilter_min_pruning_ratio: f64, default = 0.5
+
+        /// Minimum input probe rows in each integer prefilter sampling window,
+        /// including NULLs. Must be greater than zero. Windows end at batch boundaries.
+        /// Unprofitable samples initially pause for 10 times this many input rows;
+        /// consecutive failures double the pause up to 128 times. A profitable
+        /// sample resets the pause to 10 times this many rows.
+        pub join_integer_prefilter_sample_rows: ConfigNonZeroUsize, default = non_zero_usize_default(12288)
+
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
         /// are highly selective filters or joins that could produce tiny output batches. The
@@ -943,7 +966,9 @@ config_namespace! {
 
         /// The default time zone
         ///
-        /// Some functions, e.g. `now` return timestamps in this time zone
+        /// Some functions, e.g. `now`, return timestamps in this time zone.
+        /// This is also used to interpret timezone-naive timestamps in
+        /// comparisons and subtraction with timezone-aware timestamps.
         pub time_zone: Option<ConfigTimeZone>, default = None
 
         /// Parquet options
@@ -1378,13 +1403,13 @@ config_namespace! {
         /// reading them as binary and then casting to string.
         pub binary_as_string: bool, default = false
 
-        /// (reading) If true, parquet reader will read columns of
-        /// physical type int96 as originating from a different resolution
-        /// than nanosecond. This is useful for reading data from systems like Spark
-        /// which stores microsecond resolution timestamps in an int96 allowing it
-        /// to write values with a larger date range than 64-bit timestamps with
-        /// nanosecond resolution.
-        pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
+        /// (reading) If set, parquet reader will read columns of
+        /// physical type int96 as originating from this resolution instead of
+        /// nanosecond. Valid values are: ns, us, ms, and s. This is useful for
+        /// reading data from systems like Spark which store microsecond
+        /// resolution timestamps in an int96, allowing them to write values with
+        /// a larger date range than 64-bit timestamps with nanosecond resolution.
+        pub coerce_int96: Option<DFTimeUnit>, default = None
 
         /// (reading) Optional timezone applied to INT96 columns when `coerce_int96`
         /// is set. When `Some`, INT96 columns coerce to
@@ -1423,6 +1448,17 @@ config_namespace! {
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
+
+        /// (reading) If true, top-level string and binary Parquet columns with
+        /// dictionary pages are inferred and scanned as
+        /// `Dictionary<Int32, Utf8>` / `Dictionary<Int32, Binary>` instead of
+        /// their plain value type.
+        ///
+        /// This applies only when DataFusion infers the table schema. Tables with
+        /// a user-supplied schema are not promoted because the Parquet footer is
+        /// not read at DDL time, so dictionary pages cannot be detected per column.
+        /// See <https://github.com/apache/datafusion/issues/24112>
+        pub enable_rle_to_dictionary: bool, default = false
 
         /// (reading) Which byte range of a split file reads each row group.
         /// `start_offset` picks the range containing the row group's start.
@@ -1508,7 +1544,7 @@ config_namespace! {
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub encoding: Option<String>, transform = str::to_lowercase, default = None
+        pub encoding: Option<DFParquetEncoding>, default = None
 
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
@@ -1520,6 +1556,12 @@ config_namespace! {
         /// (writing) Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
+
+        /// (writing) Write the number of distinct values (NDV) for each column
+        /// in row group statistics when creating parquet files. Enabling this
+        /// improves NDV-based query optimizations at the cost of hashing every
+        /// non-null value during write.
+        pub write_row_group_number_distinct_values: bool, default = false
 
         /// (writing) Controls whether DataFusion will attempt to speed up writing
         /// parquet files by serializing them in parallel. Each column
@@ -1796,7 +1838,9 @@ config_namespace! {
         /// rule. When set to false, any rules that produce errors will cause the query to fail
         pub skip_failed_rules: bool, default = false
 
-        /// Number of times that the optimizer will attempt to optimize the plan
+        /// The logical optimizer applies rules in order for up to `max_passes` passes,
+        /// stopping early if a pass leaves the plan unchanged or repeats an earlier plan.
+        /// The physical optimizer always runs in one pass.
         pub max_passes: usize, default = 3
 
         /// When set to true, the physical plan optimizer will run a top down
@@ -2926,6 +2970,7 @@ pub enum ConfigFileType {
     #[cfg(feature = "parquet")]
     PARQUET,
     JSON,
+    ARROW,
 }
 
 /// Represents the configuration options available for handling different table formats within a data processing application.
@@ -2943,6 +2988,10 @@ pub struct TableOptions {
 
     /// Configuration options for JSON file handling.
     pub json: JsonOptions,
+
+    /// Configuration options for Arrow IPC file handling. This includes settings for the
+    /// compression codec used for record batches written to disk.
+    pub arrow: ArrowOptions,
 
     /// The current file format that the table operations should assume. This option allows
     /// for dynamic switching between the supported file types (e.g., CSV, Parquet, JSON).
@@ -2967,11 +3016,13 @@ impl ConfigField for TableOptions {
                 ConfigFileType::PARQUET => self.parquet.visit(v, "format", ""),
                 ConfigFileType::CSV => self.csv.visit(v, "format", ""),
                 ConfigFileType::JSON => self.json.visit(v, "format", ""),
+                ConfigFileType::ARROW => self.arrow.visit(v, "format", ""),
             }
         } else {
             self.csv.visit(v, "csv", "");
             self.parquet.visit(v, "parquet", "");
             self.json.visit(v, "json", "");
+            self.arrow.visit(v, "arrow", "");
         }
     }
 
@@ -3003,6 +3054,7 @@ impl ConfigField for TableOptions {
                     ConfigFileType::PARQUET => self.parquet.set(rem, value),
                     ConfigFileType::CSV => self.csv.set(rem, value),
                     ConfigFileType::JSON => self.json.set(rem, value),
+                    ConfigFileType::ARROW => self.arrow.set(rem, value),
                 }
             }
             _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
@@ -3631,7 +3683,7 @@ impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
         let mut column_encryption_properties: HashMap<
             String,
             ColumnEncryptionProperties,
-        > = HashMap::new();
+        > = HashMap::with_capacity(column_names_vec.len());
 
         for (i, column_name) in column_names_vec.iter().enumerate() {
             let column_key_as_hex = hex::encode(&column_keys_vec[i]);
@@ -3739,8 +3791,9 @@ impl TryFrom<ConfigFileDecryptionProperties> for FileDecryptionProperties {
     type Error = DataFusionError;
 
     fn try_from(val: ConfigFileDecryptionProperties) -> Result<Self> {
-        let mut column_names: Vec<&str> = Vec::new();
-        let mut column_keys: Vec<Vec<u8>> = Vec::new();
+        let num_columns = val.column_decryption_properties.len();
+        let mut column_names: Vec<&str> = Vec::with_capacity(num_columns);
+        let mut column_keys: Vec<Vec<u8>> = Vec::with_capacity(num_columns);
 
         for (col_name, decryption_properties) in val.column_decryption_properties.iter() {
             let column_key = hex::decode(&decryption_properties.column_key_as_hex).map_err(|e| {
@@ -3812,7 +3865,7 @@ impl TryFrom<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties 
         let mut column_decryption_properties: HashMap<
             String,
             ColumnDecryptionProperties,
-        > = HashMap::new();
+        > = HashMap::with_capacity(column_names_vec.len());
         for (i, column_name) in column_names_vec.iter().enumerate() {
             let props = ColumnDecryptionProperties {
                 column_key_as_hex: hex::encode(column_keys_vec[i].clone()),
@@ -3861,6 +3914,80 @@ impl EncryptionFactoryOptions {
             options.set(key, value)?;
         }
         Ok(options)
+    }
+}
+
+/// Compression codec used for the record batch bodies of Arrow IPC files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrowIpcCompression {
+    /// No compression
+    Uncompressed,
+    /// LZ4 (frame format)
+    Lz4Frame,
+    /// Zstd
+    Zstd,
+}
+
+impl FromStr for ArrowIpcCompression {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.replace('\'', "").to_ascii_lowercase().as_str() {
+            "uncompressed" | "" => Ok(Self::Uncompressed),
+            "lz4_frame" => Ok(Self::Lz4Frame),
+            "zstd" => Ok(Self::Zstd),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid Arrow IPC compression type: {other}. \
+                Expected one of: uncompressed, lz4_frame, zstd"
+            ))),
+        }
+    }
+}
+
+impl Display for ArrowIpcCompression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Uncompressed => "uncompressed",
+            Self::Lz4Frame => "lz4_frame",
+            Self::Zstd => "zstd",
+        };
+        write!(f, "{str}")
+    }
+}
+
+impl ConfigField for ArrowIpcCompression {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = ArrowIpcCompression::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl From<ArrowIpcCompression> for Option<CompressionType> {
+    fn from(c: ArrowIpcCompression) -> Self {
+        match c {
+            ArrowIpcCompression::Uncompressed => None,
+            ArrowIpcCompression::Lz4Frame => Some(CompressionType::LZ4_FRAME),
+            ArrowIpcCompression::Zstd => Some(CompressionType::ZSTD),
+        }
+    }
+}
+
+config_namespace! {
+    /// Options controlling Arrow IPC format
+    pub struct ArrowOptions {
+        /// Compression codec used for the record batch bodies of Arrow IPC files.
+        /// One of: "uncompressed", "lz4_frame", "zstd"
+        pub compression: ArrowIpcCompression, default = ArrowIpcCompression::Lz4Frame
+        /// Compression level to use with the "zstd" codec. Not supported by "lz4_frame"
+        /// or "uncompressed". If not specified, the default zstd compression level is used.
+        pub compression_level: Option<i32>, default = None
+        /// Byte alignment to pad buffers to when writing Arrow IPC files.
+        /// Must be one of 8, 16, 32, or 64.
+        pub alignment: usize, default = 64
     }
 }
 
@@ -4119,7 +4246,7 @@ pub enum OutputFormat {
     #[cfg(feature = "parquet")]
     PARQUET(TableParquetOptions),
     AVRO,
-    ARROW,
+    ARROW(ArrowOptions),
 }
 
 impl Display for OutputFormat {
@@ -4130,7 +4257,7 @@ impl Display for OutputFormat {
             #[cfg(feature = "parquet")]
             OutputFormat::PARQUET(_) => "parquet",
             OutputFormat::AVRO => "avro",
-            OutputFormat::ARROW => "arrow",
+            OutputFormat::ARROW(_) => "arrow",
         };
         write!(f, "{out}")
     }
@@ -4890,6 +5017,70 @@ mod tests {
         let mut scalar = DFParquetCompression::Lz4;
         assert!(ConfigField::set(&mut scalar, "typo", "snappy").is_err());
         assert_eq!(scalar, DFParquetCompression::Lz4);
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_coerce_int96_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFTimeUnit};
+
+        let mut config = ConfigOptions::default();
+        assert_eq!(config.execution.parquet.coerce_int96, None);
+
+        for (value, expected) in [
+            ("ns", DFTimeUnit::Nanosecond),
+            ("US", DFTimeUnit::Microsecond),
+            ("ms", DFTimeUnit::Millisecond),
+            ("s", DFTimeUnit::Second),
+        ] {
+            config
+                .set("datafusion.execution.parquet.coerce_int96", value)
+                .unwrap();
+            assert_eq!(config.execution.parquet.coerce_int96, Some(expected));
+        }
+
+        let err = config
+            .set("datafusion.execution.parquet.coerce_int96", "nanos")
+            .unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Invalid parquet coerce_int96 setting: nanos. Expected one of: ns, us, ms, s"
+        );
+        // A rejected value leaves the previous one in place.
+        assert_eq!(
+            config.execution.parquet.coerce_int96,
+            Some(DFTimeUnit::Second)
+        );
+
+        // An invalid update must leave an unset option unset rather than
+        // inserting a default.
+        config.execution.parquet.coerce_int96 = None;
+        assert!(
+            config
+                .set("datafusion.execution.parquet.coerce_int96", "nanos")
+                .is_err()
+        );
+        assert_eq!(config.execution.parquet.coerce_int96, None);
+
+        config.execution.parquet.coerce_int96 = Some(DFTimeUnit::Microsecond);
+        assert!(
+            config
+                .set("datafusion.execution.parquet.coerce_int96.typo", "ns")
+                .is_err()
+        );
+        assert!(
+            config
+                .reset("datafusion.execution.parquet.coerce_int96.typo")
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.coerce_int96,
+            Some(DFTimeUnit::Microsecond)
+        );
+
+        let mut scalar = DFTimeUnit::Microsecond;
+        assert!(ConfigField::set(&mut scalar, "typo", "ns").is_err());
+        assert_eq!(scalar, DFTimeUnit::Microsecond);
     }
 
     #[cfg(feature = "parquet")]

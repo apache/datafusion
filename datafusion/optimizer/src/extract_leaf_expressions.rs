@@ -19,6 +19,41 @@
 //! access `user['status']`) closer to data sources, enabling early data reduction
 //! and source-level optimizations (e.g., Parquet column pruning). See
 //! [`ExtractLeafExpressions`] (pass 1) and [`PushDownLeafProjections`] (pass 2).
+//!
+//! # Precedence over [`PushDownFilter`]
+//!
+//! [`PushDownLeafProjections`] and [`PushDownFilter`] both move nodes towards
+//! the leaves, and for an adjacent filter and *pure extraction projection* (a
+//! projection whose expressions are only `__datafusion_extracted_N` aliases and
+//! pass-through columns) they want the opposite order:
+//!
+//! ```text
+//! Filter: t.date = '2025-01-03'                                  <-- (A)
+//!   Projection: get_field(t.ids, 'id1') AS __datafusion_extracted_1, t.date   <-- (B)
+//!     TableScan: t
+//! ```
+//!
+//! `PushDownFilter` wants (A) below (B). `PushDownLeafProjections` wants (B)
+//! below (A). Before <https://github.com/apache/datafusion/issues/14540> was
+//! decided the two rules undid each other on every optimizer pass, and the rule
+//! that runs later in the list won.
+//!
+//! **Invariant: pure extraction projections win.** `PushDownFilter` does not
+//! move a filter below a pure extraction projection, so the plan above is the
+//! final plan. `PushDownLeafProjections` keeps moving such a projection through
+//! a filter, which is how the projection reaches the scan.
+//!
+//! The reason is that the extraction projection is the node a source absorbs.
+//! A Parquet scan merges it into the file projection and reads only the struct
+//! leaf. With the opposite precedence the scan reads the whole struct whenever
+//! `datafusion.execution.parquet.pushdown_filters` is `false`, which is the
+//! default. The filter loses nothing by staying one node higher, because
+//! `PushDownFilter` records the predicate in
+//! [`TableScan::filters`](datafusion_expr::logical_plan::TableScan) in the pass
+//! that runs before the extraction projection exists, so row group pruning and
+//! source level filtering still happen.
+//!
+//! [`PushDownFilter`]: crate::push_down_filter::PushDownFilter
 
 use indexmap::{IndexMap, IndexSet};
 use std::collections::{BTreeSet, HashMap};
@@ -419,7 +454,7 @@ fn remap_pairs_and_columns(
     from_schema: &DFSchema,
     to_schema: &DFSchema,
 ) -> Result<ExtractionTarget> {
-    let mut replace_map = HashMap::new();
+    let mut replace_map = HashMap::with_capacity(from_schema.fields().len());
     for ((from_q, from_f), (to_q, to_f)) in from_schema.iter().zip(to_schema.iter()) {
         replace_map.insert(
             qualified_name(from_q, from_f.name()),
@@ -637,6 +672,20 @@ impl<'a> LeafExpressionExtractor<'a> {
     }
 }
 
+/// Resolves `col` against `schema` and returns it with the qualifier that
+/// `schema` gives the field. Returns `None` if `schema` does not hold `col`,
+/// or if the name is ambiguous in `schema`.
+///
+/// Two spellings of the same input column (a bare `c` and a qualified `t.c`)
+/// resolve to the same `Column`, so they compare equal. A column pushed into
+/// a projection this way uses the name that the input gives it.
+fn resolve_against(schema: &DFSchema, col: &Column) -> Option<Column> {
+    schema
+        .qualified_field_from_column(col)
+        .ok()
+        .map(Column::from)
+}
+
 /// Build an extraction projection above the target node (shared by both passes).
 ///
 /// If the target is an existing projection, merges into it. This requires
@@ -702,16 +751,17 @@ fn build_extraction_projection_impl(
         // than target_schema (the projection's output) because columns produced
         // by alias expressions (e.g., CSE's __common_expr_N) exist in the output but
         // not the input, and cannot be added as pass-through Column references.
+        //
+        // Resolve the pass-through columns of `existing` (including same-name
+        // aliases such as `t.c AS c`) and the columns in `columns_needed`
+        // against the input schema before comparing them. Otherwise a bare `c`
+        // and a qualified `t.c` do not match, and the merged projection holds
+        // both, which `Projection::try_new` rejects as ambiguous.
+        let input_schema = existing.input.schema();
         let existing_cols: IndexSet<Column> = existing
             .expr
             .iter()
-            .filter_map(|e| {
-                if let Expr::Column(c) = e {
-                    Some(c.clone())
-                } else {
-                    None
-                }
-            })
+            .filter_map(|e| resolve_against(input_schema, passthrough_column(e)?))
             .collect();
 
         // The names the merged projection already produces. The merge keeps
@@ -725,7 +775,6 @@ fn build_extraction_projection_impl(
             .map(|f| f.name().as_str())
             .collect();
 
-        let input_schema = existing.input.schema();
         for col in columns_needed {
             // The projection produces this name, so the parent reads it from the
             // projection's own output. Do not resolve the name through the rename
@@ -738,19 +787,22 @@ fn build_extraction_projection_impl(
             let col_expr = Expr::Column(col.clone());
             let resolved = replace_cols_by_name(col_expr, &replace_map)?;
             if let Expr::Column(resolved_col) = &resolved
-                && !existing_cols.contains(resolved_col)
-                && input_schema.has_column(resolved_col)
-                && !output_names.contains(resolved_col.name.as_str())
+                && let Some(input_col) = resolve_against(input_schema, resolved_col)
+                && !existing_cols.contains(&input_col)
+                && !output_names.contains(input_col.name.as_str())
             {
-                proj_exprs.push(Expr::Column(resolved_col.clone()));
+                proj_exprs.push(Expr::Column(input_col));
             }
-            // If resolved to non-column expr, it's already computed by existing projection
+            // Skip a column that resolves to a non-column expr: the existing
+            // projection already computes it. Also skip a column that is not in
+            // the input or is ambiguous there: no single spelling is correct.
         }
 
         Projection::try_new(proj_exprs, Arc::clone(&existing.input))
     } else {
         // Build new projection with extracted expressions + all input columns
-        let mut proj_exprs = Vec::new();
+        let mut proj_exprs =
+            Vec::with_capacity(extracted_exprs.len() + target_schema.fields().len());
         for (expr, alias) in extracted_exprs {
             proj_exprs.push(expr.clone().alias(alias));
         }
@@ -895,9 +947,9 @@ fn merge_would_duplicate_kept_expr(
     // same kept column twice still inlines one copy, so count each pair at most
     // once per column.
     let mut usage: HashMap<String, usize> = HashMap::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (expr, _alias) in pairs {
-        let mut seen: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        seen.clear();
         for col in expr.column_refs() {
             let name = col.flat_name();
             if kept_columns.contains(&name) && seen.insert(name.clone()) {
@@ -1171,15 +1223,18 @@ fn split_and_push_projection(
     }
 }
 
-/// Returns true if the plan is a Projection where ALL expressions are either
-/// `Alias(EXTRACTED_EXPR_PREFIX, ...)` or `Column`, with at least one extraction.
+/// Returns true if `exprs` are the expressions of a *pure extraction
+/// projection*: every expression is either `Alias(EXTRACTED_EXPR_PREFIX, ...)`
+/// or a bare `Column`, and there is at least one extraction alias.
+///
 /// Such projections can safely be pushed further without re-extraction.
-fn is_pure_extraction_projection(plan: &LogicalPlan) -> bool {
-    let LogicalPlan::Projection(proj) = plan else {
-        return false;
-    };
+///
+/// [`PushDownFilter`](crate::push_down_filter::PushDownFilter) uses the same
+/// predicate to keep a filter above such a projection. See the module
+/// documentation for the precedence rule.
+pub(crate) fn is_pure_extraction_projection(exprs: &[Expr]) -> bool {
     let mut has_extraction = false;
-    for expr in &proj.expr {
+    for expr in exprs {
         match expr {
             Expr::Alias(alias) if alias.name.starts_with(EXTRACTED_EXPR_PREFIX) => {
                 has_extraction = true;
@@ -1216,6 +1271,7 @@ fn push_extraction_pairs(
                 proj_input,
                 target_schema.as_ref(),
             )?;
+            let merged_is_pure = is_pure_extraction_projection(&merged.expr);
             let merged_plan = LogicalPlan::Projection(merged);
 
             // After merging, try to push the result further down, but ONLY
@@ -1226,7 +1282,7 @@ fn push_extraction_pairs(
             // the (None, true) fallback can't find the original aliases.
             // This handles: Extraction → Recovery(cols) → Filter → ... → TableScan
             // by pushing through the recovery projection AND the filter in one pass.
-            if is_pure_extraction_projection(&merged_plan)
+            if merged_is_pure
                 && let Some(pushed) = try_push_input(&merged_plan, alias_generator)?
             {
                 return Ok(Some(pushed));
@@ -2379,6 +2435,113 @@ mod tests {
               Filter: __datafusion_extracted_2 = Int32(1)
                 Projection: leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_2, test.a, test.b, test.c, leaf_udf(test.b, Utf8("y")) AS __datafusion_extracted_1
                   TableScan: test projection=[a, b, c]
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
+    /// A filter can name a column bare (`a`) while the projection below it
+    /// outputs the qualified `test.a`. The optimizer leaves this shape when it
+    /// removes the empty input of a `UNION ALL` (for example
+    /// `... UNION ALL SELECT ... WHERE 1 = 2`). The merge must match the two, and not add a bare `a`
+    /// beside `test.a`, which is an ambiguous schema.
+    #[test]
+    fn test_merge_bare_column_into_qualified_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let projection = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                col("test.a"),
+                col("test.b"),
+                (col("test.c") + lit(1)).alias("d"),
+            ])?
+            .build()?;
+        let predicate =
+            leaf_udf(Expr::Column(Column::new_unqualified("a")), "x").eq(lit(1));
+        let plan = LogicalPlan::Filter(datafusion_expr::Filter::try_new(
+            predicate,
+            Arc::new(projection),
+        )?);
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Filter: leaf_udf(a, Utf8("x")) = Int32(1)
+          Projection: test.a, test.b, test.c + Int32(1) AS d
+            TableScan: test projection=[a, b, c]
+
+        ## After Extraction
+        Projection: test.a, test.b, d
+          Filter: __datafusion_extracted_1 = Int32(1)
+            Projection: test.a, test.b, test.c + Int32(1) AS d, leaf_udf(a, Utf8("x")) AS __datafusion_extracted_1
+              TableScan: test projection=[a, b, c]
+
+        ## After Pushdown
+        (same as after extraction)
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
+    /// When the merge appends a needed column that the projection does not
+    /// keep, it must append the input's qualified column (`test.b`), not the
+    /// bare `b` that the caller asked for.
+    #[test]
+    fn test_merge_appends_qualified_column_for_bare_request() -> Result<()> {
+        let projection = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("test.a")])?
+            .build()?;
+        let target_schema = Arc::clone(projection.schema());
+        let columns_needed: IndexSet<Column> =
+            IndexSet::from([Column::new_unqualified("b")]);
+
+        let merged = build_extraction_projection_impl(
+            &[],
+            &columns_needed,
+            &Arc::new(projection),
+            &target_schema,
+        )?;
+
+        assert_eq!(
+            merged.expr,
+            vec![
+                Expr::Column(Column::new(Some("test"), "a")),
+                Expr::Column(Column::new(Some("test"), "b")),
+            ]
+        );
+        Ok(())
+    }
+
+    /// A projection can spell a pass-through column as a same-name alias
+    /// (`test.a AS a`). Merging an extraction into it must treat that alias as
+    /// the pass-through it is, and not add `test.a` beside the `a` it outputs,
+    /// which is an ambiguous schema.
+    #[test]
+    fn test_merge_into_projection_with_same_name_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                col("test.a").alias("a"),
+                col("test.b").alias("b"),
+                col("test.c").alias("c"),
+            ])?
+            .filter(leaf_udf(col("a"), "x").eq(lit(1)))?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Filter: leaf_udf(a, Utf8("x")) = Int32(1)
+          Projection: test.a AS a, test.b AS b, test.c AS c
+            TableScan: test projection=[a, b, c]
+
+        ## After Extraction
+        Projection: a, b, c
+          Filter: __datafusion_extracted_1 = Int32(1)
+            Projection: test.a AS a, test.b AS b, test.c AS c, leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_1
+              TableScan: test projection=[a, b, c]
+
+        ## After Pushdown
+        (same as after extraction)
 
         ## Optimized
         (same as after pushdown)
@@ -3746,14 +3909,11 @@ mod tests {
     fn test_is_pure_extraction_projection() -> Result<()> {
         let scan = test_table_scan_with_struct()?;
 
-        // Not a projection.
-        assert!(!is_pure_extraction_projection(&scan));
-
         // Columns only: nothing was extracted.
         let columns_only = LogicalPlanBuilder::from(scan.clone())
             .project(vec![col("id"), col("user")])?
             .build()?;
-        assert!(!is_pure_extraction_projection(&columns_only));
+        assert!(!is_pure_extraction_projection(&columns_only.expressions()));
 
         // One extraction alias and one pass-through column.
         let pure = LogicalPlanBuilder::from(scan.clone())
@@ -3762,7 +3922,7 @@ mod tests {
                 col("id"),
             ])?
             .build()?;
-        assert!(is_pure_extraction_projection(&pure));
+        assert!(is_pure_extraction_projection(&pure.expressions()));
 
         // The same shape under a `CommonSubexprEliminate` alias is not an
         // extraction projection.
@@ -3772,13 +3932,13 @@ mod tests {
                 col("id"),
             ])?
             .build()?;
-        assert!(!is_pure_extraction_projection(&common_expr));
+        assert!(!is_pure_extraction_projection(&common_expr.expressions()));
 
         // A bare expression is never allowed.
         let bare_expr = LogicalPlanBuilder::from(scan)
             .project(vec![leaf_udf(col("user"), "status"), col("id")])?
             .build()?;
-        assert!(!is_pure_extraction_projection(&bare_expr));
+        assert!(!is_pure_extraction_projection(&bare_expr.expressions()));
 
         Ok(())
     }

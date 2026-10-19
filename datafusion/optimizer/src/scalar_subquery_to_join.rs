@@ -84,10 +84,6 @@ impl ScalarSubqueryToJoin {
 }
 
 impl OptimizerRule for ScalarSubqueryToJoin {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -219,7 +215,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     }
                 }
 
-                let mut proj_exprs = vec![];
+                let mut proj_exprs = Vec::with_capacity(projection.expr.len());
                 for (expr, new_expr) in projection.expr.iter().zip(rewrite_exprs) {
                     let old_expr_name = expr.schema_name().to_string();
                     let new_expr_name = new_expr.schema_name().to_string();
@@ -398,9 +394,11 @@ fn build_join(
     // itself be NULL) otherwise.
     let mut compensation_exprs = HashMap::new();
     if let Some(expr_map) = collected_count_expr_map {
-        let mut expr_rewrite = TypeCoercionRewriter {
-            schema: new_plan.schema(),
-        };
+        // No session timezone: this builds a *searched* `CASE WHEN`, so the
+        // `CASE expr WHEN` comparison rule never applies, and the only type
+        // introduced is the untyped `Null` of the HAVING arm. The expressions
+        // themselves come from a plan `TypeCoercion` has already coerced.
+        let mut expr_rewrite = TypeCoercionRewriter::new(new_plan.schema());
         let having_arm = pull_up
             .pull_up_having_expr
             .as_ref()

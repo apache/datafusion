@@ -441,10 +441,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         //
         let first_n_views = split_vec_min_alloc(&mut self.views, n);
 
-        let last_non_inlined_view = first_n_views
-            .iter()
-            .rev()
-            .find(|view| ((**view) as u32) > 12);
+        let last_non_inlined_view =
+            first_n_views.iter().rfind(|view| ((**view) as u32) > 12);
 
         // All taken views inlined
         let Some(view) = last_non_inlined_view else {
