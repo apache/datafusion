@@ -248,11 +248,21 @@ physical_plan
 statement ok
 drop table dates;
 
-# Maximum-precision decimal casts unwrap for aligned literals, while an
-# unaligned IN member keeps the cast. NULL inputs retain SQL comparison behavior.
+# Decimal casts from integer or decimal sources unwrap for aligned literals
+# when the target only adds scale, while an unaligned IN member keeps the cast.
+# NULL inputs retain SQL comparison behavior.
 statement ok
-create table decimal_prices(price decimal(38,2)) as values
-  (4.00), (-1.00), (0.00), (5.00), (NULL);
+create table decimal_prices(
+  price decimal(38,2),
+  price30 decimal(30,2),
+  price28 decimal(28,0),
+  price36 decimal(36,4)
+) as values
+  (4.00, 4.00, 4, 4.0000),
+  (-1.00, -1.00, -1, -1.0000),
+  (0.00, 0.00, 0, 0.0000),
+  (5.00, 5.00, 5, 5.0000),
+  (NULL, NULL, NULL, NULL);
 
 query TT
 explain select price from decimal_prices where price = 4.00;
@@ -331,8 +341,111 @@ true false
 true false
 NULL NULL
 
+# Scale-up regression for the review's three source shapes. The natural
+# comparisons coerce to a scale-up cast that unwraps to a bare-column
+# comparison at the source type, and the queries return the actual 4.00 value,
+# not only a matching plan snapshot.
+query R
+select price30 from decimal_prices where price30 = 4.00;
+----
+4.00
+
+query TT
+explain select price30 from decimal_prices where price30 = 4.00;
+----
+logical_plan
+01)Filter: decimal_prices.price30 = Decimal128(4.00,30,2)
+02)--TableScan: decimal_prices projection=[price30]
+physical_plan
+01)FilterExec: price30@0 = 4.00
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query R
+select price28 from decimal_prices where price28 = 4.00;
+----
+4
+
+query TT
+explain select price28 from decimal_prices where price28 = 4.00;
+----
+logical_plan
+01)Filter: decimal_prices.price28 = Decimal128(4,28,0)
+02)--TableScan: decimal_prices projection=[price28]
+physical_plan
+01)FilterExec: price28@0 = 4
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query R
+select price36 from decimal_prices where price36 = 4.00;
+----
+4.0000
+
+query TT
+explain select price36 from decimal_prices where price36 = 4.00;
+----
+logical_plan
+01)Filter: decimal_prices.price36 = Decimal128(4.0000,36,4)
+02)--TableScan: decimal_prices projection=[price36]
+physical_plan
+01)FilterExec: price36@0 = 4.0000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 drop table decimal_prices;
+
+# Integer -> decimal scale-up is admitted by the same type-based rule: the
+# rewrite compares the integer column directly, so a source value that Arrow's
+# strict cast rejects (and TRY_CAST renders NULL) simply fails the predicate
+# instead of raising an error.
+statement ok
+create table int_prices(v int) as values (4), (2147483647), (-2000000000), (NULL);
+
+statement error
+select cast(v as decimal(10,2)) from int_prices;
+
+query IR
+select v, try_cast(v as decimal(10,2)) as d from int_prices order by v nulls last;
+----
+-2000000000 NULL
+4 4.00
+2147483647 NULL
+NULL NULL
+
+# Newly admitted overflow policy: the strict comparison compares the integer
+# column directly, so the rows whose cast would overflow are TRUE/FALSE instead
+# of a cast error. The TRY_CAST comparison is rewritten the same way and so no
+# longer NULL for those rows; only the NULL source row stays NULL. A plain
+# TRY_CAST projection above still yields NULL, since it is not a comparison.
+query BBB
+select
+  cast(v as decimal(10,2)) > cast(4 as decimal(10,2)) as strict_gt,
+  try_cast(v as decimal(10,2)) > cast(4 as decimal(10,2)) as try_gt,
+  try_cast(v as decimal(10,2)) is distinct
+    from cast(null as decimal(10,2)) as try_distinct
+from int_prices order by v nulls last;
+----
+false false true
+false false true
+true true true
+NULL NULL false
+
+query I
+select v from int_prices where cast(v as decimal(10,2)) = 4.00;
+----
+4
+
+query TT
+explain select v from int_prices where cast(v as decimal(10,2)) = 4.00;
+----
+logical_plan
+01)Filter: int_prices.v = Int32(4)
+02)--TableScan: int_prices projection=[v]
+physical_plan
+01)FilterExec: v@0 = 4
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table int_prices;
 
 # ------------------------------------------------------------------------
 # Unwrapping Date32 <-> Date64 casts in comparison predicates.

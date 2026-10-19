@@ -27,7 +27,7 @@ use datafusion_common::{DataFusionError, ScalarValue};
 use itertools::Itertools;
 
 use crate::parquet::Unit::RowGroup;
-use crate::parquet::{ContextWithParquet, Scenario};
+use crate::parquet::{ContextWithParquet, Scenario, make_decimal_batch};
 use datafusion_expr::{col, lit};
 struct RowGroupPruningTest {
     scenario: Scenario,
@@ -1030,7 +1030,77 @@ async fn prune_decimal_eq() {
         .with_expected_rows(2)
         .test_row_group_prune()
         .await;
-    // The data type of decimal_col is decimal(38,2)
+    // Source-precision regression: the same scale-up rewrite must admit
+    // sub-maximum decimal sources, not only decimal(38,x). Each pair below
+    // writes one row group per value list [1,2,3,4,6], [-5,1,3,4,6] and
+    // [20,30,30,40,60], stored unscaled at the source scale, so 4.00 is in the
+    // first two row groups only.
+    for (precision, scale) in [(30u8, 2i8), (28, 0), (36, 4)] {
+        let unit = 10_i128.pow(scale as u32);
+        let batches = [
+            vec![1, 2, 3, 4, 6],
+            vec![-5, 1, 3, 4, 6],
+            vec![20, 30, 30, 40, 60],
+        ]
+        .into_iter()
+        .map(|values| {
+            make_decimal_batch(
+                values.into_iter().map(|v| v * unit).collect(),
+                precision,
+                scale,
+            )
+        })
+        .collect::<Vec<_>>();
+
+        let mut ctx = ContextWithParquet::with_custom_data(
+            Scenario::DecimalLargePrecision,
+            RowGroup(5),
+            batches[0].schema(),
+            batches,
+        )
+        .await;
+        let output = ctx.query("SELECT * FROM t where decimal_col = 4.00").await;
+
+        println!(
+            "--- decimal source decimal({precision},{scale}) ---\n{}",
+            output.description()
+        );
+
+        let case = format!("decimal({precision},{scale})");
+        assert_eq!(
+            output.predicate_evaluation_errors(),
+            Some(0),
+            "predicate_evaluation_errors for {case}"
+        );
+        assert_eq!(
+            output.row_groups_matched_statistics(),
+            Some(2),
+            "row_groups_matched_statistics for {case}"
+        );
+        assert_eq!(
+            output.row_groups_pruned_statistics(),
+            Some(1),
+            "row_groups_pruned_statistics for {case}"
+        );
+        let bloom = output
+            .row_groups_bloom_filter()
+            .unwrap_or_else(|| panic!("no bloom filter metrics for {case}"));
+        assert_eq!(bloom.total_matched(), 2, "bloom filter matched for {case}");
+        assert_eq!(bloom.total_pruned(), 0, "bloom filter pruned for {case}");
+        assert_eq!(output.result_rows, 2, "result rows for {case}");
+
+        // The two returned rows are exactly 4.00 at the source scale.
+        let expected = ScalarValue::Decimal128(Some(4 * unit), precision, scale);
+        assert_eq!(
+            output
+                .pretty_results()
+                .matches(&format!("| {expected} "))
+                .count(),
+            2,
+            "expected two {expected} rows for {case}, got:\n{}",
+            output.pretty_results()
+        );
+    }
 }
 
 #[tokio::test]
