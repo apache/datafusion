@@ -6283,7 +6283,8 @@ NULL 3
 # Descending order with duplicate values and NULLs preserves the second key.
 query I
 COPY (
-    SELECT column1::BIGINT AS value, column2::INT AS id
+    SELECT column1::BIGINT AS value, column2::INT AS id,
+           arrow_cast(column1, 'Date32') AS d
     FROM (VALUES (NULL, 1), (NULL, 0), (1, 1), (1, 0), (0, 0), (-1, 0))
     ORDER BY value DESC NULLS FIRST, id
 ) TO 'test_files/scratch/timestamps/conversion_desc.parquet' STORED AS PARQUET;
@@ -6293,6 +6294,7 @@ COPY (
 statement ok
 CREATE EXTERNAL TABLE ordered_timestamps_desc STORED AS PARQUET
 WITH ORDER (value DESC NULLS FIRST, id ASC)
+WITH ORDER (d DESC NULLS FIRST, id ASC)
 LOCATION 'test_files/scratch/timestamps/conversion_desc.parquet';
 
 query TT
@@ -6306,6 +6308,23 @@ EXPLAIN SELECT to_timestamp_micros(value) AS t, id
 FROM ordered_timestamps_desc ORDER BY t DESC NULLS FIRST, id;
 ----
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_desc.parquet]]}, projection=[to_timestamp_micros(value@0) as t, id], file_type=parquet
+
+query TT
+EXPLAIN SELECT to_unixtime(d) AS seconds, id
+FROM ordered_timestamps_desc ORDER BY seconds DESC NULLS FIRST, id;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_desc.parquet]]}, projection=[to_unixtime(d@2) as seconds, id], file_type=parquet
+
+query II
+SELECT to_unixtime(d) AS seconds, id
+FROM ordered_timestamps_desc ORDER BY seconds DESC NULLS FIRST, id;
+----
+NULL 0
+NULL 1
+86400 0
+86400 1
+0 0
+-86400 0
 
 query IPI
 SELECT to_unixtime(value) AS seconds, to_timestamp_micros(value), id
@@ -6323,6 +6342,41 @@ SELECT to_timestamp_micros(arrow_cast(9223372036854775808, 'UInt64'));
 
 query error Can't cast value 9223372036854775808 to type Int64
 SELECT to_unixtime(arrow_cast(9223372036854775808, 'UInt64'));
+
+# Exercise overflow in the array cast path after the redundant sort is removed.
+query I
+COPY (
+    SELECT arrow_cast(column1, 'UInt64') AS u
+    FROM (VALUES (0), (9223372036854775807), (9223372036854775808))
+    ORDER BY u ASC NULLS LAST
+) TO 'test_files/scratch/timestamps/conversion_overflow.parquet' STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE ordered_timestamps_overflow STORED AS PARQUET
+WITH ORDER (u ASC NULLS LAST)
+LOCATION 'test_files/scratch/timestamps/conversion_overflow.parquet';
+
+query TT
+EXPLAIN SELECT to_timestamp_micros(u) AS t
+FROM ordered_timestamps_overflow ORDER BY t ASC NULLS LAST;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_overflow.parquet]]}, projection=[to_timestamp_micros(u@0) as t], file_type=parquet
+
+query error Can't cast value 9223372036854775808 to type Int64
+SELECT to_timestamp_micros(u) AS t
+FROM ordered_timestamps_overflow ORDER BY t ASC NULLS LAST;
+
+query TT
+EXPLAIN SELECT to_unixtime(u) AS seconds
+FROM ordered_timestamps_overflow ORDER BY seconds ASC NULLS LAST;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/conversion_overflow.parquet]]}, projection=[to_unixtime(u@0) as seconds], file_type=parquet
+
+query error Can't cast value 9223372036854775808 to type Int64
+SELECT to_unixtime(u) AS seconds
+FROM ordered_timestamps_overflow ORDER BY seconds ASC NULLS LAST;
 
 # Epoch-unit conversions remain valid at the underlying integer boundaries.
 query IIIIII
