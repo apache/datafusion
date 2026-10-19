@@ -815,3 +815,50 @@ physical_plan
 
 statement count 0
 drop table t;
+
+# JSON output must keep MAP entries whose value is NULL (the entry is the data)
+statement ok
+create table map_null_src as
+select 1 as id, map(['color', 'size', 'note'], ['red', NULL, NULL]) as attrs
+union all
+select 2 as id, map(['flag'], [NULL]) as attrs;
+
+query I
+copy map_null_src to 'test_files/scratch/copy/map_null_values.json' stored as json;
+----
+2
+
+statement ok
+create external table map_null_back (id bigint, attrs map(varchar, varchar))
+stored as json location 'test_files/scratch/copy/map_null_values.json';
+
+query I?I
+select id, attrs, cardinality(attrs) from map_null_back order by id;
+----
+1 {color: red, size: NULL, note: NULL} 3
+2 {flag: NULL} 1
+
+# MAP nested in a struct / list (no top-level MAP) must also keep NULL values
+query I
+copy (select named_struct('m', map(['k'], [NULL])) as s, [map(['k'], [NULL])] as l)
+to 'test_files/scratch/copy/map_null_nested.json' stored as json;
+----
+1
+
+statement ok
+create external table map_null_nested (s struct<m map(varchar, varchar)>, l map(varchar, varchar)[])
+stored as json location 'test_files/scratch/copy/map_null_nested.json';
+
+query ?I?I
+select s, cardinality(s['m']), l, cardinality(l[1]) from map_null_nested;
+----
+{m: {k: NULL}} 1 [{k: NULL}] 1
+
+statement ok
+drop table map_null_nested;
+
+statement ok
+drop table map_null_back;
+
+statement ok
+drop table map_null_src;

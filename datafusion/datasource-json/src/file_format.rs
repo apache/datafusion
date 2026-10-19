@@ -26,7 +26,7 @@ use std::sync::Arc;
 use crate::source::JsonSource;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::json;
 use arrow::json::reader::{ValueIter, infer_json_schema_from_iterator};
@@ -386,6 +386,40 @@ impl Default for JsonSerializer {
     }
 }
 
+/// Returns true if `data_type` is, or contains at any depth, a `Map`.
+fn contains_map(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Map(_, _) => true,
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::ListView(f)
+        | DataType::LargeListView(f) => contains_map(f.data_type()),
+        DataType::Struct(fields) => fields.iter().any(|f| contains_map(f.data_type())),
+        DataType::Dictionary(_, v) => contains_map(v),
+        DataType::RunEndEncoded(_, v) => contains_map(v.data_type()),
+        _ => false,
+    }
+}
+
+/// Creates a newline-delimited JSON writer for `schema`.
+///
+/// By default arrow-json omits keys whose value is NULL. For a `Map` that drops
+/// the entry itself, losing the key and changing the map's cardinality (see
+/// <https://github.com/apache/datafusion/issues/26493>). So when the schema
+/// contains a `Map` at any depth, NULLs are written explicitly. This is a
+/// writer-wide setting, so every other NULL in the same output is written as
+/// `null` too. Schemas without a `Map` keep the default.
+pub(crate) fn ndjson_writer<W: std::io::Write>(
+    schema: &Schema,
+    sink: W,
+) -> json::Writer<W, json::writer::LineDelimited> {
+    let explicit_nulls = schema.fields().iter().any(|f| contains_map(f.data_type()));
+    json::writer::WriterBuilder::new()
+        .with_explicit_nulls(explicit_nulls)
+        .build::<_, json::writer::LineDelimited>(sink)
+}
+
 /// Define a struct for serializing Json records to a stream
 pub struct JsonSerializer {}
 
@@ -399,7 +433,7 @@ impl JsonSerializer {
 impl BatchSerializer for JsonSerializer {
     fn serialize(&self, batch: RecordBatch, _initial: bool) -> Result<Bytes> {
         let mut buffer = Vec::with_capacity(4096);
-        let mut writer = json::LineDelimitedWriter::new(&mut buffer);
+        let mut writer = ndjson_writer(batch.schema_ref(), &mut buffer);
         writer.write(&batch)?;
         Ok(Bytes::from(buffer))
     }
@@ -656,5 +690,78 @@ impl From<&JsonFormatFactory> for datafusion_proto_models::protobuf::JsonOptions
         } else {
             datafusion_proto_models::protobuf::JsonOptions::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow::array::{Array, ArrayRef, Int32Array, MapBuilder, StringBuilder};
+    use arrow::datatypes::{Field, Fields};
+
+    fn map_type() -> DataType {
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("keys", DataType::Utf8, false),
+                    Field::new("values", DataType::Utf8, true),
+                ])),
+                false,
+            )),
+            false,
+        )
+    }
+
+    #[test]
+    fn contains_map_looks_through_nested_types() {
+        let map = map_type();
+        let list_of_struct_of_map = DataType::new_list(
+            DataType::Struct(Fields::from(vec![Field::new("m", map.clone(), true)])),
+            true,
+        );
+        let dictionary =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(map.clone()));
+        let run_end_encoded = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", map.clone(), true)),
+        );
+
+        assert!(contains_map(&map));
+        assert!(contains_map(&list_of_struct_of_map));
+        assert!(contains_map(&dictionary));
+        assert!(contains_map(&run_end_encoded));
+        assert!(!contains_map(&DataType::new_list(DataType::Utf8, true)));
+    }
+
+    #[test]
+    fn serialize_writes_explicit_nulls_only_when_schema_has_map() -> Result<()> {
+        let ids: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+
+        // Without a Map, NULLs are omitted as before.
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::clone(&ids)])?;
+        let bytes = JsonSerializer::new().serialize(batch, true)?;
+        assert_eq!(std::str::from_utf8(&bytes).unwrap(), "{}\n");
+
+        // With a Map, NULL map values and every other NULL are written explicitly.
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+        builder.keys().append_value("k");
+        builder.values().append_null();
+        builder.append(true)?;
+        let map = Arc::new(builder.finish());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("m", map.data_type().clone(), true),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![ids, map])?;
+        let bytes = JsonSerializer::new().serialize(batch, true)?;
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            "{\"id\":null,\"m\":{\"k\":null}}\n"
+        );
+        Ok(())
     }
 }
