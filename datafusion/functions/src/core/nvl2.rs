@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, internal_err, utils::take_function_args};
+use datafusion_common::{Result, internal_err, plan_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, Volatility,
@@ -125,20 +125,11 @@ impl ScalarUDFImpl for NVL2Func {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [tested, if_non_null, if_null] = take_function_args(self.name(), arg_types)?;
-        let new_type =
-            [if_non_null, if_null]
-                .iter()
-                .try_fold(tested.clone(), |acc, x| {
-                    // `type_union_coercion` finds a loose common type; the actual
-                    // coercion is done by `maybe_data_types`.
-                    let coerced_type = type_union_coercion(&acc, x);
-                    if let Some(coerced_type) = coerced_type {
-                        Ok(coerced_type)
-                    } else {
-                        internal_err!("Coercion from {acc} to {x} failed.")
-                    }
-                })?;
-        Ok(vec![new_type; arg_types.len()])
+        let Some(new_type) = type_union_coercion(if_non_null, if_null) else {
+            return plan_err!("Coercion from {if_non_null} to {if_null} failed.");
+        };
+
+        Ok(vec![tested.clone(), new_type.clone(), new_type])
     }
 
     fn documentation(&self) -> Option<&Documentation> {

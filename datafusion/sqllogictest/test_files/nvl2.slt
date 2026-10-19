@@ -118,3 +118,44 @@ query ?
 SELECT NVL2(NULL, NULL, NULL);
 ----
 NULL
+
+
+# issue 26024 - nvl2 result type should not depend on its first argument
+statement ok
+CREATE TABLE t AS SELECT
+  1 AS i, 1.5 AS f, 'a' AS s,
+  CAST(1.23 AS DECIMAL(5,2)) AS d1, CAST(4.56 AS DECIMAL(5,2)) AS d2,
+  TIMESTAMP '2024-01-01 10:00:00' AS ts1, TIMESTAMP '2024-01-02 10:00:00' AS ts2;
+
+query T
+SELECT arrow_typeof(CASE WHEN i IS NOT NULL THEN d1 ELSE d2 END) AS case_type FROM t;
+----
+Decimal128(5, 2)
+
+query RT
+SELECT nvl2(i, d1, d2) AS v, arrow_typeof(nvl2(i, d1, d2)) AS v_type FROM t;
+----
+1.23 Decimal128(5, 2)
+
+query RT
+SELECT nvl2(f, d1, d2) AS v, arrow_typeof(nvl2(f, d1, d2)) AS v_type FROM t;
+----
+1.23 Decimal128(5, 2)
+
+query RT
+SELECT nvl2(s, d1, d2) AS v, arrow_typeof(nvl2(s, d1, d2)) AS v_type FROM t;
+----
+1.23 Decimal128(5, 2)
+
+query PT
+SELECT nvl2(i, ts1, ts2) AS v, arrow_typeof(nvl2(i, ts1, ts2)) AS v_type FROM t;
+----
+2024-01-01T10:00:00 Timestamp(ns)
+
+query PT
+SELECT nvl2('a', ts1, ts2) AS v, arrow_typeof(nvl2('a', ts1, ts2)) AS v_type FROM t;
+----
+2024-01-01T10:00:00 Timestamp(ns)
+
+statement ok
+DROP TABLE t;
