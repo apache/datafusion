@@ -25,7 +25,8 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::mem::size_of;
+use std::iter::repeat_n;
+use std::mem::{size_of, take};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -62,11 +63,12 @@ use futures::StreamExt;
 pub(super) struct StreamedJoinedChunk {
     /// Index of batch in buffered_data
     buffered_batch_idx: Option<usize>,
-    /// Array builder for streamed indices
-    streamed_indices: UInt64Builder,
-    /// Array builder for buffered indices
-    /// This could contain nulls if the join is null-joined
-    buffered_indices: UInt64Builder,
+    /// Streamed indices, which are never null
+    streamed_indices: Vec<u64>,
+    /// Buffered indices. The slot of a null-joined pair holds 0.
+    buffered_indices: Vec<u64>,
+    /// Validity of `buffered_indices`, null where the pair is null-joined
+    buffered_nulls: NullBufferBuilder,
 }
 
 /// Represents a record batch from streamed input.
@@ -126,8 +128,9 @@ impl StreamedBatch {
     ) {
         let streamed_idx = self.idx as u64;
         let current_chunk = self.chunk_for(buffered_batch_idx, batch_size);
-        current_chunk.streamed_indices.append_value(streamed_idx);
-        current_chunk.buffered_indices.append_null();
+        current_chunk.streamed_indices.push(streamed_idx);
+        current_chunk.buffered_indices.push(0);
+        current_chunk.buffered_nulls.append_null();
         self.num_output_rows += 1;
     }
 
@@ -152,10 +155,9 @@ impl StreamedBatch {
             1 => {
                 let streamed_idx = self.idx as u64;
                 let current_chunk = self.chunk_for(Some(buffered_batch_idx), batch_size);
-                current_chunk.streamed_indices.append_value(streamed_idx);
-                current_chunk
-                    .buffered_indices
-                    .append_value(buffered_start as u64);
+                current_chunk.streamed_indices.push(streamed_idx);
+                current_chunk.buffered_indices.push(buffered_start as u64);
+                current_chunk.buffered_nulls.append_non_null();
                 self.num_output_rows += 1;
             }
             _ => self.append_output_range(
@@ -182,11 +184,12 @@ impl StreamedBatch {
         let current_chunk = self.chunk_for(Some(buffered_batch_idx), batch_size);
         current_chunk
             .streamed_indices
-            .append_value_n(streamed_idx, len);
+            .extend(repeat_n(streamed_idx, len));
         let start = buffered_start as u64;
-        for idx in start..start + len as u64 {
-            current_chunk.buffered_indices.append_value(idx);
-        }
+        current_chunk
+            .buffered_indices
+            .extend(start..start + len as u64);
+        current_chunk.buffered_nulls.append_n_non_nulls(len);
         self.num_output_rows += len;
     }
 
@@ -220,8 +223,9 @@ impl StreamedBatch {
         let capacity = batch_size - self.num_output_rows;
         self.output_indices.push(StreamedJoinedChunk {
             buffered_batch_idx,
-            streamed_indices: UInt64Builder::with_capacity(capacity),
-            buffered_indices: UInt64Builder::with_capacity(capacity),
+            streamed_indices: Vec::with_capacity(capacity),
+            buffered_indices: Vec::with_capacity(capacity),
+            buffered_nulls: NullBufferBuilder::new(capacity),
         });
         self.buffered_batch_idx = buffered_batch_idx;
     }
@@ -1587,11 +1591,15 @@ impl MaterializingSortMergeJoinStream {
         let mut total_matched_rows: usize = 0;
 
         for chunk in self.streamed_batch.output_indices.iter_mut() {
-            let left_indices = chunk.streamed_indices.finish();
+            let left_indices =
+                UInt64Array::try_new(take(&mut chunk.streamed_indices).into(), None)?;
             if left_indices.is_empty() {
                 continue;
             }
-            let right_indices: UInt64Array = chunk.buffered_indices.finish();
+            let right_indices = UInt64Array::try_new(
+                take(&mut chunk.buffered_indices).into(),
+                chunk.buffered_nulls.finish(),
+            )?;
 
             if chunk.buffered_batch_idx.is_none() {
                 let left_columns =
