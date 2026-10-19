@@ -1443,6 +1443,7 @@ fn try_push_into_inputs(
     // so if the TopDown pass later pushes a child further (changing its output
     // schema), the parent node's schema becomes stale.
     let mut new_inputs: Vec<LogicalPlan> = Vec::with_capacity(num_inputs);
+    let is_union = matches!(node, LogicalPlan::Union(_));
     for (idx, input) in inputs.into_iter().enumerate() {
         if per_input[idx].pairs.is_empty() {
             new_inputs.push(input.clone());
@@ -1478,9 +1479,14 @@ fn try_push_into_inputs(
             // this input (e.g., through Filter → existing extraction projection).
             // This ensures the input's output schema is stable and won't change
             // when the TopDown pass later visits children.
-            match try_push_input(&proj_plan, alias_generator)? {
-                Some(pushed) => new_inputs.push(pushed),
-                None => new_inputs.push(proj_plan),
+            let pushed = match try_push_input(&proj_plan, alias_generator)? {
+                Some(pushed) => pushed,
+                None => proj_plan,
+            };
+            if is_union {
+                new_inputs.push(align_union_input(pushed, &per_input[idx])?);
+            } else {
+                new_inputs.push(pushed);
             }
         }
     }
@@ -1499,6 +1505,40 @@ fn try_push_into_inputs(
     }
 
     Ok(Some(new_node))
+}
+
+/// Projects one input of a `Union` to the extracted aliases, in pair order,
+/// followed by the needed columns, in column order.
+///
+/// `Union` matches its inputs by position, not by name. A merge into an
+/// existing projection appends the aliases after the existing expressions,
+/// while a new projection puts them first. Without this, two inputs that take
+/// different paths disagree on the position of each column, and the union
+/// reads the alias of one input from an unrelated column of another input.
+fn align_union_input(
+    input: LogicalPlan,
+    target: &ExtractionTarget,
+) -> Result<LogicalPlan> {
+    let exprs: Vec<Expr> = target
+        .pairs
+        .iter()
+        .map(|(_, alias)| Expr::Column(Column::new_unqualified(alias)))
+        .chain(target.columns.iter().map(|col| Expr::Column(col.clone())))
+        .collect();
+    // Skip the extra projection when the input already has this exact layout.
+    let fields = input.schema().fields();
+    let already_aligned = fields.len() == exprs.len()
+        && target
+            .pairs
+            .iter()
+            .map(|(_, alias)| alias.as_str())
+            .chain(target.columns.iter().map(|col| col.name.as_str()))
+            .zip(fields.iter())
+            .all(|(name, field)| field.name() == name);
+    if already_aligned {
+        return Ok(input);
+    }
+    Projection::try_new(exprs, Arc::new(input)).map(LogicalPlan::Projection)
 }
 
 #[cfg(test)]
