@@ -3581,6 +3581,19 @@ SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (ORDER BY v
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
 SELECT win_outer.k, (SELECT count(*) OVER () FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS m FROM win_outer ORDER BY win_outer.k;
 
+# A projection that drops the aggregate column keeps the count bug handling, so
+# the subquery stays correlated. The right answer is `(1, 1), (2, 1), (5, 1)`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT count(*) OVER () FROM (SELECT 1 AS x FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS b) AS m FROM win_outer ORDER BY win_outer.k;
+
+# Without the window, the constant keeps its value for an outer row without a match.
+query II
+SELECT win_outer.k, (SELECT b.x FROM (SELECT 1 AS x FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS b) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 1
+2 1
+5 1
+
 # LEFT JOIN LATERAL keeps the outer rows without a match.
 query III
 SELECT win_outer.k, s.id, s.rn FROM win_outer LEFT JOIN LATERAL (SELECT win_inner.id, row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k) AS s ON true ORDER BY win_outer.k;

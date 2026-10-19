@@ -1142,7 +1142,11 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             })
             .data()?;
 
-        if result_expr.ne(expr) {
+        // An expression that reads no column, like `1 AS x`, keeps its value
+        // on an empty input, while the join that replaces the subquery gives
+        // it NULL for an outer row without a match.
+        let is_constant = !expr.any_column_refs() && !expr.contains_outer();
+        if result_expr.ne(expr) || is_constant {
             let info = SimplifyContext::builder()
                 .with_schema(Arc::clone(schema))
                 .build();
