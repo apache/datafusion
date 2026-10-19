@@ -187,6 +187,19 @@ impl CrossJoinExec {
     /// This function should be called BEFORE inserting any repartitioning
     /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
     /// for more details.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// Direct use of this API in downstream projects is discouraged because
+    /// correctness depends on strict preconditions. See the notes above for
+    /// correct usage.
+    ///
+    /// This API may change frequently as internal join optimizations evolve.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let new_join =
             CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));
@@ -613,22 +626,16 @@ fn build_batch(
     schema: &Schema,
 ) -> Result<RecordBatch> {
     // Repeat value on the left n times
-    let arrays = left_data
-        .columns()
-        .iter()
-        .map(|arr| {
-            let scalar = ScalarValue::try_from_array(arr, left_index)?;
-            scalar.to_array_of_size(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut arrays = Vec::with_capacity(left_data.num_columns() + batch.num_columns());
+    for arr in left_data.columns() {
+        let scalar = ScalarValue::try_from_array(arr, left_index)?;
+        arrays.push(scalar.to_array_of_size(batch.num_rows())?);
+    }
+    arrays.extend_from_slice(batch.columns());
 
     RecordBatch::try_new_with_options(
         Arc::new(schema.clone()),
-        arrays
-            .iter()
-            .chain(batch.columns().iter())
-            .cloned()
-            .collect(),
+        arrays,
         &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
     )
     .map_err(Into::into)
@@ -706,7 +713,9 @@ impl CrossJoinStream {
 mod tests {
     use super::*;
     use crate::common;
-    use crate::test::{assert_join_metrics, build_table_scan_i32};
+    use crate::test::{
+        TestMemoryExec, assert_join_metrics, build_table_i32, build_table_scan_i32,
+    };
 
     use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -725,6 +734,29 @@ mod tests {
         let metrics = join.metrics().unwrap();
 
         Ok((columns_header, batches, metrics))
+    }
+
+    /// Split a 3-column i32 table into `RecordBatch`es of at most `input_batch_size` rows.
+    fn build_table_scan_i32_chunked(
+        a: (&str, &Vec<i32>),
+        b: (&str, &Vec<i32>),
+        c: (&str, &Vec<i32>),
+        input_batch_size: usize,
+    ) -> Arc<dyn ExecutionPlan> {
+        let full = build_table_i32(a, b, c);
+        let n = full.num_rows();
+        let batches = (0..n)
+            .step_by(input_batch_size)
+            .map(|i| full.slice(i, input_batch_size.min(n - i)))
+            .collect();
+        TestMemoryExec::try_new_exec(&[batches], full.schema(), None).unwrap()
+    }
+
+    fn metric_count(metrics: &MetricsSet, name: &str) -> usize {
+        metrics
+            .sum_by_name(name)
+            .expect("missing metric")
+            .as_usize()
     }
 
     #[tokio::test]
@@ -966,6 +998,50 @@ mod tests {
         ");
 
         assert_join_metrics!(metrics, 6);
+        assert_eq!(metric_count(&metrics, "build_input_rows"), 3);
+        assert_eq!(metric_count(&metrics, "input_rows"), 2);
+
+        Ok(())
+    }
+
+    /// `build_input_rows`, `input_rows`, and `output_rows` must count each row
+    /// once when the build and probe sides arrive as several batches.
+    #[tokio::test]
+    async fn join_metrics_count_rows_once_across_batches() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        // 2: left 2+1, right 2.  1: left 3×1, right 2×1.
+        for (input_batch_size, expected_build_batches, expected_probe_batches) in
+            [(2, 2, 1), (1, 3, 2)]
+        {
+            let left = build_table_scan_i32_chunked(
+                ("a1", &vec![1, 2, 3]),
+                ("b1", &vec![4, 5, 6]),
+                ("c1", &vec![7, 8, 9]),
+                input_batch_size,
+            );
+            let right = build_table_scan_i32_chunked(
+                ("a2", &vec![10, 11]),
+                ("b2", &vec![12, 13]),
+                ("c2", &vec![14, 15]),
+                input_batch_size,
+            );
+
+            let (_, batches, metrics) =
+                join_collect(left, right, Arc::clone(&task_ctx)).await?;
+            let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(num_rows, 6);
+            assert_join_metrics!(metrics, 6);
+            assert_eq!(metric_count(&metrics, "build_input_rows"), 3);
+            assert_eq!(metric_count(&metrics, "input_rows"), 2);
+            assert_eq!(
+                metric_count(&metrics, "build_input_batches"),
+                expected_build_batches
+            );
+            assert_eq!(
+                metric_count(&metrics, "input_batches"),
+                expected_probe_batches
+            );
+        }
 
         Ok(())
     }

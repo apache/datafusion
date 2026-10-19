@@ -197,6 +197,7 @@ impl HashJoinExec {
             self.null_equality,
             None,
             count,
+            Count::new(),
             BuildMode::Prepared,
         )
         .await?;
