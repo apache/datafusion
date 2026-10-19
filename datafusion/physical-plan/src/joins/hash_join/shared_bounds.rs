@@ -29,9 +29,9 @@ use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::{HASH_JOIN_SEED, NullAwareMode};
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
-    HashExpr, HashTableLookupExpr, PartitionLookup, PartitionedLookupExpr,
-    SeededRandomState,
+    HashExpr, HashTableLookupExpr, SeededRandomState,
 };
+use crate::joins::join_hash_map::union_hash_maps;
 use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::repartition::RangeExpr;
 use arrow::array::ArrayRef;
@@ -688,9 +688,9 @@ impl SharedBuildAccumulator {
         let mut empty_partition_ids = Vec::new();
         let mut has_canceled_unknown = false;
         let mut keys_have_null = false;
-        // Per-partition lookups for `PartitionedLookupExpr`; `None` once a
-        // partition needs a predicate that expression cannot route to.
-        let mut lookups = Some(Vec::with_capacity(partition_filters.capacity()));
+        // Every non-empty partition's hash table, merged into one membership
+        // lookup below; `None` once a partition's build side cannot be merged.
+        let mut hash_maps = Some(Vec::with_capacity(partitions.len()));
         let mut merged_bounds: Option<PartitionBounds> = None;
 
         for (partition_id, partition) in partitions.into_iter().enumerate() {
@@ -701,9 +701,6 @@ impl SharedBuildAccumulator {
                 }) => {
                     empty_partition_ids.push(partition_id);
                     partition_filters.push(lit(false));
-                    if let Some(lookups) = &mut lookups {
-                        lookups.push(PartitionLookup::Const(false));
-                    }
                 }
                 PartitionStatus::Reported(PartitionData {
                     bounds,
@@ -712,12 +709,12 @@ impl SharedBuildAccumulator {
                 }) => {
                     real_partition_ids.push(partition_id);
                     keys_have_null |= partition_keys_have_null;
-                    lookups = match (&pushdown, lookups) {
-                        (PushdownStrategy::Map(map, _), Some(mut lookups))
+                    hash_maps = match (&pushdown, hash_maps) {
+                        (PushdownStrategy::Map(map, _), Some(mut hash_maps))
                             if matches!(map.as_ref(), Map::HashMap(_)) =>
                         {
-                            lookups.push(PartitionLookup::Map(Arc::clone(map)));
-                            Some(lookups)
+                            hash_maps.push(Arc::clone(map));
+                            Some(hash_maps)
                         }
                         _ => None,
                     };
@@ -726,6 +723,7 @@ impl SharedBuildAccumulator {
                         (Some(merged), _) => merged.union(&bounds),
                         (None, _) => None,
                     };
+
                     let membership_expr = create_membership_predicate(
                         &self.on_right,
                         pushdown,
@@ -741,9 +739,8 @@ impl SharedBuildAccumulator {
                 PartitionStatus::CanceledUnknown => {
                     has_canceled_unknown = true;
                     partition_filters.push(lit(true));
-                    if let Some(lookups) = &mut lookups {
-                        lookups.push(PartitionLookup::Const(true));
-                    }
+                    // Rows routed here must pass, which a merged lookup cannot express.
+                    hash_maps = None;
                     // A canceled partition's build content is unknown, so it
                     // may hold a NULL key.
                     keys_have_null = true;
@@ -773,17 +770,25 @@ impl SharedBuildAccumulator {
             // Only one build partition contains rows, so its filter covers every
             // possible probe match without routing.
             Arc::clone(&partition_filters[real_partition_ids[0]])
-        } else if let Some(lookups) = lookups.filter(|lookups| {
-            self.probe_range_partitioning.is_none()
-                && lookups.iter().any(|l| matches!(l, PartitionLookup::Map(_)))
-        }) {
-            // Every partition is a hash table, so route rows to the right table
-            // directly instead of through a CASE over per-partition filters.
-            let membership = Arc::new(PartitionedLookupExpr::new(
+        } else if let Some(hash_maps) = hash_maps {
+            // Every non-empty partition is a hash table. A key is only ever built
+            // into the partition it is routed to, so membership in the union of
+            // all tables equals membership in the routed table, and needs neither
+            // a routing hash nor a CASE over per-partition filters.
+            let tables = hash_maps
+                .iter()
+                .filter_map(|map| match map.as_ref() {
+                    Map::HashMap(table) => Some(table.as_ref()),
+                    Map::ArrayMap(_) => None,
+                })
+                .collect::<Vec<_>>();
+            let union = Arc::new(Map::HashMap(union_hash_maps(&tables)));
+            let membership = Arc::new(HashTableLookupExpr::new(
                 self.on_right.clone(),
-                self.repartition_random_state.clone(),
                 HASH_JOIN_SEED,
-                lookups,
+                union,
+                String::from("hash_lookup"),
+                None,
             )) as Arc<dyn PhysicalExpr>;
             let bounds = merged_bounds
                 .and_then(|bounds| create_bounds_predicate(&self.on_right, &bounds));
@@ -1218,7 +1223,7 @@ mod tests {
         assert!(expr.downcast_ref::<CaseExpr>().is_none());
         assert_eq!(
             expr.to_string(),
-            "probe_key@0 >= 1 AND probe_key@0 <= 10 AND partitioned_hash_lookup(3)"
+            "probe_key@0 >= 1 AND probe_key@0 <= 10 AND hash_lookup"
         );
     }
 

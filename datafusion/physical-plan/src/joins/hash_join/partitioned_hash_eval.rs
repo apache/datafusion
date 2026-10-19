@@ -20,13 +20,13 @@
 use std::{fmt::Display, hash::Hash, sync::Arc};
 
 use arrow::{
-    array::{ArrayRef, BooleanArray, UInt64Array},
+    array::{ArrayRef, UInt64Array},
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::{create_hashes, with_hashes};
-use datafusion_common::{Result, internal_err};
+use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
@@ -456,209 +456,6 @@ impl PhysicalExpr for HashTableLookupExpr {
     }
 }
 
-/// Build-side lookup for one partition of a `Partitioned` hash join.
-pub(crate) enum PartitionLookup {
-    /// The partition's hash table; probe rows routed here are looked up in it.
-    Map(Arc<Map>),
-    /// The partition is known empty (`false`) or its contents are unknown (`true`).
-    Const(bool),
-}
-
-/// Routes each probe row to the hash table of the build partition that would
-/// contain it and looks the row up there.
-///
-/// This replaces `CASE hash(keys) % n WHEN i THEN lookup_i ... END` for
-/// partitioned joins. `CaseExpr` evaluates each branch by filtering the batch
-/// down to that branch's rows and merging the partial results, which copies
-/// every column of the batch once per branch. This expression computes the
-/// routing and lookup hashes once, buckets row indices by partition and only
-/// gathers the 8-byte hashes, so the batch columns are never copied.
-pub(crate) struct PartitionedLookupExpr {
-    on_columns: Vec<PhysicalExprRef>,
-    routing_state: SeededRandomState,
-    lookup_state: SeededRandomState,
-    partitions: Vec<PartitionLookup>,
-}
-
-impl PartitionedLookupExpr {
-    pub(crate) fn new(
-        on_columns: Vec<PhysicalExprRef>,
-        routing_state: SeededRandomState,
-        lookup_state: SeededRandomState,
-        partitions: Vec<PartitionLookup>,
-    ) -> Self {
-        Self {
-            on_columns,
-            routing_state,
-            lookup_state,
-            partitions,
-        }
-    }
-}
-
-impl std::fmt::Debug for PartitionedLookupExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let cols = self
-            .on_columns
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        write!(
-            f,
-            "partitioned_hash_lookup({cols}, {} partitions)",
-            self.partitions.len()
-        )
-    }
-}
-
-impl Display for PartitionedLookupExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "partitioned_hash_lookup({})", self.partitions.len())
-    }
-}
-
-impl Hash for PartitionedLookupExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.on_columns.dyn_hash(state);
-        self.routing_state.seed().hash(state);
-        self.lookup_state.seed().hash(state);
-        for partition in &self.partitions {
-            match partition {
-                PartitionLookup::Map(map) => Arc::as_ptr(map).hash(state),
-                PartitionLookup::Const(value) => value.hash(state),
-            }
-        }
-    }
-}
-
-impl PartialEq for PartitionedLookupExpr {
-    fn eq(&self, other: &Self) -> bool {
-        self.on_columns == other.on_columns
-            && self.routing_state.seed() == other.routing_state.seed()
-            && self.lookup_state.seed() == other.lookup_state.seed()
-            && self.partitions.len() == other.partitions.len()
-            && self
-                .partitions
-                .iter()
-                .zip(&other.partitions)
-                .all(|(a, b)| match (a, b) {
-                    (PartitionLookup::Map(a), PartitionLookup::Map(b)) => {
-                        Arc::ptr_eq(a, b)
-                    }
-                    (PartitionLookup::Const(a), PartitionLookup::Const(b)) => a == b,
-                    _ => false,
-                })
-    }
-}
-
-impl Eq for PartitionedLookupExpr {}
-
-impl PhysicalExpr for PartitionedLookupExpr {
-    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(DataType::Boolean)
-    }
-
-    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        Ok(false)
-    }
-
-    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let keys = evaluate_columns(&self.on_columns, batch)?;
-        let num_rows = batch.num_rows();
-        let num_partitions = self.partitions.len() as u64;
-
-        // Same routing as RepartitionExec: hash(keys) % partitions.
-        let mut routing_hashes = vec![0u64; num_rows];
-        create_hashes(
-            &keys,
-            self.routing_state.random_state(),
-            &mut routing_hashes,
-        )?;
-        let mut rows_by_partition: Vec<Vec<usize>> =
-            vec![Vec::new(); self.partitions.len()];
-        for (row, hash) in routing_hashes.iter().enumerate() {
-            rows_by_partition[(hash % num_partitions) as usize].push(row);
-        }
-
-        with_hashes(&keys, self.lookup_state.random_state(), |lookup_hashes| {
-            let mut result = vec![false; num_rows];
-            for (partition, rows) in self.partitions.iter().zip(&rows_by_partition) {
-                match partition {
-                    PartitionLookup::Const(value) => {
-                        for &row in rows {
-                            result[row] = *value;
-                        }
-                    }
-                    PartitionLookup::Map(map) => {
-                        let Map::HashMap(map) = map.as_ref() else {
-                            return internal_err!(
-                                "PartitionedLookupExpr only supports hash map partitions"
-                            );
-                        };
-                        let hashes: Vec<u64> =
-                            rows.iter().map(|&row| lookup_hashes[row]).collect();
-                        let hits = map.contain_hashes(&hashes);
-                        for (i, &row) in rows.iter().enumerate() {
-                            result[row] = hits.value(i);
-                        }
-                    }
-                }
-            }
-            Ok(ColumnarValue::Array(Arc::new(BooleanArray::from(result))))
-        })
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        self.on_columns.iter().collect()
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn PhysicalExpr>>,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        let partitions = self
-            .partitions
-            .iter()
-            .map(|p| match p {
-                PartitionLookup::Map(map) => PartitionLookup::Map(Arc::clone(map)),
-                PartitionLookup::Const(value) => PartitionLookup::Const(*value),
-            })
-            .collect();
-        Ok(Arc::new(PartitionedLookupExpr {
-            on_columns: children,
-            routing_state: self.routing_state.clone(),
-            lookup_state: self.lookup_state.clone(),
-            partitions,
-        }))
-    }
-
-    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self}")
-    }
-
-    #[cfg(feature = "proto")]
-    fn try_to_proto(
-        &self,
-        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
-        use datafusion_proto_models::protobuf;
-        use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
-
-        // Like HashTableLookupExpr: the hash tables cannot be serialized, and
-        // dynamic filters are an optimization only, so emit lit(true).
-        let value = datafusion_proto_common::ScalarValue {
-            value: Some(datafusion_proto_common::scalar_value::Value::BoolValue(
-                true,
-            )),
-        };
-        Ok(Some(protobuf::PhysicalExprNode {
-            expr_id: None,
-            expr_type: Some(ExprType::Literal(value)),
-        }))
-    }
-}
-
 fn evaluate_columns(
     columns: &[PhysicalExprRef],
     batch: &RecordBatch,
@@ -673,7 +470,7 @@ fn evaluate_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::joins::join_hash_map::{JoinHashMapType, JoinHashMapU32};
+    use crate::joins::join_hash_map::JoinHashMapU32;
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::Column;
     use std::collections::hash_map::DefaultHasher;
@@ -713,66 +510,6 @@ mod tests {
         let derived = derived.downcast_ref::<HashTableLookupExpr>().unwrap();
         assert_eq!(derived.children()[0].to_string(), "a@7");
         assert!(Arc::ptr_eq(&bitmap, derived.pruning_bitmap().unwrap()));
-    }
-
-    /// Rows must be looked up in the table of the partition RepartitionExec
-    /// would send them to, and constant partitions must apply to their rows only.
-    #[test]
-    fn partitioned_lookup_routes_rows_to_their_partition() {
-        let routing = SeededRandomState::with_seed(1);
-        let lookup = SeededRandomState::with_seed(2);
-        let num_partitions = 3u64;
-        let keys: ArrayRef =
-            Arc::new(arrow::array::Int32Array::from((0..300).collect::<Vec<_>>()));
-        let mut routing_hashes = vec![0u64; 300];
-        create_hashes(
-            &[Arc::clone(&keys)],
-            routing.random_state(),
-            &mut routing_hashes,
-        )
-        .unwrap();
-        let mut lookup_hashes = vec![0u64; 300];
-        create_hashes(
-            &[Arc::clone(&keys)],
-            lookup.random_state(),
-            &mut lookup_hashes,
-        )
-        .unwrap();
-
-        // Partition 0 and 1 hold the even keys routed to them; partition 2 is a constant.
-        let partitions = (0..num_partitions)
-            .map(|p| {
-                if p == 2 {
-                    return PartitionLookup::Const(true);
-                }
-                let build: Vec<u64> = (0..300)
-                    .filter(|k| k % 2 == 0 && routing_hashes[*k] % num_partitions == p)
-                    .map(|k| lookup_hashes[k])
-                    .collect();
-                let mut map = JoinHashMapU32::with_capacity(build.len());
-                map.update_from_iter(Box::new(build.iter().enumerate()), 0);
-                PartitionLookup::Map(Arc::new(Map::HashMap(Box::new(map))))
-            })
-            .collect();
-        let expr = PartitionedLookupExpr::new(
-            vec![Arc::new(Column::new("k", 0))],
-            routing,
-            lookup,
-            partitions,
-        );
-
-        let schema = Arc::new(Schema::new(vec![arrow::datatypes::Field::new(
-            "k",
-            DataType::Int32,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(schema, vec![keys]).unwrap();
-        let result = expr.evaluate(&batch).unwrap().into_array(300).unwrap();
-        let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
-        for (k, routing_hash) in routing_hashes.iter().enumerate() {
-            let expected = routing_hash % num_partitions == 2 || k % 2 == 0;
-            assert_eq!(result.value(k), expected, "key {k}");
-        }
     }
 
     #[test]
