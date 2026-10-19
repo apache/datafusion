@@ -19,25 +19,26 @@
 
 use std::sync::Arc;
 
+use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinSide, JoinType, internal_datafusion_err};
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{Column, LambdaExpr, Literal};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprSimplifier};
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::joins::NestedLoopJoinExec;
-use datafusion_physical_plan::joins::utils::ColumnIndex;
+use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::joins::{CrossJoinExec, NestedLoopJoinExec};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use crate::PhysicalOptimizerRule;
 
-/// Rewrites an inner [`NestedLoopJoinExec`] whose input provably produces one row
-/// of literals into a [`FilterExec`] over the other input, with the literals
-/// substituted into the join filter, under a [`ProjectionExec`] that restores the
-/// join's output.
+/// Rewrites an inner [`NestedLoopJoinExec`] or a [`CrossJoinExec`] whose input
+/// provably produces one row of literals into a [`FilterExec`] over the other
+/// input, with the literals substituted into the join filter, under a
+/// [`ProjectionExec`] that restores the join's output.
 ///
 /// For example, [`AggregateStatistics`] folds the scalar subquery in
 ///
@@ -70,10 +71,15 @@ impl PhysicalOptimizerRule for EliminateConstantJoin {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
-            let Some(join) = plan.downcast_ref::<NestedLoopJoinExec>() else {
-                return Ok(Transformed::no(plan));
+            let rewritten = if let Some(join) = plan.downcast_ref::<NestedLoopJoinExec>()
+            {
+                eliminate_nested_loop_join(join)?
+            } else if let Some(join) = plan.downcast_ref::<CrossJoinExec>() {
+                eliminate(join.left(), join.right(), None, None, &join.schema())?
+            } else {
+                None
             };
-            Ok(match eliminate(join)? {
+            Ok(match rewritten {
                 Some(rewritten) => Transformed::yes(rewritten),
                 None => Transformed::no(plan),
             })
@@ -90,8 +96,11 @@ impl PhysicalOptimizerRule for EliminateConstantJoin {
     }
 }
 
-/// Rewrites `join` over its non-constant input, if the other input is a constant row.
-fn eliminate(join: &NestedLoopJoinExec) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+/// Rewrites `join` if it is an inner join against a constant row and its filter
+/// has no lambdas.
+fn eliminate_nested_loop_join(
+    join: &NestedLoopJoinExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     if join.join_type() != &JoinType::Inner {
         return Ok(None);
     }
@@ -104,17 +113,35 @@ fn eliminate(join: &NestedLoopJoinExec) -> Result<Option<Arc<dyn ExecutionPlan>>
     {
         return Ok(None);
     }
+    eliminate(
+        join.left(),
+        join.right(),
+        join.filter(),
+        join.projection().as_deref(),
+        &join.schema(),
+    )
+}
+
+/// Rewrites an inner join of `left_input` and `right_input` over its non-constant
+/// input, if the other input is a constant row.
+fn eliminate(
+    left_input: &Arc<dyn ExecutionPlan>,
+    right_input: &Arc<dyn ExecutionPlan>,
+    filter: Option<&JoinFilter>,
+    projection: Option<&[usize]>,
+    schema: &SchemaRef,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // Each input's columns as expressions over the non-constant input.
-    let (left, right, input) = if let Some(row) = constant_row(join.left()) {
-        (row, columns(join.right()), join.right())
-    } else if let Some(row) = constant_row(join.right()) {
-        (columns(join.left()), row, join.left())
+    let (left, right, input) = if let Some(row) = constant_row(left_input) {
+        (row, columns(right_input), right_input)
+    } else if let Some(row) = constant_row(right_input) {
+        (columns(left_input), row, left_input)
     } else {
         return Ok(None);
     };
 
     let mut input = Arc::clone(input);
-    if let Some(filter) = join.filter() {
+    if let Some(filter) = filter {
         let predicate = Arc::clone(filter.expression())
             .transform_up(|expr| {
                 let Some(column) = expr.downcast_ref::<Column>() else {
@@ -141,14 +168,13 @@ fn eliminate(join: &NestedLoopJoinExec) -> Result<Option<Arc<dyn ExecutionPlan>>
     }
 
     let mut outputs = left.into_iter().chain(right).collect::<Vec<_>>();
-    if let Some(projection) = join.projection() {
+    if let Some(projection) = projection {
         outputs = projection
             .iter()
             .map(|&index| outputs.get(index).cloned())
             .collect::<Option<_>>()
             .ok_or_else(|| internal_datafusion_err!("Join projection out of range"))?;
     }
-    let schema = join.schema();
     let exprs = outputs
         .into_iter()
         .zip(schema.fields())
@@ -158,13 +184,13 @@ fn eliminate(join: &NestedLoopJoinExec) -> Result<Option<Arc<dyn ExecutionPlan>>
         });
     // Keep the join's metadata, which may come from the constant input.
     Ok(Some(Arc::new(
-        ProjectionExec::try_new_with_schema_metadata(exprs, input, &schema)?,
+        ProjectionExec::try_new_with_schema_metadata(exprs, input, schema)?,
     )))
 }
 
 /// Returns the literal values of the one row `plan` produces, if it is a stack of
-/// projections over a single-partition [`PlaceholderRowExec`] that project only
-/// literals and columns of the projection below.
+/// projections over a single-partition [`PlaceholderRowExec`] whose expressions
+/// evaluate to literals at planning time.
 fn constant_row(plan: &Arc<dyn ExecutionPlan>) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
     let projection = plan.downcast_ref::<ProjectionExec>()?;
     let input = projection.input();
@@ -178,15 +204,30 @@ fn constant_row(plan: &Arc<dyn ExecutionPlan>) -> Option<Vec<Arc<dyn PhysicalExp
     } else {
         constant_row(input)?
     };
+    // The logical simplifier already folds constant expressions, but those over a
+    // value `AggregateStatistics` folded, such as `min(ts) + 1`, are only constant
+    // now. Volatile expressions and ones that fail to evaluate are not folded, and
+    // are rejected: the filter would evaluate them for every row instead of once.
+    let schema = input.schema();
+    let simplifier = PhysicalExprSimplifier::new(&schema);
     projection
         .expr()
         .iter()
         .map(|ProjectionExpr { expr, .. }| {
-            if expr.is::<Literal>() {
-                return Some(Arc::clone(expr));
-            }
-            let column = expr.downcast_ref::<Column>()?;
-            input_row.get(column.index()).cloned()
+            let expr = Arc::clone(expr)
+                .transform_up(|expr| {
+                    let value = expr
+                        .downcast_ref::<Column>()
+                        .and_then(|column| input_row.get(column.index()));
+                    Ok(match value {
+                        Some(value) => Transformed::yes(Arc::clone(value)),
+                        None => Transformed::no(expr),
+                    })
+                })
+                .data()
+                .and_then(|expr| simplifier.simplify(expr))
+                .ok()?;
+            expr.is::<Literal>().then_some(expr)
         })
         .collect()
 }

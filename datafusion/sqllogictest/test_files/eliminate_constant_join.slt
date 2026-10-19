@@ -75,6 +75,46 @@ a 1
 b 1
 c 1
 
+# Expressions over a value folded from statistics are evaluated at planning time
+query TT
+EXPLAIN SELECT e.acct
+FROM events e CROSS JOIN (SELECT min(ts) + 1 AS cutoff FROM live) l
+WHERE e.t < l.cutoff;
+----
+physical_plan
+01)FilterExec: 26 > t@1, projection=[acct@0]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/eliminate_constant_join/events.parquet]]}, projection=[acct, t], output_ordering=[acct@0 ASC NULLS LAST], file_type=parquet, predicate=26 > t@1, pruning_predicate=t_null_count@1 != row_count@2 AND t_min@0 < 26, required_guarantees=[]
+
+query T rowsort
+SELECT e.acct
+FROM events e CROSS JOIN (SELECT min(ts) + 1 AS cutoff FROM live) l
+WHERE e.t < l.cutoff;
+----
+a
+b
+c
+
+# A cross join with a constant row keeps the other input's ordering
+query TT
+EXPLAIN SELECT e.acct, l.first_ts, count(*) AS n
+FROM events e CROSS JOIN (SELECT min(ts) AS first_ts FROM live) l
+GROUP BY e.acct, l.first_ts;
+----
+physical_plan
+01)ProjectionExec: expr=[acct@0 as acct, first_ts@1 as first_ts, count(Int64(1))@2 as n]
+02)--AggregateExec: mode=Single, gby=[acct@0 as acct, first_ts@1 as first_ts], aggr=[count(Int64(1))], group_clustering_mode=Full
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/eliminate_constant_join/events.parquet]]}, projection=[acct, 25 as first_ts], output_ordering=[acct@0 ASC NULLS LAST], file_type=parquet
+
+query TII
+SELECT e.acct, l.first_ts, count(*) AS n
+FROM events e CROSS JOIN (SELECT min(ts) AS first_ts FROM live) l
+GROUP BY e.acct, l.first_ts
+ORDER BY e.acct;
+----
+a 25 2
+b 25 2
+c 25 1
+
 # The constant row's columns stay in the output
 query TT
 EXPLAIN SELECT e.acct, e.t, c.cutoff
@@ -93,7 +133,19 @@ a 10 25
 b 20 25
 c 5 25
 
-# A left join keeps the constant row when nothing matches
+# A left join keeps the constant row when nothing matches, so it stays a join
+query TT
+EXPLAIN SELECT c.cutoff, e.acct
+FROM (SELECT 25 AS cutoff) c LEFT JOIN events e ON e.t > c.cutoff + 100;
+----
+physical_plan
+01)ProjectionExec: expr=[cutoff@0 as cutoff, acct@1 as acct]
+02)--NestedLoopJoinExec: join_type=Left, filter=t@0 > join_proj_push_down_1@1, projection=[cutoff@0, acct@2, t@3]
+03)----ProjectionExec: expr=[cutoff@0 as cutoff, cutoff@0 + 100 as join_proj_push_down_1]
+04)------ProjectionExec: expr=[25 as cutoff]
+05)--------PlaceholderRowExec
+06)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/eliminate_constant_join/events.parquet]]}, projection=[acct, t], output_ordering=[acct@0 ASC NULLS LAST], file_type=parquet
+
 query IT
 SELECT c.cutoff, e.acct
 FROM (SELECT 25 AS cutoff) c LEFT JOIN events e ON e.t > c.cutoff + 100;
