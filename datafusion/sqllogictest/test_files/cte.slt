@@ -1017,6 +1017,62 @@ WITH RECURSIVE my_cte AS (
 ----
 2
 
+# Every signed BIGINT value fits in DECIMAL(19, 0), even though UNION's
+# common-type rules reserve 20 digits for both signed and unsigned BIGINT.
+query TT rowsort
+WITH RECURSIVE my_cte AS (
+    SELECT 0::DECIMAL(19, 0) AS lo, 0::DECIMAL(19, 0) AS hi
+    UNION ALL
+    SELECT '-9223372036854775808'::BIGINT, '9223372036854775807'::BIGINT
+    FROM my_cte WHERE lo = 0
+) SELECT lo::VARCHAR, hi::VARCHAR FROM my_cte;
+----
+-9223372036854775808 9223372036854775807
+0 0
+
+# Unsigned BIGINT requires all 20 integer digits.
+query T rowsort
+WITH RECURSIVE my_cte AS (
+    SELECT 0::DECIMAL(20, 0) AS a
+    UNION ALL
+    SELECT arrow_cast('18446744073709551615', 'UInt64') FROM my_cte WHERE a = 0
+) SELECT a::VARCHAR FROM my_cte;
+----
+0
+18446744073709551615
+
+# Checking decimal destinations before UNION coercion must still reject types
+# whose complete range does not fit, even when the recursive value itself fits.
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Decimal128.* in the non-recursive term but Int64 in the recursive term
+EXPLAIN WITH RECURSIVE my_cte AS (
+    SELECT 1::DECIMAL(18, 0) AS a
+    UNION ALL
+    SELECT 2::BIGINT FROM my_cte WHERE a < 2
+) SELECT * FROM my_cte;
+
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Decimal128.* in the non-recursive term but UInt64 in the recursive term
+EXPLAIN WITH RECURSIVE my_cte AS (
+    SELECT 1::DECIMAL(19, 0) AS a
+    UNION ALL
+    SELECT arrow_cast(2, 'UInt64') FROM my_cte WHERE a < 2
+) SELECT * FROM my_cte;
+
+# Fractional digits leave too little room for the complete signed BIGINT range.
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Decimal128.* in the non-recursive term but Int64 in the recursive term
+EXPLAIN WITH RECURSIVE my_cte AS (
+    SELECT 1::DECIMAL(19, 1) AS a
+    UNION ALL
+    SELECT 2::BIGINT FROM my_cte WHERE a < 2
+) SELECT * FROM my_cte;
+
+# Decimal-to-decimal coercion must not discard fractional digits either.
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Decimal128.* in the non-recursive term but Decimal128.* in the recursive term
+EXPLAIN WITH RECURSIVE my_cte AS (
+    SELECT 1::DECIMAL(20, 1) AS a
+    UNION ALL
+    SELECT 2::DECIMAL(10, 2) FROM my_cte WHERE a < 2
+) SELECT * FROM my_cte;
+
 # Safe widening within date and string types remains supported.
 query I
 WITH RECURSIVE my_cte AS (

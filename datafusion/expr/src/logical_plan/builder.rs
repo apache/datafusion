@@ -120,7 +120,9 @@ fn recursive_type_can_be_coerced(from: &DataType, into: &DataType) -> bool {
     if !from.is_numeric() || !into.is_numeric() {
         return false;
     }
-    if type_union_coercion(into, from).as_ref() != Some(into) {
+    // The decimal range/scale checks below are more precise than UNION coercion,
+    // which reserves 20 digits for Int64 even though its values fit in 19.
+    if !into.is_decimal() && type_union_coercion(into, from).as_ref() != Some(into) {
         return false;
     }
 
