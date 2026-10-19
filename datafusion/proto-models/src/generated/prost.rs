@@ -2006,7 +2006,7 @@ pub struct PhysicalExtensionExprNode {
     pub inputs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     /// Optional type discriminator naming the extension expression, e.g.
     /// "my_crate.MyExpr". When present and registered in the session's
-    /// PhysicalExprRegistry, decoding is routed to that registered
+    /// ProtoDecoderRegistry, decoding is routed to that registered
     /// decoder; otherwise it falls back to PhysicalExtensionCodec::try_decode_expr.
     #[prost(string, optional, tag = "3")]
     pub expr_name: ::core::option::Option<::prost::alloc::string::String>,

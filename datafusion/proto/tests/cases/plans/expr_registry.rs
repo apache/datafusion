@@ -32,10 +32,15 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::proto::PhysicalExprDecodeCtx;
 use datafusion::physical_plan::proto::PhysicalExprEncodeCtx;
 use datafusion::physical_plan::proto::{
-    ExtensionExprFromProto, ProtoDecoderRegistry, extension_expr_node,
-    physical_expr_names, register_physical_expr,
+    ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx, ExtensionExprFromProto,
+    ExtensionPlanFromProto, ProtoDecoderRegistry, extension_expr_node,
+    physical_expr_names, register_execution_plan, register_physical_expr,
+};
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, PlanProperties, SendableRecordBatchStream,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, resources_err,
 };
@@ -50,10 +55,13 @@ use datafusion_proto::bytes::{
     physical_plan_to_bytes_with_extension_codec,
 };
 use datafusion_proto::physical_plan::{
-    DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
-    PhysicalProtoConverterExtension,
+    DeduplicatingProtoConverter, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
-use datafusion_proto::protobuf::{PhysicalExprNode, physical_expr_node};
+use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
+use datafusion_proto::protobuf::{
+    PhysicalExprNode, PhysicalPlanNode, physical_expr_node,
+};
 use prost::Message;
 
 /// The wire name of a [`TaggedExpr`], and whether its decoder fails on
@@ -703,5 +711,272 @@ fn registry_expr_survives_a_whole_plan_roundtrip() -> Result<()> {
     let tag = binary.left().downcast_ref::<TagExpr>().unwrap();
     assert_eq!(tag.tag, "in_plan");
     assert_eq!(tag.decoded_batch_size, Some(4096));
+    Ok(())
+}
+
+/// An extension expression with an identity: two references with the same
+/// `expression_id` share `state`, as two pushed-down copies of one dynamic
+/// filter would. `with_new_children` keeps `state`, so a deduplicating decoder
+/// that re-shares the first decode keeps the two copies linked.
+#[derive(Debug, Clone)]
+struct IdentityExpr {
+    id: u64,
+    state: Arc<String>,
+    child: Arc<dyn PhysicalExpr>,
+}
+
+impl Display for IdentityExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IdentityExpr({}, {})", self.id, self.child)
+    }
+}
+
+impl PartialEq for IdentityExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.child.eq(&other.child)
+    }
+}
+
+impl Eq for IdentityExpr {}
+
+impl std::hash::Hash for IdentityExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.child.hash(state);
+    }
+}
+
+impl PhysicalExpr for IdentityExpr {
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        self.child.data_type(input_schema)
+    }
+
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        self.child.nullable(input_schema)
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        self.child.evaluate(batch)
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.child]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(Self {
+            child: Arc::clone(&children[0]),
+            ..(*self).clone()
+        }))
+    }
+
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(self, f)
+    }
+
+    fn expression_id(&self) -> Option<u64> {
+        Some(self.id)
+    }
+
+    fn try_to_proto(
+        &self,
+        ctx: &PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<PhysicalExprNode>> {
+        // The helper cannot see `expression_id`; the serializer stamps it.
+        Ok(Some(extension_expr_node::<Self>(
+            ctx,
+            name_payload(&self.state),
+            self.children(),
+        )?))
+    }
+}
+
+impl ExtensionExprFromProto for IdentityExpr {
+    const NAME: &'static str = "datafusion-test.IdentityExpr";
+
+    fn try_from_proto(
+        node: &PhysicalExprNode,
+        ctx: &PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let extension = expect_expr_variant!(
+            node,
+            physical_expr_node::ExprType::Extension,
+            "Extension"
+        );
+        let Some(id) = node.expr_id else {
+            return internal_err!("IdentityExpr needs an expr_id");
+        };
+        let mut children = ctx.decode_children_expressions(&extension.inputs)?;
+        Ok(Arc::new(Self {
+            id,
+            state: Arc::new(decode_name_payload(&extension.expr)?),
+            child: children.remove(0),
+        }))
+    }
+}
+
+/// An extension expression built with `extension_expr_node` keeps its
+/// `expression_id` on the wire. Two references to it, with different
+/// children, decode through the deduplicating converter to two expressions
+/// that share state, each with its own child.
+#[test]
+fn registry_expr_keeps_its_expression_id_for_deduplication() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Int64, false),
+    ]));
+    let state = Arc::new("shared".to_string());
+    let left: Arc<dyn PhysicalExpr> = Arc::new(IdentityExpr {
+        id: 42,
+        state: Arc::clone(&state),
+        child: col("a", &schema)?,
+    });
+    let right: Arc<dyn PhysicalExpr> = Arc::new(IdentityExpr {
+        id: 42,
+        state,
+        child: col("b", &schema)?,
+    });
+    let pair: Arc<dyn PhysicalExpr> =
+        Arc::new(BinaryExpr::new(Arc::clone(&left), Operator::And, right));
+
+    let codec = TestCodec::Refusing;
+    let converter = DeduplicatingProtoConverter {};
+    let node = converter.physical_expr_to_proto(&pair, &codec)?;
+    assert_eq!(
+        to_wire(&left, &codec)?.expr_id,
+        Some(42),
+        "the serializer must stamp the expression id"
+    );
+
+    let session =
+        session_with(SessionConfig::new(), register_physical_expr::<IdentityExpr>)?;
+    let task_ctx = session.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let decoded = converter.proto_to_physical_expr(&node, &schema, &decode_ctx)?;
+    let binary = decoded.downcast_ref::<BinaryExpr>().unwrap();
+    let left = binary.left().downcast_ref::<IdentityExpr>().unwrap();
+    let right = binary.right().downcast_ref::<IdentityExpr>().unwrap();
+    assert!(
+        Arc::ptr_eq(&left.state, &right.state),
+        "state must be shared"
+    );
+    assert_eq!(left.child.to_string(), "a@0");
+    assert_eq!(right.child.to_string(), "b@1");
+    Ok(())
+}
+
+/// An extension plan whose wire name equals [`TagExpr::NAME`]. The registry
+/// scopes names per kind, so the plan and the expression do not collide.
+#[derive(Debug)]
+struct SameNameExec {
+    child: Arc<dyn ExecutionPlan>,
+}
+
+impl DisplayAs for SameNameExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "SameNameExec")
+    }
+}
+
+impl ExecutionPlan for SameNameExec {
+    fn name(&self) -> &str {
+        "SameNameExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        self.child.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.child]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            child: children.remove(0),
+        }))
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        internal_err!("SameNameExec is a serde-only test plan")
+    }
+
+    fn try_to_proto(
+        &self,
+        ctx: &ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<PhysicalPlanNode>> {
+        Ok(Some(ctx.extension_node::<Self>(vec![], self.children())?))
+    }
+}
+
+impl ExtensionPlanFromProto for SameNameExec {
+    const NAME: &'static str = Tag::NAME;
+
+    fn try_from_proto(
+        node: &PhysicalPlanNode,
+        ctx: &ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let Some(PhysicalPlanType::Extension(extension)) = &node.physical_plan_type
+        else {
+            return internal_err!("expected an extension node");
+        };
+        let mut children = ctx.decode_children(&extension.inputs)?;
+        Ok(Arc::new(Self {
+            child: children.remove(0),
+        }))
+    }
+}
+
+/// A plan that holds a registered extension plan and a registered extension
+/// expression with the same wire name. Both decode through the registry, each
+/// to its own type.
+#[test]
+fn registry_plan_and_expr_with_the_same_name_roundtrip_together() -> Result<()> {
+    let schema = test_schema();
+    let extension_plan: Arc<dyn ExecutionPlan> = Arc::new(SameNameExec {
+        child: Arc::new(EmptyExec::new(Arc::clone(&schema))),
+    });
+    let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(TagExpr::new("same_name", col("a", &schema)?)),
+        Operator::Eq,
+        lit(1i64),
+    ));
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(predicate, extension_plan)?);
+    let bytes = physical_plan_to_bytes_with_extension_codec(plan, &TestCodec::Refusing)?;
+
+    let session = session_with(SessionConfig::new().with_batch_size(2048), |registry| {
+        register_execution_plan::<SameNameExec>(registry)?;
+        register_physical_expr::<TagExpr>(registry)
+    })?;
+    let decoded = physical_plan_from_bytes_with_extension_codec(
+        &bytes,
+        session.task_ctx().as_ref(),
+        &TestCodec::Refusing,
+    )?;
+    let filter = decoded.downcast_ref::<FilterExec>().unwrap();
+    let binary = filter.predicate().downcast_ref::<BinaryExpr>().unwrap();
+    let tag = binary.left().downcast_ref::<TagExpr>().unwrap();
+    assert_eq!(tag.tag, "same_name");
+    assert_eq!(tag.decoded_batch_size, Some(2048));
+    let extension = filter.input().downcast_ref::<SameNameExec>().unwrap();
+    assert_eq!(extension.child.name(), "EmptyExec");
     Ok(())
 }
