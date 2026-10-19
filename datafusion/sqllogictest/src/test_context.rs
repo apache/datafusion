@@ -68,7 +68,6 @@ use datafusion::physical_plan::operator_statistics::{
 };
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use log::info;
-use sqlparser::ast;
 use tempfile::TempDir;
 
 mod range_partitioning;
@@ -119,7 +118,6 @@ impl TestContext {
             }
         }
 
-
         if matches!(
             relative_path.file_name().and_then(|name| name.to_str()),
             Some("statistics_registry.slt")
@@ -150,7 +148,6 @@ impl TestContext {
                 StatisticsRegistry::with_providers(vec![Arc::new(join_provider)]);
             state_builder = state_builder.with_statistics_registry(registry);
         }
-
 
         let state = state_builder.build();
 

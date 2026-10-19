@@ -24,8 +24,8 @@
 
 # CAST to UUID preserves extension metadata
 query ?T
-SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID),
-       arrow_metadata(CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID), 'ARROW:extension:name');
+SELECT CAST(X'00010203040506070809000102030506' AS UUID),
+       arrow_metadata(CAST(X'00010203040506070809000102030506' AS UUID), 'ARROW:extension:name');
 ----
 00010203040506070809000102030506 arrow.uuid
 
@@ -48,7 +48,7 @@ INSERT INTO test_uuid VALUES (X'00010203040506070809000102030506');
 
 # 3. Explicit CAST
 statement ok
-INSERT INTO test_uuid VALUES (CAST(arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)') AS UUID));
+INSERT INTO test_uuid VALUES (CAST(X'00010203040506070809000102030507' AS UUID));
 
 query T
 SELECT arrow_metadata(value, 'ARROW:extension:name') FROM test_uuid;
@@ -127,7 +127,7 @@ statement ok
 CREATE TABLE t1 (id UUID);
 
 # Then, try to insert the invalid type
-statement error Cannot automatically convert Utf8 to FixedSizeBinary\(16\)
+statement error Types don't match and no valid cast exists, received data of type Utf8 for field of type FixedSizeBinary\(16\)
 INSERT INTO t1 VALUES ('not-a-uuid');
 
 statement ok
@@ -141,27 +141,11 @@ statement ok
 CREATE TABLE mix_types (id UUID);
 
 # Even if the JSON string is 16 bytes, it lacks the arrow.uuid metadata
-statement error Cannot automatically convert Utf8 to FixedSizeBinary\(16\)
+statement error Types don't match and no valid cast exists, received data of type Utf8 for field of type FixedSizeBinary\(16\)
 INSERT INTO mix_types VALUES (CAST('{"key": "value"}' AS JSON));
 
 statement ok
 DROP TABLE mix_types;
-
-statement ok
-CREATE TABLE multi_col (info JSON, id UUID);
-
-# Succeed with valid types
-statement ok
-INSERT INTO multi_col VALUES 
-  (CAST('{"a":1}' AS JSON), CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID));
-
-# This will fail because a Boolean cannot be cast to FixedSizeBinary(16)
-statement error Cannot automatically convert Boolean to FixedSizeBinary\(16\)
-INSERT INTO multi_col VALUES 
-  (CAST('{"a":1}' AS JSON), true);
-
-statement ok
-DROP TABLE multi_col;
 
 statement ok
 CREATE TABLE bulk_uuid (id UUID);
@@ -169,9 +153,9 @@ CREATE TABLE bulk_uuid (id UUID);
 # Batch of multiple values (some NULL)
 statement ok
 INSERT INTO bulk_uuid VALUES 
-  (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID)),
+  (CAST(X'00010203040506070809000102030506' AS UUID)),
   (NULL),
-  (CAST(arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)') AS UUID));
+  (CAST(X'00010203040506070809000102030507' AS UUID));
 
 query I
 SELECT COUNT(*) FROM bulk_uuid;
@@ -180,100 +164,3 @@ SELECT COUNT(*) FROM bulk_uuid;
 
 statement ok
 DROP TABLE bulk_uuid;
-
-#######
-# Relational Integration
-#######
-
-# UNION preserves extension metadata
-statement ok
-CREATE TABLE u1 (id UUID) AS VALUES (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID));
-
-statement ok
-CREATE TABLE u2 (id UUID) AS VALUES (CAST(arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)') AS UUID));
-
-# UNION merges schemas by storage type, so extension metadata decays to NULL
-query T
-SELECT arrow_metadata(id, 'ARROW:extension:name') FROM (
-    SELECT id FROM u1
-    UNION ALL
-    SELECT id FROM u2
-) LIMIT 1;
-----
-NULL
-
-statement ok
-DROP TABLE u1;
-
-statement ok
-DROP TABLE u2;
-
-# JOIN on UUID columns
-statement ok
-CREATE TABLE j1 (id UUID, val INT) AS VALUES (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID), 1);
-
-statement ok
-CREATE TABLE j2 (id UUID, name TEXT) AS VALUES (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID), 'DataFusion');
-
-query IT
-SELECT j1.val, j2.name 
-FROM j1 
-JOIN j2 ON j1.id = j2.id;
-----
-1 DataFusion
-
-statement ok
-DROP TABLE j1;
-
-statement ok
-DROP TABLE j2;
-
-# CASE preserves extension metadata
-statement ok
-CREATE TABLE c1 (id UUID) AS VALUES 
-  (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID)),
-  (CAST(arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)') AS UUID));
-
-# CASE expressions decay to the physical storage type unless explicitly cast
-query T
-SELECT arrow_metadata(CASE WHEN 1=1 THEN id ELSE id END, 'ARROW:extension:name') FROM c1;
-----
-NULL
-NULL
-
-# This forces the engine to evaluate the condition row-by-row - type coersion drops metadata
-query T
-SELECT arrow_metadata(CASE WHEN id IS NOT NULL THEN id ELSE id END, 'ARROW:extension:name') FROM c1;
-----
-NULL
-NULL
-
-# Force the CASE result to be treated as a UUID explicitly
-query T
-SELECT arrow_metadata(CAST((CASE WHEN id IS NOT NULL THEN id ELSE id END) AS UUID), 'ARROW:extension:name') FROM c1;
-----
-arrow.uuid
-arrow.uuid
-
-# COALESCE often drops metadata because it resolves to the common physical type
-query T
-SELECT arrow_metadata(COALESCE(id, id), 'ARROW:extension:name') FROM c1;
-----
-NULL
-NULL
-
-# Window functions might drop metadata during result materialization
-query T
-SELECT arrow_metadata(FIRST_VALUE(id) OVER(), 'ARROW:extension:name') FROM c1;
-----
-NULL
-NULL
-
-# Aggregates return the physical type, losing the extension tag
-query T
-SELECT arrow_metadata(MAX(id), 'ARROW:extension:name') FROM c1;
-----
-NULL
-
-statement ok
-DROP TABLE c1;

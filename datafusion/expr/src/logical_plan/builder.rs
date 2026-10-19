@@ -50,13 +50,14 @@ use crate::{
 };
 
 use super::dml::InsertOp;
+use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, FunctionalDependencies, NullEquality,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions, exec_err,
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
     plan_err,
 };
@@ -274,8 +275,22 @@ impl LogicalPlanBuilder {
         let n_cols = values[0].len();
         let mut fields = ValuesFields::new();
         for j in 0..n_cols {
+            let field_type = schema.field(j).data_type();
+            for row in values.iter() {
+                let value = &row[j];
+                let data_type = value.get_type(schema)?;
+
+                if !data_type.equals_datatype(field_type)
+                    && !can_cast_types(&data_type, field_type)
+                {
+                    return exec_err!(
+                        "Types don't match and no valid cast exists, received data of type {} for field of type {}",
+                        data_type,
+                        field_type
+                    );
+                }
+            }
             let field = schema.field(j);
-            let field_type = field.data_type();
 
             fields.push_with_metadata(
                 field_type.clone(),
@@ -3355,7 +3370,8 @@ mod tests {
 
         assert_eq!(
             err.strip_backtrace(),
-            "Error during planning: Cannot automatically convert Boolean to Date32"
+            "Execution error: Types don't match and no valid cast exists, \
+         received data of type Boolean for field of type Date32"
         );
     }
 }
