@@ -417,8 +417,8 @@ EXPLAIN SELECT * FROM (SELECT a, b FROM ordered_prefix LIMIT 4 OFFSET 3) ORDER B
 ----
 logical_plan
 01)Sort: ordered_prefix.a ASC NULLS LAST, ordered_prefix.b ASC NULLS LAST
-02)--Limit: skip=3, fetch=4
-03)----TableScan: ordered_prefix projection=[a, b], fetch=7
+02)--Limit: skip=0, fetch=4
+03)----TableScan: ordered_prefix projection=[a, b], fetch=4, skip=3
 physical_plan
 01)SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--GlobalLimitExec: skip=3, fetch=4
