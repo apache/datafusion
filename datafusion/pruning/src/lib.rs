@@ -21,6 +21,7 @@ mod file_pruner;
 mod in_list;
 mod primitive_in_list;
 mod pruning_predicate;
+mod range;
 mod string_in_list;
 
 pub use file_pruner::FilePruner;
@@ -28,3 +29,4 @@ pub use pruning_predicate::{
     MAX_IN_LIST_SIZE, PredicateRewriter, PruningPredicate, PruningPredicateBuilder,
     PruningStatistics, RequiredColumns, UnhandledPredicateHook, build_pruning_predicate,
 };
+pub use range::RangePruningStatistics;

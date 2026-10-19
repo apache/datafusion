@@ -28,7 +28,6 @@
 mod config;
 pub mod helpers;
 mod options;
-mod range_pruning;
 mod table;
 
 pub use config::{ListingTableConfig, SchemaSource};

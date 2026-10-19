@@ -1388,6 +1388,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_files_prunes_normalized_range_boundaries() -> Result<()> {
+        let files = [
+            "bucket/key-prefix/file0",
+            "bucket/key-prefix/file1",
+            "bucket/key-prefix/file2",
+            "bucket/key-prefix/file3",
+        ];
+        let ctx = SessionContext::new();
+        // Logical split points need not have the physical range column's type.
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_output_partitioning(Some(LogicalPartitioning::Range(
+                LogicalRangePartitioning::try_new(
+                    vec![col("a").sort(true, true)],
+                    [10_i64, 20, 30]
+                        .into_iter()
+                        .map(|value| SplitPoint::new(vec![ScalarValue::from(value)]))
+                        .collect(),
+                )?,
+            )));
+        let table = listing_table_with_files(
+            &ctx,
+            &files,
+            "test:///bucket/key-prefix/",
+            opt,
+            Schema::new(vec![Field::new("a", DataType::Int32, true)]),
+        )?;
+
+        for (filter, expected) in [
+            (col("a").lt(lit(10_i32)), vec![1, 0, 0, 0]),
+            (col("a").eq(lit(10_i32)), vec![0, 1, 0, 0]),
+            (col("a").gt_eq(lit(30_i32)), vec![0, 0, 0, 1]),
+            (col("a").is_null(), vec![1, 0, 0, 0]),
+        ] {
+            let listed = table
+                .list_files_for_scan(&ctx.state(), std::slice::from_ref(&filter), Some(1))
+                .await?;
+            assert_eq!(
+                listed
+                    .file_groups
+                    .iter()
+                    .map(|g| g.len())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{filter}"
+            );
+            let scan = table.scan(&ctx.state(), None, &[filter], None).await?;
+            assert_eq!(scan.output_partitioning().partition_count(), 4);
+        }
+        // Invalid pruning expressions are conservative; the normal scan/filter
+        // planning remains responsible for reporting any expression error.
+        let invalid_filter = col("missing").eq(lit(10_i32));
+        let listed = table
+            .list_files_for_scan(&ctx.state(), &[invalid_filter], None)
+            .await?;
+        assert_eq!(
+            listed
+                .file_groups
+                .iter()
+                .map(|g| g.len())
+                .collect::<Vec<_>>(),
+            vec![1, 1, 1, 1]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_range_output_partitioning_normalizes_split_point_types() -> Result<()> {
         let files = ["bucket/key-prefix/file0"];
 
