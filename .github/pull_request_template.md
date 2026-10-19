@@ -1,9 +1,12 @@
+> [!IMPORTANT]
+>
+> **Fork CI setup:** For pull requests from a fork to `main`, enable workflows in your fork's **Actions** tab before you push.
+> See the [fork CI setup guide](https://datafusion.apache.org/contributor-guide/#pull-requests-from-forks).
+
 ## Which issue does this PR close?
 
 <!--
 We generally require a GitHub issue to be filed for all bug fixes and enhancements and this helps us generate change logs for our releases. You can link an issue to this PR using the GitHub syntax. For example `Closes #123` indicates that this PR will close issue #123.
-
-If this PR comes from a fork, the Rust workflow runs on your fork: enable workflows on your fork's Actions tab. See https://datafusion.apache.org/contributor-guide/#pull-requests-from-forks
 -->
 
 - Closes #.
@@ -12,7 +15,7 @@ If this PR comes from a fork, the Rust workflow runs on your fork: enable workfl
 
 <!--
  Why are you proposing this change? If this is already explained clearly in the issue then this section is not needed.
- Explaining clearly why changes are proposed helps reviewers understand your changes and offer better suggestions for fixes.  
+ Explaining clearly why changes are proposed helps reviewers understand your changes and offer better suggestions for fixes.
 
 Please explain the problem you are trying to solve in terms of the user-visible
 behavior, rather than the implementation.

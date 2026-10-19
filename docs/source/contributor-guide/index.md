@@ -242,6 +242,11 @@ We also use standard GitHub runners for some actions in the main repository; the
 
 #### Pull Requests from Forks
 
+DataFusion and its subprojects use substantial CI runner time. ASF Infrastructure
+identified them among its largest GitHub Actions users in
+[#25148](https://github.com/apache/datafusion/issues/25148). Fork CI reduces
+duplicate work on ASF's shared runners.
+
 A pull request from a fork to `main` runs the Rust workflow on your fork, with
 your own GitHub Actions runners. The main repository runs only the fast lint jobs for
 such a pull request and adds a `Rust (fork)` check that links to the run on
@@ -250,12 +255,8 @@ a pull request merges, so a green fork run does not replace it.
 
 To make this work:
 
-1. Enable workflows on your fork. Open the **Actions** tab of your fork and
-   confirm the prompt. If the `Rust (fork)` check reports no fork run for a
-   commit that changed code, this step is missing; enable workflows and push
-   again. A push that changes only documentation or Markdown does not start
-   the Rust workflow; the check then reports that no fork run exists for the
-   commit, and the merge queue still runs the full workflow.
+1. Before you push your branch, open the **Actions** tab on your fork.
+   Confirm the prompt to enable workflows.
 2. Keep the `main` branch of your fork in sync with upstream. Runs on your
    branches restore the build caches that a run on your `main` saves, so a
    synced fork builds much faster.
