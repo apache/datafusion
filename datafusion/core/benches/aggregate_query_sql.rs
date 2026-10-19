@@ -17,7 +17,10 @@
 
 mod data_utils;
 
-use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use arrow::array::{Array, AsArray};
+use arrow::datatypes::{
+    DataType, Int32Type, Int64Type, IntervalUnit, TimeUnit, TimestampNanosecondType,
+};
 use criterion::{Criterion, criterion_group, criterion_main};
 use data_utils::create_table_provider;
 use datafusion::datasource::MemTable;
@@ -440,23 +443,47 @@ fn fully_ordered(c: &mut Criterion) {
     let mut group = c.benchmark_group("fully_ordered");
     for (name, key_expr, key_type, run_length) in cases {
         let ctx = rt
-            .block_on(fully_ordered_context(key_expr, &key_type, run_length))
+            .block_on(fully_ordered_context(
+                key_expr, &key_type, run_length, false,
+            ))
             .unwrap();
         group.bench_function(name, |b| {
             b.iter(|| query(ctx.clone(), &rt, FULLY_ORDERED_QUERY))
         });
     }
+    // Add accumulator work for one representative timestamp case without
+    // multiplying every key type and run length by the aggregate expression.
+    let ctx = rt
+        .block_on(fully_ordered_context(
+            "arrow_cast(signed_key, 'Timestamp(Nanosecond)')",
+            &Timestamp(Nanosecond, None),
+            31,
+            true,
+        ))
+        .unwrap();
+    group.bench_function("timestamp_ns_sum", |b| {
+        b.iter(|| query(ctx.clone(), &rt, FULLY_ORDERED_SUM_QUERY))
+    });
     group.finish();
 }
 
 const FULLY_ORDERED_QUERY: &str = "SELECT k1, k2 FROM ordered_input GROUP BY k1, k2";
+const FULLY_ORDERED_SUM_QUERY: &str =
+    "SELECT k1, k2, SUM(v) FROM ordered_input GROUP BY k1, k2";
 
 async fn fully_ordered_context(
     key_expr: &str,
     key_type: &DataType,
     run_length: usize,
+    with_sum: bool,
 ) -> Result<Arc<Mutex<SessionContext>>> {
     const ROWS: usize = 2_097_152;
+    // Use source row numbers as nonconstant values for the aggregate case.
+    let (value_projection, input_value, sql) = if with_sum {
+        (", v", ", value AS v", FULLY_ORDERED_SUM_QUERY)
+    } else {
+        ("", "", FULLY_ORDERED_QUERY)
+    };
     let config = SessionConfig::new()
         .with_target_partitions(1)
         .with_batch_size(8192)
@@ -467,10 +494,10 @@ async fn fully_ordered_context(
     let input = ctx
         .sql(&format!(
             "SELECT CAST(group_id / 32 AS INTEGER) AS k1, \
-             CASE WHEN key_value = 0 THEN NULL ELSE {key_expr} END AS k2 \
+             CASE WHEN key_value = 0 THEN NULL ELSE {key_expr} END AS k2{value_projection} \
              FROM (SELECT value / {run_length} AS group_id, \
                           value / {run_length} % 32 AS key_value, \
-                          value / {run_length} % 32 - 16 AS signed_key \
+                          value / {run_length} % 32 - 16 AS signed_key{input_value} \
                    FROM range({ROWS})) \
              ORDER BY k1 ASC NULLS FIRST, k2 ASC NULLS FIRST"
         ))
@@ -492,11 +519,7 @@ async fn fully_ordered_context(
     ]]);
     ctx.register_table("ordered_input", Arc::new(table))?;
 
-    let plan = ctx
-        .sql(FULLY_ORDERED_QUERY)
-        .await?
-        .create_physical_plan()
-        .await?;
+    let plan = ctx.sql(sql).await?.create_physical_plan().await?;
     let description = displayable(plan.as_ref()).indent(true).to_string();
     assert!(
         description.contains("group_clustering_mode=Full"),
@@ -511,6 +534,31 @@ async fn fully_ordered_context(
         result.iter().map(|batch| batch.num_rows()).sum::<usize>(),
         ROWS.div_ceil(run_length)
     );
+    if with_sum {
+        let rows = i64::try_from(ROWS).unwrap();
+        let run_length = i64::try_from(run_length).unwrap();
+        for batch in &result {
+            let k1 = batch.column(0).as_primitive::<Int32Type>();
+            let k2 = batch.column(1).as_primitive::<TimestampNanosecondType>();
+            let sums = batch.column(2).as_primitive::<Int64Type>();
+            assert_eq!(sums.null_count(), 0);
+            for row in 0..batch.num_rows() {
+                // Each input group covers a contiguous range of source row
+                // numbers. Recover it from the keys, independently of output
+                // order, and check the arithmetic-series sum, including the
+                // final short group and groups with a NULL timestamp key.
+                let key_offset = if k2.is_null(row) {
+                    0
+                } else {
+                    k2.value(row) + 16
+                };
+                let group_id = i64::from(k1.value(row)) * 32 + key_offset;
+                let start = group_id * run_length;
+                let end = (start + run_length).min(rows);
+                assert_eq!(sums.value(row), (start + end - 1) * (end - start) / 2);
+            }
+        }
+    }
     Ok(Arc::new(Mutex::new(ctx)))
 }
 
