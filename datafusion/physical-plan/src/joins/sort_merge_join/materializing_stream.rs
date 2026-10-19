@@ -795,7 +795,7 @@ impl MaterializingSortMergeJoinStream {
     /// paused. Returns true when the group scan is complete and there is
     /// room for more pairs.
     fn pair_streamed_row_with_group(&mut self) -> bool {
-        let mut room = self.batch_size - self.num_unfrozen_pairs();
+        let mut room = self.batch_size.saturating_sub(self.num_unfrozen_pairs());
         while !self.buffered_data.scanning_finished() && room > 0 {
             let rows = self.buffered_data.scanning_remaining();
             let len = rows.len().min(room);
