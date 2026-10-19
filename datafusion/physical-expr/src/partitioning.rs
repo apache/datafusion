@@ -1864,6 +1864,43 @@ mod tests {
     }
 
     #[test]
+    fn range_transform_rejects_adjacent_timestamp_evaluation_errors() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let nanoseconds_per_hour = 3_600_000_000_000;
+        let first_representable_hour =
+            i64::MIN / nanoseconds_per_hour * nanoseconds_per_hour;
+        let split =
+            ScalarValue::TimestampNanosecond(Some(first_representable_hour), None);
+        let predecessor =
+            ScalarValue::TimestampNanosecond(Some(first_representable_hour - 1), None);
+        let timestamp = fixture.col(0);
+        let trunc_hour = date_trunc_of(Arc::clone(&timestamp), "hour", None);
+
+        assert_eq!(
+            evaluate_with_range_value(&trunc_hour, &timestamp, &split),
+            Some(split.clone()),
+        );
+        assert_eq!(
+            evaluate_with_range_value(&trunc_hour, &timestamp, &predecessor),
+            None,
+        );
+
+        let range = fixture.range_partitioning([0], vec![SplitPoint::new(vec![split])]);
+        assert_key_locality(
+            "predecessor truncation underflows even though split truncation succeeds",
+            &range,
+            &[trunc_hour],
+            &fixture.eq_properties,
+            false,
+            false,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn range_transform_rejects_timezone_annotated_timestamps() -> Result<()> {
         let fixture = PartitioningTestFixture::new(vec![(
             "timestamp",
