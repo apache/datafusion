@@ -433,7 +433,9 @@ where
 }
 
 struct BitXorAccumulator<T: ArrowNumericType> {
-    value: Option<T::Native>,
+    /// Running XOR of every value seen so far, starting from the identity `0`.
+    /// Only meaningful when `non_null_count` is non-zero.
+    value: T::Native,
     /// Number of non-NULL values currently accumulated (inserted minus retracted)
     non_null_count: usize,
 }
@@ -447,7 +449,7 @@ impl<T: ArrowNumericType> std::fmt::Debug for BitXorAccumulator<T> {
 impl<T: ArrowNumericType> Default for BitXorAccumulator<T> {
     fn default() -> Self {
         Self {
-            value: None,
+            value: T::Native::usize_as(0),
             non_null_count: 0,
         }
     }
@@ -459,8 +461,7 @@ where
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = arrow::compute::bit_xor(values[0].as_primitive::<T>()) {
-            let v = self.value.get_or_insert_with(|| T::Native::usize_as(0));
-            *v = *v ^ x;
+            self.value = self.value ^ x;
         }
         self.non_null_count += values[0].len() - values[0].null_count();
         Ok(())
@@ -470,8 +471,7 @@ where
         // XOR is its own inverse, so the value is updated as in `update_batch`;
         // only the count of non-NULL values moves the other way
         if let Some(x) = arrow::compute::bit_xor(values[0].as_primitive::<T>()) {
-            let v = self.value.get_or_insert_with(|| T::Native::usize_as(0));
-            *v = *v ^ x;
+            self.value = self.value ^ x;
         }
         self.non_null_count -= values[0].len() - values[0].null_count();
         Ok(())
@@ -483,11 +483,7 @@ where
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         // All non-NULL values may have been retracted, in which case the result is NULL
-        let value = if self.non_null_count == 0 {
-            None
-        } else {
-            self.value
-        };
+        let value = (self.non_null_count > 0).then_some(self.value);
         ScalarValue::new_primitive::<T>(value, &T::DATA_TYPE)
     }
 
