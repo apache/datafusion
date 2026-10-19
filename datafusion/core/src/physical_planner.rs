@@ -1156,193 +1156,13 @@ impl DefaultPhysicalPlanner {
                     )?)
                 }
             }
-            LogicalPlan::Aggregate(Aggregate {
-                input,
-                group_expr,
-                aggr_expr,
-                ..
-            }) => {
-                let options = session_state.config().options();
-                // Initially need to perform the aggregate and then merge the partitions
-                let input_exec = children.one()?;
-                let physical_input_schema = input_exec.schema();
-                let logical_input_schema = input.as_ref().schema();
-                let physical_input_schema_from_logical = logical_input_schema.inner();
-
-                if !options.execution.skip_physical_aggregate_schema_check
-                    && !schema_satisfied_by(
-                        physical_input_schema_from_logical,
-                        &physical_input_schema,
-                    )
-                {
-                    let mut differences = Vec::new();
-
-                    if physical_input_schema.metadata()
-                        != physical_input_schema_from_logical.metadata()
-                    {
-                        differences.push(format!(
-                            "schema metadata differs: (physical) {:?} vs (logical) {:?}",
-                            physical_input_schema.metadata(),
-                            physical_input_schema_from_logical.metadata()
-                        ));
-                    }
-
-                    if physical_input_schema.fields().len()
-                        != physical_input_schema_from_logical.fields().len()
-                    {
-                        differences.push(format!(
-                            "Different number of fields: (physical) {} vs (logical) {}",
-                            physical_input_schema.fields().len(),
-                            physical_input_schema_from_logical.fields().len()
-                        ));
-                    }
-                    for (i, (physical_field, logical_field)) in physical_input_schema
-                        .fields()
-                        .iter()
-                        .zip(physical_input_schema_from_logical.fields())
-                        .enumerate()
-                    {
-                        if physical_field.name() != logical_field.name() {
-                            differences.push(format!(
-                                "field name at index {}: (physical) {} vs (logical) {}",
-                                i,
-                                physical_field.name(),
-                                logical_field.name()
-                            ));
-                        }
-                        if physical_field.data_type() != logical_field.data_type() {
-                            differences.push(format!("field data type at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.data_type(), logical_field.data_type()));
-                        }
-                        if physical_field.is_nullable() && !logical_field.is_nullable() {
-                            differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
-                        }
-                        if physical_field.metadata() != logical_field.metadata() {
-                            differences.push(format!(
-                                "field metadata at index {} [{}]: (physical) {:?} vs (logical) {:?}",
-                                i,
-                                physical_field.name(),
-                                physical_field.metadata(),
-                                logical_field.metadata()
-                            ));
-                        }
-                    }
-                    return internal_err!(
-                        "Physical input schema should be the same as the one converted from logical input schema. Differences: {}",
-                        differences.iter().map(|s| format!("\n\t- {s}")).join("")
-                    );
-                }
-
-                let groups = self.create_grouping_physical_expr(
-                    group_expr,
-                    logical_input_schema,
-                    &physical_input_schema,
-                    execution_props,
-                    planning_ctx,
-                )?;
-
-                let agg_filter = aggr_expr
-                    .iter()
-                    .map(|e| {
-                        LoweredAggregateBuilder::new(
-                            e,
-                            logical_input_schema,
-                            &physical_input_schema,
-                            execution_props,
-                            planning_ctx,
-                        )
-                        .build()
-                        .map(lowered_aggregate_to_tuple)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                let (mut aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
-                    multiunzip(agg_filter);
-
-                let mut async_exprs = Vec::new();
-                let num_input_columns = physical_input_schema.fields().len();
-
-                for agg_func in &mut aggregates {
-                    match self.try_plan_async_exprs(
-                        num_input_columns,
-                        PlannedExprResult::Expr(agg_func.expressions()),
-                        physical_input_schema.as_ref(),
-                    )? {
-                        PlanAsyncExpr::Async(
-                            async_map,
-                            PlannedExprResult::Expr(physical_exprs),
-                        ) => {
-                            async_exprs.extend(async_map.async_exprs);
-
-                            if let Some(new_agg_func) = agg_func.with_new_expressions(
-                                physical_exprs,
-                                agg_func
-                                    .order_bys()
-                                    .iter()
-                                    .cloned()
-                                    .map(|x| x.expr)
-                                    .collect(),
-                            ) {
-                                *agg_func = Arc::new(new_agg_func);
-                            } else {
-                                return internal_err!("Failed to plan async expression");
-                            }
-                        }
-                        PlanAsyncExpr::Sync(PlannedExprResult::Expr(_)) => {
-                            // Do nothing
-                        }
-                        _ => {
-                            return internal_err!(
-                                "Unexpected result from try_plan_async_exprs"
-                            );
-                        }
-                    }
-                }
-                let input_exec = if !async_exprs.is_empty() {
-                    Arc::new(AsyncFuncExec::try_new(async_exprs, input_exec)?)
-                } else {
-                    input_exec
-                };
-
-                let initial_aggr = Arc::new(AggregateExec::try_new(
-                    AggregateMode::Partial,
-                    groups.clone(),
-                    aggregates,
-                    filters.clone(),
-                    input_exec,
-                    Arc::clone(&physical_input_schema),
-                )?);
-
-                let can_repartition = !groups.is_empty()
-                    && session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_aggregations();
-
-                // Some aggregators may be modified during initialization for
-                // optimization purposes. For example, a FIRST_VALUE may turn
-                // into a LAST_VALUE with the reverse ordering requirement.
-                // To reflect such changes to subsequent stages, use the updated
-                // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
-                let updated_aggregates = initial_aggr.aggr_expr().to_vec();
-
-                let next_partition_mode = if can_repartition {
-                    // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                    AggregateMode::FinalPartitioned
-                } else {
-                    // construct a second aggregation, keeping the final column name equal to the
-                    // first aggregation and the expressions corresponding to the respective aggregate
-                    AggregateMode::Final
-                };
-
-                let final_grouping_set = initial_aggr.group_expr().as_final();
-
-                Arc::new(AggregateExec::try_new(
-                    next_partition_mode,
-                    final_grouping_set,
-                    updated_aggregates,
-                    filters,
-                    initial_aggr,
-                    Arc::clone(&physical_input_schema),
-                )?)
-            }
+            LogicalPlan::Aggregate(aggregate) => self.plan_aggregate(
+                aggregate,
+                session_state,
+                planning_ctx,
+                execution_props,
+                children,
+            )?,
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
                 .create_project_physical_exec_with_props(
                     execution_props,
@@ -2176,6 +1996,206 @@ impl DefaultPhysicalPlanner {
             }
         };
         Ok(exec_node)
+    }
+
+    fn plan_aggregate(
+        &self,
+        aggregate: &Aggregate,
+        session_state: &dyn Session,
+        planning_ctx: &PhysicalPlanningContext,
+        execution_props: &ExecutionProps,
+        children: ChildrenContainer,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let Aggregate {
+            input,
+            group_expr,
+            aggr_expr,
+            ..
+        } = aggregate;
+        let options = session_state.config().options();
+        // Initially need to perform the aggregate and then merge the partitions
+        let input_exec = children.one()?;
+        let physical_input_schema = input_exec.schema();
+        let logical_input_schema = input.as_ref().schema();
+        let physical_input_schema_from_logical = logical_input_schema.inner();
+
+        if !options.execution.skip_physical_aggregate_schema_check
+            && !schema_satisfied_by(
+                physical_input_schema_from_logical,
+                &physical_input_schema,
+            )
+        {
+            let mut differences = Vec::new();
+
+            if physical_input_schema.metadata()
+                != physical_input_schema_from_logical.metadata()
+            {
+                differences.push(format!(
+                    "schema metadata differs: (physical) {:?} vs (logical) {:?}",
+                    physical_input_schema.metadata(),
+                    physical_input_schema_from_logical.metadata()
+                ));
+            }
+
+            if physical_input_schema.fields().len()
+                != physical_input_schema_from_logical.fields().len()
+            {
+                differences.push(format!(
+                    "Different number of fields: (physical) {} vs (logical) {}",
+                    physical_input_schema.fields().len(),
+                    physical_input_schema_from_logical.fields().len()
+                ));
+            }
+            for (i, (physical_field, logical_field)) in physical_input_schema
+                .fields()
+                .iter()
+                .zip(physical_input_schema_from_logical.fields())
+                .enumerate()
+            {
+                if physical_field.name() != logical_field.name() {
+                    differences.push(format!(
+                        "field name at index {}: (physical) {} vs (logical) {}",
+                        i,
+                        physical_field.name(),
+                        logical_field.name()
+                    ));
+                }
+                if physical_field.data_type() != logical_field.data_type() {
+                    differences.push(format!(
+                        "field data type at index {} [{}]: (physical) {} vs (logical) {}",
+                        i,
+                        physical_field.name(),
+                        physical_field.data_type(),
+                        logical_field.data_type()
+                    ));
+                }
+                if physical_field.is_nullable() && !logical_field.is_nullable() {
+                    differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
+                }
+                if physical_field.metadata() != logical_field.metadata() {
+                    differences.push(format!(
+                        "field metadata at index {} [{}]: (physical) {:?} vs (logical) {:?}",
+                        i,
+                        physical_field.name(),
+                        physical_field.metadata(),
+                        logical_field.metadata()
+                    ));
+                }
+            }
+            return internal_err!(
+                "Physical input schema should be the same as the one converted from logical input schema. Differences: {}",
+                differences.iter().map(|s| format!("\n\t- {s}")).join("")
+            );
+        }
+
+        let groups = self.create_grouping_physical_expr(
+            group_expr,
+            logical_input_schema,
+            &physical_input_schema,
+            execution_props,
+            planning_ctx,
+        )?;
+
+        let agg_filter = aggr_expr
+            .iter()
+            .map(|e| {
+                LoweredAggregateBuilder::new(
+                    e,
+                    logical_input_schema,
+                    &physical_input_schema,
+                    execution_props,
+                    planning_ctx,
+                )
+                .build()
+                .map(lowered_aggregate_to_tuple)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let (mut aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
+            multiunzip(agg_filter);
+
+        let mut async_exprs = Vec::new();
+        let num_input_columns = physical_input_schema.fields().len();
+
+        for agg_func in &mut aggregates {
+            match self.try_plan_async_exprs(
+                num_input_columns,
+                PlannedExprResult::Expr(agg_func.expressions()),
+                physical_input_schema.as_ref(),
+            )? {
+                PlanAsyncExpr::Async(
+                    async_map,
+                    PlannedExprResult::Expr(physical_exprs),
+                ) => {
+                    async_exprs.extend(async_map.async_exprs);
+
+                    if let Some(new_agg_func) = agg_func.with_new_expressions(
+                        physical_exprs,
+                        agg_func
+                            .order_bys()
+                            .iter()
+                            .cloned()
+                            .map(|x| x.expr)
+                            .collect(),
+                    ) {
+                        *agg_func = Arc::new(new_agg_func);
+                    } else {
+                        return internal_err!("Failed to plan async expression");
+                    }
+                }
+                PlanAsyncExpr::Sync(PlannedExprResult::Expr(_)) => {
+                    // Do nothing
+                }
+                _ => {
+                    return internal_err!("Unexpected result from try_plan_async_exprs");
+                }
+            }
+        }
+        let input_exec = if !async_exprs.is_empty() {
+            Arc::new(AsyncFuncExec::try_new(async_exprs, input_exec)?)
+        } else {
+            input_exec
+        };
+
+        let initial_aggr = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            aggregates,
+            filters.clone(),
+            input_exec,
+            Arc::clone(&physical_input_schema),
+        )?);
+
+        let can_repartition = !groups.is_empty()
+            && session_state.config().target_partitions() > 1
+            && session_state.config().repartition_aggregations();
+
+        // Some aggregators may be modified during initialization for
+        // optimization purposes. For example, a FIRST_VALUE may turn
+        // into a LAST_VALUE with the reverse ordering requirement.
+        // To reflect such changes to subsequent stages, use the updated
+        // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
+        let updated_aggregates = initial_aggr.aggr_expr().to_vec();
+
+        let next_partition_mode = if can_repartition {
+            // construct a second aggregation with 'AggregateMode::FinalPartitioned'
+            AggregateMode::FinalPartitioned
+        } else {
+            // construct a second aggregation, keeping the final column name equal to the
+            // first aggregation and the expressions corresponding to the respective aggregate
+            AggregateMode::Final
+        };
+
+        let final_grouping_set = initial_aggr.group_expr().as_final();
+
+        Ok(Arc::new(AggregateExec::try_new(
+            next_partition_mode,
+            final_grouping_set,
+            updated_aggregates,
+            filters,
+            initial_aggr,
+            Arc::clone(&physical_input_schema),
+        )?))
     }
 
     fn create_grouping_physical_expr(
