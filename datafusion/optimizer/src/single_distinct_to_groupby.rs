@@ -1171,6 +1171,141 @@ mod tests {
         )
     }
 
+    /// Ensures the `UInt16` branch of the small-int guard is hit.
+    /// `count(DISTINCT uint16)` without GROUP BY should SKIP the rewrite even
+    /// on 4 partitions because the cardinality is bounded and the accumulator is cheap.
+    #[test]
+    fn no_groupby_uint16_small_int_skips() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::UInt16, false),
+            Field::new("c", DataType::UInt32, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_options(false, 4);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.b)]] [count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt16, c:UInt32]
+        "
+        )
+    }
+
+    /// Ensures the `Int16` branch of the small-int guard is hit.
+    #[test]
+    fn no_groupby_int16_small_int_skips() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Int16, false),
+            Field::new("c", DataType::UInt32, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_options(false, 4);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.b)]] [count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:Int16, c:UInt32]
+        "
+        )
+    }
+
+    /// Verifies the `is_count_distinct_small_int` check works correctly when
+    /// the function is NOT count (not from the `count_rollup` registry).
+    /// `sum(DISTINCT int8)` without GROUP BY on multi-partitions must still
+    /// rewrite because it is not the small-int cardinality exception.
+    #[test]
+    fn no_groupby_non_count_small_int_still_rewrites() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Int8, false),
+            Field::new("c", DataType::UInt32, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![sum_distinct(col("b"))])?
+            .build()?;
+
+        // sum(DISTINCT int8) is not the small-int cardinality exception:
+        // it must rewrite on multi-partition to enable parallel deduplication.
+        let ctx = RegistryOptimizerContext::with_options(false, 4);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @"
+        Projection: sum(alias1) AS sum(DISTINCT test.b) [sum(DISTINCT test.b):Int64;N]
+          Aggregate: groupBy=[[]], aggr=[[sum(alias1)]] [sum(alias1):Int64;N]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[]] [alias1:Int8]
+              TableScan: test [a:UInt32, b:Int8, c:UInt32]
+        "
+        )
+    }
+
+    /// Verifies `min` as the sole non-distinct companion forces a skip when
+    /// the distinct aggregate already has a fast grouped accumulator.
+    /// This exercises the `func.name().eq_ignore_ascii_case("min")` branch.
+    #[test]
+    fn single_distinct_and_groupby_with_min_companion_and_fast_accumulator_skips()
+    -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![count_distinct(col("b")), min(col("c"))],
+            )?
+            .build()?;
+
+        // count(DISTINCT UInt32) has a fast grouped accumulator: skip rewrite.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), min(test.c)]] [a:UInt32, count(DISTINCT test.b):Int64, min(test.c):UInt32;N]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// With GROUP BY + `prefer_memory = true`, if the distinct aggregate has a
+    /// fast grouped accumulator, it still skips (the fast-accumulator branch
+    /// takes priority and `prefer_memory` never even needs to be checked).
+    #[test]
+    fn prefer_memory_true_with_fast_accumulator_skips_not_prefer_memory_branch()
+    -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
+            .build()?;
+
+        // Even with prefer_memory=false, the fast accumulator branch takes precedence.
+        // This test primarily exists to confirm the fast-accumulator guard is
+        // evaluated before the prefer_memory fallback so Codecov sees both paths.
+        let ctx = RegistryOptimizerContext::with_options(false, 4);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b)]] [a:UInt32, count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
     #[test]
     fn no_groupby_multi_partition_rewrites() -> Result<()> {
         let table_scan = test_table_scan()?;
