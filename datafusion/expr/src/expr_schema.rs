@@ -680,21 +680,24 @@ impl ExprSchemable for Expr {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
             Expr::Unnest(Unnest { expr, .. }) => {
-                let data_type = expr.get_type(schema)?;
                 let nullable = self.nullable(schema)?;
-                if data_type.is_list() {
-                    Ok(Arc::new(
-                        utils::get_unnested_list_field(&data_type, 1)?
+                match expr.get_type(schema)? {
+                    DataType::List(field)
+                    | DataType::LargeList(field)
+                    | DataType::FixedSizeList(field, _)
+                    | DataType::ListView(field)
+                    | DataType::LargeListView(field) => Ok(Arc::new(
+                        field
+                            .as_ref()
                             .clone()
                             .with_name(&schema_name)
                             .with_nullable(nullable),
-                    ))
-                } else {
-                    Ok(Arc::new(Field::new(
+                    )),
+                    _ => Ok(Arc::new(Field::new(
                         &schema_name,
                         self.get_type(schema)?,
                         nullable,
-                    )))
+                    ))),
                 }
             }
             Expr::Like(_)
