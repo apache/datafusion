@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical optimizer traits
+//! [`PhysicalOptimizer`] for optimizing [`ExecutionPlan`]s
+//!
+//! [`ExecutionPlan`]: datafusion_physical_plan::ExecutionPlan
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -81,7 +83,97 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 
 /// A rule-based physical optimizer.
 ///
-/// Applies its rule list in order in a single pass.
+/// Applies a *Pipeline* (an ordered list) of [`PhysicalOptimizerRule`]s in a single pass.
+///
+/// # Physical Optimizer Contract
+///
+/// [`PhysicalOptimizer::new`] defines the default sequence of
+/// [`PhysicalOptimizerRule`]s. The optimizer applies them in order, in a single
+/// pass. This section describes the contract between the optimizer rules, both
+/// for projects that extend or reorder the default rule list and for
+/// contributors adding new built-in rules.
+///
+/// ## Invariants
+///
+/// The following properties hold for all rules (built-in and custom):
+///
+/// 1. **Correctness.** The returned plan must a) be valid (it can be executed
+///    without internal errors) and b) produce the same results as the input
+///    plan. A rule may change the operators in the plan, such as changing
+///    which operator implements a join, but it may never change the query's
+///    semantics.
+///
+/// 2. **Reorderable.** Because each rule preserves correctness, running the
+///    rules in a different order must still yield a valid plan that produces
+///    the same results.
+///
+/// ### Exceptions
+///
+/// Some built-in rules do not yet fully satisfy the invariants above because
+/// they are responsible for making an initial plan *executable* rather than for
+/// optimizing an existing plan:
+///
+/// - [`EnsureRequirements`] inserts the repartitioning and sorting needed to
+///   satisfy the distribution and ordering requirements.
+/// - [`OutputRequirements`] records output requirements.
+/// - [`SanityCheckPlan`] rejects plans whose requirements are not satisfied.
+///   It should run last.
+///
+/// Custom pipelines must keep these rules in a compatible relative order. We
+/// are working to remove these exceptions, so that all rules can be reordered
+/// freely.
+///
+/// ## Optimization Coverage Is Not Guaranteed
+///
+/// The invariants above guarantee *correctness*, not that every optimization is
+/// applied. Built-in rules often match specific plan shapes that may only occur
+/// at a certain point in the default pipeline. Adding, removing, or reordering
+/// rules can change plan shapes, so a built-in rule may silently miss an
+/// optimization that would apply in the default order. To keep their
+/// implementations simple, built-in rules typically only recognize shapes that
+/// the default pipeline produces.
+///
+/// For example, [`CombinePartialFinalAggregate`] runs after
+/// [`EnsureRequirements`] and only merges a `Partial` aggregate that is the
+/// direct child of a `Final` aggregate.
+///
+/// ```text
+/// -- Canonical shape (default pipeline):
+/// -- built-in rules recognize and optimize this
+/// Limit
+///   Aggregate(Final)
+///     Aggregate(Partial)
+///
+/// -- Non-canonical shape (repartitioning inserted first):
+/// -- built-in rules skip the optimization
+/// Limit
+///   Aggregate(Final)
+///     Repartition
+///       Aggregate(Partial)
+/// ```
+///
+/// ## Guidance for Custom Pipelines
+///
+/// We recommend keeping the default rule order and using the supported
+/// configuration options to disable individual optimizations. For example, `SET
+/// datafusion.optimizer.enable_distinct_aggregation_soft_limit = false`
+/// disables the distinct aggregation soft-limit optimization. These variations
+/// are tested and preserve both correctness and optimization coverage.
+/// See <https://github.com/apache/datafusion/issues/26481> for more details.
+///
+/// If you do build a custom pipeline:
+///
+/// - **Reordering must still yield a valid plan.** Downstream projects are
+///   encouraged to add tests that run their pipeline end to end and check
+///   results, as DataFusion's own tests only cover the default order.
+/// - **Test for reduced optimization coverage,** as described above, and verify
+///   the plans you care about with `EXPLAIN`.
+/// - **Prefer adding a rule over extending a built-in one.** We discourage
+///   extending a built-in rule to match plan shapes it will not encounter in
+///   the default pipeline, because such extensions are difficult to test and
+///   maintain. Instead, add a custom rule that rewrites your plan into the
+///   canonical shape recognized by the built-in rules. If extending a built-in
+///   rule still seems necessary, please open a DataFusion issue to discuss it.
 #[derive(Clone, Debug)]
 pub struct PhysicalOptimizer {
     /// All rules to apply
@@ -211,6 +303,9 @@ impl PhysicalOptimizer {
     }
 
     /// Create a new optimizer with the given rules
+    ///
+    /// See the [`PhysicalOptimizer`](Self) documentation for the contract
+    /// governing non-default optimizer pipelines.
     pub fn with_rules(rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>) -> Self {
         Self { rules }
     }
