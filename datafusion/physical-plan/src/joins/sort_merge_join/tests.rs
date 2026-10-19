@@ -1737,6 +1737,188 @@ async fn join_left_anti() -> Result<()> {
     Ok(())
 }
 
+mod null_aware_left_anti_tests {
+    use super::*;
+    use arrow::array::{Array, ArrayRef, DictionaryArray};
+    use arrow::datatypes::Int32Type;
+
+    fn batch(keys: ArrayRef, row_ids: &[i32]) -> Result<RecordBatch> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", keys.data_type().clone(), true),
+            Field::new("row_id", DataType::Int32, false),
+        ]));
+        Ok(RecordBatch::try_new(
+            schema,
+            vec![keys, Arc::new(Int32Array::from(row_ids.to_vec()))],
+        )?)
+    }
+
+    fn int_batch(keys: Vec<Option<i32>>, row_ids: &[i32]) -> Result<RecordBatch> {
+        batch(Arc::new(Int32Array::from(keys)), row_ids)
+    }
+
+    async fn collect_ids(
+        left_batches: Vec<RecordBatch>,
+        right_batches: Vec<RecordBatch>,
+        batch_size: usize,
+    ) -> Result<Vec<i32>> {
+        let left = build_table_from_batches(left_batches);
+        // Unlike build_table_from_batches, this must also accept zero batches.
+        let right = TestMemoryExec::try_new_exec(&[right_batches], left.schema(), None)?;
+        let on: JoinOn = vec![(
+            Arc::new(Column::new("key", 0)),
+            Arc::new(Column::new("key", 0)),
+        )];
+        // Direct execution does not insert sorts. Fixtures are globally sorted
+        // ASC NULLS FIRST, including across batch boundaries.
+        let join = join_with_options(
+            left,
+            right,
+            on,
+            LeftAnti,
+            vec![SortOptions::new(false, true)],
+            NullEquality::NullEqualsNothing,
+        )?
+        .with_null_aware(true)?;
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(batch_size)),
+        );
+        let batches = common::collect(join.execute(0, context)?).await?;
+        let mut row_ids = Vec::new();
+        for batch in batches {
+            let ids = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("Int32 row IDs");
+            row_ids.extend(ids.values().iter().copied());
+        }
+        Ok(row_ids)
+    }
+
+    #[tokio::test]
+    async fn empty_rhs_keeps_nulls_and_duplicates() -> Result<()> {
+        let left = vec![
+            int_batch(vec![None, Some(1), Some(2)], &[0, 1, 2])?,
+            int_batch(vec![Some(3), Some(3)], &[3, 4])?,
+        ];
+        // EOF without any batch and EOF after empty batches are both empty RHS.
+        for right in [
+            vec![],
+            vec![int_batch(vec![], &[])?, int_batch(vec![], &[])?],
+        ] {
+            let actual = collect_ids(left.clone(), right, 2).await?;
+            assert_eq!(actual, vec![0, 1, 2, 3, 4]);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rhs_null_after_empty_batch_returns_no_rows() -> Result<()> {
+        let left = vec![
+            int_batch(vec![None, Some(1)], &[0, 1])?,
+            int_batch(vec![Some(2), Some(3)], &[2, 3])?,
+        ];
+        // Cover an all-NULL RHS and a NULL followed by a non-NULL batch.
+        for right in [
+            vec![int_batch(vec![], &[])?, int_batch(vec![None], &[10])?],
+            vec![
+                int_batch(vec![], &[])?,
+                int_batch(vec![None], &[10])?,
+                int_batch(vec![Some(2)], &[11])?,
+            ],
+        ] {
+            let actual = collect_ids(left.clone(), right, 2).await?;
+            assert!(actual.is_empty(), "unexpected rows: {actual:?}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_preserves_first_rhs_batch_across_key_groups() -> Result<()> {
+        let left = vec![
+            int_batch(vec![None, Some(1), Some(2)], &[0, 1, 2])?,
+            int_batch(vec![], &[])?,
+            int_batch(vec![Some(2), Some(3), Some(3)], &[3, 4, 5])?,
+            int_batch(vec![Some(4), Some(5)], &[6, 7])?,
+        ];
+        let right = vec![
+            int_batch(vec![], &[])?,
+            int_batch(vec![Some(2)], &[10])?,
+            int_batch(vec![], &[])?,
+            int_batch(vec![Some(4)], &[11])?,
+            int_batch(vec![Some(4)], &[12])?,
+        ];
+        for batch_size in [1, 2] {
+            let actual = collect_ids(left.clone(), right.clone(), batch_size).await?;
+            // Keep 1, 3, 3, 5; both occurrences of 2 must match the first RHS batch.
+            assert_eq!(actual, vec![1, 4, 5, 7], "batch size {batch_size}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn exhausted_rhs_drains_remaining_left_batches() -> Result<()> {
+        let left = vec![
+            int_batch(vec![None, Some(1)], &[0, 1])?,
+            int_batch(vec![Some(2)], &[2])?,
+            int_batch(vec![Some(3), Some(3)], &[3, 4])?,
+            int_batch(vec![Some(4), Some(5)], &[5, 6])?,
+        ];
+        let right = vec![int_batch(vec![Some(2)], &[10])?];
+        let actual = collect_ids(left, right, 2).await?;
+        // Exclude the initial NULL and retain unmatched rows after RHS EOF,
+        // including duplicates and the final partial output batch.
+        assert_eq!(actual, vec![1, 3, 4, 5, 6]);
+        Ok(())
+    }
+
+    // Like HashJoin's build_table_dict_key, keep all dictionary indices valid
+    // so NULL dictionary values exercise logical rather than physical nulls.
+    fn dictionary_batch(
+        keys: Vec<i32>,
+        values: Vec<Option<i32>>,
+        row_ids: &[i32],
+    ) -> Result<RecordBatch> {
+        let keys = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(keys),
+            Arc::new(Int32Array::from(values)),
+        )?;
+        batch(Arc::new(keys), row_ids)
+    }
+
+    #[tokio::test]
+    async fn dictionary_value_nulls_follow_not_in_semantics() -> Result<()> {
+        let left = dictionary_batch(
+            vec![0, 1, 2, 3, 3],
+            vec![None, Some(1), Some(2), Some(3)],
+            &[0, 1, 2, 3, 4],
+        )?;
+        assert_eq!(left.column(0).null_count(), 0);
+        assert_eq!(left.column(0).logical_null_count(), 1);
+
+        // The same logical key (2) has a different dictionary index on each side.
+        let rhs_with_null = dictionary_batch(vec![0, 1], vec![None, Some(2)], &[10, 11])?;
+        assert_eq!(rhs_with_null.column(0).null_count(), 0);
+        assert_eq!(rhs_with_null.column(0).logical_null_count(), 1);
+
+        let cases = [
+            (vec![], vec![0, 1, 2, 3, 4]),
+            (
+                vec![dictionary_batch(vec![0], vec![Some(2)], &[10])?],
+                vec![1, 3, 4],
+            ),
+            (vec![rhs_with_null], vec![]),
+        ];
+        for (right, expected) in cases {
+            let actual = collect_ids(vec![left.clone()], right, 2).await?;
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn join_right_anti_one_one() -> Result<()> {
     let left = build_table(
