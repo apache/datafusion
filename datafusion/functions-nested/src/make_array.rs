@@ -205,7 +205,7 @@ pub fn array_array<O: OffsetSizeTrait>(
         ));
     }
 
-    let mut data = vec![];
+    let mut data = Vec::with_capacity(args.len());
     let mut total_len = 0;
     for arg in args {
         let arg_data = if arg.as_any().is::<NullArray>() {

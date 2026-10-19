@@ -117,7 +117,7 @@ impl WindowExpr for StandardWindowExpr {
         let num_rows = batch.num_rows();
         if evaluator.uses_window_frame() {
             let sort_options = self.order_by.iter().map(|o| o.options).collect();
-            let mut row_wise_results = vec![];
+            let mut row_wise_results = Vec::with_capacity(num_rows);
 
             let mut values = self.evaluate_args(batch)?;
             let order_bys = get_orderby_values(self.order_by_columns(batch)?);
@@ -203,7 +203,8 @@ impl WindowExpr for StandardWindowExpr {
             // We iterate on each row to perform a running calculation.
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
-            let mut row_wise_results: Vec<ScalarValue> = vec![];
+            let mut row_wise_results: Vec<ScalarValue> =
+                Vec::with_capacity(num_rows.saturating_sub(state.last_calculated_index));
             let is_causal = if evaluator.uses_window_frame() {
                 self.window_frame.is_causal()
             } else {

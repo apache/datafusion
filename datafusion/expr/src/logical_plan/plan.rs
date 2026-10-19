@@ -39,12 +39,13 @@ use crate::expr_rewriter::{
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
+use crate::logical_plan::materialized_cte::MaterializedCte;
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
     check_aggregate_and_window_nesting, check_no_window_functions,
     enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
     find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    merge_schema, split_conjunction,
+    merge_schema, passthrough_field_index, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -69,7 +70,6 @@ use datafusion_common::{
     aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
 };
-use indexmap::IndexSet;
 use itertools::Itertools as _;
 
 // backwards compatibility
@@ -522,8 +522,9 @@ impl LogicalPlan {
             };
             if let Some(on) = on {
                 // The join keys in using-join must be columns.
-                let columns =
-                    on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
+                let columns = on.iter().try_fold(
+                    HashSet::with_capacity(on.len() * 2),
+                    |mut accumu, (l, r)| {
                         let Some(l) = l.get_as_join_column() else {
                             return internal_err!(
                                 "Invalid join key. Expected column, found {l:?}"
@@ -537,7 +538,8 @@ impl LogicalPlan {
                         accumu.insert(l.to_owned());
                         accumu.insert(r.to_owned());
                         Result::<_, DataFusionError>::Ok(accumu)
-                    })?;
+                    },
+                )?;
                 using_columns.push(columns);
             }
             Ok(TreeNodeRecursion::Continue)
@@ -609,13 +611,19 @@ impl LogicalPlan {
                     })
                     .map_or(Ok(None), |v| v.map(Some))
             }
+            // A materialized CTE outputs the output of its continuation.
+            LogicalPlan::Extension(Extension { node }) => {
+                match node.as_any().downcast_ref::<MaterializedCte>() {
+                    Some(cte) => cte.continuation.head_output_expr(),
+                    None => Ok(None),
+                }
+            }
             LogicalPlan::Subquery(_) => Ok(None),
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
-            | LogicalPlan::Extension(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::Ddl(_)
@@ -688,6 +696,7 @@ impl LogicalPlan {
                 schema: _,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -710,6 +719,7 @@ impl LogicalPlan {
                     schema: DFSchemaRef::new(schema),
                     null_equality,
                     null_aware,
+                    null_aware_value_keys,
                 }))
             }
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -991,6 +1001,7 @@ impl LogicalPlan {
                 on,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
@@ -1033,6 +1044,7 @@ impl LogicalPlan {
                     schema: DFSchemaRef::new(schema),
                     null_equality: *null_equality,
                     null_aware: *null_aware,
+                    null_aware_value_keys: *null_aware_value_keys,
                 }))
             }
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -1836,14 +1848,21 @@ impl LogicalPlan {
             .collect())
     }
 
-    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and FieldRefs
+    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and FieldRefs.
+    /// Bare `LIMIT`/`OFFSET` parameters default to `Int64` if no occurrence provides a type.
     pub fn get_parameter_fields(
         &self,
     ) -> Result<HashMap<String, Option<FieldRef>>, DataFusionError> {
         let mut param_types: HashMap<String, Option<FieldRef>> = HashMap::new();
+        let mut row_count_parameters: HashSet<String> = HashSet::new();
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
+                if matches!(plan, LogicalPlan::Limit(_))
+                    && let Expr::Placeholder(Placeholder { id, field: None }) = expr
+                {
+                    row_count_parameters.insert(id.clone());
+                }
                 expr.apply(|expr| {
                     if let Expr::Placeholder(Placeholder { id, field }) = expr {
                         let prev = param_types.get(id);
@@ -1860,15 +1879,22 @@ impl LogicalPlan {
                                 param_types.insert(id.clone(), Some(Arc::clone(field)));
                             }
                             _ => {
-                                param_types.insert(id.clone(), None);
+                                param_types.entry(id.clone()).or_insert(None);
                             }
                         }
                     }
                     Ok(TreeNodeRecursion::Continue)
                 })
             })
-        })
-        .map(|_| param_types)
+        })?;
+
+        for id in row_count_parameters {
+            param_types
+                .entry(id)
+                .or_default()
+                .get_or_insert_with(|| Arc::new(Field::new("", DataType::Int64, true)));
+        }
+        Ok(param_types)
     }
 
     // ------------
@@ -2258,6 +2284,7 @@ impl LogicalPlan {
                         join_constraint,
                         join_type,
                         null_aware,
+                        null_aware_value_keys,
                         ..
                     }) => {
                         let join_expr: Vec<String> =
@@ -2266,8 +2293,12 @@ impl LogicalPlan {
                             .as_ref()
                             .map(|expr| format!(" Filter: {expr}"))
                             .unwrap_or_else(|| "".to_string());
-                        let null_aware_expr =
-                            if *null_aware { " null_aware" } else { "" };
+                        let null_aware_expr = match (*null_aware, *null_aware_value_keys)
+                        {
+                            (false, _) => "".to_string(),
+                            (true, 0 | 1) => " null_aware".to_string(),
+                            (true, n) => format!(" null_aware(value_keys={n})"),
+                        };
                         let join_type = if filter.is_none()
                             && keys.is_empty()
                             && *join_type == JoinType::Inner
@@ -2831,12 +2862,18 @@ impl Filter {
     /// Create a new filter operator.
     ///
     /// Skips the type-checking, window function check and dealiasing done in
-    /// [Self::try_new]. For internal use in DataFusion only.
+    /// [Self::try_new].
     ///
     /// **Preconditions:**
     /// - the `predicate` expression returns a boolean value
     /// - the `predicate` expression is not aliased
     /// - the `predicate` expression contains no window function calls
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
         Self { predicate, input }
@@ -3567,13 +3604,13 @@ impl Union {
             }
         }
 
-        let mut name_counts: HashMap<String, usize> = HashMap::new();
+        let mut name_counts: HashMap<String, usize> =
+            HashMap::with_capacity(fields_count);
+        let mut fields: Vec<&FieldRef> = Vec::with_capacity(inputs.len());
         let union_fields = (0..fields_count)
             .map(|i| {
-                let fields = inputs
-                    .iter()
-                    .map(|input| input.schema().field(i))
-                    .collect::<Vec<_>>();
+                fields.clear();
+                fields.extend(inputs.iter().map(|input| input.schema().field(i)));
                 let first_field = fields[0];
                 let base_name = first_field.name().to_string();
 
@@ -4323,7 +4360,7 @@ impl PartialOrd for Aggregate {
 #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
-        let mut counts: HashMap<&[Expr], usize> = HashMap::new();
+        let mut counts: HashMap<&[Expr], usize> = HashMap::with_capacity(sets.len());
         for set in sets {
             *counts.entry(set).or_insert(0) += 1;
         }
@@ -4355,15 +4392,14 @@ fn calc_func_dependencies_for_aggregate(
     //   that GROUP BY expression results will be unique.
     // - Otherwise, it may be possible to propagate functional dependencies.
     if !contains_grouping_set(group_expr) {
-        let group_by_expr_names = group_expr
-            .iter()
-            .map(|item| item.schema_name().to_string())
-            .collect::<IndexSet<_>>()
+        // One entry per GROUP BY output field, in the order of `aggr_schema`
+        let group_by_input_indices = grouping_set_to_exprlist(group_expr)?
             .into_iter()
+            .map(|item| passthrough_field_index(item, input.schema()))
             .collect::<Vec<_>>();
         let aggregate_func_dependencies = aggregate_functional_dependencies(
             input.schema(),
-            &group_by_expr_names,
+            &group_by_input_indices,
             aggr_schema,
         );
         Ok(aggregate_func_dependencies)
@@ -4389,19 +4425,9 @@ fn calc_func_dependencies_for_project(
         return Ok(FunctionalDependencies::empty());
     }
 
-    // Map each input field name to its first index so that projection
-    // expressions resolve with a hash lookup instead of a linear scan.
-    let input_fields = input.schema().field_names();
-    let mut input_index_by_name: HashMap<&str, usize> =
-        HashMap::with_capacity(input_fields.len());
-    for (index, name) in input_fields.iter().enumerate() {
-        input_index_by_name.entry(name.as_str()).or_insert(index);
-    }
-    let input_index = |name: &str| {
-        input_index_by_name
-            .get(name)
-            .copied()
-            .unwrap_or(COMPUTED_EXPR_INDEX)
+    let input_schema = input.schema();
+    let input_index = |expr: &Expr| {
+        passthrough_field_index(expr, input_schema).unwrap_or(COMPUTED_EXPR_INDEX)
     };
 
     // Map each projection output position to its input column index.
@@ -4422,16 +4448,14 @@ fn calc_func_dependencies_for_project(
                     wildcard_fields
                         .into_iter()
                         .map(|(qualifier, f)| {
-                            let flat_name = qualifier
-                                .map(|t| format!("{}.{}", t, f.name()))
-                                .unwrap_or_else(|| f.name().clone());
-                            input_index(&flat_name)
+                            input_schema
+                                .index_of_column_by_name(qualifier.as_ref(), f.name())
+                                .unwrap_or(COMPUTED_EXPR_INDEX)
                         })
                         .collect::<Vec<_>>(),
                 )
             }
-            Expr::Alias(alias) => Ok(vec![input_index(&format!("{}", alias.expr))]),
-            _ => Ok(vec![input_index(&format!("{expr}"))]),
+            _ => Ok(vec![input_index(expr)]),
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -4480,6 +4504,17 @@ pub struct Join {
     /// For `LeftMark`, the generated `mark` column becomes nullable so unmatched rows can produce
     /// `NULL` rather than `false` when SQL three-valued logic requires it.
     pub null_aware: bool,
+    /// Number of `NOT IN` value keys of a null-aware join; ignored unless
+    /// [`Self::null_aware`] is set.
+    ///
+    /// A scalar `x NOT IN (SELECT y ...)` has one value key, a multi-column
+    /// `(a, b) NOT IN (SELECT x, y ...)` one per tuple element. The value keys
+    /// are the leading equi-join keys (`on[..n]`, or the leading equality
+    /// conjuncts of `filter` before they are extracted into `on`); any keys
+    /// after them are correlation scope keys of a correlated subquery. A NULL
+    /// in a value key follows SQL three-valued logic across the whole tuple,
+    /// while the scope keys only select which subquery rows are compared.
+    pub null_aware_value_keys: usize,
 }
 
 /// The ordered comparison used by an [`AsOfJoin`].
@@ -4707,7 +4742,15 @@ impl Join {
             schema: Arc::new(join_schema),
             null_equality,
             null_aware,
+            null_aware_value_keys: 1,
         })
+    }
+
+    /// Sets the number of `NOT IN` value keys of a null-aware join, see
+    /// [`Self::null_aware_value_keys`].
+    pub fn with_null_aware_value_keys(mut self, null_aware_value_keys: usize) -> Self {
+        self.null_aware_value_keys = null_aware_value_keys;
+        self
     }
 
     /// Create Join with input which wrapped with projection, this method is used in physical planning only to help
@@ -4762,6 +4805,7 @@ impl Join {
                 schema: Arc::new(join_schema),
                 null_equality: original_join.null_equality,
                 null_aware: original_join.null_aware,
+                null_aware_value_keys: original_join.null_aware_value_keys,
             },
             requalified,
         ))
@@ -5113,7 +5157,7 @@ impl Unnest {
 
         let input_schema = input.schema();
 
-        let mut dependency_indices = vec![];
+        let mut dependency_indices = Vec::with_capacity(input_schema.fields().len());
         // Transform input schema into new schema
         // Given this comprehensive example
         //
@@ -5514,16 +5558,37 @@ mod tests {
     }
 
     #[test]
-    fn projection_duplicate_flattened_name_uses_first_input_index() -> Result<()> {
+    fn aggregate_group_by_repeated_key_keeps_key_dependency() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        // `id` is in the GROUP BY list two times: as itself and as `k`.
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .aggregate(
+                vec![col("id"), col("state"), col("id").alias("k")],
+                Vec::<Expr>::new(),
+            )?
+            .build()?;
+
+        // `id` alone still determines the row.
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].target_indices, vec![0, 1, 2]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_resolves_columns_not_flattened_names() -> Result<()> {
         // Build an input schema where a qualified field (`orders`.`id`) and an
-        // unqualified field that is literally named `"orders.id"` flatten to
-        // the exact same lookup key that `calc_func_dependencies_for_project`
-        // uses to resolve projection expressions against input fields. This is
-        // the only way two entries of `DFSchema::field_names()` can collide
-        // (`DFSchema::check_names` otherwise forbids duplicate names), and it
-        // pins that the hash-map based lookup resolves such a collision to the
-        // *first* matching index, exactly like the linear `position()` scan it
-        // replaces.
+        // unqualified field that is literally named `"orders.id"` (the name of
+        // e.g. `CAST(orders.id AS INT)`) have the same flattened name. The
+        // projection must resolve the column it references, not the first
+        // field with the same flattened name.
         let schema = DFSchema::new_with_metadata(
             vec![
                 (
@@ -5546,11 +5611,14 @@ mod tests {
             schema: Arc::new(schema),
         });
 
-        // References the *unqualified* second field, whose flattened name
-        // ("orders.id") collides with the first (qualified) field's.
+        // References the *unqualified* second field, which is not a key.
         let exprs = vec![Expr::Column(Column::new_unqualified("orders.id"))];
         let deps = calc_func_dependencies_for_project(&exprs, &input)?;
+        assert!(deps.is_empty());
 
+        // References the qualified first field, which is a key.
+        let exprs = vec![Expr::Column(Column::new(Some("orders"), "id"))];
+        let deps = calc_func_dependencies_for_project(&exprs, &input)?;
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].source_indices, vec![0]);
 
@@ -6928,6 +6996,7 @@ mod tests {
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
+                null_aware_value_keys: 1,
             }))
         }
 

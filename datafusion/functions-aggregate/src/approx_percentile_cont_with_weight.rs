@@ -342,7 +342,7 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
         );
         let means_f64 = ApproxPercentileAccumulator::convert_to_float(&means)?;
         let weights_f64 = ApproxPercentileAccumulator::convert_to_float(&weights)?;
-        let mut digests: Vec<TDigest> = vec![];
+        let mut digests: Vec<TDigest> = Vec::with_capacity(means_f64.len());
         for (mean, weight) in means_f64.iter().zip(weights_f64.iter()) {
             digests.push(TDigest::new_with_centroid(
                 self.approx_percentile_cont_accumulator.max_size(),
