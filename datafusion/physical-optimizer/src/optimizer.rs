@@ -16,6 +16,63 @@
 // under the License.
 
 //! Physical optimizer traits
+//!
+//! # Physical Optimizer Contract
+//!
+//! This section explains the contract for extending the default list of
+//! optimizer rules.
+//!
+//! [`PhysicalOptimizer::new`] defines the default rule sequence:
+//!
+//! ```text
+//! // Default rules
+//! let rules = vec![
+//!     rule1,
+//!     rule2,
+//!     rule3,
+//!     rule4,
+//!     // ...
+//! ];
+//! ```
+//!
+//! 1. **Keep the default order.** Rules may rely on properties established by
+//!    earlier rules. Correctness is only guaranteed in the default order.
+//!
+//! 2. **Use configuration to disable optimizations.** Configuration options
+//!    provide supported variations of the default pipeline that preserve
+//!    correctness. For example,
+//!    `SET datafusion.optimizer.enable_distinct_aggregation_soft_limit = false`
+//!    disables the distinct aggregation soft-limit optimization. Removing rules
+//!    directly from the pipeline may produce invalid plans.
+//!
+//! 3. **Adding optimizer rules.**
+//!
+//!    1. Rules added within DataFusion or downstream must respect the
+//!       assumptions of the surrounding rules. Many of these are implicit or
+//!       documented only in individual rules. Changes to the default pipeline
+//!       may require updates to rules that rely on them.
+//!
+//!    2. DataFusion aims to make these assumptions easier to understand and
+//!       verify.
+//!
+//!    3. Extension rules should adapt to the built-in rules, not the other
+//!       way around. DataFusion does not aim to support arbitrary downstream
+//!       pipelines such as:
+//!
+//!       ```text
+//!       // Potential downstream usage:
+//!       //
+//!       // Reordered default rules mixed with extension rules
+//!       let rules = vec![
+//!           rule3,
+//!           extension_rule1,
+//!           rule1,
+//!           // ...
+//!       ];
+//!       ```
+//!
+//!       Do not extend built-in rules or add unit tests within DataFusion
+//!       solely to support such downstream pipelines.
 
 use std::fmt::Debug;
 use std::sync::Arc;
