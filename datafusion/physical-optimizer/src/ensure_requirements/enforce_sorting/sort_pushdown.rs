@@ -189,13 +189,9 @@ fn preserve_fetch_above_ordered_plan(
     let input = Arc::clone(&node.plan);
 
     let limit: Arc<dyn ExecutionPlan> = if input_has_multiple_partitions {
-        let mut limit = LocalLimitExec::new(input, fetch);
-        limit.set_required_ordering(Some(ordering.clone()));
-        Arc::new(limit)
+        Arc::new(LocalLimitExec::new(input, fetch))
     } else {
-        let mut limit = GlobalLimitExec::new(input, 0, Some(fetch));
-        limit.set_required_ordering(Some(ordering.clone()));
-        Arc::new(limit)
+        Arc::new(GlobalLimitExec::new(input, 0, Some(fetch)))
     };
     let limit_node = PlanContext::new(limit, ParentRequirements::default(), vec![node]);
 
