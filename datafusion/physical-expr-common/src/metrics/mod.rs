@@ -22,12 +22,14 @@ mod builder;
 mod custom;
 mod elapsed_compute;
 mod expression;
+mod snapshot;
 mod value;
 
 use datafusion_common::HashMap;
 pub use datafusion_common::format::{MetricCategory, MetricType};
 use datafusion_common::human_readable_size;
 use parking_lot::Mutex;
+use snapshot::{Registry, Snapshot};
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Display},
@@ -228,9 +230,13 @@ impl Metric {
 }
 
 /// A snapshot of the metrics for a particular execution plan.
+///
+/// The set's members remain fixed as execution registers more metrics, but their
+/// values continue to reflect execution progress. Use [`Self::for_partition`] to
+/// select the metrics belonging to one partition.
 #[derive(Default, Debug, Clone)]
 pub struct MetricsSet {
-    metrics: Vec<Arc<Metric>>,
+    metrics: Snapshot,
 }
 
 impl MetricsSet {
@@ -239,9 +245,37 @@ impl MetricsSet {
         Default::default()
     }
 
-    /// Add the specified metric
+    /// Add the specified metric without changing other snapshots.
     pub fn push(&mut self, metric: Arc<Metric>) {
         self.metrics.push(metric)
+    }
+
+    /// Returns this set with the derived `output_rows_skew` metric appended,
+    /// or unchanged if no partition reported `output_rows` yet.
+    ///
+    /// This is typically used in `ExecutionPlan::metrics` of operators that
+    /// execute in multiple partitions (e.g. repartitions, partitioned joins and
+    /// aggregations), where it shows how evenly their output rows are spread
+    /// across partitions. With a single partition the skew is always `0%`.
+    ///
+    /// See [`BaselineMetrics::output_rows_skew_metric`] for how skew is computed.
+    pub fn with_output_rows_skew(mut self) -> Self {
+        if let Some(output_rows_skew) = BaselineMetrics::output_rows_skew_metric(&self) {
+            self.push(output_rows_skew);
+        }
+        self
+    }
+
+    /// Return the metrics whose partition ID equals `partition`.
+    ///
+    /// Unpartitioned metrics are excluded; an unknown partition yields an empty
+    /// set. Registration order and duplicates are preserved. Selected metrics
+    /// share their current values with this set, but changes to either set's
+    /// membership do not affect the other.
+    pub fn for_partition(&self, partition: usize) -> Self {
+        Self {
+            metrics: self.metrics.for_partition(partition),
+        }
     }
 
     /// Returns an iterator across all metrics
@@ -360,10 +394,7 @@ impl MetricsSet {
                 });
         }
 
-        let new_metrics = map
-            .into_iter()
-            .map(|(_k, v)| Arc::new(v))
-            .collect::<Vec<_>>();
+        let new_metrics = map.into_iter().map(|(_k, v)| Arc::new(v)).collect();
 
         Self {
             metrics: new_metrics,
@@ -371,14 +402,15 @@ impl MetricsSet {
     }
 
     /// Sort the order of metrics so the "most useful" show up first
-    pub fn sorted_for_display(mut self) -> Self {
-        self.metrics.sort_unstable_by_key(|metric| {
+    pub fn sorted_for_display(self) -> Self {
+        let mut metrics: Vec<_> = self.into_iter().collect();
+        metrics.sort_unstable_by_key(|metric| {
             (
                 metric.value().display_sort_key(),
                 metric.value().name().to_owned(),
             )
         });
-        self
+        metrics.into_iter().collect()
     }
 
     /// Remove all timestamp metrics (for more compact display)
@@ -388,7 +420,7 @@ impl MetricsSet {
         let metrics = metrics
             .into_iter()
             .filter(|m| !m.value.is_timestamp())
-            .collect::<Vec<_>>();
+            .collect();
 
         Self { metrics }
     }
@@ -397,14 +429,14 @@ impl MetricsSet {
     /// [`MetricType`] appears in `allowed`.
     pub fn filter_by_metric_types(self, allowed: &[MetricType]) -> Self {
         if allowed.is_empty() {
-            return Self { metrics: vec![] };
+            return Self::new();
         }
 
         let metrics = self
             .metrics
             .into_iter()
             .filter(|metric| allowed.contains(&metric.metric_type()))
-            .collect::<Vec<_>>();
+            .collect();
         Self { metrics }
     }
 
@@ -418,7 +450,7 @@ impl MetricsSet {
     ///   removed.
     pub fn filter_by_categories(self, allowed: &[MetricCategory]) -> Self {
         if allowed.is_empty() {
-            return Self { metrics: vec![] };
+            return Self::new();
         }
 
         let metrics = self
@@ -430,7 +462,7 @@ impl MetricsSet {
                     .unwrap_or(MetricCategory::Uncategorized);
                 allowed.contains(&cat)
             })
-            .collect::<Vec<_>>();
+            .collect();
         Self { metrics }
     }
 
@@ -438,14 +470,14 @@ impl MetricsSet {
     /// Only metrics with the names appearing the list will be kept.
     pub fn filter_by_names(self, names: &[String]) -> Self {
         if names.is_empty() {
-            return Self { metrics: vec![] };
+            return Self::new();
         }
 
         let metrics = self
             .metrics
             .into_iter()
             .filter(|metric| names.iter().any(|name| name == metric.value().name()))
-            .collect::<Vec<_>>();
+            .collect();
         Self { metrics }
     }
 }
@@ -509,33 +541,35 @@ impl FromIterator<Arc<Metric>> for MetricsSet {
 /// underlying metrics set
 #[derive(Default, Debug, Clone)]
 pub struct ExecutionPlanMetricsSet {
-    inner: Arc<Mutex<MetricsSet>>,
+    inner: Arc<Mutex<Registry>>,
 }
 
 impl ExecutionPlanMetricsSet {
     /// Create a new empty shared metrics set
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(MetricsSet::new())),
-        }
+        Self::default()
     }
 
     /// Add the specified metric to the underlying metric set
     pub fn register(&self, metric: Arc<Metric>) {
-        self.inner.lock().push(metric)
+        self.inner.lock().register(metric)
     }
 
-    /// Return a clone of the inner [`MetricsSet`]
+    /// Return a snapshot of the currently registered metrics.
+    ///
+    /// Later registrations do not appear in this snapshot, but changes to the
+    /// values of existing metrics remain visible.
     pub fn clone_inner(&self) -> MetricsSet {
-        let guard = self.inner.lock();
-        (*guard).clone()
+        MetricsSet {
+            metrics: Snapshot::new(Arc::clone(&self.inner)),
+        }
     }
 }
 
 impl From<MetricsSet> for ExecutionPlanMetricsSet {
     fn from(metrics: MetricsSet) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(metrics)),
+            inner: Arc::new(Mutex::new(Registry::new(metrics.into_iter().collect()))),
         }
     }
 }
@@ -735,6 +769,134 @@ mod tests {
         assert_eq!(borrowed, shared);
         assert_eq!(borrowed.to_string(), owned.to_string());
         assert_eq!(borrowed.to_string(), shared.to_string());
+    }
+
+    #[test]
+    fn selected_snapshot_mutations_are_independent() {
+        let registry = ExecutionPlanMetricsSet::new();
+        MetricBuilder::new(&registry).output_rows(0).add(3);
+        MetricBuilder::new(&registry).output_rows(1).add(7);
+        MetricBuilder::new(&registry)
+            .global_counter("global")
+            .add(11);
+        let full = registry.clone_inner();
+        let selected = full.for_partition(0);
+        assert_eq!(selected.for_partition(0).output_rows(), Some(3));
+        assert_eq!(selected.for_partition(1).iter().count(), 0);
+        let mut modified = selected.clone();
+        let count = Count::new();
+        count.add(13);
+        modified.push(Arc::new(Metric::new(
+            MetricValue::OutputRows(count),
+            Some(1),
+        )));
+        assert_eq!(modified.output_rows(), Some(16));
+        assert_eq!(modified.for_partition(1).output_rows(), Some(13));
+        assert_eq!(selected.output_rows(), Some(3));
+        assert_eq!(full.output_rows(), Some(10));
+        assert_eq!(registry.clone_inner().iter().count(), 3);
+        assert_eq!(modified.clone().into_iter().count(), 2);
+        assert_eq!(
+            modified.sorted_for_display().for_partition(0).output_rows(),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn partition_snapshots_preserve_registration_and_shared_values() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        assert_eq!(metrics.clone_inner().for_partition(0).iter().count(), 0);
+        let first = MetricBuilder::new(&metrics).output_rows(0);
+        first.add(11);
+        MetricBuilder::new(&metrics).global_counter("global").add(7);
+        MetricBuilder::new(&metrics).output_rows(usize::MAX).add(99);
+        // Same name and partition must not overwrite the earlier metric.
+        MetricBuilder::new(&metrics).output_rows(0).add(13);
+        let snapshot = metrics.clone_inner().for_partition(0);
+        assert_eq!(snapshot.output_rows(), Some(24));
+        assert_eq!(snapshot.iter().count(), 2);
+        assert_eq!(snapshot.aggregate_by_name().output_rows(), Some(24));
+        assert_eq!(
+            metrics
+                .clone_inner()
+                .for_partition(usize::MAX)
+                .output_rows(),
+            Some(99)
+        );
+        assert_eq!(metrics.clone_inner().for_partition(1).iter().count(), 0);
+
+        let shared = metrics.clone();
+        first.add(1);
+        MetricBuilder::new(&shared).output_rows(0).add(17);
+        assert_eq!(snapshot.output_rows(), Some(25));
+        assert_eq!(
+            shared.clone_inner().for_partition(0).output_rows(),
+            Some(42)
+        );
+        assert_eq!(
+            metrics.clone_inner().for_partition(0).output_rows(),
+            Some(42)
+        );
+
+        let full = metrics.clone_inner();
+        let imported = ExecutionPlanMetricsSet::from(full.clone());
+        for (original, copied) in full.iter().zip(imported.clone_inner().iter()) {
+            assert!(Arc::ptr_eq(original, copied));
+        }
+        for partition in [0, 1, usize::MAX] {
+            let expected: Vec<_> = full
+                .iter()
+                .filter(|metric| metric.partition() == Some(partition))
+                .collect();
+            let selected = imported.clone_inner().for_partition(partition);
+            assert_eq!(expected.len(), selected.iter().count());
+            for (original, copied) in expected.into_iter().zip(selected.iter()) {
+                assert!(Arc::ptr_eq(original, copied));
+            }
+        }
+        // From shares metric values, but creates an independent registration set.
+        MetricBuilder::new(&imported).output_rows(0).add(3);
+        assert_eq!(
+            imported.clone_inner().for_partition(0).output_rows(),
+            Some(45)
+        );
+        assert_eq!(
+            metrics.clone_inner().for_partition(0).output_rows(),
+            Some(42)
+        );
+        assert_eq!(full.iter().filter(|m| m.partition().is_none()).count(), 1);
+    }
+
+    #[test]
+    fn partition_snapshots_during_registration() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        let barrier = std::sync::Barrier::new(5);
+        std::thread::scope(|scope| {
+            for partition in 0..4 {
+                let metrics = &metrics;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    for _ in 0..1000 {
+                        MetricBuilder::new(metrics).output_rows(partition).add(1);
+                    }
+                });
+            }
+            barrier.wait();
+            for _ in 0..1000 {
+                for partition in 0..4 {
+                    let selected = metrics.clone_inner().for_partition(partition);
+                    assert!(selected.iter().all(|m| m.partition() == Some(partition)));
+                    assert!(selected.iter().count() <= 1000);
+                }
+            }
+        });
+        for partition in 0..4 {
+            let selected = metrics.clone_inner().for_partition(partition);
+            assert_eq!(selected.iter().count(), 1000);
+            assert_eq!(selected.output_rows(), Some(1000));
+        }
+        assert_eq!(metrics.clone_inner().output_rows(), Some(4000));
     }
 
     #[test]

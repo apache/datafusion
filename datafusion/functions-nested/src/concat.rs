@@ -603,7 +603,8 @@ fn generic_append_and_prepend<O: OffsetSizeTrait>(
 where
     i64: TryInto<O>,
 {
-    let mut offsets = vec![O::usize_as(0)];
+    let mut offsets = Vec::with_capacity(list_array.len() + 1);
+    offsets.push(O::usize_as(0));
     let values = list_array.values();
     let original_data = values.to_data();
     let element_data = element_array.to_data();

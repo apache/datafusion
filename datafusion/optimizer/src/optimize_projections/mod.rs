@@ -28,6 +28,7 @@ use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{
     Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScanBuilder, Unnest,
     Window, logical_plan::LogicalPlan,
@@ -87,10 +88,6 @@ impl OptimizerRule for OptimizeProjections {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
     }
 
     fn rewrite(
@@ -158,16 +155,18 @@ fn optimize_projections(
             {
                 aggregate.group_expr
             } else {
-                let group_by_expr_existing = aggregate
+                let group_by_input_indices = aggregate
                     .group_expr
                     .iter()
-                    .map(|group_by_expr| group_by_expr.schema_name().to_string())
+                    .map(|group_by_expr| {
+                        passthrough_field_index(group_by_expr, aggregate.input.schema())
+                    })
                     .collect::<Vec<_>>();
 
                 if let Some(simplest_groupby_indices) =
                     get_required_group_by_exprs_indices(
                         aggregate.input.schema(),
-                        &group_by_expr_existing,
+                        &group_by_input_indices,
                     )
                 {
                     // Some of the fields in the GROUP BY may be required by
@@ -446,7 +445,8 @@ fn optimize_projections(
                 RequiredIndices::new().with_plan_exprs(&plan, input.schema())?;
 
             // Add additional required indices from the parent
-            let mut additional_necessary_child_indices = Vec::new();
+            let mut additional_necessary_child_indices =
+                Vec::with_capacity(indices.indices().len());
             indices.indices().iter().for_each(|idx| {
                 if let Some(index) = dependency_indices.get(*idx) {
                     additional_necessary_child_indices.push(*index);
@@ -603,7 +603,7 @@ fn merge_consecutive_projections_one_level(
     // Try to rewrite the expressions in the current projection using the
     // previous projection as input:
     let name_preserver = NamePreserver::new_for_projection();
-    let mut original_names = vec![];
+    let mut original_names = Vec::with_capacity(expr.len());
     let new_exprs = expr.map_elements(|expr| {
         original_names.push(name_preserver.save(&expr));
 

@@ -58,6 +58,18 @@ physical_plan
 01)FilterExec: range_key@0 = 10
 02)--DataSourceExec: file_groups={4 groups: [[], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.parquet], [], []]}, projection=[range_key], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, predicate=range_key@0 = 10, pruning_predicate=range_key_null_count@2 != row_count@3 AND range_key_min@0 <= 10 AND 10 <= range_key_max@1, required_guarantees=[range_key in (10)]
 
+# Pruning must preserve LIMIT/OFFSET results after the other groups become empty.
+query I
+SELECT range_key FROM range_partitioned
+WHERE range_key < 10 ORDER BY range_key LIMIT 1 OFFSET 1;
+----
+5
+
+query I
+SELECT range_key FROM range_partitioned
+WHERE range_key < 10 ORDER BY range_key LIMIT 1 OFFSET 100;
+----
+
 # A range-key join must still align the surviving rows with their partition.
 query II
 SELECT l.range_key, r.value
@@ -1658,9 +1670,8 @@ EXPLAIN SELECT * FROM (
 ----
 physical_plan
 01)ProjectionExec: expr=[range_key@0 as range_key, value@1 as value, row_number() PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0], order=[value@1 DESC]
-04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+02)--PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0], order=[value@1 DESC], emit=[row_number() PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
 
 query III
 SELECT * FROM (
@@ -1699,10 +1710,9 @@ EXPLAIN SELECT * FROM (
 ----
 physical_plan
 01)ProjectionExec: expr=[non_range_key@0 as non_range_key, value@1 as value, row_number() PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[non_range_key@0], order=[value@1 DESC]
-04)------RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
-05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[non_range_key, value], output_partitioning=UnknownPartitioning(4), file_type=parquet
+02)--PartitionedTopKExec: fn=row_number, fetch=1, partition=[non_range_key@0], order=[value@1 DESC], emit=[row_number() PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[non_range_key, value], output_partitioning=UnknownPartitioning(4), file_type=parquet
 
 query III
 SELECT * FROM (
@@ -1735,9 +1745,8 @@ EXPLAIN SELECT * FROM (
 ----
 physical_plan
 01)ProjectionExec: expr=[range_key@0 as range_key, non_range_key@1 as non_range_key, value@2 as value, row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0, non_range_key@1], order=[value@2 DESC]
-04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+02)--PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0, non_range_key@1], order=[value@2 DESC], emit=[row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
 
 query IIII
 SELECT * FROM (
@@ -1780,10 +1789,9 @@ EXPLAIN SELECT * FROM (
 ----
 physical_plan
 01)ProjectionExec: expr=[range_key@0 as range_key, non_range_key@1 as non_range_key, value@2 as value, row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0, non_range_key@1], order=[value@2 DESC]
-04)------RepartitionExec: partitioning=Hash([range_key@0, non_range_key@1], 4), input_partitions=4
-05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+02)--PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0, non_range_key@1], order=[value@2 DESC], emit=[row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----RepartitionExec: partitioning=Hash([range_key@0, non_range_key@1], 4), input_partitions=4
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
 
 statement ok
 reset datafusion.optimizer.subset_repartition_threshold;
@@ -1988,6 +1996,47 @@ ORDER BY b.range_key;
 ----
 5 50 50
 20 200 200
+
+##########
+# TEST 49: Reorder Composite Join Keys to Match Range Partitioning
+##########
+
+statement ok
+set datafusion.optimizer.enable_join_dynamic_filter_pushdown = false;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+query TT
+EXPLAIN SELECT l.range_key, l.non_range_key, l.value, r.value
+FROM range_partitioned_composite l
+JOIN range_partitioned_composite r
+  ON l.non_range_key = r.non_range_key
+ AND l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0), (non_range_key@1, non_range_key@1)], projection=[range_key@0, non_range_key@1, value@2, value@5]
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC, non_range_key@1 ASC], [(10, 1), (20, 1), (30, 1)], 4), file_type=parquet
+03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC, non_range_key@1 ASC], [(10, 1), (20, 1), (30, 1)], 4), file_type=parquet
+
+query IIII rowsort
+SELECT l.range_key, l.non_range_key, l.value, r.value
+FROM range_partitioned_composite l
+JOIN range_partitioned_composite r
+  ON l.non_range_key = r.non_range_key
+ AND l.range_key = r.range_key;
+----
+1 1 10 10
+10 0 90 90
+10 1 100 100
+10 1 100 101
+10 1 101 100
+10 1 101 101
+20 0 190 190
+20 1 200 200
+30 0 290 290
+30 1 300 300
+35 2 350 350
 
 statement ok
 reset datafusion.optimizer.preserve_file_partitions;
