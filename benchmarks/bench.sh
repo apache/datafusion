@@ -104,6 +104,8 @@ push_down_topk:         Benchmark of ORDER BY ... LIMIT over outer joins on TPC-
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
 wide_schema:            Small-projection queries on a wide synthetic dataset (1024 cols × 256 files) — measures per-file metadata overhead
                           (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
+set_operations:        INTERSECT ALL / EXCEPT ALL: distinct, duplicates, skew, and DISTINCT controls
+                          (inline data; SET_ROWS controls left rows, default 1000000)
 predicate_eval:         Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an
                           adaptive predicate-ordering system behaves across them (see https://github.com/apache/datafusion/issues/11262)
                           (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift, nulls)
@@ -275,6 +277,9 @@ main() {
                     ;;
                 wide_schema)
                     data_wide_schema
+                    ;;
+                set_operations)
+                    echo "set_operations: no external data to generate"
                     ;;
                 predicate_eval)
                     # Data is generated inline by the suite's load SQL.
@@ -537,6 +542,9 @@ main() {
                     ;;
                 wide_schema)
                     run_wide_schema
+                    ;;
+                set_operations)
+                    run_set_operations
                     ;;
                 predicate_eval)
                     run_predicate_eval
@@ -931,6 +939,16 @@ run_push_down_topk() {
       DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+run_set_operations() {
+    echo "Running set_operations benchmark (subgroup=${BENCH_SUBGROUP:-all}, rows=${SET_ROWS:-1000000})..."
+    debug_run env BENCH_NAME=set_operations \
+      BENCH_RESULTS_FILE="$(sql_results_file set_operations)" \
+      ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
+      SET_ROWS="${SET_ROWS:-1000000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
       bash -c "$SQL_CARGO_COMMAND"
 }
 

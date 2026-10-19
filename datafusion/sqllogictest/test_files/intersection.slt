@@ -42,3 +42,150 @@ query IR
 SELECT int_col, double_col FROM alltypes_plain where int_col > 0 INTERSECT SELECT int_col, double_col FROM alltypes_plain
 ----
 1 10.1
+
+# INTERSECT ALL keeps min(m, n) copies of each row and EXCEPT ALL keeps
+# max(m - n, 0), with NULLs compared as equal.
+statement ok
+CREATE TABLE set_all_left(v INT) AS VALUES (NULL), (NULL), (NULL), (1), (1), (2);
+
+statement ok
+CREATE TABLE set_all_right(v INT) AS VALUES (NULL), (NULL), (1), (1), (1), (3);
+
+query I rowsort
+SELECT v FROM set_all_left INTERSECT ALL SELECT v FROM set_all_right
+----
+1
+1
+NULL
+NULL
+
+query I rowsort
+SELECT v FROM set_all_left EXCEPT ALL SELECT v FROM set_all_right
+----
+2
+NULL
+
+query I rowsort
+SELECT v FROM set_all_right EXCEPT ALL SELECT v FROM set_all_left
+----
+1
+3
+
+# Rows that are NULL in only some columns
+statement ok
+CREATE TABLE set_all_pairs_left(a INT, b INT) AS VALUES
+  (1, NULL), (1, NULL), (NULL, 1), (1, 1), (NULL, NULL);
+
+statement ok
+CREATE TABLE set_all_pairs_right(a INT, b INT) AS VALUES
+  (1, NULL), (NULL, 1), (NULL, 1), (NULL, NULL), (NULL, NULL);
+
+query II rowsort
+SELECT a, b FROM set_all_pairs_left INTERSECT ALL SELECT a, b FROM set_all_pairs_right
+----
+1 NULL
+NULL 1
+NULL NULL
+
+query II rowsort
+SELECT a, b FROM set_all_pairs_left EXCEPT ALL SELECT a, b FROM set_all_pairs_right
+----
+1 1
+1 NULL
+
+# INTERSECT binds tighter than EXCEPT
+statement ok
+CREATE TABLE set_all_a(v INT) AS VALUES (1), (1), (1), (2), (2), (3);
+
+statement ok
+CREATE TABLE set_all_b(v INT) AS VALUES (1), (1), (2), (2), (2);
+
+statement ok
+CREATE TABLE set_all_c(v INT) AS VALUES (1), (2), (2), (2), (4);
+
+query I rowsort
+SELECT v FROM set_all_a EXCEPT ALL SELECT v FROM set_all_b INTERSECT ALL SELECT v FROM set_all_c
+----
+1
+1
+3
+
+query I rowsort
+(SELECT v FROM set_all_a EXCEPT ALL SELECT v FROM set_all_b) INTERSECT ALL SELECT v FROM set_all_c
+----
+1
+
+# The output keeps the left input's qualifiers
+statement ok
+CREATE TABLE set_all_t(x INT) AS VALUES (1), (1), (2);
+
+statement ok
+CREATE TABLE set_all_u(x INT) AS VALUES (1), (3);
+
+query I
+SELECT set_all_t.x FROM set_all_t INTERSECT ALL SELECT set_all_u.x FROM set_all_u ORDER BY set_all_t.x
+----
+1
+
+query I
+SELECT set_all_t.x FROM set_all_t EXCEPT ALL SELECT set_all_u.x FROM set_all_u ORDER BY set_all_t.x
+----
+1
+2
+
+# Both sides read the same table, so the planner has to requalify them internally
+query I
+SELECT set_all_t.x FROM set_all_t INTERSECT ALL SELECT set_all_t.x FROM set_all_t ORDER BY set_all_t.x
+----
+1
+1
+2
+
+# Columns with the same name from different relations on one side
+query II
+SELECT t1.x, t2.x FROM (VALUES (1)) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+INTERSECT ALL
+SELECT t1.x, t2.x FROM (VALUES (1)) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+----
+1 2
+
+query II
+SELECT t1.x, t2.x FROM (VALUES (1), (1)) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+EXCEPT ALL
+SELECT t1.x, t2.x FROM (VALUES (1)) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+----
+1 2
+
+query II
+SELECT t1.x, t2.x FROM (VALUES (1)) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+INTERSECT ALL
+SELECT t3.x, t4.x FROM (VALUES (1)) t3(x) CROSS JOIN (VALUES (2)) t4(x)
+----
+1 2
+
+statement ok
+DROP TABLE set_all_left;
+
+statement ok
+DROP TABLE set_all_right;
+
+statement ok
+DROP TABLE set_all_pairs_left;
+
+statement ok
+DROP TABLE set_all_pairs_right;
+
+statement ok
+DROP TABLE set_all_a;
+
+statement ok
+DROP TABLE set_all_b;
+
+statement ok
+DROP TABLE set_all_c;
+
+statement ok
+DROP TABLE set_all_t;
+
+statement ok
+DROP TABLE set_all_u;
