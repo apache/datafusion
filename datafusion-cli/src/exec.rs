@@ -39,6 +39,7 @@ use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
+use datafusion::sql::sqlparser::tokenizer::Tokenizer;
 use futures::StreamExt;
 use log::warn;
 use object_store::Error::Generic;
@@ -70,14 +71,23 @@ pub async fn exec_from_lines(
     print_options: &PrintOptions,
 ) -> Result<()> {
     let mut query = "".to_owned();
+    // Comment markers and semicolons can be part of an unfinished multiline literal.
+    let can_tokenize = |sql: &str| {
+        let task_ctx = ctx.task_ctx();
+        let dialect = &task_ctx.session_config().options().sql_parser.dialect;
+        dialect_from_str(dialect).is_some_and(|dialect| {
+            Tokenizer::new(dialect.as_ref(), sql).tokenize().is_ok()
+        })
+    };
 
     for line in reader.lines() {
         match line {
-            Ok(line) if line.starts_with("#!") || line.starts_with("--") => {}
+            Ok(line)
+                if (line.starts_with("#!") || line.starts_with("--"))
+                    && can_tokenize(&query) => {}
             Ok(line) => {
-                let line = line.trim_end();
-                query.push_str(line);
-                if line.ends_with(';') {
+                query.push_str(&line);
+                if line.trim_end().ends_with(';') && can_tokenize(&query) {
                     match exec_and_print(ctx, print_options, query).await {
                         Ok(_) => {}
                         Err(err) => eprintln!("{err}"),

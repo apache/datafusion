@@ -342,6 +342,40 @@ fn cli_quick_test<'a>(
 }
 
 #[test]
+fn test_cli_file_preserves_multiline_literal() {
+    let script = env::temp_dir().join(format!(
+        "datafusion_cli_multiline_literal_{}.sql",
+        std::process::id()
+    ));
+    fs::write(
+        &script,
+        concat!(
+            "#!/usr/bin/env -S datafusion-cli -f\n",
+            "\n-- leading comment\n",
+            "SELECT\n-- comment outside the literal;\n",
+            "'first\n-- body;\n#! body\na \nlast' AS s;  \n",
+            "\n-- trailing comment\n",
+        ),
+    )
+    .unwrap();
+
+    let output = cli()
+        .args(["-q", "--format", "json", "--file"])
+        .arg(&script)
+        .output()
+        .expect("failed to run datafusion-cli");
+    let _ = fs::remove_file(&script);
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim_end(),
+        r#"[{"s":"first\n-- body;\n#! body\na \nlast"}]"#
+    );
+}
+
+#[test]
 fn spark_features_require_opt_in() {
     let dialect_query = "SELECT CAST(1 AS LONG);";
     let spark_query = "SELECT concat_ws(',', array(1, 2)), CAST(1 AS LONG);";
