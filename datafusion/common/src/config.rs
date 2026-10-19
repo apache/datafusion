@@ -24,8 +24,8 @@ use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::{
-    DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion, DFTimeUnit,
-    RowGroupRangeAssignment,
+    DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFParquetWriterVersion,
+    DFTimeUnit, RowGroupRangeAssignment,
 };
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
@@ -1544,7 +1544,7 @@ config_namespace! {
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub encoding: Option<String>, transform = str::to_lowercase, default = None
+        pub encoding: Option<DFParquetEncoding>, default = None
 
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
