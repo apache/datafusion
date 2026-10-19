@@ -60,7 +60,7 @@ GROUP BY e.acct;
 ----
 physical_plan
 01)ProjectionExec: expr=[acct@0 as acct, count(Int64(1))@1 as n]
-02)--AggregateExec: mode=Single, gby=[acct@0 as acct], aggr=[count(Int64(1))], ordering_mode=Sorted
+02)--AggregateExec: mode=Single, gby=[acct@0 as acct], aggr=[count(Int64(1))], group_clustering_mode=Full
 03)----FilterExec: 25 > t@1, projection=[acct@0]
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/eliminate_constant_join/events.parquet]]}, projection=[acct, t], output_ordering=[acct@0 ASC NULLS LAST], file_type=parquet, predicate=25 > t@1, pruning_predicate=t_null_count@1 != row_count@2 AND t_min@0 < 25, required_guarantees=[]
 
