@@ -152,9 +152,17 @@ DROP TABLE t1;
 statement ok
 CREATE TABLE mix_types (id UUID);
 
-# Even if the JSON string is 16 bytes, it lacks the arrow.uuid metadata
-statement error Types don't match and no valid cast exists, received data of type Utf8 for field of type FixedSizeBinary\(16\)
-INSERT INTO mix_types VALUES (CAST('{"key": "value"}' AS JSON));
+# custom_id() returns FixedSizeBinary(16) tagged with the extension name `test.custom_id`.
+# Its storage type matches the UUID column, but its extension type is not arrow.uuid.
+# This succeeds because VALUES validation only checks storage types, not extension
+# names, and the target field's metadata (arrow.uuid) is applied regardless.
+statement ok
+INSERT INTO mix_types VALUES (custom_id());
+
+query T
+SELECT arrow_metadata(id, 'ARROW:extension:name') FROM mix_types;
+----
+arrow.uuid
 
 statement ok
 DROP TABLE mix_types;
