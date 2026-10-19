@@ -3261,12 +3261,13 @@ async fn collect_left_input(
     let schema = left_stream.schema();
     let prepared = mode == BuildMode::Prepared;
 
-    // The extra scope maps are only built for correlated null-aware joins, and
-    // the null bitmap only for those that mark build rows (see
-    // `NullAwareMode`).
-    let with_null_aware_scope_state =
-        null_aware.is_some_and(NullAwareMode::is_correlated);
-    let with_null_aware_row_state =
+    // Correlated null-aware joins (see `NullAwareMode`), multi-column value
+    // keys without scope keys included, pair NULL-valued rows with the other
+    // side to find UNKNOWN rows: they need the NULL-valued build rows and, with
+    // scope keys, the scope map. Of those, only the ones that decide build rows
+    // also need the per-build-row UNKNOWN bitmap.
+    let with_null_candidate_state = null_aware.is_some_and(NullAwareMode::is_correlated);
+    let with_build_unknown_bitmap =
         null_aware.is_some_and(NullAwareMode::marks_build_rows);
     let null_aware_value_keys = null_aware.map_or(1, NullAwareMode::value_keys);
 
@@ -3462,13 +3463,13 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
-    let null_indices_bitmap = if with_null_aware_row_state {
+    let null_indices_bitmap = if with_build_unknown_bitmap {
         allocate_bitmap()?
     } else {
         BooleanBufferBuilder::new(0)
     };
 
-    let (null_aware_scope_map, null_value_build_rows) = if with_null_aware_scope_state {
+    let (null_aware_scope_map, null_value_build_rows) = if with_null_candidate_state {
         // Null-aware convention: `on_left[..V]` are the value keys and
         // `on_left[V..]` the (possibly empty) correlation scope keys.
         let scope_keys = &on_left[null_aware_value_keys..];
@@ -10526,45 +10527,6 @@ mod tests {
         ));
     }
 
-    /// A multi-column null-aware `RightAnti` (a multi-column or correlated
-    /// `NOT IN` swapped to build on the subquery) is accepted.
-    #[tokio::test]
-    async fn test_null_aware_validation_multi_column_right_anti() {
-        let left = build_table(("a", &vec![1]), ("b", &vec![2]), ("c", &vec![3]));
-        let right = build_table(("x", &vec![1]), ("y", &vec![2]), ("z", &vec![3]));
-
-        let on = vec![
-            (
-                Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
-                Arc::new(Column::new_with_schema("x", &right.schema()).unwrap()) as _,
-            ),
-            (
-                Arc::new(Column::new_with_schema("b", &left.schema()).unwrap()) as _,
-                Arc::new(Column::new_with_schema("y", &right.schema()).unwrap()) as _,
-            ),
-        ];
-
-        let join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::RightAnti,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
-        )
-        .unwrap();
-        assert_eq!(
-            join.null_aware_mode().unwrap(),
-            Some(NullAwareMode::RightAnti {
-                correlated: true,
-                value_keys: 1,
-            })
-        );
-    }
-
     /// Test that null_aware validation rejects PartitionMode::Partitioned (must be CollectLeft).
     #[tokio::test]
     async fn test_null_aware_validation_partitioned() {
@@ -10604,34 +10566,55 @@ mod tests {
         );
     }
 
-    /// A filtered null-aware anti join is a decorrelated correlated `NOT IN`
-    /// and is accepted both as `LeftAnti` and as the swapped `RightAnti`, which
-    /// is correlated and so decides `NOT IN` per probe row after the filter.
-    #[tokio::test]
-    async fn test_null_aware_filter_accepted_for_anti_joins() {
-        for join_type in [JoinType::LeftAnti, JoinType::RightAnti] {
-            let left =
-                build_table_two_cols(("c1", &vec![Some(1)]), ("dummy", &vec![Some(10)]));
-            let right =
-                build_table_two_cols(("c2", &vec![Some(1)]), ("dummy", &vec![Some(100)]));
-            let on = vec![(
-                Arc::new(Column::new_with_schema("c1", &left.schema()).unwrap()) as _,
-                Arc::new(Column::new_with_schema("c2", &right.schema()).unwrap()) as _,
-            )];
-            let join = HashJoinExec::try_new(
-                left,
-                right,
-                on,
-                Some(prepare_join_filter()),
-                &join_type,
-                None,
-                PartitionMode::CollectLeft,
-                NullEquality::NullEqualsNothing,
-                true,
-            )
-            .unwrap();
-            assert!(join.null_aware_mode().unwrap().unwrap().is_correlated());
+    /// A correlated null-aware anti join, with more than one key or a join
+    /// filter (a decorrelated correlated `NOT IN`), is accepted both as
+    /// `LeftAnti` and as the `RightAnti` that `JoinSelection` swaps it into.
+    #[rstest]
+    #[case::right_anti_multi_key(JoinType::RightAnti, true, false)]
+    #[case::right_anti_filter(JoinType::RightAnti, false, true)]
+    #[case::left_anti_filter(JoinType::LeftAnti, false, true)]
+    fn test_null_aware_correlated_anti_join_accepted(
+        #[case] join_type: JoinType,
+        #[case] multi_key: bool,
+        #[case] with_filter: bool,
+    ) -> Result<()> {
+        let left =
+            build_table_two_cols(("c1", &vec![Some(1)]), ("dummy", &vec![Some(10)]));
+        let right =
+            build_table_two_cols(("c2", &vec![Some(1)]), ("dummy", &vec![Some(100)]));
+        let key = |l: &str, r: &str| -> Result<(PhysicalExprRef, PhysicalExprRef)> {
+            Ok((
+                Arc::new(Column::new_with_schema(l, &left.schema())?) as _,
+                Arc::new(Column::new_with_schema(r, &right.schema())?) as _,
+            ))
+        };
+        let mut on = vec![key("c1", "c2")?];
+        if multi_key {
+            on.push(key("dummy", "dummy")?);
         }
+        let join = HashJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on,
+            with_filter.then(prepare_join_filter),
+            &join_type,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+        let expected = match join_type {
+            JoinType::RightAnti => NullAwareMode::RightAnti {
+                correlated: true,
+                value_keys: 1,
+            },
+            _ => NullAwareMode::LeftAnti {
+                correlated: true,
+                value_keys: 1,
+            },
+        };
+        assert_eq!(join.null_aware_mode()?, Some(expected));
+        Ok(())
     }
 
     #[apply(hash_join_exec_configs)]
@@ -11309,131 +11292,6 @@ mod tests {
         let swapped = left_anti.swap_inputs(PartitionMode::CollectLeft)?;
         let swapped = swapped.downcast_ref::<HashJoinExec>().unwrap();
         Ok(Arc::new(swapped.builder().reset_state().build()?))
-    }
-
-    /// Uncorrelated two-column `(a, b) NOT IN (SELECT a, b ...)`, run both as
-    /// `LeftAnti` (built on the outer side) and as the swapped `RightAnti`
-    /// (built on the subquery side), which decides each outer row per probe
-    /// batch.
-    #[apply(hash_join_exec_configs)]
-    #[tokio::test]
-    async fn test_null_aware_multi_column_right_anti(batch_size: usize) -> Result<()> {
-        type Rows = Vec<(Option<i32>, Option<i32>)>;
-        fn table(rows: &Rows) -> Arc<dyn ExecutionPlan> {
-            let schema = Arc::new(Schema::new(vec![
-                Field::new("a", DataType::Int32, true),
-                Field::new("b", DataType::Int32, true),
-            ]));
-            let batch = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from_iter(rows.iter().map(|r| r.0))),
-                    Arc::new(Int32Array::from_iter(rows.iter().map(|r| r.1))),
-                ],
-            )
-            .unwrap();
-            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
-        }
-
-        async fn not_in(
-            outer: &Rows,
-            subquery: &Rows,
-            batch_size: usize,
-        ) -> Result<String> {
-            let (outer, subquery) = (table(outer), table(subquery));
-            let on = ["a", "b"]
-                .into_iter()
-                .map(|name| {
-                    Ok((
-                        Arc::new(Column::new_with_schema(name, &outer.schema())?) as _,
-                        Arc::new(Column::new_with_schema(name, &subquery.schema())?) as _,
-                    ))
-                })
-                .collect::<Result<JoinOn>>()?;
-            let left_anti =
-                HashJoinExecBuilder::new(outer, subquery, on, JoinType::LeftAnti)
-                    .with_partition_mode(PartitionMode::CollectLeft)
-                    .with_null_aware(true)
-                    .with_null_aware_value_keys(2)
-                    .build()?;
-            let right_anti = swap_for_separate_execution(&left_anti)?;
-            let right_anti_join = right_anti.downcast_ref::<HashJoinExec>().unwrap();
-            assert_eq!(
-                right_anti_join.null_aware_mode()?,
-                Some(NullAwareMode::RightAnti {
-                    correlated: true,
-                    value_keys: 2,
-                })
-            );
-
-            let task_ctx = prepare_task_ctx(batch_size, false);
-            let expected = batches_to_sort_string(
-                &common::collect(left_anti.execute(0, Arc::clone(&task_ctx))?).await?,
-            );
-            let actual = batches_to_sort_string(
-                &common::collect(right_anti.execute(0, task_ctx)?).await?,
-            );
-            assert_eq!(expected, actual);
-            Ok(actual)
-        }
-
-        let outer = vec![
-            (Some(1), Some(2)),
-            (Some(1), Some(3)),
-            (Some(5), Some(7)),
-            (None, Some(9)),
-            (None, Some(6)),
-            (None, None),
-        ];
-        // `(1, 2)` matches exactly, `(1, 3)` has no definite mismatch with
-        // `(NULL, 3)`, nor `(NULL, 6)` with `(5, 6)` and `(NULL, NULL)` with any
-        // row. `(5, 7)` and `(NULL, 9)` have a definite mismatch with every row.
-        let subquery = vec![(Some(1), Some(2)), (None, Some(3)), (Some(5), Some(6))];
-        let actual = not_in(&outer, &subquery, batch_size).await?;
-        allow_duplicates! {
-            assert_snapshot!(actual, @r"
-            +---+---+
-            | a | b |
-            +---+---+
-            |   | 9 |
-            | 5 | 7 |
-            +---+---+
-            ");
-        }
-
-        // Every subquery row is NULL-valued, so the full-key hash map is empty
-        // and every outer row is decided by the NULL candidates alone: only
-        // `(5, 7)` has a definite mismatch with both `(NULL, 3)` and `(1, NULL)`.
-        let subquery = vec![(None, Some(3)), (Some(1), None)];
-        let actual = not_in(&outer, &subquery, batch_size).await?;
-        allow_duplicates! {
-            assert_snapshot!(actual, @r"
-            +---+---+
-            | a | b |
-            +---+---+
-            | 5 | 7 |
-            +---+---+
-            ");
-        }
-
-        // An empty subquery keeps every outer row, NULL-valued ones included.
-        let actual = not_in(&outer, &vec![], batch_size).await?;
-        allow_duplicates! {
-            assert_snapshot!(actual, @r"
-            +---+---+
-            | a | b |
-            +---+---+
-            |   |   |
-            |   | 6 |
-            |   | 9 |
-            | 1 | 2 |
-            | 1 | 3 |
-            | 5 | 7 |
-            +---+---+
-            ");
-        }
-
-        Ok(())
     }
 
     /// Correlated null-aware `LeftAnti` whose two scope keys are Float64, with

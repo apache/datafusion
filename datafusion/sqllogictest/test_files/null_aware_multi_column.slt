@@ -52,6 +52,11 @@ CREATE TABLE mc_inner_no_null(x INT, y INT) AS VALUES
 statement ok
 CREATE TABLE mc_empty(x INT, y INT);
 
+statement ok
+CREATE TABLE mc_inner_all_null(x INT, y INT) AS VALUES
+(NULL, 4),
+(1, NULL);
+
 #############
 ## NULL in the subquery
 #############
@@ -65,6 +70,15 @@ WHERE (a, b) NOT IN (SELECT x, y FROM mc_inner_null);
 ----
 5 6 z
 NULL 8 w
+
+# Every subquery row holds a NULL, so no row can match a whole tuple and only
+# the NULL-aware checks decide. Only (5, 6) has a definite mismatch with both
+# (NULL, 4) and (1, NULL).
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_inner_all_null);
+----
+5 6 z
 
 #############
 ## NULL only in the outer tuple
@@ -547,6 +561,9 @@ DROP TABLE mc_inner_no_null;
 
 statement ok
 DROP TABLE mc_empty;
+
+statement ok
+DROP TABLE mc_inner_all_null;
 
 statement ok
 DROP TABLE mc3_outer;

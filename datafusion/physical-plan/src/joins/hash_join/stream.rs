@@ -940,36 +940,50 @@ impl HashJoinStream {
             // Must precede the empty-build-map return below: an all-NULL-key
             // build side has an empty full-key map but still needs UNKNOWN marks.
             if mode.is_correlated() && state.is_first_chunk() {
-                // `RightAnti` marks the rows of this probe batch, the others
-                // the build rows shared by all probe partitions.
-                let probe_marks = (!mode.marks_build_rows()).then(|| {
-                    let mut marks = BooleanBufferBuilder::new(state.batch.num_rows());
-                    marks.append_n(state.batch.num_rows(), false);
-                    SharedBitmapBuilder::new(marks)
-                });
-                let marks = match &probe_marks {
-                    Some(probe_marks) => UnknownMarks::Probe(probe_marks),
-                    None => {
-                        UnknownMarks::Build(build_side.left_data.null_indices_bitmap())
-                    }
+                let mut mark = |marks| {
+                    mark_null_candidates_for_probe_batch(
+                        build_side,
+                        state,
+                        mode.value_keys(),
+                        self.filter.as_ref(),
+                        self.join_type,
+                        marks,
+                        &self.random_state,
+                        self.batch_size,
+                        &mut self.null_mark_hashes_buffer,
+                        &mut self.null_mark_probe_indices_buffer,
+                        &mut self.null_mark_build_indices_buffer,
+                    )
                 };
-                mark_null_candidates_for_probe_batch(
-                    build_side,
-                    state,
-                    mode.value_keys(),
-                    self.filter.as_ref(),
-                    self.join_type,
-                    marks,
-                    &self.random_state,
-                    self.batch_size,
-                    &mut self.null_mark_hashes_buffer,
-                    &mut self.null_mark_probe_indices_buffer,
-                    &mut self.null_mark_build_indices_buffer,
-                )?;
-                state.unknown_probe_rows = probe_marks
-                    .map(|marks| marks.into_inner().finish())
-                    .filter(|marks| marks.count_set_bits() > 0)
-                    .map(Box::new);
+                match mode {
+                    // `RightAnti` decides the rows of this probe batch. Without
+                    // a NULL-valued row on either side none of them can be
+                    // UNKNOWN, so the bitmap is only allocated when one exists.
+                    NullAwareMode::RightAnti { value_keys, .. } => {
+                        let may_be_unknown =
+                            build_side.left_data.null_value_build_rows().is_some()
+                                || state.values[..value_keys]
+                                    .iter()
+                                    .any(|values| values.logical_null_count() > 0);
+                        if may_be_unknown {
+                            let num_rows = state.batch.num_rows();
+                            let mut unknown = BooleanBufferBuilder::new(num_rows);
+                            unknown.append_n(num_rows, false);
+                            let unknown = SharedBitmapBuilder::new(unknown);
+                            mark(UnknownMarks::Probe(&unknown))?;
+                            let unknown = unknown.into_inner().finish();
+                            state.unknown_probe_rows =
+                                (unknown.count_set_bits() > 0).then(|| Box::new(unknown));
+                        }
+                    }
+                    // The others decide the build rows shared by all probe
+                    // partitions.
+                    NullAwareMode::LeftAnti { .. } | NullAwareMode::LeftMark { .. } => {
+                        mark(UnknownMarks::Build(
+                            build_side.left_data.null_indices_bitmap(),
+                        ))?;
+                    }
+                }
             }
         }
 
@@ -1556,8 +1570,9 @@ impl<'a> UnknownMarks<'a> {
         }
     }
 
-    /// The row of a (build, probe) candidate pair that this join marks.
-    fn marked_row(self, build_idx: u64, probe_idx: u32) -> usize {
+    /// The row of a (build, probe) candidate pair whose `NOT IN` the pair
+    /// decides, and that is marked when the pair makes it UNKNOWN.
+    fn unknown_row(self, build_idx: u64, probe_idx: u32) -> usize {
         match self {
             Self::Build(_) => build_idx as usize,
             Self::Probe(_) => probe_idx as usize,
@@ -1571,9 +1586,10 @@ impl<'a> UnknownMarks<'a> {
 ///
 /// Key layout: `on[..V]` are the `NOT IN` value keys, `on[V..]` the (possibly
 /// empty) correlation scope keys (see `HashJoinExec::null_aware`). A row is
-/// NULL-valued when any of its value keys is NULL. A (build, probe) pair makes
-/// the `NOT IN` of the marked row UNKNOWN instead of TRUE (a `LeftMark` mark
-/// NULL instead of FALSE) when either:
+/// NULL-valued when any of its value keys is NULL. Each (build, probe) pair
+/// decides one of its rows (see [`UnknownMarks::unknown_row`]), and makes that
+/// row's `NOT IN` UNKNOWN instead of TRUE (a `LeftMark` mark NULL instead of
+/// FALSE) when either:
 /// 1. the build row is NULL-valued, or
 /// 2. the probe row is NULL-valued,
 ///
@@ -1590,10 +1606,10 @@ impl<'a> UnknownMarks<'a> {
 /// The value tuples and then the join filter, if any, decide which candidates
 /// count.
 ///
-/// A row stays UNKNOWN once it is marked, so candidates whose marked row is
-/// already marked are skipped, and the join filter is not evaluated for them.
-/// Without scope keys this also ends the pairing as soon as no unmarked row is
-/// left.
+/// A row stays UNKNOWN once it is marked, so pairs that decide a row already
+/// known to be UNKNOWN are skipped, and the join filter is not evaluated for
+/// them. Without scope keys this also ends the pairing as soon as every row
+/// that can be decided is UNKNOWN.
 #[expect(clippy::too_many_arguments)]
 fn mark_null_candidates_for_probe_batch(
     build_side: &BuildSideReadyState,
@@ -1660,7 +1676,7 @@ fn mark_null_candidates_for_probe_batch(
             for (build_idx, probe_idx) in
                 build_indices.values().iter().zip(probe_indices.values())
             {
-                bitmap.set_bit(marks.marked_row(*build_idx, *probe_idx), true);
+                bitmap.set_bit(marks.unknown_row(*build_idx, *probe_idx), true);
             }
         }
         Ok(())
@@ -1862,7 +1878,7 @@ fn for_each_scope_match(
     Ok(())
 }
 
-/// Removes the candidate pairs whose marked row is already marked UNKNOWN.
+/// Removes the candidate pairs that decide a row already marked UNKNOWN.
 fn retain_unmarked(
     marks: UnknownMarks<'_>,
     build_indices: UInt64Array,
@@ -1870,7 +1886,7 @@ fn retain_unmarked(
 ) -> (UInt64Array, UInt32Array) {
     let bitmap = marks.bitmap().lock();
     let is_unmarked = |(build_idx, probe_idx): (&u64, &u32)| {
-        !bitmap.get_bit(marks.marked_row(*build_idx, *probe_idx))
+        !bitmap.get_bit(marks.unknown_row(*build_idx, *probe_idx))
     };
     if build_indices
         .values()
@@ -1889,9 +1905,9 @@ fn retain_unmarked(
     (build.into(), probe.into())
 }
 
-/// Calls `f` with the pairs of `build_rows` x `probe_rows` whose marked row
-/// (see [`UnknownMarks`]) is not marked UNKNOWN, as chunks of at most
-/// `batch_size` pairs.
+/// Calls `f` with the pairs of `build_rows` x `probe_rows` that decide a row
+/// (see [`UnknownMarks::unknown_row`]) not yet marked UNKNOWN, as chunks of at
+/// most `batch_size` pairs.
 fn for_each_unmarked_cross_product(
     marks: UnknownMarks<'_>,
     build_rows: impl Iterator<Item = u64>,
@@ -1917,53 +1933,53 @@ fn for_each_unmarked_cross_product(
     }
 }
 
-/// Calls `f` with the pairs of `marked_rows` x `other_rows` whose row in
-/// `marked_rows` is not set in `bitmap`, as chunks of at most `batch_size`
+/// Calls `f` with the pairs of `decided_rows` x `other_rows` whose row in
+/// `decided_rows` is not set in `bitmap`, as chunks of at most `batch_size`
 /// pairs.
 ///
-/// `f` sets bits in `bitmap`, so the unmarked rows are found again after each
-/// chunk. The pairing stops when no unmarked row is left.
-fn for_each_unmarked_pair<M: Copy + Into<u64>, O: Copy>(
+/// `f` sets bits in `bitmap`, so the unset rows are found again after each
+/// chunk. The pairing stops when every row of `decided_rows` is set.
+fn for_each_unmarked_pair<D: Copy + Into<u64>, O: Copy>(
     bitmap: &SharedBitmapBuilder,
-    mut marked_rows: Vec<M>,
+    mut decided_rows: Vec<D>,
     other_rows: impl Iterator<Item = O>,
     batch_size: usize,
-    mut f: impl FnMut(Vec<M>, Vec<O>) -> Result<()>,
+    mut f: impl FnMut(Vec<D>, Vec<O>) -> Result<()>,
 ) -> Result<()> {
-    let retain_unmarked_rows = |rows: &mut Vec<M>| {
+    let retain_undecided_rows = |rows: &mut Vec<D>| {
         let bitmap = bitmap.lock();
         rows.retain(|idx| !bitmap.get_bit((*idx).into() as usize));
     };
 
-    retain_unmarked_rows(&mut marked_rows);
+    retain_undecided_rows(&mut decided_rows);
 
-    let mut marked_chunk = Vec::with_capacity(batch_size);
+    let mut decided_chunk = Vec::with_capacity(batch_size);
     let mut other_chunk = Vec::with_capacity(batch_size);
     let mut marks_since_refresh = false;
     for other_row in other_rows {
         // Refresh only after a chunk was sent, so the cost of the refresh
         // stays proportional to the pairs already evaluated.
         if marks_since_refresh {
-            retain_unmarked_rows(&mut marked_rows);
+            retain_undecided_rows(&mut decided_rows);
             marks_since_refresh = false;
         }
-        if marked_rows.is_empty() {
+        if decided_rows.is_empty() {
             break;
         }
-        for marked_row in &marked_rows {
-            marked_chunk.push(*marked_row);
+        for decided_row in &decided_rows {
+            decided_chunk.push(*decided_row);
             other_chunk.push(other_row);
-            if marked_chunk.len() == batch_size {
+            if decided_chunk.len() == batch_size {
                 f(
-                    std::mem::replace(&mut marked_chunk, Vec::with_capacity(batch_size)),
+                    std::mem::replace(&mut decided_chunk, Vec::with_capacity(batch_size)),
                     std::mem::replace(&mut other_chunk, Vec::with_capacity(batch_size)),
                 )?;
                 marks_since_refresh = true;
             }
         }
     }
-    if !marked_chunk.is_empty() {
-        f(marked_chunk, other_chunk)?;
+    if !decided_chunk.is_empty() {
+        f(decided_chunk, other_chunk)?;
     }
     Ok(())
 }

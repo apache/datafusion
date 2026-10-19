@@ -31,8 +31,10 @@ use std::sync::Arc;
 use arrow::array::{Int32Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::util::pretty::pretty_format_batches;
+use datafusion::common::JoinType;
 use datafusion::datasource::MemTable;
-use datafusion::physical_plan::displayable;
+use datafusion::physical_plan::joins::HashJoinExec;
+use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -66,9 +68,9 @@ async fn null_aware_join_matches_reference() {
                 ctx.register_table("o", Arc::clone(&outer) as _).unwrap();
                 ctx.register_table("i", Arc::clone(&inner) as _).unwrap();
                 for (query, reference) in cases() {
-                    plans.record(&ctx, &query).await;
-                    let actual = run(&ctx, &query).await;
-                    let expected = run(&ctx, &reference).await;
+                    let (actual, plan) = run(&ctx, &query).await;
+                    plans.record(plan.as_ref());
+                    let (expected, _) = run(&ctx, &reference).await;
                     assert_eq!(
                         actual, expected,
                         "seed={seed} target_partitions={target_partitions} \
@@ -95,24 +97,24 @@ struct NullAwarePlans {
 }
 
 impl NullAwarePlans {
-    async fn record(&mut self, ctx: &SessionContext, sql: &str) {
-        let plan = ctx
-            .sql(sql)
-            .await
-            .unwrap()
-            .create_physical_plan()
-            .await
-            .unwrap();
-        let plan = displayable(plan.as_ref()).indent(true).to_string();
-        for line in plan.lines().filter(|line| line.contains("null_aware")) {
-            if line.contains("join_type=LeftAnti") {
-                self.left_anti += 1;
-            } else if line.contains("join_type=RightAnti") {
-                self.right_anti += 1;
-                if line.contains("), (") || line.contains("filter=") {
-                    self.correlated_right_anti += 1;
+    /// Counts the null-aware anti joins in `plan` and its descendants.
+    fn record(&mut self, plan: &dyn ExecutionPlan) {
+        if let Some(join) = plan.downcast_ref::<HashJoinExec>()
+            && join.null_aware
+        {
+            match join.join_type() {
+                JoinType::LeftAnti => self.left_anti += 1,
+                JoinType::RightAnti => {
+                    self.right_anti += 1;
+                    if join.on().len() > 1 || join.filter().is_some() {
+                        self.correlated_right_anti += 1;
+                    }
                 }
+                _ => {}
             }
+        }
+        for child in plan.children() {
+            self.record(child.as_ref());
         }
     }
 }
@@ -215,9 +217,16 @@ fn random_table(rng: &mut StdRng, columns: &[&str], max_rows: i32) -> Arc<MemTab
     Arc::new(MemTable::try_new(schema, partitions).unwrap())
 }
 
-/// The rows of `sql`, sorted.
-async fn run(ctx: &SessionContext, sql: &str) -> Vec<String> {
-    let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+/// The rows of `sql`, sorted, and the physical plan that produced them.
+async fn run(ctx: &SessionContext, sql: &str) -> (Vec<String>, Arc<dyn ExecutionPlan>) {
+    let plan = ctx
+        .sql(sql)
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+    let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await.unwrap();
     let formatted = pretty_format_batches(&batches).unwrap().to_string();
     let mut rows: Vec<String> = formatted
         .lines()
@@ -226,5 +235,5 @@ async fn run(ctx: &SessionContext, sql: &str) -> Vec<String> {
         .map(String::from)
         .collect();
     rows.sort();
-    rows
+    (rows, plan)
 }
