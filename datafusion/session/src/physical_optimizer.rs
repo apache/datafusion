@@ -120,10 +120,14 @@ where
 /// `PhysicalOptimizerRule` transforms one [`ExecutionPlan`] into another which
 /// computes the same results, but in a potentially more efficient way.
 ///
-/// Use [`SessionState::add_physical_optimizer_rule`] to register additional
+/// The returned plan must be valid and produce the same results as the input
+/// plan. See [`PhysicalOptimizer`] for more details.
+///
+/// Use [`SessionStateBuilder::with_physical_optimizer_rule`] to register additional
 /// `PhysicalOptimizerRule`s.
 ///
-/// [`SessionState::add_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_physical_optimizer_rule
+/// [`PhysicalOptimizer`]: https://docs.rs/datafusion-physical-optimizer/latest/datafusion_physical_optimizer/optimizer/struct.PhysicalOptimizer.html
+/// [`SessionStateBuilder::with_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionStateBuilder.html#method.with_physical_optimizer_rule
 pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     /// Rewrite `plan` to an optimized form.
     ///

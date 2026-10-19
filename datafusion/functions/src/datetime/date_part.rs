@@ -28,9 +28,9 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    ArrowTimestampType, DataType, Date32Type, Date64Type, Field, FieldRef,
-    IntervalUnit as ArrowIntervalUnit, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    ArrowTimestampType, DataType, Field, FieldRef, IntervalUnit as ArrowIntervalUnit,
+    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
 };
 use chrono::{Datelike, NaiveDate, Offset};
 use datafusion_common::types::{NativeType, logical_date};
@@ -304,8 +304,8 @@ impl ScalarUDFImpl for DatePartFunc {
 
         // Convert to ScalarValues
         let (Some(lower), Some(upper)) = (
-            date_to_scalar(start_time, target_type),
-            date_to_scalar(end_time, target_type),
+            ScalarValue::try_from_date(start_time, target_type),
+            ScalarValue::try_from_date(end_time, target_type),
         ) else {
             return Ok(PreimageResult::None);
         };
@@ -429,54 +429,6 @@ fn timezone_part_typed<T: ArrowTimestampType>(
             .map(|dt| part.project(dt.offset().fix().local_minus_utc()))
     });
     Ok(Arc::new(result))
-}
-
-fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
-    Some(match target_type {
-        Date32 => ScalarValue::Date32(Some(Date32Type::from_naive_date(date))),
-        Date64 => ScalarValue::Date64(Some(Date64Type::from_naive_date(date))),
-
-        Timestamp(unit, tz_opt) => {
-            let naive_midnight = date.and_hms_opt(0, 0, 0)?;
-            let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
-
-            // Midnight has no representation when the date falls outside the
-            // unit's range, or when the zone skips it. Reporting no bound keeps
-            // the caller on the original predicate; a NULL bound here would make
-            // the rewritten comparison NULL on every row.
-            match unit {
-                Second => ScalarValue::TimestampSecond(
-                    Some(TimestampSecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    )?),
-                    tz_opt.clone(),
-                ),
-                Millisecond => ScalarValue::TimestampMillisecond(
-                    Some(TimestampMillisecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    )?),
-                    tz_opt.clone(),
-                ),
-                Microsecond => ScalarValue::TimestampMicrosecond(
-                    Some(TimestampMicrosecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    )?),
-                    tz_opt.clone(),
-                ),
-                Nanosecond => ScalarValue::TimestampNanosecond(
-                    Some(TimestampNanosecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    )?),
-                    tz_opt.clone(),
-                ),
-            }
-        }
-        _ => return None,
-    })
 }
 
 // Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error
