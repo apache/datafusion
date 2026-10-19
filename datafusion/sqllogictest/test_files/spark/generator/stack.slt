@@ -108,6 +108,12 @@ SELECT stack(2, array(1), [2]), stack(2, named_struct('a', array(1)), named_stru
 ----
 [{col0: [1]}, {col0: [2]}] [{col0: {a: [1]}}, {col0: {a: [2]}}] [{col0: {a: 1}}, {col0: {b: 2}}]
 
+# Nullability does not make types differ
+query ?
+SELECT stack(2, arrow_cast([1], 'List(non-null Int64)'), [2]);
+----
+[{col0: [1]}, {col0: [2]}]
+
 # Integer literals are BIGINT here but INT in Spark, so one that fits can follow an
 # INT value
 query ?T
@@ -121,12 +127,19 @@ SELECT stack(2, a, 3000000000) FROM (VALUES (1::INT)) AS t(a);
 query error The data type of the column \(0\) do not have the same type: "Int16" \(1\) <> "Int64" \(2\)\.
 SELECT stack(2, a, 0) FROM (VALUES (1::SMALLINT)) AS t(a);
 
-# Spark also accepts the literal first. Here the first value sets the column type,
-# so the literal needs a cast such as 0::INT.
-# query ?
-# SELECT stack(2, 0, a) FROM (VALUES (1::INT)) AS t(a);
-# ----
-# [{col0: 0}, {col0: 1}]
+# The order does not matter, and the literal can be in a later group of values
+query ?T
+SELECT stack(2, 0, a), arrow_typeof(stack(2, 0, a)) FROM (VALUES (1::INT)) AS t(a);
+----
+[{col0: 0}, {col0: 1}] List(Struct("col0": Int32))
+
+query ?T
+SELECT stack(2, 'x', 1, 'y', a), arrow_typeof(stack(2, 'x', 1, 'y', a)) FROM (VALUES (2::INT)) AS t(a);
+----
+[{col0: x, col1: 1}, {col0: y, col1: 2}] List(Struct("col0": Utf8, "col1": Int32))
+
+query error The data type of the column \(0\) do not have the same type: "Int64" \(1\) <> "Int32" \(2\)\.
+SELECT stack(2, 3000000000, a) FROM (VALUES (1::INT)) AS t(a);
 
 # unnest expands the generated rows, keeping those with NULL values
 query ITI rowsort
@@ -164,15 +177,17 @@ SELECT stack(-1, 1, 2, 3);
 query error The `n` must be between \(0, 2147483647\] \(current value = 2147483648\)\.
 SELECT stack(2147483648, 1);
 
-query error the input `n` should be a foldable "INT" expression; however, got "n"\. Only an integer literal is supported\.
+query error The first parameter of `stack` must be an integer literal, however "n" is not one\.
 SELECT stack(n, a, b, c) FROM (VALUES (2, 1, 2, 3)) AS t(n, a, b, c);
 
 # Spark accepts any foldable n, such as 3 - 1 or 2::INT. DataFusion only sees the
-# value of a literal when it plans the return type.
-# query ?
-# SELECT stack(3 - 1, 1, '2', NULL, NULL);
-# ----
-# [{col0: 1, col1: 2}, {col0: NULL, col1: NULL}]
+# value of a literal when it plans the return type, before expressions are folded.
+query error The first parameter of `stack` must be an integer literal, however "Int64\(3\) - Int64\(1\)" is not one\.
+SELECT stack(3 - 1, 1, '2', NULL, NULL);
+
+# The generated rows are materialized, so their number is limited
+query error stack: 1 rows of 2000000000 generated rows exceed the limit
+SELECT stack(2000000000, 1);
 
 # The values of a column must have the same type. The first mismatch in
 # argument order is reported.

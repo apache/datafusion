@@ -26,12 +26,17 @@ use arrow::compute::{concat, take};
 use arrow::datatypes::{ArrowPrimitiveType, DataType, Field, FieldRef, Fields};
 use datafusion_common::types::NativeType;
 use datafusion_common::{
-    Result, ScalarValue, exec_datafusion_err, internal_err, plan_err,
+    Result, ScalarValue, internal_err, plan_err, resources_datafusion_err,
 };
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
+
+/// The most rows a call generates per batch. Spark streams the rows, but they are
+/// materialized here, so a large `n` such as `stack(2000000000, 1)` fails instead of
+/// exhausting memory.
+const MAX_GENERATED_ROWS: usize = 1 << 24;
 
 /// Spark-compatible `stack` expression
 ///
@@ -50,8 +55,9 @@ use datafusion_expr::{
 /// As in Spark, `n` is an `INT` in `[1, 2147483647]`, and the values of a column
 /// must have the same type, which is the type of its first non-NULL value. NULLs,
 /// Arrow types of the same Spark type (such as `Utf8` and `Utf8View`), and integer
-/// literals that fit an `INT` column are cast to it. Unlike Spark, which accepts
-/// any foldable `n`, `n` must be an integer literal.
+/// literals that fit an `INT` column are cast to it, wherever they are in the
+/// column. Unlike Spark, which accepts any foldable `n`, `n` must be an integer
+/// literal, because the return type is planned before expressions are folded.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkStack {
     signature: Signature,
@@ -104,7 +110,7 @@ impl ScalarUDFImpl for SparkStack {
         }
         let Some(n_value) = args.scalar_arguments.first().copied().flatten() else {
             return plan_err!(
-                "the input `n` should be a foldable \"INT\" expression; however, got \"{}\". Only an integer literal is supported.",
+                "The first parameter of `stack` must be an integer literal, however \"{}\" is not one.",
                 n.name()
             );
         };
@@ -176,45 +182,48 @@ fn column_types(
     scalar_arguments: &[Option<&ScalarValue>],
     num_fields: usize,
 ) -> Result<Vec<DataType>> {
+    // Integer literals are BIGINT here but INT in Spark, so one that fits is an INT
+    // in a column that has an INT value, wherever it is. Being a literal never
+    // changes the column type otherwise, which must not change when constant
+    // folding turns an expression into a literal.
+    let mut has_int32 = vec![false; num_fields];
+    for (i, arg_field) in arg_fields.iter().enumerate() {
+        has_int32[i % num_fields] |= arg_field.data_type() == &DataType::Int32;
+    }
     let mut types = vec![DataType::Null; num_fields];
     for (i, arg_field) in arg_fields.iter().enumerate() {
         let col = i % num_fields;
-        let (expected, actual) = (&mut types[col], arg_field.data_type());
+        let literal = scalar_arguments.get(i).copied().flatten();
+        let actual = if has_int32[col]
+            && arg_field.data_type().is_integer()
+            && literal.is_some_and(|literal| literal.cast_to(&DataType::Int32).is_ok())
+        {
+            &DataType::Int32
+        } else {
+            arg_field.data_type()
+        };
+        let expected = &mut types[col];
         if expected.is_null() {
             *expected = actual.clone();
-            continue;
+        } else if !actual.is_null() && !same_spark_type(actual, expected) {
+            return plan_err!(
+                "The data type of the column ({col}) do not have the same type: \"{expected}\" ({}) <> \"{actual}\" ({}).",
+                col + 1,
+                i + 1
+            );
         }
-        if actual.is_null() || same_spark_type(actual, expected) {
-            continue;
-        }
-        // Integer literals are BIGINT here but INT in Spark, so one that fits is
-        // cast to an INT column. Being a literal never changes the column type,
-        // which must not change when constant folding turns an expression into a
-        // literal.
-        let literal = scalar_arguments.get(i).copied().flatten();
-        if *expected == DataType::Int32
-            && actual.is_integer()
-            && literal.is_some_and(|literal| literal.cast_to(expected).is_ok())
-        {
-            continue;
-        }
-        return plan_err!(
-            "The data type of the column ({col}) do not have the same type: \"{expected}\" ({}) <> \"{actual}\" ({}).",
-            col + 1,
-            i + 1
-        );
     }
     Ok(types)
 }
 
 /// Whether two Arrow types are the same Spark type. Types of one logical type, such
 /// as `Utf8` and `Utf8View`, match, and list elements and map entries match
-/// regardless of their field names, which Spark types do not have.
+/// regardless of their field names, which Spark types do not have. As in Spark's
+/// `sameType`, nullability is ignored.
 fn same_spark_type(left: &DataType, right: &DataType) -> bool {
     use DataType::*;
     fn same_field(left: &FieldRef, right: &FieldRef) -> bool {
-        left.is_nullable() == right.is_nullable()
-            && same_spark_type(left.data_type(), right.data_type())
+        same_spark_type(left.data_type(), right.data_type())
     }
     left == right
         || match (left, right) {
@@ -264,12 +273,20 @@ fn stack(
             values.len().div_ceil(n)
         );
     }
-    let offsets =
-        OffsetBuffer::try_from_repeated_length(n, number_rows).map_err(|_| {
-            exec_datafusion_err!(
-                "stack: {number_rows} rows of {n} generated rows exceed the maximum list size"
-            )
-        })?;
+    if number_rows.saturating_mul(n) > MAX_GENERATED_ROWS {
+        return Err(resources_datafusion_err!(
+            "stack: {number_rows} rows of {n} generated rows exceed the limit of {MAX_GENERATED_ROWS} rows per batch"
+        ));
+    }
+    // Every array is one value per input row, which the kernels rely on
+    if let Some(len) = values.iter().find_map(|value| match value {
+        ColumnarValue::Array(array) if array.len() != number_rows => Some(array.len()),
+        _ => None,
+    }) {
+        return internal_err!("stack: array of {len} rows in a batch of {number_rows}");
+    }
+    // The limit keeps the offsets within `i32`
+    let offsets = OffsetBuffer::from_repeated_length(n, number_rows);
     let columns = if number_rows == 0 {
         // The column builders below need at least one row
         fields
@@ -464,14 +481,37 @@ mod tests {
     }
 
     #[test]
-    fn test_stack_list_size_overflow() {
+    fn test_stack_generated_rows_limit() {
         let item = item(vec![Field::new("col0", DataType::Int64, true)]);
         let values = [ColumnarValue::Scalar(ScalarValue::Int64(Some(1)))];
-        let err = stack(&values, &item, i32::MAX as usize, 2).unwrap_err();
+        let err = stack(&values, &item, i32::MAX as usize, 1).unwrap_err();
         assert!(
             err.to_string()
-                .contains("2 rows of 2147483647 generated rows exceed"),
+                .contains("1 rows of 2147483647 generated rows exceed the limit"),
             "{err}"
         );
+        assert!(stack(&values, &item, MAX_GENERATED_ROWS, 1).is_ok());
+    }
+
+    #[test]
+    fn test_stack_array_length_mismatch() {
+        let item = item(vec![Field::new("col0", DataType::Int64, true)]);
+        let array: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        let err = stack(&[ColumnarValue::Array(array)], &item, 1, 2).unwrap_err();
+        assert!(err.to_string().contains("array of 3 rows in a batch of 2"));
+    }
+
+    #[test]
+    fn test_tile_block_boundaries() -> Result<()> {
+        let block: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        for count in [0, 1, 2, 255, 256, 257, 511, 512, 513, 1000] {
+            let tiled = tile(Arc::clone(&block), count)?;
+            let expected = (0..count).flat_map(|_| [1, 2]).collect::<Vec<i64>>();
+            assert_eq!(
+                tiled.as_primitive::<arrow::datatypes::Int64Type>().values(),
+                &expected
+            );
+        }
+        Ok(())
     }
 }
