@@ -15,26 +15,73 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A special-case optimizer rule that pushes limit into a grouped aggregation
-//! which has no aggregate expressions or sorting requirements
+//! Stop unordered DISTINCT aggregation once enough groups have been found.
 
 use std::sync::Arc;
 
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, ExecutionPlanProperties,
+    ReplaceChildrenOptions,
+};
 
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 
 use crate::PhysicalOptimizerRule;
-use itertools::Itertools;
 
-/// An optimizer rule that passes a `limit` hint into grouped aggregations which don't require all
-/// rows in the group to be processed for correctness. Example queries fitting this description are:
-/// - `SELECT distinct l_orderkey FROM lineitem LIMIT 10;`
-/// - `SELECT l_orderkey FROM lineitem GROUP BY l_orderkey LIMIT 10;`
+/// Pushes a soft limit into unordered DISTINCT aggregations. For
+/// `SELECT DISTINCT a FROM t LIMIT 10`, any ten distinct values are sufficient:
+/// later rows cannot change the groups already found. The same reasoning applies
+/// to `GROUP BY a` without aggregate expressions. Aggregates such as `SUM` need
+/// every row in each group.
+///
+/// Each partial stage can also stop after finding ten distinct keys: those keys
+/// remain distinct in the final stage, even if other partitions contribute
+/// duplicates.
+///
+/// Before:
+///
+/// ```txt
+/// Limit(10)
+///   Aggregate(Final, a)
+///     Aggregate(Partial, a)
+///       Scan
+/// ```
+///
+/// After:
+///
+/// ```txt
+/// Limit(10)
+///   Aggregate(Final, a, soft_limit=10)
+///     Aggregate(Partial, a, soft_limit=10)
+///       Scan
+/// ```
+///
+/// # What this rule assumes
+///
+/// This rule assumes the logical aggregate only have one shape showed below, this
+/// is what the current physical planning produces.
+///
+/// ```txt
+/// Limit
+///   AggregateExec(mode=Final)
+///     AggregateExec(mode=Partial)
+/// ```
+///
+/// If future changes or extensions produce a different shape, this rule skips the
+/// rewrite rather than reporting an error, potentially missing an optimization
+/// opportunity.
+///
+/// # What this rule promises
+///
+/// Immediately after an eligible rewrite, both stages have a soft-limit hint.
+/// Otherwise, this rule leaves both stages unchanged.
+///
+/// If a later rule removes the limit, it won't affect correctness, but it may
+/// miss an optimization opportunity.
 #[derive(Debug)]
 pub struct LimitedDistinctAggregation {}
 
@@ -44,95 +91,66 @@ impl LimitedDistinctAggregation {
         Self {}
     }
 
-    fn transform_agg(
-        aggr: &AggregateExec,
-        limit: usize,
-    ) -> Option<Transformed<Arc<dyn ExecutionPlan>>> {
-        let new_aggr = aggr.clone().try_optimize_distinct_soft_limit(limit)?;
-        // An already limited aggregate still permits optimizing its partial child.
-        Some(new_aggr.update_data(|aggr| Arc::new(aggr) as Arc<dyn ExecutionPlan>))
-    }
+    /// Rewrite a limit and its immediately adjacent final/partial aggregate pair.
+    fn transform_limit(
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        // Step 1: Identify the plan shape,
+        //
+        // Limit
+        //   Aggregate(final)
+        //     Aggregate(partial)
 
-    /// transform_limit matches an `AggregateExec` as the child of a `LocalLimitExec`
-    /// or `GlobalLimitExec` and pushes the limit into the aggregation as a soft limit when
-    /// there is a group by, but no sorting, no aggregate expressions, and no filters in the
-    /// aggregation
-    fn transform_limit(plan: Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
-        let limit: usize;
-        let mut global_fetch: Option<usize> = None;
-        let mut global_skip: usize = 0;
-        let children: Vec<Arc<dyn ExecutionPlan>>;
-        let mut is_global_limit = false;
-        if let Some(local_limit) = plan.downcast_ref::<LocalLimitExec>() {
-            limit = local_limit.fetch();
-            children = local_limit.children().into_iter().cloned().collect();
-        } else {
-            let global_limit = plan.downcast_ref::<GlobalLimitExec>()?;
-            global_fetch = global_limit.fetch();
-            global_fetch?;
-            global_skip = global_limit.skip();
-            // the aggregate must read at least fetch+skip number of rows
-            limit = global_fetch.unwrap() + global_skip;
-            children = global_limit.children().into_iter().cloned().collect();
-            is_global_limit = true
-        }
-        let child = children.iter().exactly_one().ok()?;
-        // ensure there is no output ordering; can this rule be relaxed?
-        if plan.output_ordering().is_some() {
-            return None;
-        }
-        // ensure no ordering is required on the input
-        if plan.required_input_ordering()[0].is_some() {
-            return None;
-        }
-
-        // if found_match_aggr is true, match_aggr holds a parent aggregation whose group_by
-        // must match that of a child aggregation in order to rewrite the child aggregation
-        let mut match_aggr: Arc<dyn ExecutionPlan> = plan;
-        let mut found_match_aggr = false;
-
-        let mut rewrite_applicable = true;
-        let closure = |plan: Arc<dyn ExecutionPlan>| {
-            if !rewrite_applicable {
-                return Ok(Transformed::no(plan));
-            }
-            if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
-                if found_match_aggr
-                    && let Some(parent_aggr) = match_aggr.downcast_ref::<AggregateExec>()
-                    && !parent_aggr.group_expr().eq(aggr.group_expr())
-                {
-                    // a partial and final aggregation with different groupings disqualifies
-                    // rewriting the child aggregation
-                    rewrite_applicable = false;
-                    return Ok(Transformed::no(plan));
-                }
-                // either we run into an Aggregate and transform it, or disable the rewrite
-                // for subsequent children
-                match Self::transform_agg(aggr, limit) {
-                    None => {}
-                    Some(new_aggr) => {
-                        match_aggr = plan;
-                        found_match_aggr = true;
-                        return Ok(new_aggr);
-                    }
-                }
-            }
-            rewrite_applicable = false;
-            Ok(Transformed::no(plan))
+        // Check the current plan is limit, and extract limit value, input plan.
+        let (limit, input) = match (
+            plan.downcast_ref::<LocalLimitExec>(),
+            plan.downcast_ref::<GlobalLimitExec>(),
+        ) {
+            (Some(local), _) => (local.fetch(), local.input()),
+            (_, Some(global)) => match global.fetch() {
+                Some(fetch) => (global.skip() + fetch, global.input()),
+                None => return Ok(Transformed::no(plan)),
+            },
+            _ => return Ok(Transformed::no(plan)),
         };
-        let child = child.to_owned().transform_down(closure).ok()?;
-        if !child.transformed {
-            return None;
+
+        if plan.output_ordering().is_some() || plan.required_input_ordering()[0].is_some()
+        {
+            return Ok(Transformed::no(plan));
         }
-        let child = child.data;
-        if is_global_limit {
-            return Some(Arc::new(GlobalLimitExec::new(
-                child,
-                global_skip,
-                global_fetch,
-            )));
+
+        let Some(final_agg) = input.downcast_ref::<AggregateExec>() else {
+            return Ok(Transformed::no(plan));
+        };
+        let Some(partial_agg) = final_agg.input().downcast_ref::<AggregateExec>() else {
+            return Ok(Transformed::no(plan));
+        };
+
+        // Step 2: Verify partial/final aggregate is compatible, then apply optimization
+        if !final_agg.matches_partial(partial_agg) {
+            return Ok(Transformed::no(plan));
         }
-        Some(Arc::new(LocalLimitExec::new(child, limit)))
+
+        // Validate both stages before replacing either one.
+        let (Some(final_agg), Some(partial_agg)) = (
+            final_agg.clone().try_optimize_distinct_soft_limit(limit),
+            partial_agg.clone().try_optimize_distinct_soft_limit(limit),
+        ) else {
+            return Ok(Transformed::no(plan));
+        };
+        if !final_agg.transformed && !partial_agg.transformed {
+            return Ok(Transformed::no(plan));
+        }
+
+        let input = Arc::new(final_agg.data).replace_children(
+            vec![Arc::new(partial_agg.data)],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        plan.replace_children(
+            vec![input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+        .map(Transformed::yes)
     }
 }
 
@@ -149,18 +167,7 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if config.optimizer.enable_distinct_aggregation_soft_limit {
-            plan.transform_down(|plan| {
-                Ok(
-                    if let Some(plan) =
-                        LimitedDistinctAggregation::transform_limit(plan.to_owned())
-                    {
-                        Transformed::yes(plan)
-                    } else {
-                        Transformed::no(plan)
-                    },
-                )
-            })
-            .data()
+            plan.transform_down(Self::transform_limit).data()
         } else {
             Ok(plan)
         }

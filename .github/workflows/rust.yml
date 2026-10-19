@@ -75,7 +75,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -105,7 +105,7 @@ jobs:
       - name: Upload Cargo check artifacts
         if: ${{ steps.archive-check.outcome == 'success' && !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: cargo-check
           path: ${{ runner.temp }}/cargo-check/
@@ -159,6 +159,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -167,7 +168,7 @@ jobs:
       - name: Download Cargo check artifacts
         id: download-check
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: cargo-check
           path: ${{ runner.temp }}/cargo-check
@@ -204,7 +205,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -240,7 +241,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -269,7 +270,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -278,7 +279,7 @@ jobs:
       - name: Download Cargo check artifacts
         id: download-check
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: cargo-check
           path: ${{ runner.temp }}/cargo-check
@@ -399,14 +400,14 @@ jobs:
           save-if: false # The workspace and functions checks save this cache on main.
           shared-key: "amd-ci-check"
       - name: Check datafusion-spark (default features)
-        run: cargo check --profile ci --all-targets -p datafusion-spark
+        run: cargo xtask ci step check datafusion-spark default
       #
       # Note: Only check libraries (not --all-targets) to cover end user APIs
       #
       - name: Check datafusion-spark (no-default-features)
-        run: cargo check --profile ci --no-default-features -p datafusion-spark
+        run: cargo xtask ci step check datafusion-spark no-default
       - name: Check datafusion-spark (core)
-        run: cargo check --profile ci --no-default-features -p datafusion-spark --features=core
+        run: cargo xtask ci step check datafusion-spark core
 
   # Library and integration tests
   linux-test:
@@ -418,7 +419,7 @@ jobs:
       volumes:
         - /usr/local:/host/usr/local
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -430,7 +431,7 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe  # v2.87.27
         with:
           tool: cargo-llvm-cov
       - name: Rust Dependency Cache
@@ -468,7 +469,7 @@ jobs:
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -515,7 +516,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -547,7 +548,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -570,7 +571,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -598,7 +599,7 @@ jobs:
               clang-18 --version
               clang++-18 --version
           - name: Setup wasm-pack
-            uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
+            uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe  # v2.87.27
             with:
               tool: wasm-pack
       - name: Run tests with headless mode
@@ -618,7 +619,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -665,7 +666,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -689,7 +690,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -700,10 +701,12 @@ jobs:
           rust-version: stable
       - name: Run sqllogictest
         # TODO: Right now several tests are failing in Substrait round-trip mode, so this
-        #  command cannot be run for all the .slt files. Run it for just one that works (limit.slt)
+        #  command cannot be run for all the .slt files. Run a supported subset
         #  until most of the tickets in https://github.com/apache/datafusion/issues/16248 are addressed
         #  and this command can be run without filters.
-        run: cargo xtask ci step test substrait
+        run: |
+          cargo xtask ci step test substrait
+          cargo xtask ci step test substrait-optimized
 
   #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
   #  Waiting for new Windows 2025 github runner
@@ -794,7 +797,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -831,7 +834,7 @@ jobs:
         with:
           rust-version: stable
       - name: Install taplo
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe  # v2.87.27
         with:
           tool: taplo-cli@0.9
       # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
@@ -846,7 +849,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3  # v2.5.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
@@ -855,7 +858,7 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: "20"
       - name: Check generated config and function docs
@@ -889,13 +892,23 @@ jobs:
 
           - name: Set up Node.js (required for prettier)
             # doc_prettier_check.sh uses npx to run prettier for Markdown formatting
-            uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+            uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
             with:
               node-version: '18'
 
       - name: Run examples docs check script
         run: |
           bash ci/scripts/check_examples_docs.sh
+
+  # Ensures that the examples only use the main `datafusion` crate and not its subcrates, which are
+  # already exported by `datafusion` (there are a few exceptions, like `datafusion-proto`).
+  # See: https://github.com/apache/datafusion/pull/14305
+  examples-check-datafusion-crates:
+    name: Check datafusion crates used in datafusion-examples
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - run: python3 ci/scripts/check_examples_datafusion_crates.py
 
   # Verify MSRV for the crates which are directly used by other projects:
   # - datafusion
@@ -913,7 +926,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe  # v2.87.27
         with:
           tool: cargo-msrv
 

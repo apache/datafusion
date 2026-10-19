@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::strings::append_view;
+use crate::strings::sub_view;
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
@@ -297,9 +297,7 @@ fn string_view_substr(
         let count = count_array_opt.map(|a| a.value(i));
 
         let (byte_start, byte_end) = get_true_start_end(string, start, count, is_ascii)?;
-        let substr = &string[byte_start..byte_end];
-
-        append_view(&mut views_buf, raw_view, substr, byte_start as u32);
+        views_buf.push(sub_view(*raw_view, string.as_bytes(), byte_start..byte_end));
     }
 
     let views_buf = ScalarBuffer::from(views_buf);

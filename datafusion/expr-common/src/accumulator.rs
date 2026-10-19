@@ -97,7 +97,7 @@ impl Drop for AggregateMetricTimer<'_> {
 /// `Accumulator`s are stateful objects that implement a single group. They
 /// aggregate values from multiple rows together into a final output aggregate.
 ///
-/// [`GroupsAccumulator]` is an additional more performant (but also complex) API
+/// [`GroupsAccumulator`] is an additional more performant (but also complex) API
 /// that manages state for multiple groups at once.
 ///
 /// An accumulator knows how to:
@@ -118,6 +118,7 @@ impl Drop for AggregateMetricTimer<'_> {
 /// [`state`]: Self::state
 /// [`evaluate`]: Self::evaluate
 /// [`merge_batch`]: Self::merge_batch
+/// [`GroupsAccumulator`]: crate::groups_accumulator::GroupsAccumulator
 /// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
 pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// Supplies optional metrics owned by this aggregate expression.

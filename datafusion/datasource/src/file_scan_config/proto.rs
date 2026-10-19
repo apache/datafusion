@@ -106,7 +106,7 @@ impl FileScanConfig {
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>>>()?;
 
-        let mut proto_output_ordering = vec![];
+        let mut proto_output_ordering = Vec::with_capacity(output_ordering.len());
         for order in output_ordering {
             let nodes = sort_exprs_try_to_proto(order.iter(), &ctx.expr_ctx())?;
             proto_output_ordering.push(protobuf::PhysicalSortExprNodeCollection {
@@ -125,7 +125,7 @@ impl FileScanConfig {
 
         // Partition fields must be added to the schema so they can persist in
         // protobuf and then be removed again in `parse_table_schema_from_proto`.
-        let mut fields = file_schema.fields().iter().cloned().collect::<Vec<_>>();
+        let mut fields = file_schema.fields().to_vec();
         fields.extend(table_partition_cols.iter().cloned());
         let schema = Schema::new(fields).with_metadata(file_schema.metadata.clone());
 
@@ -242,7 +242,7 @@ impl FileScanConfig {
             true => ObjectStoreUrl::local_filesystem(),
         };
 
-        let mut decoded_output_ordering = vec![];
+        let mut decoded_output_ordering = Vec::with_capacity(output_ordering.len());
         for node_collection in output_ordering {
             let protobuf::PhysicalSortExprNodeCollection {
                 physical_sort_expr_nodes,
