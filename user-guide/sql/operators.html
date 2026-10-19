@@ -876,6 +876,7 @@
 <li><p><a class="reference internal" href="#op-str-cat">|| (string concatenation)</a></p></li>
 <li><p><a class="reference internal" href="#op-arr-contains">&#64;&gt; (array contains)</a></p></li>
 <li><p><a class="reference internal" href="#op-arr-contained-by">&lt;&#64; (array is contained by)</a></p></li>
+<li><p><a class="reference internal" href="#op-at-time-zone">AT TIME ZONE</a></p></li>
 </ul>
 <section id="op-str-cat">
 <span id="id26"></span><h3><code class="docutils literal notranslate"><span class="pre">||</span></code><a class="headerlink" href="#op-str-cat" title="Link to this heading">#</a></h3>
@@ -912,6 +913,71 @@
 <span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
 </pre></div>
 </div>
+</section>
+<section id="at-time-zone">
+<span id="op-at-time-zone"></span><h3><code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code><a class="headerlink" href="#at-time-zone" title="Link to this heading">#</a></h3>
+<p>Converts between timezone-naive and timezone-aware timestamps, following
+PostgreSQL. <code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> always returns the <em>other</em> kind of timestamp from
+the one it is given:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Input type</p></th>
+<th class="head"><p>Result type</p></th>
+<th class="head"><p>Meaning</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">None)</span></code> (timezone-naive)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">Some(tz))</span></code> (tz-aware)</p></td>
+<td><p>Read the value as a wall clock in <code class="docutils literal notranslate"><span class="pre">tz</span></code>; the result is that instant.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">Some(_))</span></code> (tz-aware)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">None)</span></code> (timezone-naive)</p></td>
+<td><p>Return the wall clock that instant has in <code class="docutils literal notranslate"><span class="pre">tz</span></code>.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>A timezone-naive timestamp is a wall clock with no instant attached, so
+<code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> pins it to one:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">time_zone</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;UTC&#39;</span><span class="p">;</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span>
+<span class="w">  </span><span class="s1">&#39;2024-01-01 12:00:00&#39;</span><span class="p">::</span><span class="k">timestamp</span><span class="w"> </span><span class="k">AT</span><span class="w"> </span><span class="k">TIME</span><span class="w"> </span><span class="k">ZONE</span><span class="w"> </span><span class="s1">&#39;America/Denver&#39;</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">instant</span><span class="p">,</span>
+<span class="w">  </span><span class="n">arrow_typeof</span><span class="p">(</span><span class="s1">&#39;2024-01-01 12:00:00&#39;</span><span class="p">::</span><span class="k">timestamp</span><span class="w"> </span><span class="k">AT</span><span class="w"> </span><span class="k">TIME</span><span class="w"> </span><span class="k">ZONE</span><span class="w"> </span><span class="s1">&#39;America/Denver&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">type</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------------+---------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">instant</span><span class="w">                   </span><span class="o">|</span><span class="w"> </span><span class="k">type</span><span class="w">                            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------+---------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2024</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span><span class="n">T12</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="o">-</span><span class="mi">07</span><span class="p">:</span><span class="mi">00</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">Timestamp</span><span class="p">(</span><span class="n">ns</span><span class="p">,</span><span class="w"> </span><span class="ss">&quot;America/Denver&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------+---------------------------------+</span>
+</pre></div>
+</div>
+<p>A timezone-aware timestamp already is an instant, so <code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> reads off
+its wall clock in <code class="docutils literal notranslate"><span class="pre">tz</span></code> and drops the timezone. Daylight saving time is taken
+into account:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span>
+<span class="w">  </span><span class="s1">&#39;2024-01-01T12:00:00Z&#39;</span><span class="p">::</span><span class="n">timestamptz</span><span class="w"> </span><span class="k">AT</span><span class="w"> </span><span class="k">TIME</span><span class="w"> </span><span class="k">ZONE</span><span class="w"> </span><span class="s1">&#39;America/Denver&#39;</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">wall_clock</span><span class="p">,</span>
+<span class="w">  </span><span class="n">arrow_typeof</span><span class="p">(</span><span class="s1">&#39;2024-01-01T12:00:00Z&#39;</span><span class="p">::</span><span class="n">timestamptz</span><span class="w"> </span><span class="k">AT</span><span class="w"> </span><span class="k">TIME</span><span class="w"> </span><span class="k">ZONE</span><span class="w"> </span><span class="s1">&#39;America/Denver&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">type</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+---------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">wall_clock</span><span class="w">          </span><span class="o">|</span><span class="w"> </span><span class="k">type</span><span class="w">          </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+---------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2024</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span><span class="n">T05</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">Timestamp</span><span class="p">(</span><span class="n">ns</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+---------------+</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">expression</span> <span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span> <span class="pre">tz</span></code> is the same as the function call
+<a class="reference internal" href="scalar_functions.html#timezone"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">timezone(tz,</span> <span class="pre">expression)</span></code></span></a>, as in PostgreSQL and DuckDB. The planner uses the
+input type <em>after</em> type coercion. For example, <code class="docutils literal notranslate"><span class="pre">CASE</span> <span class="pre">WHEN</span> <span class="pre">c</span> <span class="pre">THEN</span> <span class="pre">naive</span> <span class="pre">ELSE</span> <span class="pre">aware</span> <span class="pre">END</span></code> has a timezone-aware type, so <code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> returns a
+timezone-naive timestamp for it, whatever the order of the arms.</p>
+<p>Because the two forms return different types, applying <code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> twice
+returns a timezone-aware timestamp again: the wall clock produced by the first
+application is re-read as a local time in the second timezone.</p>
+<p><code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> never changes the precision (<code class="docutils literal notranslate"><span class="pre">TimeUnit</span></code>) of its input. A
+dictionary-encoded timestamp follows its value type. Inputs that are not
+timestamps at all (a string literal, for example) are cast to
+<code class="docutils literal notranslate"><span class="pre">Timestamp(Nanosecond,</span> <span class="pre">Some(tz))</span></code>.</p>
+<p>Note that a timezone written as a fixed offset string follows the ISO 8601
+convention, so <code class="docutils literal notranslate"><span class="pre">'+05:30'</span></code> is 5 hours 30 minutes <em>east</em> of UTC. PostgreSQL
+applies the opposite (POSIX) convention to offsets spelled this way.</p>
 </section>
 </section>
 <section id="literals">
@@ -1060,6 +1126,7 @@ bar
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-str-cat"><code class="docutils literal notranslate"><span class="pre">||</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-arr-contains"><code class="docutils literal notranslate"><span class="pre">@&gt;</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-arr-contained-by"><code class="docutils literal notranslate"><span class="pre">&lt;@</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#at-time-zone"><code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#literals">Literals</a><ul class="nav section-nav flex-column">
