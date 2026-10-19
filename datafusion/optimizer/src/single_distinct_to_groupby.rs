@@ -120,28 +120,32 @@ impl CountRollup {
     }
 }
 
-/// Check whether all aggregate exprs are distinct on a single field.
+/// Check whether all aggregate exprs are distinct on a single field and whether
+/// rewriting the aggregation into a two-phase GROUP BY is advantageous.
 ///
-/// `prefer_memory` mirrors `OptimizerOptions::single_distinct_aggregation_prefer_memory`.
-/// When `false` (default) the cost guard is only applied when companion non-distinct
-/// aggregates are present; lone-distinct queries are always rewritten so they can
-/// fan out across partitions.  When `true` the guard is applied universally: the
-/// rewrite is skipped even for lone-distinct queries when the distinct function
-/// already has a native `GroupsAccumulator`, trading throughput for lower peak memory.
+/// The decision logic follows this cost and parallelism model:
+///
+/// Does the query have a GROUP BY?
+/// |
+/// +- No -> Is there more than 1 partition, and is it not count(DISTINCT tinyint/smallint)?
+/// |        +- Yes -> REWRITE  (2.6-5.5x faster: the only way the distinct runs in parallel)
+/// |        +- No  -> SKIP     (faster and uses less memory)
+/// |
+/// +- Yes -> Does the distinct aggregate have its own fast grouped accumulator?
+///          +- Yes (count(DISTINCT <integer>)) -> SKIP (faster or a tie, less memory)
+///          +- No (sum/avg DISTINCT, floats, decimals, strings, user-defined) -> REWRITE (1.4-20x faster)
+///                +- config option to skip it when memory matters more (few groups: 2.4-6x more memory)
 fn is_single_distinct_agg(
     aggr_expr: &[Expr],
+    group_expr: &[Expr],
     input_schema: &DFSchema,
     count_rollup: Option<&CountRollup>,
+    target_partitions: usize,
     prefer_memory: bool,
 ) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
     let mut distinct_aggs = vec![];
-    // Track whether any non-distinct companion aggregate (sum/min/max/count) is
-    // present alongside the distinct one.  This drives the rewrite_pays check
-    // below: lone-distinct queries must always be rewritten in the default path
-    // (see comment below), while mixed queries need the cost guard.
-    let mut has_companion_non_distinct = false;
     for expr in aggr_expr {
         if let Expr::AggregateFunction(AggregateFunction {
             func,
@@ -164,17 +168,14 @@ fn is_single_distinct_agg(
                     fields_set.insert(e);
                 }
                 distinct_aggs.push((func, args.as_slice()));
-            } else if count_rollup.is_some_and(|rollup| rollup.is_count(func)) {
-                // count(*) alongside the distinct aggregate is allowed
-                has_companion_non_distinct = true;
-            } else if func.name() != "sum"
-                && func.name().to_lowercase() != "min"
-                && func.name().to_lowercase() != "max"
+            } else if count_rollup.is_some_and(|rollup| rollup.is_count(func))
+                || func.name() == "sum"
+                || func.name().eq_ignore_ascii_case("min")
+                || func.name().eq_ignore_ascii_case("max")
             {
-                return Ok(false);
+                // Companion non-distinct aggregates
             } else {
-                // sum / min / max alongside the distinct aggregate
-                has_companion_non_distinct = true;
+                return Ok(false);
             }
         } else {
             return Ok(false);
@@ -183,61 +184,72 @@ fn is_single_distinct_agg(
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
         return Ok(false);
     }
-    // Apply the cost guard when:
-    //   - companion non-distinct aggregates are present (they move to the finer-grained
-    //     inner group-by and, if they already have a native GroupsAccumulator, the extra
-    //     work is unlikely to pay off), OR
-    //   - the caller has opted in to memory-saving mode via `prefer_memory`, in which
-    //     case even lone-distinct queries skip the rewrite when the distinct function
-    //     has a native GroupsAccumulator.
-    //
-    // Without the guard, lone-distinct queries are always rewritten: the two-phase GROUP
-    // BY enables parallel deduplication across partitions, avoiding the 2–3× slowdown
-    // that serial per-group accumulation produces for COUNT(DISTINCT int64) etc.
-    if (has_companion_non_distinct || prefer_memory)
-        && !rewrite_pays(&distinct_aggs, input_schema)
-    {
-        return Ok(false);
-    }
-    Ok(true)
-}
 
-/// Whether the rewrite is worth extending to a plan.
-///
-/// The rewrite is not free: every other aggregate moves down to the inner group
-/// by, which has a row per `(group, distinct value)` pair rather than per group,
-/// and keeps its state at that finer grain. What pays for that is taking the
-/// distinct aggregate off `GroupsAccumulatorAdapter` and its one boxed
-/// accumulator per group. An aggregate that already has a specialized
-/// `GroupsAccumulator` never went near the adapter, so there is nothing to buy
-/// and only the inner group by to pay for.
-///
-/// `Some(false)` is therefore the only answer that permits the rewrite. `None`,
-/// the default for almost every function, is not evidence that it pays.
-///
-/// This is a proxy: what actually decides the outcome is the cost per distinct
-/// value on each side, which this rule cannot see. It is deliberately
-/// conservative in the direction that leaves a plan alone.
-fn rewrite_pays(
-    distinct_aggs: &[(&Arc<AggregateUDF>, &[Expr])],
-    input_schema: &DFSchema,
-) -> bool {
-    for (func, args) in distinct_aggs {
-        if func.distinct_handling() == datafusion_expr::DistinctHandling::Unsupported {
-            return true;
+    // Invariant: Distinct aggregates with DistinctHandling::Unsupported (e.g. approx_median)
+    // cannot execute without being rewritten into a GROUP BY first.
+    if distinct_aggs.iter().any(|(func, _)| {
+        func.distinct_handling() == datafusion_expr::DistinctHandling::Unsupported
+    }) {
+        return Ok(true);
+    }
+
+    let has_group_by = !group_expr.is_empty();
+
+    if !has_group_by {
+        // Query has NO GROUP BY:
+        // Is there more than 1 partition, and is it not count(DISTINCT tinyint/smallint)?
+        //   Yes -> REWRITE (2.6-5.5x faster: the only way the distinct runs in parallel)
+        //   No  -> SKIP    (faster and uses less memory)
+        let is_multi_partition = target_partitions > 1;
+        let is_count_distinct_small_int = distinct_aggs.iter().all(|(func, args)| {
+            count_rollup.is_some_and(|rollup| rollup.is_count(func))
+                && args.len() == 1
+                && matches!(
+                    args[0]
+                        .get_type(input_schema)
+                        .unwrap_or(arrow::datatypes::DataType::Null),
+                    arrow::datatypes::DataType::Int8
+                        | arrow::datatypes::DataType::UInt8
+                        | arrow::datatypes::DataType::Int16
+                        | arrow::datatypes::DataType::UInt16
+                )
+        });
+
+        if is_multi_partition && !is_count_distinct_small_int {
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        let arg_types: Vec<_> = args
-            .iter()
-            .map(|arg| {
-                arg.get_type(input_schema)
-                    .unwrap_or(arrow::datatypes::DataType::Null)
-            })
-            .collect();
-        if func.groups_accumulator_supported_for_types(&arg_types, true) == Some(false) {
-            return true;
+    } else {
+        // Query HAS a GROUP BY:
+        // Does the distinct aggregate have its own fast grouped accumulator?
+        //   Yes (count(DISTINCT <integer>)) -> SKIP (faster or a tie, less memory)
+        //   No (sum/avg DISTINCT, floats, decimals, strings, user-defined) -> REWRITE (1.4-20x faster)
+        //         +- config option to skip it when memory matters more (few groups: 2.4-6x more memory)
+        let has_fast_grouped_accumulator = distinct_aggs.iter().all(|(func, args)| {
+            let arg_types: Vec<_> = args
+                .iter()
+                .map(|arg| {
+                    arg.get_type(input_schema)
+                        .unwrap_or(arrow::datatypes::DataType::Null)
+                })
+                .collect();
+            func.groups_accumulator_supported_for_types(&arg_types, true) == Some(true)
+        });
+
+        if has_fast_grouped_accumulator {
+            // Fast native grouped accumulator exists (e.g. count(DISTINCT <integer>)).
+            // Single-phase grouping is faster or equivalent, and avoids two-phase memory overhead.
+            Ok(false)
+        } else if prefer_memory {
+            // No fast grouped accumulator, but caller opted in to prefer lower memory over throughput.
+            Ok(false)
+        } else {
+            // No fast grouped accumulator (e.g. sum/avg DISTINCT, Utf8 strings).
+            // Rewriting into two-phase GROUP BY is 1.4-20x faster by avoiding GroupsAccumulatorAdapter.
+            Ok(true)
         }
     }
-    false
 }
 
 /// Check if the first expr is [Expr::GroupingSet].
@@ -266,6 +278,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
             .options()
             .optimizer
             .single_distinct_aggregation_prefer_memory;
+        let target_partitions = config.options().execution.target_partitions;
         let count_rollup = CountRollup::try_new(config);
         match plan {
             LogicalPlan::Aggregate(Aggregate {
@@ -274,12 +287,15 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 schema,
                 group_expr,
                 ..
-            }) if is_single_distinct_agg(
-                &aggr_expr,
-                input.schema(),
-                count_rollup.as_ref(),
-                prefer_memory,
-            )? && !contains_grouping_set(&group_expr) =>
+            }) if !contains_grouping_set(&group_expr)
+                && is_single_distinct_agg(
+                    &aggr_expr,
+                    &group_expr,
+                    input.schema(),
+                    count_rollup.as_ref(),
+                    target_partitions,
+                    prefer_memory,
+                )? =>
             {
                 let group_size = group_expr.len();
                 // alias all original group_by exprs
@@ -599,6 +615,15 @@ mod tests {
         table_scan(Some("test"), &schema, None)?.build()
     }
 
+    fn test_table_scan_int8_b() -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Int8, false),
+            Field::new("c", DataType::UInt32, false),
+        ]);
+        table_scan(Some("test"), &schema, None)?.build()
+    }
+
     /// An [`OptimizerConfig`] that resolves functions the way a session does.
     /// The rule needs `count` and `sum` from the registry to rewrite a
     /// non-distinct `count`.
@@ -617,12 +642,17 @@ mod tests {
         /// `single_distinct_aggregation_prefer_memory` so tests can verify both sides
         /// of the memory / throughput trade-off.
         fn with_prefer_memory(prefer_memory: bool) -> Self {
+            Self::with_options(prefer_memory, 4)
+        }
+
+        fn with_options(prefer_memory: bool, target_partitions: usize) -> Self {
             let mut registry = MemoryFunctionRegistry::new();
             registry.register_udaf(count_udaf()).unwrap();
             registry.register_udaf(sum_udaf()).unwrap();
 
             let mut opts = ConfigOptions::new();
             opts.optimizer.single_distinct_aggregation_prefer_memory = prefer_memory;
+            opts.execution.target_partitions = target_partitions;
 
             Self {
                 inner: OptimizerContext::new_with_config_options(Arc::new(opts)),
@@ -816,14 +846,34 @@ mod tests {
             .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
             .build()?;
 
-        // Should work
+        // `count(DISTINCT <integer>)` has a specialized fast grouped accumulator:
+        // single-phase grouping is faster or equivalent and avoids two-phase memory overhead.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b)]] [a:UInt32, count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn single_distinct_and_groupby_without_fast_accumulator() -> Result<()> {
+        let table_scan = test_table_scan_utf8_b()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
+            .build()?;
+
+        // `count(DISTINCT <string>)` lacks a specialized fast grouped accumulator:
+        // rewrites into two-phase GROUP BY to avoid GroupsAccumulatorAdapter.
         assert_optimized_plan_equal!(
             plan,
             @"
         Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
           Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:Utf8]
+              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
         "
         )
     }
@@ -983,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn distinct_over_a_function_with_no_opinion_is_not_rewritten() -> Result<()> {
+    fn distinct_over_a_function_with_no_opinion_rewrites_by_default() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -993,12 +1043,33 @@ mod tests {
             )?
             .build()?;
 
-        // Should not work: `silent` leaves
-        // `groups_accumulator_supported_for_types` at its default, so it
-        // reports nothing about `GroupsAccumulatorAdapter`. Silence is not
-        // evidence that the rewrite pays, and the rule must not read it as
-        // permission
+        // User-defined / no-opinion aggregate lacks a fast grouped accumulator:
+        // by default it rewrites into two-phase GROUP BY to avoid GroupsAccumulatorAdapter (1.4-20x faster)
         assert_optimized_plan_equal!(
+            plan,
+            @"
+        Projection: test.a, silent(alias1) AS silent(DISTINCT test.b), CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(test.c) [a:UInt32, silent(DISTINCT test.b):UInt32;N, count(test.c):Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[silent(alias1), sum(alias2)]] [a:UInt32, silent(alias1):UInt32;N, sum(alias2):Int64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[count(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:Int64]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn distinct_over_a_function_with_no_opinion_prefer_memory_skips() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![silent_distinct(col("b")), count(col("c"))],
+            )?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(true);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
             plan,
             @r"
         Aggregate: groupBy=[[test.a]], aggr=[[silent(DISTINCT test.b), count(test.c)]] [a:UInt32, silent(DISTINCT test.b):UInt32;N, count(test.c):Int64]
@@ -1008,7 +1079,7 @@ mod tests {
     }
 
     #[test]
-    fn distinct_sum_and_count_is_not_rewritten() -> Result<()> {
+    fn distinct_sum_and_count_rewrites_by_default() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -1018,9 +1089,33 @@ mod tests {
             )?
             .build()?;
 
-        // Should not work: `sum` reports nothing about
-        // `GroupsAccumulatorAdapter` either, so the rewrite is not known to pay
+        // `sum(DISTINCT)` lacks a fast grouped accumulator:
+        // by default it rewrites into two-phase GROUP BY to avoid GroupsAccumulatorAdapter (1.4-20x faster)
         assert_optimized_plan_equal!(
+            plan,
+            @"
+        Projection: test.a, sum(alias1) AS sum(DISTINCT test.b), CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(test.c) [a:UInt32, sum(DISTINCT test.b):UInt64;N, count(test.c):Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[sum(alias1), sum(alias2)]] [a:UInt32, sum(alias1):UInt64;N, sum(alias2):Int64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[count(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:Int64]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn distinct_sum_and_count_prefer_memory_skips() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![sum_distinct(col("b")), count(col("c"))],
+            )?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(true);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
             plan,
             @r"
         Aggregate: groupBy=[[test.a]], aggr=[[sum(DISTINCT test.b), count(test.c)]] [a:UInt32, sum(DISTINCT test.b):UInt64;N, count(test.c):Int64]
@@ -1031,20 +1126,20 @@ mod tests {
 
     #[test]
     fn group_by_with_expr() -> Result<()> {
-        let table_scan = test_table_scan().unwrap();
+        let table_scan = test_table_scan_utf8_b().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a") + lit(1)], vec![count_distinct(col("c"))])?
+            .aggregate(vec![col("a") + lit(1)], vec![count_distinct(col("b"))])?
             .build()?;
 
         // Should work
         assert_optimized_plan_equal!(
             plan,
             @"
-        Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS count(DISTINCT test.c) [test.a + Int32(1):Int64, count(DISTINCT test.c):Int64]
+        Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS count(DISTINCT test.b) [test.a + Int32(1):Int64, count(DISTINCT test.b):Int64]
           Aggregate: groupBy=[[group_alias_0]], aggr=[[count(alias1)]] [group_alias_0:Int64, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int64, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.b AS alias1]], aggr=[[]] [group_alias_0:Int64, alias1:Utf8]
+              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
         "
         )
     }
@@ -1064,12 +1159,73 @@ mod tests {
             )?
             .build()?;
 
-        // Should work
+        // `max(DISTINCT b)` lacks a fast grouped accumulator: rewrites into two-phase GROUP BY
         assert_optimized_plan_equal!(
             plan,
             @"
-        Aggregate: groupBy=[[test.a]], aggr=[[sum(test.c), count(DISTINCT test.b), max(DISTINCT test.b)]] [a:UInt32, sum(test.c):UInt64;N, count(DISTINCT test.b):Int64, max(DISTINCT test.b):UInt32;N]
+        Projection: test.a, sum(alias2) AS sum(test.c), count(alias1) AS count(DISTINCT test.b), max(alias1) AS max(DISTINCT test.b) [a:UInt32, sum(test.c):UInt64;N, count(DISTINCT test.b):Int64, max(DISTINCT test.b):UInt32;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[sum(alias2), count(alias1), max(alias1)]] [a:UInt32, sum(alias2):UInt64;N, count(alias1):Int64, max(alias1):UInt32;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:UInt64;N]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn no_groupby_multi_partition_rewrites() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_options(false, 4);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @"
+        Projection: count(alias1) AS count(DISTINCT test.b) [count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[]] [alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn no_groupby_single_partition_skips() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_options(false, 1);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.b)]] [count(DISTINCT test.b):Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn no_groupby_small_int_skips() -> Result<()> {
+        let table_scan = test_table_scan_int8_b()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_options(false, 4);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.b)]] [count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:Int8, c:UInt32]
         "
         )
     }
