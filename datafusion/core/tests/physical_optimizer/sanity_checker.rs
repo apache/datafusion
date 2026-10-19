@@ -39,7 +39,7 @@ use datafusion_physical_expr::{Partitioning, RangePartitioning, SplitPoint};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
-use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
+use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
 use datafusion_physical_plan::joins::{StreamJoinPartitionMode, SymmetricHashJoinExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -459,10 +459,9 @@ fn create_test_schema2() -> SchemaRef {
 
 /// Check if sanity checker should accept or reject plans.
 fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
-    let sanity_checker = SanityCheckPlan::new();
     let opts = ConfigOptions::default();
     assert_eq!(
-        sanity_checker.optimize(plan.clone(), &opts).is_ok(),
+        check_plan_tree_sanity(plan, &opts.optimizer).is_ok(),
         is_sane
     );
 }

@@ -116,12 +116,14 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// - [`EnsureRequirements`] inserts the repartitioning and sorting needed to
 ///   satisfy the distribution and ordering requirements.
 /// - [`OutputRequirements`] records output requirements.
-/// - [`SanityCheckPlan`] rejects plans whose requirements are not satisfied.
-///   It should run last.
 ///
 /// Custom pipelines must keep these rules in a compatible relative order. We
 /// are working to remove these exceptions, so that all rules can be reordered
 /// freely.
+///
+/// After the last rule, including rules added by the user, the physical
+/// planner rejects the plan if its requirements are not satisfied (see
+/// [`check_plan_tree_sanity`](crate::sanity_checker::check_plan_tree_sanity)).
 ///
 /// ## Optimization Coverage Is Not Guaranteed
 ///

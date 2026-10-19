@@ -23,8 +23,9 @@
 //!
 //! The physical planner runs the same check on the final plan of every query,
 //! after all physical optimizer rules, including rules appended by the user.
-//! The rule is therefore not part of the default rule list. It remains
-//! available for code that drives optimizer rules directly.
+//! The rule is therefore not part of the default rule list and is deprecated.
+//! Code that drives optimizer rules directly can call
+//! [`check_plan_tree_sanity`] on the final plan.
 
 use std::sync::Arc;
 
@@ -52,9 +53,14 @@ use itertools::izip;
 ///    are not satisfied by their children.
 /// 2. Plans that use pipeline-breaking operators on infinite input(s),
 ///    it is impossible to execute such queries (they will never generate output nor finish)
+#[deprecated(
+    since = "56.0.0",
+    note = "The physical planner checks the final plan after all rules. To check a plan outside the planner, use `check_plan_tree_sanity`"
+)]
 #[derive(Default, Debug)]
 pub struct SanityCheckPlan {}
 
+#[expect(deprecated)]
 impl SanityCheckPlan {
     #[expect(missing_docs)]
     pub fn new() -> Self {
@@ -62,6 +68,7 @@ impl SanityCheckPlan {
     }
 }
 
+#[expect(deprecated)]
 impl PhysicalOptimizerRule for SanityCheckPlan {
     fn optimize(
         &self,

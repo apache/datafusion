@@ -54,7 +54,7 @@ use datafusion_physical_plan::{
 };
 
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
+use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
 
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_physical_expr::Distribution;
@@ -183,7 +183,7 @@ fn optimize_and_sanity_check(
     let config = test_config();
     let optimized = EnsureRequirements::new().optimize(plan, &config)?;
     // SanityCheckPlan must pass
-    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
     Ok(optimized)
 }
 
@@ -205,11 +205,9 @@ fn assert_idempotent(plan: Arc<dyn ExecutionPlan>) {
     );
 
     // Both must pass SanityCheckPlan
-    SanityCheckPlan::new()
-        .optimize(p1, &config)
+    check_plan_tree_sanity(&p1, &config.optimizer)
         .expect("SanityCheckPlan failed on first pass");
-    SanityCheckPlan::new()
-        .optimize(p2, &config)
+    check_plan_tree_sanity(&p2, &config.optimizer)
         .expect("SanityCheckPlan failed on second pass");
 }
 
@@ -251,8 +249,7 @@ macro_rules! assert_ensure_requirements_plan {
         let p1 = EnsureRequirements::new()
             .optimize($plan, &config)
             .expect("EnsureRequirements::optimize failed (pass 1)");
-        SanityCheckPlan::new()
-            .optimize(Arc::clone(&p1), &config)
+        check_plan_tree_sanity(&p1, &config.optimizer)
             .expect("SanityCheckPlan failed (pass 1)");
         let p1_str = plan_string(&p1);
         insta::assert_snapshot!(p1_str, @ $snapshot);
@@ -266,8 +263,7 @@ macro_rules! assert_ensure_requirements_plan {
             p1_str, p2_str,
             "EnsureRequirements is NOT idempotent!\nPass 1:\n{p1_str}\nPass 2:\n{p2_str}",
         );
-        SanityCheckPlan::new()
-            .optimize(p2, &config)
+        check_plan_tree_sanity(&p2, &config.optimizer)
             .expect("SanityCheckPlan failed (pass 2)");
     }};
 }
@@ -789,11 +785,9 @@ fn test_issue_21973_parallel_sort_survives_multiple_passes() {
 
     // All passes must produce sanity-checkable plans.
     for (i, p) in [p1, p2, p3].into_iter().enumerate() {
-        SanityCheckPlan::new()
-            .optimize(p, &config)
-            .unwrap_or_else(|e| {
-                panic!("SanityCheckPlan failed on pass {}: {e:?}", i + 1)
-            });
+        check_plan_tree_sanity(&p, &config.optimizer).unwrap_or_else(|e| {
+            panic!("SanityCheckPlan failed on pass {}: {e:?}", i + 1)
+        });
     }
 }
 
@@ -1201,11 +1195,9 @@ fn test_idempotent_parallelize_sorts() {
         "parallelize_sorts NOT idempotent!\nFirst:\n{s1}\nSecond:\n{s2}"
     );
 
-    SanityCheckPlan::new()
-        .optimize(p1, &config)
+    check_plan_tree_sanity(&p1, &config.optimizer)
         .expect("SanityCheckPlan failed on first pass");
-    SanityCheckPlan::new()
-        .optimize(p2, &config)
+    check_plan_tree_sanity(&p2, &config.optimizer)
         .expect("SanityCheckPlan failed on second pass");
 }
 
@@ -1467,7 +1459,7 @@ fn parallelize_sorts_and_sanity_check(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let ctx = PlanWithCorrespondingCoalescePartitions::new_default(plan);
     let rewritten = ctx.transform_up(parallelize_sorts).data()?.plan;
-    SanityCheckPlan::new().optimize(Arc::clone(&rewritten), &test_config())?;
+    check_plan_tree_sanity(&rewritten, &test_config().optimizer)?;
     Ok(rewritten)
 }
 
