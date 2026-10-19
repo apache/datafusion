@@ -1099,3 +1099,142 @@ set datafusion.execution.parquet.pushdown_filters = false;
 
 statement ok
 DROP TABLE case_without_else;
+
+##########
+# Regression for https://github.com/apache/datafusion/issues/26267.
+# A filter must test the value returned by a volatile projection, without
+# evaluating that projection expression again in the Parquet scan.
+##########
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+COPY (SELECT unnest(range(0, 1000)) AS n)
+TO 'test_files/scratch/parquet_filter_pushdown/volatile_projection.parquet'
+STORED AS PARQUET;
+
+# Create the table with pushdown disabled so the session setting below can
+# exercise both enabled and disabled pushdown on the same table.
+statement ok
+CREATE EXTERNAL TABLE volatile_projection
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/volatile_projection.parquet';
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+# The filter must stay above the projection and the scan must have no random()
+# predicate. EXPLAIN makes this regression independent of the sampled values.
+query TT
+EXPLAIN SELECT x FROM (SELECT random() AS x FROM volatile_projection) WHERE x < 0.1;
+----
+logical_plan
+01)Filter: x < Float64(0.1)
+02)--Projection: random() AS x
+03)----TableScan: volatile_projection projection=[]
+physical_plan
+01)FilterExec: x@0 < 0.1
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/volatile_projection.parquet]]}, projection=[random() as x], file_type=parquet
+
+# Both sides of this tautology refer to the same projected value.
+query I
+SELECT count(*) FROM (SELECT random() AS x FROM volatile_projection)
+WHERE x < 0.5 OR x >= 0.5;
+----
+1000
+
+# Every returned x must satisfy the predicate, regardless of the random sample.
+query I
+SELECT count(*) FILTER (WHERE x >= 0.1)
+FROM (SELECT random() AS x FROM volatile_projection) WHERE x < 0.1;
+----
+0
+
+# Detect volatility nested inside a larger projection expression.
+query TT
+EXPLAIN SELECT x FROM (SELECT n + random() AS x FROM volatile_projection) WHERE x < 100.0;
+----
+logical_plan
+01)Filter: x < Float64(100)
+02)--Projection: CAST(volatile_projection.n AS Float64) + random() AS x
+03)----TableScan: volatile_projection projection=[n]
+physical_plan
+01)FilterExec: x@0 < 100
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/volatile_projection.parquet]]}, projection=[CAST(n@0 AS Float64) + random() as x], file_type=parquet
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+# Disabled row-filter pushdown must not pass a volatile predicate to pruning.
+query TT
+EXPLAIN SELECT x FROM (SELECT random() AS x FROM volatile_projection) WHERE x < 0.1;
+----
+logical_plan
+01)Filter: x < Float64(0.1)
+02)--Projection: random() AS x
+03)----TableScan: volatile_projection projection=[]
+physical_plan
+01)FilterExec: x@0 < 0.1
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/volatile_projection.parquet]]}, projection=[random() as x], file_type=parquet
+
+query I
+SELECT count(*) FROM (SELECT random() AS x FROM volatile_projection)
+WHERE x < 0.5 OR x >= 0.5;
+----
+1000
+
+query I
+SELECT count(*) FILTER (WHERE x >= 0.1)
+FROM (SELECT random() AS x FROM volatile_projection) WHERE x < 0.1;
+----
+0
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+# Disable logical optimization to exercise physical filter pushdown through the
+# projection: an unrelated immutable predicate must still reach the scan.
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+query TT
+EXPLAIN SELECT n, x FROM (SELECT n, random() AS x FROM volatile_projection)
+WHERE n > 10 AND x < 0.1;
+----
+logical_plan
+01)Projection: volatile_projection.n, x
+02)--Filter: volatile_projection.n > Int64(10) AND x < Float64(0.1)
+03)----Projection: volatile_projection.n, random() AS x
+04)------TableScan: volatile_projection
+physical_plan
+01)FilterExec: x@1 < 0.1
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/volatile_projection.parquet]]}, projection=[n, random() as x], file_type=parquet, predicate=n@0 > 10, pruning_predicate=n_null_count@1 != row_count@2 AND n_max@0 > 10, required_guarantees=[]
+
+# Ordinary computed immutable projections still support physical pushdown.
+query TT
+EXPLAIN SELECT x FROM (SELECT n + 1 AS x FROM volatile_projection) WHERE x > 10;
+----
+logical_plan
+01)Projection: x
+02)--Filter: x > Int64(10)
+03)----Projection: volatile_projection.n + Int64(1) AS x
+04)------TableScan: volatile_projection
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/volatile_projection.parquet]]}, projection=[n@0 + 1 as x], file_type=parquet, predicate=n@0 + 1 > 10
+
+query I
+SELECT count(*) FROM (SELECT n + 1 AS x FROM volatile_projection) WHERE x > 10;
+----
+990
+
+statement ok
+set datafusion.optimizer.max_passes = 3;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE volatile_projection;
