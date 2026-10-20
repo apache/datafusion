@@ -323,8 +323,9 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     /// field outside of those transient drain points.
     fn build_group_columns(schema: &Schema) -> Result<Vec<Box<dyn GroupColumn>>> {
         let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(schema.fields().len());
+        let values_are_group_unique = schema.fields().len() == 1;
         for f in schema.fields().iter() {
-            v.push(make_group_column(f.as_ref())?);
+            v.push(make_group_column(f.as_ref(), values_are_group_unique)?);
         }
         Ok(v)
     }
@@ -955,7 +956,7 @@ macro_rules! instantiate_primitive {
 /// column only creates empty buffers, and this runs once per stream.
 fn group_column_supported_type(data_type: &DataType) -> bool {
     // Whether a type is supported does not depend on its nullability
-    make_group_column(&Field::new("", data_type.clone(), true)).is_ok()
+    make_group_column(&Field::new("", data_type.clone(), true), false).is_ok()
 }
 
 /// Build a [`GroupColumn`] for a single schema field.
@@ -970,7 +971,10 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
 /// Returns `Err(not_impl_err!(...))` for any type not in the supported set.
 /// [`group_column_supported_type`] reports exactly that, which is how
 /// `new_group_values` knows to use the `GroupValuesRows` fallback instead.
-fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
+fn make_group_column(
+    field: &Field,
+    values_are_group_unique: bool,
+) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
 
@@ -1007,14 +1011,14 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 Some(Box::new(BooleanGroupValueBuilder::<false>::new()))
             }
         }
-        DataType::List(child_field) => match make_group_column(child_field.as_ref()) {
+        DataType::List(child_field) => match make_group_column(child_field.as_ref(), false) {
             Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i32>::new(
                 Arc::clone(child_field),
                 child,
             ))),
             Err(_) => None,
         },
-        DataType::LargeList(child_field) => match make_group_column(child_field.as_ref())
+        DataType::LargeList(child_field) => match make_group_column(child_field.as_ref(), false)
         {
             Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i64>::new(
                 Arc::clone(child_field),
@@ -1024,12 +1028,18 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
         },
         DataType::Dictionary(key_dt, value_dt) => {
             let new_field = Field::new("", *value_dt.clone(), true);
-            let inner = make_group_column(&new_field)?;
+            let inner = make_group_column(&new_field, false)?;
             macro_rules! dict_col {
                 ($T:ty) => {
-                    Box::new(dictionary::DictionaryGroupValuesColumn::<$T>::new(
-                        inner, &new_field,
-                    ))
+                    if values_are_group_unique {
+                        Box::new(dictionary::DictionaryGroupValuesColumn::<$T>::new_group_unique(
+                            inner, &new_field,
+                        ))
+                    } else {
+                        Box::new(dictionary::DictionaryGroupValuesColumn::<$T>::new(
+                            inner, &new_field,
+                        ))
+                    }
                 };
             }
             let col: Box<dyn GroupColumn> = match key_dt.as_ref() {
@@ -1735,7 +1745,7 @@ mod tests {
             // Building a top-level Field and feeding it through the factory
             // must succeed for every supported case.
             let field = Field::new("col", dt.clone(), true);
-            make_group_column(&field).unwrap_or_else(|e| {
+            make_group_column(&field, false).unwrap_or_else(|e| {
                 panic!(
                     "group_column_supported_type accepted {dt:?} but make_group_column rejected: {e}"
                 )
@@ -1776,7 +1786,7 @@ mod tests {
             );
             let field = Field::new("col", dt.clone(), true);
             assert!(
-                make_group_column(&field).is_err(),
+                make_group_column(&field, false).is_err(),
                 "group_column_supported_type rejected {dt:?} but make_group_column accepted it"
             );
         }
@@ -2122,6 +2132,42 @@ mod tests {
         ));
         // Both vectorized and streaming paths now deduplicate dict values.
         assert_eq!(out[1].as_dictionary::<Int8Type>().values().len(), 2);
+    }
+
+    #[test]
+    fn single_dictionary_group_uses_outer_group_uniqueness() {
+        use arrow::array::{AsArray, DictionaryArray, Int32Array};
+        use arrow::datatypes::Int32Type;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "category",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        let first: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![0, 1, 0]),
+            Arc::new(StringArray::from(vec!["cat", "dog"])),
+        ));
+        let mut groups = vec![];
+        group_values.intern(&[first], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 0]);
+
+        // A different dictionary assigns different keys to the same logical
+        // values. The outer group table still recognizes both existing groups.
+        let second: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![0, 1, 0]),
+            Arc::new(StringArray::from(vec!["dog", "cat"])),
+        ));
+        group_values.intern(&[second], &mut groups).unwrap();
+        assert_eq!(groups, vec![1, 0, 1]);
+
+        let output = group_values.emit(EmitTo::All).unwrap();
+        let dictionary = output[0].as_dictionary::<Int32Type>();
+        assert_eq!(dictionary.len(), 2);
+        assert_eq!(dictionary.values().len(), 2);
     }
 
     #[test]

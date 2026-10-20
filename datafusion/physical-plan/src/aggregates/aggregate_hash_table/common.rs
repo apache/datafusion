@@ -24,11 +24,11 @@ use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, new_empty_array, new_null_array,
 };
 use arrow::compute::{filter_record_batch, prep_null_mask_filter};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
+use datafusion_expr::{AggregateMetrics, EmitTo, GroupSelection, GroupsAccumulator};
 use datafusion_physical_expr::GroupsAccumulatorAdapter;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use log::debug;
@@ -303,10 +303,37 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                         return Ok(None);
                     }
 
+                    let group_schema = state.group_by.group_schema(&self.input_schema)?;
+                    let compact_dictionary_groups =
+                        group_schema.fields().iter().any(|field| {
+                            matches!(field.data_type(), DataType::Dictionary(_, _))
+                        }) && state.group_values.supports_values_preserving();
+
                     // Accumulator output consumes internal state. Materialize all
-                    // groups once, then slice the materialized batch on later polls.
+                    // aggregate columns once. Dictionary group columns are read in
+                    // output-sized ranges so each batch owns only the dictionary
+                    // values it references; slicing one fully materialized dictionary
+                    // would retain all group values in every output batch.
                     let emit_to = EmitTo::All;
-                    let columns = self.group_by_metrics.time_emitting(|| {
+                    self.group_by_metrics.time_emitting(|| {
+                        if compact_dictionary_groups {
+                            let mut aggregate_columns = vec![];
+                            for (idx, acc) in state.accumulators.iter_mut().enumerate() {
+                                aggregate_columns.extend(accumulator_metrics.time(
+                                    idx,
+                                    accumulator_phase,
+                                    || materialize_accumulator_fn(acc, emit_to),
+                                )?);
+                            }
+                            return Ok(
+                                MaterializedAggregateOutput::new_dictionary_groups(
+                                    output_schema,
+                                    state.group_values,
+                                    aggregate_columns,
+                                ),
+                            );
+                        }
+
                         let mut columns = state.group_values.emit(emit_to)?;
                         for (idx, acc) in state.accumulators.iter_mut().enumerate() {
                             columns.extend(accumulator_metrics.time(
@@ -315,12 +342,12 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                                 || materialize_accumulator_fn(acc, emit_to),
                             )?);
                         }
-                        Ok::<_, datafusion_common::DataFusionError>(columns)
-                    })?;
-
-                    let batch = RecordBatch::try_new(output_schema, columns)?;
-                    debug_assert!(batch.num_rows() > 0);
-                    MaterializedAggregateOutput::new(batch)
+                        let batch = RecordBatch::try_new(output_schema, columns)?;
+                        debug_assert!(batch.num_rows() > 0);
+                        Ok::<_, datafusion_common::DataFusionError>(
+                            MaterializedAggregateOutput::new(batch),
+                        )
+                    })?
                 }
                 AggregateHashTableState::OutputtingMaterialized(output) => output,
                 AggregateHashTableState::Done => return Ok(None),
@@ -331,7 +358,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 }
             };
 
-        let batch = output.next_batch(batch_size);
+        let batch = output.next_batch(batch_size)?;
         if output.is_exhausted() {
             self.state = AggregateHashTableState::Done;
         } else {
@@ -638,37 +665,109 @@ pub(super) enum AggregateHashTableState {
 
 /// Fully evaluated aggregate output and the next row offset to emit.
 ///
-/// Final aggregate evaluation consumes accumulator state, and partial terminal
-/// output should not repeatedly renumber group values with `EmitTo::First`.
-/// Materialize once and then slice to honor `batch_size` across output polls.
-pub(super) struct MaterializedAggregateOutput {
-    batch: RecordBatch,
-    offset: usize,
+/// Terminal aggregate output buffered across output polls.
+///
+/// Accumulator evaluation consumes its state, so aggregate columns are always
+/// materialized once. Most group columns are materialized with them and sliced.
+/// Dictionary group columns instead remain in [`GroupValues`] and are emitted in
+/// compact output-sized ranges so each slice does not retain the full dictionary.
+pub(super) enum MaterializedAggregateOutput {
+    /// Fully materialized output that can be sliced without retaining oversized
+    /// backing storage.
+    Sliced { batch: RecordBatch, offset: usize },
+    /// Compact dictionary group batches paired with slices of the already
+    /// materialized aggregate columns.
+    DictionaryGroups {
+        schema: SchemaRef,
+        group_values: Box<dyn GroupValues>,
+        aggregate_columns: Vec<ArrayRef>,
+        num_rows: usize,
+        offset: usize,
+    },
 }
 
 impl MaterializedAggregateOutput {
     pub(super) fn new(batch: RecordBatch) -> Self {
-        Self { batch, offset: 0 }
+        Self::Sliced { batch, offset: 0 }
     }
 
-    pub(super) fn next_batch(&mut self, batch_size: usize) -> Option<RecordBatch> {
+    pub(super) fn new_dictionary_groups(
+        schema: SchemaRef,
+        group_values: Box<dyn GroupValues>,
+        aggregate_columns: Vec<ArrayRef>,
+    ) -> Self {
+        let num_rows = group_values.len();
+        Self::DictionaryGroups {
+            schema,
+            group_values,
+            aggregate_columns,
+            num_rows,
+            offset: 0,
+        }
+    }
+
+    pub(super) fn next_batch(
+        &mut self,
+        batch_size: usize,
+    ) -> Result<Option<RecordBatch>> {
         debug_assert!(batch_size > 0);
         if self.is_exhausted() {
-            return None;
+            return Ok(None);
         }
 
-        let length = batch_size.min(self.batch.num_rows() - self.offset);
-        let batch = self.batch.slice(self.offset, length);
-        self.offset += length;
-        Some(batch)
+        match self {
+            Self::Sliced { batch, offset } => {
+                let length = batch_size.min(batch.num_rows() - *offset);
+                let batch = batch.slice(*offset, length);
+                *offset += length;
+                Ok(Some(batch))
+            }
+            Self::DictionaryGroups {
+                schema,
+                group_values,
+                aggregate_columns,
+                num_rows,
+                offset,
+            } => {
+                let length = batch_size.min(*num_rows - *offset);
+                let indices = (*offset..*offset + length).collect::<Vec<_>>();
+                let selection = GroupSelection::try_from_indices(&indices, *num_rows)?;
+                let mut columns = group_values.values_preserving(selection)?;
+                columns.extend(
+                    aggregate_columns
+                        .iter()
+                        .map(|column| column.slice(*offset, length)),
+                );
+                *offset += length;
+                Ok(Some(RecordBatch::try_new(Arc::clone(schema), columns)?))
+            }
+        }
     }
 
     pub(super) fn is_exhausted(&self) -> bool {
-        self.offset >= self.batch.num_rows()
+        match self {
+            Self::Sliced { batch, offset } => *offset >= batch.num_rows(),
+            Self::DictionaryGroups {
+                num_rows, offset, ..
+            } => *offset >= *num_rows,
+        }
     }
 
     pub(super) fn memory_size(&self) -> usize {
-        self.batch.get_array_memory_size()
+        match self {
+            Self::Sliced { batch, .. } => batch.get_array_memory_size(),
+            Self::DictionaryGroups {
+                group_values,
+                aggregate_columns,
+                ..
+            } => {
+                group_values.size()
+                    + aggregate_columns
+                        .iter()
+                        .map(|column| column.get_array_memory_size())
+                        .sum::<usize>()
+            }
+        }
     }
 }
 
@@ -924,8 +1023,10 @@ impl AggregateHashTableState {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Array, BooleanArray, Int32Array, Int64Array};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{
+        Array, BooleanArray, DictionaryArray, Int32Array, Int64Array, StringArray,
+    };
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::Column;
@@ -968,11 +1069,87 @@ mod tests {
         )?;
         let mut output = MaterializedAggregateOutput::new(batch);
 
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![1, 2]);
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![3, 4]);
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![5]);
-        assert!(output.next_batch(2).is_none());
+        assert_eq!(int32_values(&output.next_batch(2)?.unwrap(), 0), vec![1, 2]);
+        assert_eq!(int32_values(&output.next_batch(2)?.unwrap(), 0), vec![3, 4]);
+        assert_eq!(int32_values(&output.next_batch(2)?.unwrap(), 0), vec![5]);
+        assert!(output.next_batch(2)?.is_none());
         assert!(output.is_exhausted());
+
+        Ok(())
+    }
+
+    #[test]
+    fn materialized_aggregate_output_compacts_dictionary_groups() -> Result<()> {
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let group_schema = Arc::new(Schema::new(vec![Field::new(
+            "group_col",
+            dictionary_type.clone(),
+            false,
+        )]));
+        let mut group_values = new_group_values(group_schema, &GroupClustering::None)?;
+
+        let values = Arc::new(StringArray::from_iter_values(
+            (0..12).map(|index| format!("value-{index}")),
+        ));
+        let input = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from_iter_values(0..12),
+            values,
+        )) as ArrayRef;
+        let mut groups = vec![];
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, (0..12).collect::<Vec<_>>());
+
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", dictionary_type, false),
+            Field::new("count", DataType::Int64, false),
+        ]));
+        let aggregate_columns =
+            vec![Arc::new(Int64Array::from_iter_values(100..112)) as ArrayRef];
+        let mut output = MaterializedAggregateOutput::new_dictionary_groups(
+            output_schema,
+            group_values,
+            aggregate_columns,
+        );
+
+        for expected_start in [0, 5, 10] {
+            let batch = output.next_batch(5)?.unwrap();
+            let dictionary = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<DictionaryArray<Int32Type>>()
+                .unwrap();
+            let expected_len = (12 - expected_start).min(5);
+            assert_eq!(batch.num_rows(), expected_len);
+            assert_eq!(dictionary.values().len(), expected_len);
+
+            let dictionary_values = dictionary
+                .values()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let actual = (0..dictionary.len())
+                .map(|row| dictionary_values.value(dictionary.key(row).unwrap()))
+                .collect::<Vec<_>>();
+            let expected = (expected_start..expected_start + expected_len)
+                .map(|index| format!("value-{index}"))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+
+            let counts = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values();
+            assert_eq!(
+                counts,
+                &(100 + expected_start as i64
+                    ..100 + (expected_start + expected_len) as i64)
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert!(output.next_batch(5)?.is_none());
 
         Ok(())
     }
