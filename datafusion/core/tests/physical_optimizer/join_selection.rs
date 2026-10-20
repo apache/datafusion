@@ -469,10 +469,13 @@ async fn test_join_with_swap_semi() {
     }
 }
 
+/// `PartitionMode::Partitioned` is deliberately not a case here: a null-aware
+/// `LeftAnti` cannot be constructed in that mode at all, so there is no input
+/// plan to optimize. See
+/// `HashJoinExec::null_aware_mode`/`NullAwareMode::try_new`.
 #[rstest]
 #[case(PartitionMode::CollectLeft)]
 #[case(PartitionMode::Auto)]
-#[case(PartitionMode::Partitioned)]
 #[tokio::test]
 async fn test_null_aware_left_anti_swaps_to_right_anti(
     #[case] partition_mode: PartitionMode,
