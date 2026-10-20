@@ -346,36 +346,18 @@ impl DynamicFilterPhysicalExpr {
         Ok(())
     }
 
-    /// Apply an update from another [`DynamicFilterPhysicalExpr`].
+    /// Update the current expression from another [`DynamicFilterPhysicalExpr`]
+    /// and notify all waiters.
     ///
     /// The source's [`PhysicalExpr::expression_id`] must match this filter's.
     /// The original children must also match, but the filters may have different
     /// children remapped by [`PhysicalExpr::with_new_children`].
-    ///
-    /// Copies the source's original expression without applying either filter's
-    /// remapping. The target and its existing consumers continue sharing their
-    /// state and each applies its own remapping in [`Self::current`]. Subsequent
-    /// updates to the source are independent of the target.
-    ///
-    /// The expression and completion flag are read together. A complete source
-    /// marks the target complete; an incomplete source does not clear completion.
-    /// The target's generation is incremented and waiters are notified. The
-    /// source's generation is not copied or used to order updates, so callers
-    /// must apply updates in the intended order.
-    ///
-    /// If the filters already share their state, this is a no-op.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error without modifying the target if the expression IDs or
-    /// original children differ.
     pub fn update_from(&self, source: &Self) -> Result<()> {
         if Arc::ptr_eq(&self.inner, &source.inner) {
             return Ok(());
         }
 
-        // Release the source lock before acquiring the target lock, including
-        // when two independent filters are copying updates from each other.
+        // Release the source lock before acquiring the target lock via clone().
         let source_state = source.inner.read().clone();
         if self.children != source.children {
             return internal_err!(
