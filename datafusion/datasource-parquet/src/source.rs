@@ -37,9 +37,7 @@ use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::morsel::Morselizer;
 
-use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
-use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 #[cfg(feature = "proto")]
@@ -537,37 +535,6 @@ impl ParquetSource {
     }
 }
 
-/// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
-pub(crate) fn parse_coerce_int96_string(
-    str_setting: &str,
-) -> datafusion_common::Result<TimeUnit> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-
-    match str_setting_lower {
-        "ns" => Ok(TimeUnit::Nanosecond),
-        "us" => Ok(TimeUnit::Microsecond),
-        "ms" => Ok(TimeUnit::Millisecond),
-        "s" => Ok(TimeUnit::Second),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet coerce_int96: \
-        {str_setting}. Valid values are: ns, us, ms, and s."
-        ))),
-    }
-}
-
-/// Validates that `tz` is a parseable IANA timezone and returns it as an
-/// `Arc<str>` for use in `Timestamp(_, Some(tz))` types.
-pub(crate) fn parse_coerce_int96_tz_string(
-    tz: &str,
-) -> datafusion_common::Result<Arc<str>> {
-    tz.parse::<Tz>().map_err(|e| {
-        DataFusionError::Configuration(format!(
-            "Invalid parquet coerce_int96_tz {tz:?}: {e}"
-        ))
-    })?;
-    Ok(Arc::<str>::from(tz))
-}
-
 /// Allows easy conversion from ParquetSource to Arc&lt;dyn FileSource&gt;
 impl From<ParquetSource> for Arc<dyn FileSource> {
     fn from(source: ParquetSource) -> Self {
@@ -617,15 +584,13 @@ impl FileSource for ParquetSource {
             .table_parquet_options
             .global
             .coerce_int96
-            .as_ref()
-            .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
+            .map(TimeUnit::from);
         let coerce_int96_tz = self
             .table_parquet_options
             .global
             .coerce_int96_tz
             .as_ref()
-            .map(|tz| parse_coerce_int96_tz_string(tz))
-            .transpose()?;
+            .map(|tz| Arc::<str>::from(tz.as_str()));
         if coerce_int96_tz.is_some() && coerce_int96.is_none() {
             warn!(
                 "coerce_int96_tz is set but coerce_int96 is not; the timezone will be ignored"
@@ -655,7 +620,7 @@ impl FileSource for ParquetSource {
                 .batch_size
                 .expect("Batch size must set before creating ParquetMorselizer"),
             limit: base_config.limit,
-            preserve_order: base_config.preserve_order,
+            preserve_order: base_config.preserves_file_order(),
             predicate: self.predicate.clone(),
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
