@@ -522,8 +522,9 @@ impl AggregateUDFImpl for Regr {
     }
 
     fn distinct_handling(&self) -> DistinctHandling {
-        // The accumulator rejects `DISTINCT` with `not_impl_err!`, so the
-        // planner has to deduplicate the input first.
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`. It only
+        // works when the planner removes it first (`SingleDistinctToGroupBy`
+        // for a single distinct field, e.g. `regr_slope(DISTINCT x, x)`).
         DistinctHandling::Unsupported
     }
 }

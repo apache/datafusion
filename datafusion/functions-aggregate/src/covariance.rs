@@ -134,8 +134,9 @@ impl AggregateUDFImpl for CovarianceSample {
     }
 
     fn distinct_handling(&self) -> DistinctHandling {
-        // The accumulator rejects `DISTINCT` with `not_impl_err!`, so the
-        // planner has to deduplicate the input first.
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`. It only
+        // works when the planner removes it first (`SingleDistinctToGroupBy`
+        // for a single distinct field, e.g. `covar_samp(DISTINCT x, x)`).
         DistinctHandling::Unsupported
     }
 }
@@ -221,8 +222,9 @@ impl AggregateUDFImpl for CovariancePopulation {
     }
 
     fn distinct_handling(&self) -> DistinctHandling {
-        // The accumulator rejects `DISTINCT` with `not_impl_err!`, so the
-        // planner has to deduplicate the input first.
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`. It only
+        // works when the planner removes it first (`SingleDistinctToGroupBy`
+        // for a single distinct field, e.g. `covar_pop(DISTINCT x, x)`).
         DistinctHandling::Unsupported
     }
 }
