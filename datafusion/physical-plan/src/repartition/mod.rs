@@ -46,10 +46,14 @@ use crate::{
     PlanProperties, ReplaceChildrenOptions, Statistics, validate_child_count,
 };
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
+use arrow::array::{
+    Array, ArrayRef, AsArray, PrimitiveArray, RecordBatch, RecordBatchOptions,
+    UInt64Array,
+};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{DataType, Schema, SchemaRef, UInt32Type};
 use arrow_schema::SortOptions;
+use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
@@ -1382,13 +1386,52 @@ impl BatchPartitioner {
             partition_ranges
                 .into_iter()
                 .map(|(partition, start, len)| {
-                    Ok((partition, reordered_batch.slice(start, len)))
+                    let batch = reordered_batch.slice(start, len);
+                    Ok((partition, compact_sparse_dictionaries(batch)?))
                 })
                 .collect()
         };
 
         Ok(batches)
     }
+}
+
+/// Remove unreferenced values from dictionaries made sparse by repartitioning.
+///
+/// `take_arrays` reorders dictionary keys but preserves their complete values
+/// arrays. Each output partition then references only a fraction of those
+/// values, and coalescing the partitions would otherwise hash every retained
+/// value while merging their dictionaries.
+fn compact_sparse_dictionaries(batch: RecordBatch) -> Result<RecordBatch> {
+    let threshold = batch.num_rows().saturating_mul(4);
+    let mut changed = false;
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| {
+            let DataType::Dictionary(_, _) = column.data_type() else {
+                return Ok(Arc::clone(column));
+            };
+            let dictionary = column.as_any_dictionary();
+            if dictionary.values().len() <= threshold {
+                return Ok(Arc::clone(column));
+            }
+            changed = true;
+            Ok(garbage_collect_any_dictionary(dictionary)?)
+        })
+        .collect::<Result<Vec<ArrayRef>>>()?;
+
+    if !changed {
+        return Ok(batch);
+    }
+
+    let mut options = RecordBatchOptions::new();
+    options = options.with_row_count(Some(batch.num_rows()));
+    Ok(RecordBatch::try_new_with_options(
+        batch.schema(),
+        columns,
+        &options,
+    )?)
 }
 
 /// Maps `N` input partitions to `M` output partitions based on a
@@ -2660,10 +2703,10 @@ mod tests {
     };
 
     use arrow::array::{
-        Array, ArrayRef, Decimal128Array, Int64Array, StringArray,
-        TimestampNanosecondArray, UInt32Array,
+        Array, ArrayRef, Decimal128Array, DictionaryArray, Int32Array, Int64Array,
+        StringArray, TimestampNanosecondArray, UInt32Array,
     };
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::{as_string_array, as_uint32_array};
     use datafusion_common::config::SpillCompression;
@@ -2676,6 +2719,46 @@ mod tests {
         LexOrdering, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
     use insta::assert_snapshot;
+
+    #[test]
+    fn compact_sparse_dictionaries_only_rebuilds_sparse_columns() -> Result<()> {
+        let values = Arc::new(StringArray::from_iter_values(
+            (0..32).map(|index| format!("value-{index}")),
+        ));
+        let sparse = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![31, 2, 7, 2]),
+            values,
+        )) as ArrayRef;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "dictionary",
+            sparse.data_type().clone(),
+            false,
+        )]));
+        let compacted = compact_sparse_dictionaries(RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::clone(&sparse)],
+        )?)?;
+        let dictionary = compacted.column(0).as_dictionary::<Int32Type>();
+        assert_eq!(dictionary.values().len(), 3);
+        let compacted_values = dictionary.values().as_string::<i32>();
+        assert_eq!(
+            (0..dictionary.len())
+                .map(|row| compacted_values.value(dictionary.key(row).unwrap()))
+                .collect::<Vec<_>>(),
+            vec!["value-31", "value-2", "value-7", "value-2"]
+        );
+
+        let dense_values = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
+        let dense = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![0, 1, 2, 3]),
+            dense_values,
+        )) as ArrayRef;
+        let dense_batch = RecordBatch::try_new(schema, vec![Arc::clone(&dense)])?;
+        let dense_output = compact_sparse_dictionaries(dense_batch)?;
+        assert!(Arc::ptr_eq(dense_output.column(0), &dense));
+
+        Ok(())
+    }
 
     #[derive(Debug)]
     struct UnboundedTestPartition {
