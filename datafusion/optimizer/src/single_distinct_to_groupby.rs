@@ -146,6 +146,7 @@ fn is_single_distinct_agg(
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
     let mut distinct_aggs = vec![];
+    let mut has_count_rollup = false;
     for expr in aggr_expr {
         if let Expr::AggregateFunction(AggregateFunction {
             func,
@@ -168,8 +169,9 @@ fn is_single_distinct_agg(
                     fields_set.insert(e);
                 }
                 distinct_aggs.push((func, args.as_slice()));
-            } else if count_rollup.is_some_and(|rollup| rollup.is_count(func))
-                || func.name() == "sum"
+            } else if count_rollup.is_some_and(|rollup| rollup.is_count(func)) {
+                has_count_rollup = true;
+            } else if func.name() == "sum"
                 || func.name().eq_ignore_ascii_case("min")
                 || func.name().eq_ignore_ascii_case("max")
             {
@@ -191,6 +193,25 @@ fn is_single_distinct_agg(
         func.distinct_handling() == datafusion_expr::DistinctHandling::Unsupported
     }) {
         return Ok(true);
+    }
+
+    let has_fast_grouped_accumulator = distinct_aggs.iter().all(|(func, args)| {
+        let arg_types: Vec<_> = args
+            .iter()
+            .map(|arg| {
+                arg.get_type(input_schema)
+                    .unwrap_or(arrow::datatypes::DataType::Null)
+            })
+            .collect();
+        func.groups_accumulator_supported_for_types(&arg_types, true) == Some(true)
+    });
+
+    // If there is a companion non-distinct count rollup alongside a distinct aggregate
+    // that already has a fast native grouped accumulator (e.g. count(DISTINCT <integer>)),
+    // rolling up the count into sum(count) adds extra intermediate grouping state without
+    // taking anything off GroupsAccumulatorAdapter.
+    if has_count_rollup && has_fast_grouped_accumulator {
+        return Ok(false);
     }
 
     let has_group_by = !group_expr.is_empty();
@@ -226,17 +247,6 @@ fn is_single_distinct_agg(
         //   Yes (count(DISTINCT <integer>)) -> SKIP (faster or a tie, less memory)
         //   No (sum/avg DISTINCT, floats, decimals, strings, user-defined) -> REWRITE (1.4-20x faster)
         //         +- config option to skip it when memory matters more (few groups: 2.4-6x more memory)
-        let has_fast_grouped_accumulator = distinct_aggs.iter().all(|(func, args)| {
-            let arg_types: Vec<_> = args
-                .iter()
-                .map(|arg| {
-                    arg.get_type(input_schema)
-                        .unwrap_or(arrow::datatypes::DataType::Null)
-                })
-                .collect();
-            func.groups_accumulator_supported_for_types(&arg_types, true) == Some(true)
-        });
-
         if has_fast_grouped_accumulator {
             // Fast native grouped accumulator exists (e.g. count(DISTINCT <integer>)).
             // Single-phase grouping is faster or equivalent, and avoids two-phase memory overhead.
