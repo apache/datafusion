@@ -346,12 +346,11 @@ impl DynamicFilterPhysicalExpr {
         Ok(())
     }
 
-    /// Apply an update from an independent copy of the same dynamic filter.
+    /// Apply an update from another [`DynamicFilterPhysicalExpr`].
     ///
-    /// This is useful when propagating filter updates between execution plans
-    /// or processes. Both filters must have the same [`PhysicalExpr::expression_id`]
-    /// and original children, as preserved by serialization, but may have
-    /// different children remapped by [`PhysicalExpr::with_new_children`].
+    /// The source's [`PhysicalExpr::expression_id`] must match this filter's.
+    /// The original children must also match, but the filters may have different
+    /// children remapped by [`PhysicalExpr::with_new_children`].
     ///
     /// Copies the source's original expression without applying either filter's
     /// remapping. The target and its existing consumers continue sharing their
@@ -868,8 +867,7 @@ static EXPR_ID_SOURCE: ExpressionIdAtomicCounter = ExpressionIdAtomicCounter::ne
 
 #[cfg(test)]
 impl DynamicFilterPhysicalExpr {
-    /// Model an independently deserialized copy without requiring protobuf in
-    /// tests of the filter's update API.
+    /// Create an independent copy with the same expression ID and current state.
     fn independent_copy_for_test(&self) -> Self {
         Self::from_parts(
             self.children.clone(),

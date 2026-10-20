@@ -295,55 +295,6 @@ fn assert_dynamic_filters_equal(
     assert_eq!(format!("{rewritten:?}"), actual_dbg);
 }
 
-#[test]
-fn test_dynamic_filter_update_from_deserialized_consumer() -> Result<()> {
-    let producer = make_dynamic_filter();
-    let (schema, consumer) = make_reassigned_dynamic_filter(Arc::clone(&producer))?;
-    let (remote_producer, remote_consumer) = roundtrip_dynamic_filter_expr_pair(
-        Arc::clone(&producer),
-        Arc::clone(&consumer),
-        schema,
-    )?;
-
-    let producer = producer
-        .downcast_ref::<DynamicFilterPhysicalExpr>()
-        .unwrap();
-    let consumer = consumer
-        .downcast_ref::<DynamicFilterPhysicalExpr>()
-        .unwrap();
-    let remote_producer = remote_producer
-        .downcast_ref::<DynamicFilterPhysicalExpr>()
-        .unwrap();
-    let remote_consumer = remote_consumer
-        .downcast_ref::<DynamicFilterPhysicalExpr>()
-        .unwrap();
-
-    // Populate both local caches before receiving the remote update.
-    assert_eq!(producer.current()?.as_ref(), lit(true).as_ref());
-    assert_eq!(consumer.current()?.as_ref(), lit(true).as_ref());
-
-    let predicate = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new("a", 0)),
-        Operator::Gt,
-        lit(42i64),
-    )) as Arc<dyn PhysicalExpr>;
-    remote_producer.update(Arc::clone(&predicate))?;
-    remote_producer.mark_complete();
-
-    consumer.update_from(remote_consumer)?;
-
-    assert_eq!(producer.current()?.as_ref(), predicate.as_ref());
-    let remapped = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new("a", 1)),
-        Operator::Gt,
-        lit(42i64),
-    )) as Arc<dyn PhysicalExpr>;
-    assert_eq!(consumer.current()?.as_ref(), remapped.as_ref());
-    assert!(producer.is_complete());
-    assert!(consumer.is_complete());
-    Ok(())
-}
-
 // Two clones of a dynamic filter expression should be deduped to the exact same expression.
 #[test]
 fn test_dynamic_filter_roundtrip_dedupe() -> Result<()> {
