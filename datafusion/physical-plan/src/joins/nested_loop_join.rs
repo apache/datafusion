@@ -3323,6 +3323,7 @@ impl NestedLoopJoinStream {
     /// next state (ProbeRight)
     fn process_probe_batch(&mut self) -> Result<bool> {
         let left_data = Arc::clone(self.get_left_data()?);
+        let left_rows = left_data.batch().num_rows();
         if matches!(self.join_type, JoinType::RightSemi | JoinType::RightAnti) {
             if self.right_existence_probe.is_none() {
                 let right = self.current_right_batch.as_ref().ok_or_else(|| {
@@ -3332,8 +3333,7 @@ impl NestedLoopJoinStream {
                     Some(RightExistenceProbe::new(right, self.join_filter.as_ref())?);
             }
             let probe = self.right_existence_probe.as_mut().unwrap();
-            if probe.remaining == 0 || self.left_probe_idx >= left_data.batch().num_rows()
-            {
+            if probe.remaining == 0 || self.left_probe_idx >= left_rows {
                 let mut probe = self.right_existence_probe.take().unwrap();
                 self.current_right_batch_matched =
                     Some(BooleanArray::new(probe.matched.finish(), None));
@@ -3357,24 +3357,20 @@ impl NestedLoopJoinStream {
         ) && self.left_probe_idx >= self.left_unmatched_end
         {
             let bitmap = left_data.bitmap().lock();
-            let left_rows = left_data.batch().num_rows();
-            while self.left_probe_idx < left_rows && bitmap.get_bit(self.left_probe_idx) {
-                self.left_probe_idx += 1;
-            }
+            let start = (self.left_probe_idx..left_rows)
+                .find(|&idx| !bitmap.get_bit(idx))
+                .unwrap_or(left_rows);
+            self.left_probe_idx = start;
             // Amortize the lock over a short consecutive unmatched range. Other
             // partitions may match these rows meanwhile; probing them again is
             // harmless. Bound the lookahead so we check shared matches regularly.
-            self.left_unmatched_end = self.left_probe_idx;
-            let end = left_rows.min(self.left_probe_idx.saturating_add(64));
-            while self.left_unmatched_end < end
-                && !bitmap.get_bit(self.left_unmatched_end)
-            {
-                self.left_unmatched_end += 1;
-            }
+            let end = left_rows.min(start.saturating_add(64));
+            self.left_unmatched_end =
+                (start..end).find(|&idx| bitmap.get_bit(idx)).unwrap_or(end);
         }
 
         // stop probing, the caller will go to the next state
-        if self.left_probe_idx >= left_data.batch().num_rows() {
+        if self.left_probe_idx >= left_rows {
             return Ok(false);
         }
 
@@ -3403,10 +3399,8 @@ impl NestedLoopJoinStream {
             // batch.
             // Keep full ranges even if some rows already matched. Splitting
             // around those rows can turn vectorized probes into single-row work.
-            let l_row_count = std::cmp::min(
-                l_row_cnt_ratio,
-                left_data.batch().num_rows() - self.left_probe_idx,
-            );
+            let l_row_count =
+                std::cmp::min(l_row_cnt_ratio, left_rows - self.left_probe_idx);
 
             debug_assert!(
                 l_row_count != 0,
