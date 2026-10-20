@@ -79,6 +79,7 @@ impl Registry {
 #[derive(Clone)]
 pub(super) enum Snapshot {
     /// All metrics registered before a fixed boundary; partition reads use the index.
+    /// Retains the source registry, including later registrations, until dropped.
     All(Arc<AllMetrics>),
     /// A selected partition, independent of the source registry.
     Partition {
@@ -94,6 +95,11 @@ pub(super) struct AllMetrics {
     registry: Arc<Mutex<Registry>>,
     // Exclusive position in Registry::metrics, not a per-partition count.
     end: usize,
+    // Lazily copies registry.metrics[..end] for full iteration. The vector keeps
+    // the snapshot's original membership; only the metric values remain shared.
+    // Caching it gives iter(&self) stable references without holding the registry
+    // lock, and avoids copying the handles again on subsequent iterations. Keep
+    // the registry as well so partition selection can still use its shared index.
     flat: OnceLock<Vec<Arc<Metric>>>,
 }
 

@@ -785,7 +785,9 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
             assert_eq!(counter.count_batch(&membership_batch), 0);
             drop(membership_batch);
 
-            // Disabling IN-list membership changes no retained key buffers.
+            // Disabling IN-list membership shares the same key buffers; a
+            // pruning bitmap, when the sparse two-key range earns one, adds
+            // its own bytes on top.
             let mut config = ConfigOptions::default();
             config.optimizer.hash_join_inlist_pushdown_max_size = 0;
             let map = base
@@ -795,9 +797,12 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
                     Arc::new(config),
                 )
                 .await?;
-            assert!(matches!(map.build.membership, PushdownStrategy::Map(_)));
-            assert_eq!(map.reserved_bytes(), bytes);
-            assert_eq!(pool.reserved(), 2 * bytes);
+            let PushdownStrategy::Map(_, bitmap) = &map.build.membership else {
+                panic!("expected hash-map membership");
+            };
+            let bitmap_bytes = bitmap.as_ref().map_or(0, |bitmap| bitmap.size());
+            assert_eq!(map.reserved_bytes(), bytes + bitmap_bytes);
+            assert_eq!(pool.reserved(), 2 * bytes + bitmap_bytes);
             drop(map);
             let lease = Arc::clone(&prepared);
             drop(prepared);
@@ -888,7 +893,7 @@ async fn prepared_byte_keys_use_hash_membership() -> Result<()> {
         assert!(prepared.build.bounds.is_none());
         assert!(matches!(
             &prepared.build.membership,
-            PushdownStrategy::Map(_)
+            PushdownStrategy::Map(_, _)
         ));
         let task = with_probe_filter(base)?
             .builder()

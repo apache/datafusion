@@ -782,7 +782,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // timezone-naive `Timestamp<TimeUnit, None>`. Whether that
                     // should remain the behavior is tracked in
                     // https://github.com/apache/datafusion/issues/25166
-                    self.context_provider.options().execution.time_zone.clone()
+                    self.context_provider
+                        .options()
+                        .execution
+                        .time_zone
+                        .as_ref()
+                        .map(|tz| tz.as_str().to_string())
                 } else {
                     // Timestamp Without Time zone
                     None
