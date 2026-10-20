@@ -1144,3 +1144,17 @@ adjacent chunks at RG boundaries.
 ./bench.sh run sort_pushdown_inexact
 ./bench.sh run sort_pushdown_inexact_overlap
 ```
+
+## Parquet RLE dictionary scan
+
+This Criterion target compares `Utf8View` and `Dictionary<Int32, Utf8>` output
+from the same `RLE_DICTIONARY` Parquet data at NDVs from 1 through 500,000:
+
+```bash
+cargo bench -p datafusion-benchmarks --bench parquet_rle_dictionary_scan
+```
+
+Each case scans 1,000,000 16-byte strings in two 500,000-row groups. It covers
+both annotated UTF-8 and unannotated binary sources, verifies the physical page
+encoding, and rejects plans that insert a representation cast above
+`DataSourceExec`.
