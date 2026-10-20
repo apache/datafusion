@@ -105,6 +105,8 @@ FROM (
 100000 100000
 
 # Assert spill happened (same reasoning as Case A).
+# count(DISTINCT v) with GROUP BY stays single-phase: Int64 has a fast native
+# grouped accumulator, so the optimizer skips the two-phase GROUP BY rewrite.
 query TT
 EXPLAIN ANALYZE
 SELECT count(*), sum(d)
@@ -115,7 +117,7 @@ FROM (
 )
 ----
 <slt:ignore>
-04)------AggregateExec: mode=Single, gby=[group_alias_0@0 as group_alias_0], aggr=[count(alias1)], metrics=[<slt:ignore>spill_count=<slt:ignore>, spilled_bytes=<slt:ignore>, spilled_rows=100.0 K,<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[count(DISTINCT t.v)], metrics=[<slt:ignore>spill_count=<slt:ignore>, spilled_bytes=<slt:ignore>, spilled_rows=100.0 K,<slt:ignore>]
 <slt:ignore>
 
 # --- Case D: multiple aggregates (sum/min/max) under memory limit ---
