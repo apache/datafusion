@@ -1294,6 +1294,19 @@ select t1.t1_int from t1 where (
 2
 4
 
+# correlated_scalar_subquery_having_default_not_coerced_to_match_stacked_filter
+query II rowsort
+SELECT t1_id, (
+  SELECT c FROM (
+    SELECT count(*) AS c FROM t2 WHERE t2.t2_id = t1.t1_id HAVING count(*) < 10
+  ) s WHERE c > 5
+) AS v FROM t1
+----
+11 NULL
+22 NULL
+33 NULL
+44 NULL
+
 #correlated_scalar_subquery_count_agg_in_case_when
 query TT
 explain
@@ -1902,6 +1915,14 @@ SELECT t1_id, t1_int FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t1.t1_id =
 22 2
 44 4
 
+# correlated_exists_groupless_having_reads_outer_column_falls_back
+query I
+SELECT t1_id FROM t1 WHERE EXISTS (
+  SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id HAVING count(*) = t1.t1_int
+)
+----
+11
+
 # correlated_exists_groupless_having_with_stacked_filter_via_cte
 query II
 SELECT t1_id, t1_int FROM t1 WHERE EXISTS (
@@ -1949,6 +1970,34 @@ query II
 SELECT t1_id, t1_int FROM t1 WHERE NOT EXISTS (SELECT sum(t2_int) FROM t2 WHERE t1.t1_id = t2.t2_id)
 ----
 
+# correlated_not_exists_groupless_null_default_having_is_null_not_false
+query I rowsort
+SELECT t1_id FROM t1 WHERE NOT EXISTS (
+  SELECT c FROM (
+    SELECT count(*) AS c, sum(t2_int) AS s FROM t2
+    WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0
+  ) agg WHERE s > 5
+)
+----
+11
+22
+33
+44
+
+# correlated_not_exists_groupless_null_default_having_is_null_not_false_embedded_in_or
+query I rowsort
+SELECT t1_id FROM t1 WHERE t1_id > 100 OR NOT EXISTS (
+  SELECT c FROM (
+    SELECT count(*) AS c, sum(t2_int) AS s FROM t2
+    WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0
+  ) agg WHERE s > 5
+)
+----
+11
+22
+33
+44
+
 # correlated_exists_groupless_count_agg_count_bug_embedded_in_or
 query I rowsort
 select t1_id from t1
@@ -1990,20 +2039,22 @@ statement ok
 CREATE TABLE dedup_inner(k TEXT, v INT) AS VALUES ('1', 10), ('1', 20), ('01', 30), ('01', 40);
 
 # correlated_exists_groupless_count_agg_duplicate_match_dedup
-query I
+query I rowsort
 SELECT o.k FROM dedup_outer o WHERE EXISTS (
   SELECT count(*) FROM dedup_inner i WHERE CAST(i.k AS INT) = o.k
 )
 ----
 1
+1
 2
 
 # correlated_not_exists_groupless_count_agg_duplicate_match_dedup
-query I
+query I rowsort
 SELECT o.k FROM dedup_outer o WHERE NOT EXISTS (
   SELECT count(*) FROM dedup_inner i WHERE CAST(i.k AS INT) = o.k HAVING count(*) = 0
 )
 ----
+1
 1
 
 statement ok
@@ -2025,7 +2076,6 @@ SELECT o.k FROM cte_dedup_outer o WHERE EXISTS (
   SELECT c FROM agg WHERE c = 2
 )
 ----
-1
 
 # correlated_not_exists_groupless_count_agg_duplicate_match_dedup_via_cte
 query I rowsort
@@ -2034,6 +2084,7 @@ SELECT o.k FROM cte_dedup_outer o WHERE NOT EXISTS (
   SELECT c FROM agg WHERE c = 2
 )
 ----
+1
 2
 3
 
@@ -2063,6 +2114,22 @@ SELECT o.k FROM limit_zero_outer o WHERE NOT EXISTS (
 )
 ----
 1
+
+# correlated_in_groupless_max_agg_is_not_count_bug_compensated
+query I
+SELECT t1_id FROM t1
+WHERE t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id)
+----
+11
+
+# correlated_not_in_groupless_count_agg_is_not_count_bug_compensated
+query I rowsort
+SELECT t1_id FROM t1
+WHERE t1_int NOT IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id)
+----
+22
+33
+44
 
 statement ok
 DROP TABLE limit_zero_outer;

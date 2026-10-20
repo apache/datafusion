@@ -778,17 +778,42 @@ fn build_join(
     alias: &str,
     needs_null_aware_mark: bool,
 ) -> Result<Option<BuiltJoin>> {
-    let mut pull_up = PullUpCorrelatedExpr::new()
-        .with_in_predicate_opt(in_predicate_opt.cloned())
-        .with_exists_sub_query(in_predicate_opt.is_none())
-        .with_need_handle_count_bug(true);
+    let exists_sub_query = in_predicate_opt.is_none();
+    let rewrite =
+        |handle_count_bug: bool| -> Result<(LogicalPlan, PullUpCorrelatedExpr)> {
+            let mut pull_up = PullUpCorrelatedExpr::new()
+                .with_in_predicate_opt(in_predicate_opt.cloned())
+                .with_exists_sub_query(exists_sub_query)
+                .with_need_handle_count_bug(handle_count_bug);
+            let new_plan = subquery.clone().rewrite(&mut pull_up).data()?;
+            Ok((new_plan, pull_up))
+        };
+    let (mut new_plan, mut pull_up) = rewrite(exists_sub_query)?;
 
-    let new_plan = subquery.clone().rewrite(&mut pull_up).data()?;
+    let mut count_bug_compensation = pull_up
+        .collected_count_expr_map
+        .get(&new_plan)
+        .filter(|m| !m.is_empty())
+        .cloned();
+    // A HAVING-failure miss looks identical to an absent group once compensated, so bail if the join filter reads the aggregate's own output.
+    let reads_agg_output = count_bug_compensation.as_ref().is_some_and(|expr_map| {
+        pull_up
+            .join_filters
+            .iter()
+            .flat_map(|f| f.column_refs())
+            .any(|c| expr_map.contains_key(&c.name))
+    });
+    // Fall back to the uncompensated rewrite whenever compensation can't safely apply, so a HAVING never gets silently dropped.
+    let compensable = pull_up.can_pull_up
+        && !reads_agg_output
+        && (count_bug_compensation.is_some() || pull_up.pull_up_having_expr.is_none());
+    if exists_sub_query && !compensable {
+        (new_plan, pull_up) = rewrite(false)?;
+        count_bug_compensation = None;
+    }
     if !pull_up.can_pull_up {
         return Ok(None);
     }
-
-    let count_bug_compensation = pull_up.collected_count_expr_map.get(&new_plan).cloned();
 
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(alias.to_string())?
@@ -812,7 +837,6 @@ fn build_join(
             left,
             sub_query_alias,
             join_filter_opt,
-            in_predicate_opt,
             join_type,
             alias,
             &expr_map,
@@ -1092,19 +1116,12 @@ fn build_join_with_count_bug(
     left: &LogicalPlan,
     sub_query_alias: LogicalPlan,
     join_filter_opt: Option<Expr>,
-    in_predicate_opt: Option<&Expr>,
     join_type: JoinType,
     alias: &str,
     expr_map: &crate::decorrelate::ExprResultMap,
     pull_up_having_expr: Option<&Expr>,
     forces_empty_result: bool,
 ) -> Result<LogicalPlan> {
-    if in_predicate_opt.is_some() {
-        return not_impl_err!(
-            "IN/NOT IN count-bug compensation for groupless aggregates is not implemented"
-        );
-    }
-
     let joined = LogicalPlanBuilder::from(left.clone())
         .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?
         .build()?;
@@ -1155,13 +1172,14 @@ fn build_join_with_count_bug(
         lit(false)
     } else {
         match having_arm {
-            Some(when_expr) => {
-                when(indicator_col.clone().is_null(), unmatched_having_default)
-                    .when(when_expr, lit(false))
-                    .otherwise(lit(true))?
-                    .rewrite(&mut expr_rewrite)
-                    .data()?
-            }
+            Some(when_expr) => when(
+                indicator_col.clone().is_null(),
+                unmatched_having_default.is_true(),
+            )
+            .when(when_expr, lit(false))
+            .otherwise(lit(true))?
+            .rewrite(&mut expr_rewrite)
+            .data()?,
             None => lit(true),
         }
     };
@@ -1803,12 +1821,12 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey AND (customer.c_custkey = __correlated_sq_1.o_custkey OR __correlated_sq_1.__correlated_group_expr_o_orderkey) [c_custkey:Int64, c_name:Utf8]
+          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey AND (customer.c_custkey = __correlated_sq_1.o_custkey OR __correlated_sq_1.o_orderkey = Int32(1)) [c_custkey:Int64, c_name:Utf8]
             TableScan: customer [c_custkey:Int64, c_name:Utf8]
-            SubqueryAlias: __correlated_sq_1 [o_custkey:Int64, __correlated_group_expr_o_orderkey:Boolean]
-              Projection: orders.o_custkey, orders.o_orderkey = Int32(1) AS __correlated_group_expr_o_orderkey [o_custkey:Int64, __correlated_group_expr_o_orderkey:Boolean]
+            SubqueryAlias: __correlated_sq_1 [o_custkey:Int64, o_orderkey:Int64]
+              Projection: orders.o_custkey, orders.o_orderkey [o_custkey:Int64, o_orderkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
         "
         )
@@ -2859,12 +2877,12 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey OR __correlated_sq_1.__correlated_group_expr_o_orderkey [c_custkey:Int64, c_name:Utf8]
+          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey OR __correlated_sq_1.o_orderkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
             TableScan: customer [c_custkey:Int64, c_name:Utf8]
-            SubqueryAlias: __correlated_sq_1 [o_custkey:Int64, __correlated_group_expr_o_orderkey:Boolean]
-              Projection: orders.o_custkey, orders.o_orderkey = Int32(1) AS __correlated_group_expr_o_orderkey [o_custkey:Int64, __correlated_group_expr_o_orderkey:Boolean]
+            SubqueryAlias: __correlated_sq_1 [o_custkey:Int64, o_orderkey:Int64]
+              Projection: orders.o_custkey, orders.o_orderkey [o_custkey:Int64, o_orderkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
         "
         )
@@ -3155,12 +3173,12 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: __correlated_sq_1.__correlated_group_expr_a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
+          LeftSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-            SubqueryAlias: __correlated_sq_1 [UInt32(1):UInt32, __correlated_group_expr_a:UInt32]
-              Projection: UInt32(1), UInt32(1) + sq.a AS __correlated_group_expr_a [UInt32(1):UInt32, __correlated_group_expr_a:UInt32]
+            SubqueryAlias: __correlated_sq_1 [UInt32(1):UInt32, a:UInt32]
+              Projection: UInt32(1), sq.a [UInt32(1):UInt32, a:UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
@@ -3214,13 +3232,13 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: __correlated_sq_1.__correlated_group_expr_a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
+          LeftSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-            SubqueryAlias: __correlated_sq_1 [c:UInt32, __correlated_group_expr_a:UInt32]
-              Distinct: [c:UInt32, __correlated_group_expr_a:UInt32]
-                Projection: sq.c, UInt32(1) + sq.a AS __correlated_group_expr_a [c:UInt32, __correlated_group_expr_a:UInt32]
+            SubqueryAlias: __correlated_sq_1 [c:UInt32, a:UInt32]
+              Distinct: [c:UInt32, a:UInt32]
+                Projection: sq.c, sq.a [c:UInt32, a:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
@@ -3245,13 +3263,13 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: __correlated_sq_1.__correlated_group_expr_a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
+          LeftSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-            SubqueryAlias: __correlated_sq_1 [sq.b + sq.c:UInt32, __correlated_group_expr_a:UInt32]
-              Distinct: [sq.b + sq.c:UInt32, __correlated_group_expr_a:UInt32]
-                Projection: sq.b + sq.c, UInt32(1) + sq.a AS __correlated_group_expr_a [sq.b + sq.c:UInt32, __correlated_group_expr_a:UInt32]
+            SubqueryAlias: __correlated_sq_1 [sq.b + sq.c:UInt32, a:UInt32]
+              Distinct: [sq.b + sq.c:UInt32, a:UInt32]
+                Projection: sq.b + sq.c, sq.a [sq.b + sq.c:UInt32, a:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
@@ -3276,13 +3294,13 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: __correlated_sq_1.__correlated_group_expr_a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
+          LeftSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-            SubqueryAlias: __correlated_sq_1 [UInt32(1):UInt32, c:UInt32, __correlated_group_expr_a:UInt32]
-              Distinct: [UInt32(1):UInt32, c:UInt32, __correlated_group_expr_a:UInt32]
-                Projection: UInt32(1), sq.c, UInt32(1) + sq.a AS __correlated_group_expr_a [UInt32(1):UInt32, c:UInt32, __correlated_group_expr_a:UInt32]
+            SubqueryAlias: __correlated_sq_1 [UInt32(1):UInt32, c:UInt32, a:UInt32]
+              Distinct: [UInt32(1):UInt32, c:UInt32, a:UInt32]
+                Projection: UInt32(1), sq.c, sq.a [UInt32(1):UInt32, c:UInt32, a:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
