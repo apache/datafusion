@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::core::coalesce::CoalesceFunc;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, utils::take_function_args};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
@@ -160,12 +160,10 @@ impl ScalarUDFImpl for NVLFunc {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
-            return exec_err!(
-                "nvl expects exactly two arguments, but received {}",
-                arg_types.len()
-            );
-        }
+        let [_, _] = take_function_args(self.name(), arg_types)?;
+
+        // Preserve accepted pairs: (Int8, UInt64) stays Float32, and
+        // (Int64, Boolean) stays Utf8View instead of being rejected by COALESCE.
         let listed = arg_types
             .iter()
             .all(|t| t.is_null() || SUPPORTED_NVL_TYPES.contains(t));
@@ -182,5 +180,31 @@ impl ScalarUDFImpl for NVLFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::DataType;
+    use datafusion_common::DataFusionError;
+
+    #[test]
+    fn rejects_wrong_argument_counts_through_public_udf() {
+        let nvl = crate::core::nvl();
+        for count in [0, 1, 3, 4, 8] {
+            let error = nvl.coerce_types(&vec![DataType::Int64; count]).unwrap_err();
+            let DataFusionError::Execution(message) = error else {
+                panic!("Expected an execution error, got {error:?}");
+            };
+            assert_eq!(
+                message,
+                format!("nvl function requires 2 arguments, got {count}")
+            );
+        }
+        assert_eq!(
+            nvl.coerce_types(&[DataType::Int64, DataType::Int64])
+                .unwrap(),
+            vec![DataType::Int64, DataType::Int64]
+        );
     }
 }

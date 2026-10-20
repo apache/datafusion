@@ -240,3 +240,22 @@ SELECT
 FROM nvl_type_coercion;
 ----
 Utf8View Utf8View
+
+# Both names use the shared fixed-arity validation.
+query error nvl function requires 2 arguments, got 0
+SELECT nvl();
+
+query error nvl function requires 2 arguments, got 1
+SELECT nvl(1);
+
+query error nvl function requires 2 arguments, got 3
+SELECT nvl(1, 2, 3);
+
+query error nvl function requires 2 arguments, got 0
+SELECT ifnull();
+
+query error nvl function requires 2 arguments, got 1
+SELECT ifnull(1);
+
+query error nvl function requires 2 arguments, got 3
+SELECT ifnull(1, 2, 3);
