@@ -22,9 +22,9 @@
 # reviewers see the result without opening the fork. It never checks out or
 # runs code from the pull request: on `pull_request_target` it reads the fork's
 # public run list and creates the check, and on a schedule it updates the
-# checks of recently updated pull requests plus a slice of the older ones. The
-# check is informational. The merge queue runs the full workflow on the merged
-# result and stays the gate.
+# active or missing runs of recently updated pull requests plus a rotating
+# slice of all open pull requests. The check is informational. The merge
+# queue runs the full workflow on the merged result and stays the gate.
 #
 # See docs/source/contributor-guide/index.md, "Pull Requests from Forks".
 name: Fork CI status
@@ -53,7 +53,7 @@ concurrency:
 jobs:
   bridge:
     name: Mirror the fork run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
       - name: Create or update the check
@@ -86,9 +86,9 @@ jobs:
               Boolean(pr.head.repo) && pr.head.repo.fork === true && pr.base.ref === 'main';
 
             const HOW_UPDATED =
-              'This check updates within 15 minutes for a pull request updated in the last six hours, ' +
-              'and within a few hours otherwise. The merge queue runs the full workflow on the merged ' +
-              'result before this pull request merges.';
+              'Active or missing runs on recently updated pull requests are checked every 15 minutes. ' +
+              'Completed runs and older pull requests are checked by a rotating sweep, which can take a few hours. ' +
+              'The merge queue runs the full workflow on the merged result before this pull request merges.';
 
             // The check for a run. `text` is read back by the scheduled update.
             const runPayload = (fork, sha, run) => {
@@ -224,7 +224,7 @@ jobs:
 
             // Discover the latest run again, since a manual run can replace the
             // recorded run, and the fork can delete old runs.
-            async function syncCheck(pr) {
+            async function syncCheck(pr, includeCompleted = true) {
               const { data } = await github.rest.checks.listForRef({
                 ...upstream,
                 ref: pr.head.sha,
@@ -244,6 +244,9 @@ jobs:
               } catch {
                 return;
               }
+              // Completed runs only need the rotating sweep to discover reruns.
+              // A completed check with no run must keep looking for a late run.
+              if (!includeCompleted && check.status === 'completed' && params.run_id) return;
               const fork = { owner: pr.head.repo.owner.login, repo: pr.head.repo.name };
               const sha = pr.head.sha;
               const run = await findRun(fork, sha, 1);
@@ -276,6 +279,14 @@ jobs:
               const cutoff = Date.now() - hours * 3600 * 1000;
               const seen = new Set();
 
+              // Select the sweep first so a recent completed PR in this slice
+              // is checked once, even though it also appears in the window.
+              const slices = Math.max(1, Math.ceil((await openPullRequestCount()) / SWEEP_SIZE));
+              const slot = Math.floor(Date.now() / (15 * 60 * 1000));
+              const page = (slot % slices) + 1;
+              const { data: slice } = await github.rest.pulls.list({ ...listing, per_page: SWEEP_SIZE, page });
+              const sweepNumbers = new Set(slice.map((pr) => pr.number));
+
               // Pull requests updated within the window, newest first. Stop at
               // the window: GITHUB_TOKEN allows 1,000 requests per hour per
               // repository.
@@ -288,18 +299,13 @@ jobs:
                     break;
                   }
                   seen.add(pr.number);
-                  if (isForkPrToMain(pr)) await syncCheck(pr);
+                  if (isForkPrToMain(pr)) await syncCheck(pr, sweepNumbers.has(pr.number));
                 }
                 if (stale) break;
               }
 
-              // One slice of the older pull requests per run, cycling through
-              // all of them. A fork rerun does not update the upstream pull
-              // request, so the window alone would miss it.
-              const slices = Math.max(1, Math.ceil((await openPullRequestCount()) / SWEEP_SIZE));
-              const slot = Math.floor(Date.now() / (15 * 60 * 1000));
-              const page = (slot % slices) + 1;
-              const { data: slice } = await github.rest.pulls.list({ ...listing, per_page: SWEEP_SIZE, page });
+              // Check the rest of the slice, including older pull requests.
+              // A fork rerun does not update the upstream pull request.
               for (const pr of slice) {
                 if (seen.has(pr.number) || !isForkPrToMain(pr)) continue;
                 await syncCheck(pr);

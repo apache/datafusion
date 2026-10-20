@@ -45,16 +45,18 @@
 #
 # A PR from a fork runs this workflow on the fork, on the contributor's own
 # runners, and `fork_ci_status.yml` mirrors that run as the `Rust (fork)` check
-# on the PR. Upstream runs only `check-fmt` and `check-workflow-tool-installs`
-# for such a PR; the other jobs carry an `if:` that skips them. The merge queue
-# runs every job on the merged result, so it stays the gate. PRs from branches
-# in this repository, and fork PRs to release branches, which have no merge
-# queue, run every job here, as before.
+# on the PR. Upstream runs `check-fmt`, `check-workflow-tool-installs`, and
+# `examples-check-datafusion-crates` for such a PR; the other jobs carry an
+# `if:` that skips them. The merge queue runs every job on the merged result,
+# so it stays the gate. PRs from branches in this repository, and fork PRs to
+# release branches, which have no merge queue, run every job here, as before.
 #
 name: Rust
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  # Fork pushes cancel superseded runs on the same branch. Upstream main and
+  # merge queue runs keep separate groups for each SHA.
+  group: ${{ github.repository }}-${{ github.head_ref || (github.repository == 'apache/datafusion' && github.sha || github.ref) }}-${{ github.workflow }}
   cancel-in-progress: true
 
 on:

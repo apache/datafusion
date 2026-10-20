@@ -166,6 +166,8 @@ For local SQLite test instructions, see the [instructions in the documentation].
 ## CI Workflow Tests
 
 The Rust workflow validator and fork status bridge have regression tests.
+These tests cover skip conditions, fork run recovery, polling frequency, and
+concurrency groups for fork pushes and merge queue runs.
 They run in the `asf-yaml-check` CI job and in `./dev/rust_lint.sh`.
 Run them locally with Python, PyYAML, and Node.js 24:
 

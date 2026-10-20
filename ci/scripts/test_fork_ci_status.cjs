@@ -16,32 +16,45 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Execute the workflow's script with stubbed GitHub APIs. No API calls are made.
+// Test fork CI workflows with stubbed GitHub APIs. No API calls are made.
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const { test } = require("node:test");
 
-const script = execFileSync(
-  "python3",
-  [
-    "-c",
-    'import sys, yaml; print(yaml.safe_load(sys.stdin)["jobs"]["bridge"]["steps"][0]["with"]["script"])',
-  ],
-  {
-    input: readFileSync(
-      path.join(__dirname, "../../.github/workflows/fork_ci_status.yml")
-    ),
-    encoding: "utf8",
-  }
-);
+function loadWorkflow(name) {
+  return JSON.parse(
+    execFileSync(
+      "python3",
+      [
+        "-c",
+        "import json, sys, yaml; print(json.dumps(yaml.safe_load(sys.stdin)))",
+      ],
+      {
+        input: readFileSync(
+          path.join(__dirname, "../../.github/workflows", name)
+        ),
+        encoding: "utf8",
+      }
+    )
+  );
+}
+const script =
+  loadWorkflow("fork_ci_status.yml").jobs.bridge.steps[0].with.script;
+const rustWorkflow = loadWorkflow("rust.yml");
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-const bridge = new AsyncFunction("github", "context", "core", script);
+const bridge = new AsyncFunction("github", "context", "core", "Date", script);
+const now = Date.UTC(2026, 0, 1);
+class Clock extends Date {
+  static now() {
+    return now;
+  }
+}
 const sha = "a".repeat(40);
 const pr = {
   number: 1,
-  updated_at: new Date().toISOString(),
+  updated_at: new Date(now).toISOString(),
   head: {
     sha,
     repo: { owner: { login: "contributor" }, name: "datafusion", fork: true },
@@ -77,14 +90,18 @@ async function execute({
   recordedRun,
   event = "schedule",
   workflowState = "active",
+  recentPrs = [pr],
+  slice = [pr],
+  calls = [],
 }) {
   const writes = [];
   const github = {
     rest: {
       checks: {
-        listForRef: async () => ({
-          data: { check_runs: check ? [check] : [] },
-        }),
+        listForRef: async () => {
+          calls.push("checks.listForRef");
+          return { data: { check_runs: check ? [check] : [] } };
+        },
         create: async (payload) =>
           writes.push({ method: "create", ...payload }),
         update: async (payload) =>
@@ -92,6 +109,7 @@ async function execute({
       },
       actions: {
         listWorkflowRuns: async (params) => {
+          calls.push("actions.listWorkflowRuns");
           assert.equal(params.owner, "contributor");
           assert.equal(params.repo, "datafusion");
           assert.equal(params.workflow_id, "rust.yml");
@@ -104,11 +122,17 @@ async function execute({
         },
         getWorkflow: async () => ({ data: { state: workflowState } }),
       },
-      pulls: { list: async () => ({ data: [pr], headers: {} }) },
+      pulls: {
+        list: async ({ per_page }) => {
+          if (per_page === 1) return { data: [pr], headers: {} };
+          assert.equal(per_page, 25);
+          return { data: slice };
+        },
+      },
     },
     paginate: {
       iterator: async function* () {
-        yield { data: [pr] };
+        yield { data: recentPrs };
       },
     },
   };
@@ -119,7 +143,8 @@ async function execute({
       eventName: event,
       payload: { pull_request: pr },
     },
-    { info: () => {} }
+    { info: () => {} },
+    Clock
   );
   return writes;
 }
@@ -207,5 +232,142 @@ test("sweep does not rewrite an unchanged check", async () => {
       runs: [latest],
     }),
     []
+  );
+});
+
+for (const conclusion of ["success", "failure", "cancelled"]) {
+  test(`recent completed ${conclusion} checks wait for their sweep slice`, async () => {
+    const calls = [];
+    const previous = run(1, "push", conclusion);
+    const writes = await execute({
+      check: checkFor(previous),
+      runs: [run(2, "workflow_dispatch")],
+      slice: [],
+      calls,
+    });
+    assert.deepEqual(writes, []);
+    assert.deepEqual(calls, ["checks.listForRef"]);
+  });
+}
+
+test("the sweep finds a rerun on a recently updated completed PR", async () => {
+  const calls = [];
+  const latest = run(2, "workflow_dispatch");
+  const writes = await execute({
+    check: checkFor(run(1)),
+    runs: [latest],
+    calls,
+  });
+  assert.equal(writes.length, 1);
+  assertRun(writes[0], "update", latest);
+  assert.deepEqual(calls, ["checks.listForRef", "actions.listWorkflowRuns"]);
+});
+
+test("the sweep still checks completed runs on older PRs", async () => {
+  const oldPr = {
+    ...pr,
+    updated_at: new Date(now - 24 * 3600 * 1000).toISOString(),
+  };
+  const latest = run(2, "workflow_dispatch");
+  const writes = await execute({
+    check: checkFor(run(1)),
+    runs: [latest],
+    recentPrs: [oldPr],
+    slice: [oldPr],
+  });
+  assert.equal(writes.length, 1);
+  assertRun(writes[0], "update", latest);
+});
+
+for (const status of ["queued", "in_progress"]) {
+  test(`recent ${status} runs are polled outside the sweep slice`, async () => {
+    const previous = { ...run(1), status, conclusion: null };
+    const latest = run(1);
+    const writes = await execute({
+      check: checkFor(previous),
+      runs: [latest],
+      slice: [],
+    });
+    assert.equal(writes.length, 1);
+    assertRun(writes[0], "update", latest);
+  });
+}
+
+test("recent checks with no fork run keep looking outside the sweep slice", async () => {
+  const missing = checkFor(run(null, "push", "skipped"));
+  const latest = run(2);
+  const writes = await execute({ check: missing, runs: [latest], slice: [] });
+  assert.equal(writes.length, 1);
+  assertRun(writes[0], "update", latest);
+});
+
+test("recent missing checks are recovered outside the sweep slice", async () => {
+  const latest = run(2);
+  const writes = await execute({ runs: [latest], slice: [] });
+  assert.equal(writes.length, 1);
+  assertRun(writes[0], "create", latest);
+});
+
+test("a recent active PR in the sweep slice is only polled once", async () => {
+  const calls = [];
+  const active = { ...run(1), status: "in_progress", conclusion: null };
+  await execute({ check: checkFor(active), runs: [active], calls });
+  assert.deepEqual(calls, ["checks.listForRef", "actions.listWorkflowRuns"]);
+});
+
+// The concurrency expressions use string lookups and &&/||, whose semantics
+// match JavaScript for these non-empty strings and booleans.
+function concurrencyGroup(github) {
+  return rustWorkflow.concurrency.group.replace(
+    /\$\{\{\s*(.*?)\s*\}\}/g,
+    (_, expression) => new Function("github", `return (${expression});`)(github)
+  );
+}
+const forkPush = {
+  repository: "contributor/datafusion",
+  head_ref: "",
+  sha: "first",
+  ref: "refs/heads/feature",
+  workflow: "Rust",
+};
+
+test("successive pushes to a fork branch cancel the previous run", () => {
+  assert.equal(rustWorkflow.concurrency["cancel-in-progress"], true);
+  assert.equal(
+    concurrencyGroup(forkPush),
+    concurrencyGroup({ ...forkPush, sha: "second" })
+  );
+});
+
+test("different fork branches have separate concurrency groups", () => {
+  assert.notEqual(
+    concurrencyGroup(forkPush),
+    concurrencyGroup({ ...forkPush, ref: "refs/heads/other" })
+  );
+});
+
+for (const ref of [
+  "refs/heads/main",
+  "refs/heads/gh-readonly-queue/main/pr-1",
+]) {
+  test(`upstream ${ref} runs keep separate groups for each SHA`, () => {
+    const upstream = { ...forkPush, repository: "apache/datafusion", ref };
+    assert.notEqual(
+      concurrencyGroup(upstream),
+      concurrencyGroup({ ...upstream, sha: "second" })
+    );
+  });
+}
+
+test("upstream PR updates still share a concurrency group", () => {
+  const upstream = {
+    ...forkPush,
+    repository: "apache/datafusion",
+    head_ref: "feature",
+    ref: "refs/pull/1/merge",
+  };
+  assert.equal(
+    concurrencyGroup(upstream),
+    concurrencyGroup({ ...upstream, sha: "second" })
   );
 });
