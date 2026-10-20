@@ -300,7 +300,14 @@ impl ListingOptions {
             .filter(|object_meta| object_meta.size > 0)
             .collect();
 
-        let schema = self.format.infer_schema(state, &store, &files).await?;
+        let format = self
+            .format
+            .with_file_metadata_cache(Some((
+                state.runtime_env().cache_manager.get_file_metadata_cache(),
+                Arc::new(table_path.object_store()),
+            )))
+            .unwrap_or_else(|| Arc::clone(&self.format));
+        let schema = format.infer_schema(state, &store, &files).await?;
 
         Ok(schema)
     }

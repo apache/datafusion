@@ -712,12 +712,14 @@ impl TableFunctionImpl for MetadataCacheFunc {
             Field::new("metadata_size_bytes", DataType::UInt64, false),
             Field::new("hits", DataType::UInt64, false),
             Field::new("extra", DataType::Utf8, true),
+            Field::new("object_store_url", DataType::Utf8, false),
         ]));
 
         let cached_entries = self.cache_manager.get_file_metadata_cache().list_entries();
 
         // construct record batch from metadata
         let mut path_arr = Vec::with_capacity(cached_entries.len());
+        let mut object_store_url_arr = Vec::with_capacity(cached_entries.len());
         let mut file_modified_arr = Vec::with_capacity(cached_entries.len());
         let mut file_size_bytes_arr = Vec::with_capacity(cached_entries.len());
         let mut e_tag_arr = Vec::with_capacity(cached_entries.len());
@@ -728,7 +730,8 @@ impl TableFunctionImpl for MetadataCacheFunc {
         let mut extra = Vec::new();
 
         for (path, entry) in cached_entries {
-            path_arr.push(path.to_string());
+            path_arr.push(path.path.to_string());
+            object_store_url_arr.push(path.object_store_url.to_string());
             file_modified_arr
                 .push(Some(entry.value.meta.last_modified.timestamp_millis()));
             file_size_bytes_arr.push(entry.value.meta.size);
@@ -761,6 +764,7 @@ impl TableFunctionImpl for MetadataCacheFunc {
                 Arc::new(UInt64Array::from(metadata_size_bytes)),
                 Arc::new(UInt64Array::from(hits_arr)),
                 Arc::new(StringArray::from(extra_arr)),
+                Arc::new(StringArray::from(object_store_url_arr)),
             ],
         )?;
 
@@ -835,10 +839,12 @@ impl TableFunctionImpl for StatisticsCacheFunc {
             Field::new("table_size_bytes", DataType::Utf8, false),
             Field::new("statistics_size_bytes", DataType::UInt64, false),
             Field::new("hits", DataType::UInt64, false),
+            Field::new("object_store_url", DataType::Utf8, false),
         ]));
 
         // construct record batch from metadata
         let mut path_arr = vec![];
+        let mut object_store_url_arr = vec![];
         let mut table_arr = vec![];
         let mut file_modified_arr = vec![];
         let mut file_size_bytes_arr = vec![];
@@ -853,7 +859,8 @@ impl TableFunctionImpl for StatisticsCacheFunc {
         if let Some(file_statistics_cache) = self.cache_manager.get_file_statistic_cache()
         {
             for (path, entry) in file_statistics_cache.list_entries() {
-                path_arr.push(path.path.to_string());
+                path_arr.push(path.store_path.path.to_string());
+                object_store_url_arr.push(path.store_path.object_store_url.to_string());
                 table_arr
                     .push(path.table.map_or_else(|| "".to_string(), |t| t.to_string()));
                 file_modified_arr
@@ -891,6 +898,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
                 Arc::new(StringArray::from(table_size_bytes_arr)),
                 Arc::new(UInt64Array::from(statistics_size_bytes_arr)),
                 Arc::new(UInt64Array::from(hits_arr)),
+                Arc::new(StringArray::from(object_store_url_arr)),
             ],
         )?;
 
@@ -912,11 +920,13 @@ impl TableFunctionImpl for StatisticsCacheFunc {
 /// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
 /// | column_name         | data_type                                                                                                                                                                | is_nullable |
 /// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
-/// | table               | Utf8                                                                                                                                                                     | NO          |
+/// | table               | Utf8                                                                                                                                                                     | YES         |
 /// | path                | Utf8                                                                                                                                                                     | NO          |
 /// | metadata_size_bytes | UInt64                                                                                                                                                                   | NO          |
 /// | expires_in          | Duration(ms)                                                                                                                                                             | YES         |
 /// | metadata_list       | List(Struct("file_path": non-null Utf8, "file_modified": non-null Timestamp(ms), "file_size_bytes": non-null UInt64, "e_tag": Utf8, "version": Utf8), field: 'metadata') | YES         |
+/// | hits                | UInt64                                                                                                                                                                   | NO          |
+/// | object_store_url    | Utf8                                                                                                                                                                     | NO          |
 /// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
 /// ```
 #[derive(Debug)]
@@ -999,10 +1009,12 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                 true,
             ),
             Field::new("hits", DataType::UInt64, false),
+            Field::new("object_store_url", DataType::Utf8, false),
         ]));
 
         let mut table_arr = vec![];
         let mut path_arr = vec![];
+        let mut object_store_url_arr = vec![];
         let mut metadata_size_bytes_arr = vec![];
         let mut expires_arr = vec![];
 
@@ -1020,7 +1032,8 @@ impl TableFunctionImpl for ListFilesCacheFunc {
 
             for (path, entry) in list_files_cache.list_entries() {
                 table_arr.push(path.table.map(|t| t.to_string()));
-                path_arr.push(path.path.to_string());
+                path_arr.push(path.store_path.path.to_string());
+                object_store_url_arr.push(path.store_path.object_store_url.to_string());
                 metadata_size_bytes_arr.push(entry.size_bytes as u64);
                 // calculates time left before entry expires
                 expires_arr.push(
@@ -1071,6 +1084,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                     None,
                 )),
                 Arc::new(UInt64Array::from(hits_arr)),
+                Arc::new(StringArray::from(object_store_url_arr)),
             ],
         )?;
 
