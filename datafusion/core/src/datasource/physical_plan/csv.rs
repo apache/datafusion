@@ -51,6 +51,7 @@ mod tests {
     use datafusion_datasource_csv::source::CsvSource;
     use futures::{StreamExt, TryStreamExt};
 
+    use crate::test_util::aggr_test_schema;
     use arrow::datatypes::*;
     use bytes::Bytes;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -61,28 +62,6 @@ mod tests {
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
-
-    fn aggr_test_schema() -> SchemaRef {
-        let mut f1 = Field::new("c1", DataType::Utf8, false);
-        f1.set_metadata(HashMap::from_iter(vec![("testing".into(), "test".into())]));
-        let schema = Schema::new(vec![
-            f1,
-            Field::new("c2", DataType::UInt32, false),
-            Field::new("c3", DataType::Int8, false),
-            Field::new("c4", DataType::Int16, false),
-            Field::new("c5", DataType::Int32, false),
-            Field::new("c6", DataType::Int64, false),
-            Field::new("c7", DataType::UInt8, false),
-            Field::new("c8", DataType::UInt16, false),
-            Field::new("c9", DataType::UInt32, false),
-            Field::new("c10", DataType::UInt64, false),
-            Field::new("c11", DataType::Float32, false),
-            Field::new("c12", DataType::Float64, false),
-            Field::new("c13", DataType::Utf8, false),
-        ]);
-
-        Arc::new(schema)
-    }
 
     #[rstest(
         file_compression_type,
