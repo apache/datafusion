@@ -45,6 +45,7 @@ use datafusion_datasource::file_format::{
 use datafusion_common::Statistics;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::encryption::FileDecryptionProperties;
+use datafusion_common::parquet_config::DFTimeUnit;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     DEFAULT_PARQUET_EXTENSION, DataFusionError, GetExt, Result, internal_datafusion_err,
@@ -61,9 +62,7 @@ use datafusion_session::Session;
 
 use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
 use crate::reader::CachedParquetFileReaderFactory;
-use crate::source::{
-    ParquetSource, parse_coerce_int96_string, parse_coerce_int96_tz_string,
-};
+use crate::source::{ParquetSource, parse_coerce_int96_tz_string};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
@@ -242,14 +241,14 @@ impl ParquetFormat {
     /// Get [`coerce_int96`]
     ///
     /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
-    pub fn coerce_int96(&self) -> Option<String> {
-        self.options.global.coerce_int96.clone()
+    pub fn coerce_int96(&self) -> Option<DFTimeUnit> {
+        self.options.global.coerce_int96
     }
 
     /// Set [`coerce_int96`]
     ///
     /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
-    pub fn with_coerce_int96(mut self, time_unit: Option<String>) -> Self {
+    pub fn with_coerce_int96(mut self, time_unit: Option<DFTimeUnit>) -> Self {
         self.options.global.coerce_int96 = time_unit;
         self
     }
@@ -361,10 +360,7 @@ impl FileFormat for ParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        let coerce_int96 = match self.coerce_int96() {
-            Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
-            None => None,
-        };
+        let coerce_int96 = self.coerce_int96().map(arrow::datatypes::TimeUnit::from);
         let coerce_int96_tz = self
             .options
             .global
@@ -743,7 +739,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             }),
             data_page_row_count_limit: global_options.global.data_page_row_count_limit as u64,
             encoding_opt: global_options.global.encoding.map(|encoding| {
-                parquet_options::EncodingOpt::Encoding(encoding)
+                parquet_options::EncodingOpt::Encoding(encoding.to_string())
             }),
             bloom_filter_on_read: global_options.global.bloom_filter_on_read,
             bloom_filter_on_write: global_options.global.bloom_filter_on_write,
@@ -762,8 +758,8 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             write_row_group_number_distinct_values: global_options
                 .global
                 .write_row_group_number_distinct_values,
-            coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
-                parquet_options::CoerceInt96Opt::CoerceInt96(compression)
+            coerce_int96_opt: global_options.global.coerce_int96.map(|time_unit| {
+                parquet_options::CoerceInt96Opt::CoerceInt96(time_unit.to_string())
             }),
             coerce_int96_tz_opt: global_options.global.coerce_int96_tz.map(|tz| {
                 parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz)

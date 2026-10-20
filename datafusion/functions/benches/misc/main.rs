@@ -29,11 +29,5 @@ mod get_field;
 mod helper;
 mod nullif;
 mod overlay;
-mod upper;
 
-criterion_main!(
-    get_field::benches,
-    nullif::benches,
-    overlay::benches,
-    upper::benches,
-);
+criterion_main!(get_field::benches, nullif::benches, overlay::benches);
