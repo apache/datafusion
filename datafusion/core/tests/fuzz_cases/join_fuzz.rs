@@ -662,6 +662,124 @@ async fn test_right_mark_join_1k_binary_filtered() {
     }
 }
 
+// In the tests above, most key groups hold one row: the i32 tests draw the join keys
+// `(a, b)` from 10,000 values for 1000 rows, and the binary ones from random bytes.
+// The tests below draw them from 25 values, so each streamed row matches about 40
+// buffered rows. Sort-merge join pairs a streamed row with its matches in runs, which
+// end where a buffered batch ends or where the output batch fills.
+
+#[tokio::test]
+async fn test_inner_join_1k_low_cardinality() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32_with_key_range(1000, 5, left_extra),
+            make_staggered_batches_i32_with_key_range(1000, 5, right_extra),
+            JoinType::Inner,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_inner_join_1k_low_cardinality_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32_with_key_range(1000, 5, left_extra),
+            make_staggered_batches_i32_with_key_range(1000, 5, right_extra),
+            JoinType::Inner,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_left_join_1k_low_cardinality() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32_with_key_range(1000, 5, left_extra),
+            make_staggered_batches_i32_with_key_range(1000, 5, right_extra),
+            JoinType::Left,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_left_join_1k_low_cardinality_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32_with_key_range(1000, 5, left_extra),
+            make_staggered_batches_i32_with_key_range(1000, 5, right_extra),
+            JoinType::Left,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_right_join_1k_low_cardinality() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32_with_key_range(1000, 5, left_extra),
+            make_staggered_batches_i32_with_key_range(1000, 5, right_extra),
+            JoinType::Right,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_right_join_1k_low_cardinality_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32_with_key_range(1000, 5, left_extra),
+            make_staggered_batches_i32_with_key_range(1000, 5, right_extra),
+            JoinType::Right,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_full_join_1k_low_cardinality() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32_with_key_range(1000, 5, left_extra),
+            make_staggered_batches_i32_with_key_range(1000, 5, right_extra),
+            JoinType::Full,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_full_join_1k_low_cardinality_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32_with_key_range(1000, 5, left_extra),
+            make_staggered_batches_i32_with_key_range(1000, 5, right_extra),
+            JoinType::Full,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
 type JoinFilterBuilder = Box<dyn Fn(Arc<Schema>, Arc<Schema>) -> JoinFilter>;
 
 struct JoinFuzzTestCase {
@@ -1392,12 +1510,25 @@ async fn test_nested_loop_join_spill_fuzz() {
 /// two sorted int32 columns 'a', 'b' ranged from 0..99 as join columns
 /// two random int32 columns 'x', 'y' as other columns
 fn make_staggered_batches_i32(len: usize, with_extra_column: bool) -> Vec<RecordBatch> {
+    make_staggered_batches_i32_with_key_range(len, 100, with_extra_column)
+}
+
+/// Like [`make_staggered_batches_i32`], but with 'a' and 'b' drawn from
+/// `0..key_range`, so that a small `key_range` makes few, large key groups
+fn make_staggered_batches_i32_with_key_range(
+    len: usize,
+    key_range: i32,
+    with_extra_column: bool,
+) -> Vec<RecordBatch> {
     let mut rng = rand::rng();
     let mut input12: Vec<(i32, i32)> = vec![(0, 0); len];
     let mut input3: Vec<i32> = vec![0; len];
     let mut input4: Vec<i32> = vec![0; len];
     for v in &mut input12 {
-        *v = (rng.random_range(0..100), rng.random_range(0..100));
+        *v = (
+            rng.random_range(0..key_range),
+            rng.random_range(0..key_range),
+        );
     }
     rng.fill(&mut input3[..]);
     rng.fill(&mut input4[..]);

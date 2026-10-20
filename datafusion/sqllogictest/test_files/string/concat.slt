@@ -136,3 +136,72 @@ SELECT concat_ws(x'7c', column1, column2) from t;
 
 statement ok
 drop table t
+
+# Binary columns of each type, with a NULL
+statement ok
+create table binary_columns as
+select
+  arrow_cast(column1, 'Binary') as b,
+  arrow_cast(column1, 'LargeBinary') as lb,
+  arrow_cast(column1, 'BinaryView') as bv,
+  column2 as sep
+from (values
+  (x'0102030405', x'7c'),
+  (x'010203040506', NULL),
+  (x'0102030405060708090a0b0c0d0e', x'2c2c'),
+  (NULL, x'7c')
+);
+
+# NULLs are skipped, and the non-UTF-8 x'ff' is copied as is
+query ?T
+SELECT concat(b, x'ff', b), arrow_typeof(concat(b, x'ff', b)) FROM binary_columns;
+----
+0102030405ff0102030405 Binary
+010203040506ff010203040506 Binary
+0102030405060708090a0b0c0d0eff0102030405060708090a0b0c0d0e Binary
+ff Binary
+
+query ?T
+SELECT concat(lb, x'ff', lb), arrow_typeof(concat(lb, x'ff', lb)) FROM binary_columns;
+----
+0102030405ff0102030405 LargeBinary
+010203040506ff010203040506 LargeBinary
+0102030405060708090a0b0c0d0eff0102030405060708090a0b0c0d0e LargeBinary
+ff LargeBinary
+
+# The second result is 13 bytes, one more than a BinaryView stores inline
+query ?T
+SELECT concat(bv, x'ff', bv), arrow_typeof(concat(bv, x'ff', bv)) FROM binary_columns;
+----
+0102030405ff0102030405 BinaryView
+010203040506ff010203040506 BinaryView
+0102030405060708090a0b0c0d0eff0102030405060708090a0b0c0d0e BinaryView
+ff BinaryView
+
+# A NULL separator makes the result NULL
+query ?T
+SELECT concat_ws(sep, b, x'ff', b), arrow_typeof(concat_ws(sep, b, x'ff', b)) FROM binary_columns;
+----
+01020304057cff7c0102030405 Binary
+NULL Binary
+0102030405060708090a0b0c0d0e2c2cff2c2c0102030405060708090a0b0c0d0e Binary
+ff Binary
+
+query ?T
+SELECT concat_ws(sep, lb, x'ff', lb), arrow_typeof(concat_ws(sep, lb, x'ff', lb)) FROM binary_columns;
+----
+01020304057cff7c0102030405 LargeBinary
+NULL LargeBinary
+0102030405060708090a0b0c0d0e2c2cff2c2c0102030405060708090a0b0c0d0e LargeBinary
+ff LargeBinary
+
+query ?T
+SELECT concat_ws(sep, bv, x'ff', bv), arrow_typeof(concat_ws(sep, bv, x'ff', bv)) FROM binary_columns;
+----
+01020304057cff7c0102030405 BinaryView
+NULL BinaryView
+0102030405060708090a0b0c0d0e2c2cff2c2c0102030405060708090a0b0c0d0e BinaryView
+ff BinaryView
+
+statement ok
+drop table binary_columns

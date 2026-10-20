@@ -25,6 +25,7 @@
 use criterion::criterion_main;
 
 mod ascii;
+mod case_conversion_inputs;
 mod chr;
 mod concat;
 mod concat_ws;
@@ -40,7 +41,7 @@ mod split_part;
 mod starts_with;
 mod to_hex;
 mod trim;
-mod upper_unicode;
+mod upper;
 mod uuid;
 
 criterion_main!(
@@ -58,6 +59,6 @@ criterion_main!(
     starts_with::benches,
     to_hex::benches,
     trim::benches,
-    upper_unicode::benches,
+    upper::benches,
     uuid::benches,
 );
