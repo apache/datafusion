@@ -7345,3 +7345,80 @@ SELECT a FROM window_in_filter_t LIMIT count(*);
 
 statement ok
 DROP TABLE window_in_filter_t;
+
+# RANGE frames ending in `N PRECEDING`: for a row whose ORDER BY value is NULL
+# the frame is its NULL peer group, so the result must not depend on how the
+# NULL peers are split across input batches.
+statement ok
+CREATE TABLE range_null_peers(id INT, x INT, v INT) AS VALUES
+  (1, 1, 10), (2, 2, 20), (3, NULL, 30), (4, NULL, 40), (5, NULL, 50);
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+query IIIII
+SELECT id,
+  sum(v) OVER (ORDER BY x RANGE BETWEEN 5 PRECEDING AND 1 PRECEDING),
+  count(*) OVER (ORDER BY x RANGE BETWEEN 5 PRECEDING AND 1 PRECEDING),
+  max(v) OVER (ORDER BY x RANGE BETWEEN 5 PRECEDING AND 1 PRECEDING),
+  sum(v) OVER (ORDER BY x RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+FROM range_null_peers ORDER BY id;
+----
+1 NULL 0 NULL NULL
+2 10 1 10 10
+3 120 3 50 150
+4 120 3 50 150
+5 120 3 50 150
+
+query III
+SELECT id,
+  sum(v) OVER (ORDER BY x NULLS FIRST RANGE BETWEEN 5 PRECEDING AND 1 PRECEDING),
+  sum(v) OVER (ORDER BY x DESC RANGE BETWEEN 5 PRECEDING AND 1 PRECEDING)
+FROM range_null_peers ORDER BY id;
+----
+1 NULL 20
+2 10 NULL
+3 120 120
+4 120 120
+5 120 120
+
+# The FOLLOWING frames are reversed to `5 PRECEDING AND 1 PRECEDING` so they can
+# reuse the sort of the first window
+query IIII
+SELECT id,
+  count(*) OVER (ORDER BY x DESC NULLS LAST, id),
+  sum(v) OVER (ORDER BY x ASC NULLS FIRST RANGE BETWEEN 1 FOLLOWING AND 5 FOLLOWING),
+  nth_value(1, 3) OVER (ORDER BY x ASC NULLS FIRST RANGE BETWEEN 1 FOLLOWING AND 5 FOLLOWING)
+FROM range_null_peers ORDER BY id;
+----
+1 2 20 NULL
+2 1 NULL NULL
+3 3 120 1
+4 4 120 1
+5 5 120 1
+
+# NaN sorts as a single peer group too, and `NaN - 1` is NaN
+statement ok
+CREATE TABLE range_nan_peers(id INT, x DOUBLE) AS VALUES
+  (1, 1.0), (2, 'NaN'), (3, 'NaN'), (4, 'NaN'), (5, 2.0);
+
+query III
+SELECT id,
+  count(*) OVER (ORDER BY x RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+  count(*) OVER (ORDER BY x DESC RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+FROM range_nan_peers ORDER BY id;
+----
+1 0 4
+2 5 3
+3 5 3
+4 5 3
+5 1 3
+
+statement ok
+reset datafusion.execution.batch_size;
+
+statement ok
+DROP TABLE range_null_peers;
+
+statement ok
+DROP TABLE range_nan_peers;
