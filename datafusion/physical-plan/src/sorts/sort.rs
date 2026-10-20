@@ -38,7 +38,8 @@ use crate::filter_pushdown::{
 };
 use crate::limit::LimitStream;
 use crate::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+    SpillMetrics, Time,
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
@@ -61,15 +62,17 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::SpillCompression;
+use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
     unwrap_or_internal_err,
 };
+use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{
-    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool,
+    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool, WorkspaceLoan,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
@@ -87,14 +90,88 @@ struct ExternalSorterMetrics {
     baseline: BaselineMetrics,
 
     spill_metrics: SpillMetrics,
+
+    background: BackgroundSortMetrics,
 }
 
 impl ExternalSorterMetrics {
     fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        let baseline = BaselineMetrics::new(metrics, partition);
+        let background = BackgroundSortMetrics::new(
+            metrics,
+            partition,
+            baseline.elapsed_compute().clone(),
+        );
         Self {
-            baseline: BaselineMetrics::new(metrics, partition),
+            baseline,
             spill_metrics: SpillMetrics::new(metrics, partition),
+            background,
         }
+    }
+}
+
+/// Metrics of the [`BackgroundSorts`].
+///
+/// The sort's `elapsed_compute` covers all of its work, including what runs in the
+/// background, which `background_sort_time` breaks out. The sort's own thread spent
+/// `elapsed_compute` - `background_sort_time` working, and `background_sort_wait_time`
+/// idle waiting for the background.
+#[derive(Clone)]
+struct BackgroundSortMetrics {
+    /// The sort's `elapsed_compute`, which background work is added to as well.
+    elapsed_compute: Time,
+    /// How many groups of sorted batches were merged into one run.
+    merges: Count,
+    /// How many groups were left unmerged, because the merge workspace could not hold
+    /// their merge, or the merge ran out of it.
+    merges_skipped: Count,
+    /// Time the background tasks spent sorting each batch and merging them, part of the
+    /// sort's `elapsed_compute`.
+    sort_time: Time,
+    /// Time the sort's own thread waited for the background tasks: when memory ran out,
+    /// and before the final merge or a spill. Not part of `elapsed_compute`, the work it
+    /// waits for is.
+    wait_time: Time,
+}
+
+impl BackgroundSortMetrics {
+    fn new(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        elapsed_compute: Time,
+    ) -> Self {
+        Self {
+            elapsed_compute,
+            merges: MetricBuilder::new(metrics).counter("background_merges", partition),
+            merges_skipped: MetricBuilder::new(metrics)
+                .counter("background_merges_skipped", partition),
+            sort_time: MetricBuilder::new(metrics)
+                .subset_time("background_sort_time", partition),
+            wait_time: MetricBuilder::new(metrics)
+                .subset_time("background_sort_wait_time", partition),
+        }
+    }
+
+    /// Times background work into both `sort_time` and `elapsed_compute` until dropped.
+    fn timer(&self) -> BackgroundTimer<'_> {
+        BackgroundTimer {
+            metrics: self,
+            start: Instant::now(),
+        }
+    }
+}
+
+/// See [`BackgroundSortMetrics::timer`].
+struct BackgroundTimer<'a> {
+    metrics: &'a BackgroundSortMetrics,
+    start: Instant,
+}
+
+impl Drop for BackgroundTimer<'_> {
+    fn drop(&mut self) {
+        let elapsed = self.start.elapsed();
+        self.metrics.sort_time.add_duration(elapsed);
+        self.metrics.elapsed_compute.add_duration(elapsed);
     }
 }
 
@@ -279,6 +356,13 @@ struct ExternalSorter {
     /// How much memory to reserve for performing in-memory sort/merges
     /// prior to spilling.
     sort_spill_reservation_bytes: usize,
+
+    /// When non zero, every inserted batch is sorted in the background as it arrives, and
+    /// every this many sorted batches are merged into one sorted run, see
+    /// [`BackgroundSorts`].
+    background_merge_batches: usize,
+    /// The background work on the batches inserted since the last spill.
+    background: BackgroundSorts,
 }
 
 impl ExternalSorter {
@@ -339,7 +423,17 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
+            background_merge_batches: 0,
+            background: BackgroundSorts::default(),
         })
+    }
+
+    /// Sorts every inserted batch in the background as it arrives, and merges every
+    /// `background_merge_batches` sorted batches into one sorted run, see
+    /// [`BackgroundSorts`]. `0` disables it.
+    fn with_background_merge_batches(mut self, background_merge_batches: usize) -> Self {
+        self.background_merge_batches = background_merge_batches;
+        self
     }
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
@@ -351,8 +445,14 @@ impl ExternalSorter {
         }
 
         self.reserve_memory_for_merge()?;
-        self.reserve_memory_for_batch_and_maybe_spill(&input)
+        let reserved = self
+            .reserve_memory_for_batch_and_maybe_spill(&input)
             .await?;
+
+        if self.background_merge_batches > 0 {
+            self.spawn_background_sort(input, reserved)?;
+            return self.collect_finished_background_tasks();
+        }
 
         self.in_mem_batches.push(input);
         Ok(())
@@ -360,6 +460,226 @@ impl ExternalSorter {
 
     fn spilled_before(&self) -> bool {
         !self.finished_spill_files.is_empty()
+    }
+
+    /// Whether there are inserted batches not yet sorted into the output or a spill file.
+    fn has_buffered_batches(&self) -> bool {
+        !self.in_mem_batches.is_empty() || !self.background.is_empty()
+    }
+
+    /// Sorts `batch`, for which `reserved` was just added to `self.reservation`, in a
+    /// background task, see [`BackgroundSorts`].
+    fn spawn_background_sort(
+        &mut self,
+        batch: RecordBatch,
+        reserved: usize,
+    ) -> Result<()> {
+        // Without a counter, `reserved` covers this batch's buffers on their own, so they
+        // go with it. With one, buffers it shares with other buffered batches may be
+        // counted with one of them, so the input part stays here until every buffered
+        // batch is sorted, and only the sorted copy's part goes with it.
+        let task_share = match &self.in_mem_batches_counter {
+            None => reserved,
+            Some(_) => batch.get_sliced_size()?.min(reserved),
+        };
+        let reservation = self.reservation.split(task_share);
+        let expr = self.expr.clone();
+        let batch_size = self.batch_size;
+        let metrics = self.metrics.background.clone();
+        self.background.pending_sorts += 1;
+        self.background.tasks.spawn(async move {
+            let _timer = metrics.timer();
+            let batches = sort_batch_chunked(&batch, &expr, batch_size)?;
+            // Only the sorted copy is kept.
+            drop(batch);
+            Ok(BackgroundOutput::Sorted(SortedRun::new(
+                batches,
+                reservation,
+                &expr,
+            )?))
+        });
+        Ok(())
+    }
+
+    /// Takes in what the background tasks that are done produced, without waiting for the
+    /// others, and starts the merges that are due.
+    fn collect_finished_background_tasks(&mut self) -> Result<()> {
+        while let Some(result) = self.background.tasks.try_join_next() {
+            self.on_background_task_done(result)?;
+        }
+        self.spawn_background_merges();
+        Ok(())
+    }
+
+    /// Waits for every background task. When `merge` is set, merges that become due
+    /// meanwhile are started and waited for as well.
+    async fn wait_for_background_tasks(&mut self, merge: bool) -> Result<()> {
+        let wait_time = self.metrics.background.wait_time.clone();
+        let _timer = wait_time.timer();
+        while let Some(result) = self.background.tasks.join_next().await {
+            self.on_background_task_done(result)?;
+            if merge {
+                self.spawn_background_merges();
+            }
+        }
+        Ok(())
+    }
+
+    /// Takes in what a background task produced.
+    fn on_background_task_done(
+        &mut self,
+        result: std::result::Result<Result<BackgroundOutput>, tokio::task::JoinError>,
+    ) -> Result<()> {
+        let output = match result {
+            Ok(output) => output?,
+            Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+            Err(e) => return Err(DataFusionError::ExecutionJoin(Box::new(e))),
+        };
+        match output {
+            BackgroundOutput::Sorted(run) => {
+                self.background.pending_sorts -= 1;
+                run.fit_reservation()?;
+                self.background.sorted.push(run);
+                if self.background.pending_sorts == 0 {
+                    self.release_background_inputs();
+                }
+            }
+            BackgroundOutput::Merged(run) => {
+                self.metrics.background.merges.add(1);
+                run.fit_reservation()?;
+                self.background.runs.push(run);
+            }
+            BackgroundOutput::NotMerged(runs) => {
+                // As they were when they were sorted.
+                self.metrics.background.merges_skipped.add(1);
+                self.background.runs.extend(runs);
+            }
+        }
+        Ok(())
+    }
+
+    /// Once every buffered batch is sorted, no batch is left to keep the buffers of the
+    /// batches they were sorted from alive, so the input part of their reservation, which
+    /// stayed in `self.reservation` (see [`Self::spawn_background_sort`]), goes first to
+    /// what their sorted runs need to be merged, and the rest is freed.
+    fn release_background_inputs(&mut self) {
+        for run in self
+            .background
+            .sorted
+            .iter()
+            .chain(self.background.runs.iter())
+        {
+            let top_up = run.missing_reservation().min(self.reservation.size());
+            if top_up > 0 {
+                self.reservation.shrink(top_up);
+                run.reservation.grow(top_up);
+            }
+        }
+        self.reservation.free();
+        // Nothing buffered shares buffers with what comes next anymore.
+        self.in_mem_batches_counter = self.new_buffered_batches_counter();
+    }
+
+    /// Merges every `background_merge_batches` sorted batches in a background task. A
+    /// merge is only started on runs reserved for being merged, when what it needs besides
+    /// them fits in the merge workspace, otherwise its batches are left unmerged.
+    fn spawn_background_merges(&mut self) {
+        let merge_batches = self.background_merge_batches;
+        if merge_batches <= 1 {
+            return;
+        }
+        loop {
+            let ready = self
+                .background
+                .sorted
+                .iter()
+                .filter(|run| run.missing_reservation() == 0)
+                .count();
+            if ready < merge_batches {
+                return;
+            }
+            let mut runs = Vec::with_capacity(merge_batches);
+            let mut index = 0;
+            while runs.len() < merge_batches {
+                if self.background.sorted[index].missing_reservation() == 0 {
+                    runs.push(self.background.sorted.remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            // Up to two batches per run, a batch stays in the merge until its last row is
+            // copied out, which can be after the next one is read, and a cursor over the
+            // keys of each.
+            let size = runs
+                .iter()
+                .map(|run| 2 * run.max_batch_size + run.max_batch_cursor_size)
+                .sum::<usize>();
+            let workspace = self.merge_pool.borrow(size);
+            if workspace.size() < size {
+                self.metrics.background.merges_skipped.add(1);
+                self.background.runs.extend(runs);
+                continue;
+            }
+            self.background.tasks.spawn(merge_sorted_runs(
+                runs,
+                workspace,
+                self.merge_reservation.new_empty(),
+                Arc::clone(&self.schema),
+                self.expr.clone(),
+                self.batch_size,
+                self.metrics.background.clone(),
+            ));
+        }
+    }
+
+    /// Waits for the background tasks and returns all the runs they sorted, for the final
+    /// merge, `merge` set, which the merges that are due run first to shrink, or for a
+    /// spill, which they would only delay.
+    async fn finish_background_tasks(&mut self, merge: bool) -> Result<Vec<SortedRun>> {
+        if merge {
+            self.spawn_background_merges();
+        }
+        self.wait_for_background_tasks(merge).await?;
+        let mut runs = std::mem::take(&mut self.background.runs);
+        runs.append(&mut self.background.sorted);
+        Ok(runs)
+    }
+
+    /// Merges the runs sorted in the background into a single sorted stream.
+    fn merge_sorted_runs_stream(
+        &mut self,
+        runs: Vec<SortedRun>,
+        is_output_stream: bool,
+    ) -> Result<SendableRecordBatchStream> {
+        let mut streams = runs
+            .into_iter()
+            .map(|run| run.into_stream(Arc::clone(&self.schema)))
+            .collect::<Result<Vec<_>>>()?;
+
+        match streams.len() {
+            0 => {
+                let empty_stream =
+                    Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
+                Ok(self.observe_if_output(empty_stream, is_output_stream))
+            }
+            1 => {
+                let stream = streams.remove(0);
+                Ok(self.observe_if_output(stream, is_output_stream))
+            }
+            _ => StreamingMergeBuilder::new()
+                .with_streams(streams)
+                .with_schema(Arc::clone(&self.schema))
+                .with_expressions(&self.expr.clone())
+                .with_metrics(if is_output_stream {
+                    self.metrics.baseline.clone()
+                } else {
+                    self.metrics.baseline.intermediate()
+                })
+                .with_batch_size(self.batch_size)
+                .with_fetch(None)
+                .with_reservation(self.merge_reservation.new_empty())
+                .build(),
+        }
     }
 
     /// Returns the final sorted output of all batches inserted via
@@ -376,7 +696,7 @@ impl ExternalSorter {
             // Sort `in_mem_batches` and spill it first. If there are many
             // `in_mem_batches` and the memory limit is almost reached, merging
             // them with the spilled files at the same time might cause OOM.
-            if !self.in_mem_batches.is_empty() {
+            if self.has_buffered_batches() {
                 self.sort_and_spill_in_mem_batches().await?;
             }
 
@@ -399,11 +719,19 @@ impl ExternalSorter {
                 .with_merge_pool(Arc::clone(&self.merge_pool))
                 .build()
         } else {
+            let background_runs = if self.background_merge_batches > 0 {
+                Some(self.finish_background_tasks(true).await?)
+            } else {
+                None
+            };
             // Final output needs no reserve for future spills. Return unused
             // workspace so another sorter can start while this stream is alive.
             self.merge_pool.release_unused();
             self.merge_reservation.free();
-            self.in_mem_sort_stream(true, true)
+            match background_runs {
+                Some(runs) => self.merge_sorted_runs_stream(runs, true),
+                None => self.in_mem_sort_stream(true, true),
+            }
         }
     }
 
@@ -514,20 +842,29 @@ impl ExternalSorter {
 
     async fn try_sort_and_spill_in_mem_batches(&mut self) -> Result<()> {
         assert_or_internal_err!(
-            !self.in_mem_batches.is_empty(),
+            self.has_buffered_batches(),
             "in_mem_batches must not be empty when attempting to sort and spill"
         );
+
+        let background_runs = if self.background_merge_batches > 0 {
+            Some(self.finish_background_tasks(false).await?)
+        } else {
+            None
+        };
 
         // Reuse the pre-reserved workspace across cursor, encoded-row, and
         // batch reservations. Returning it to the execution pool here can
         // make spilling fail if another task consumes it or our share shrinks.
         self.merge_reservation.free();
 
-        let mut sorted_stream = self.in_mem_sort_stream(
-            false,
-            // No coalescing on the spill path: it raises per-run peak memory.
-            false,
-        )?;
+        let mut sorted_stream = match background_runs {
+            Some(runs) => self.merge_sorted_runs_stream(runs, false)?,
+            None => self.in_mem_sort_stream(
+                false,
+                // No coalescing on the spill path: it raises per-run peak memory.
+                false,
+            )?,
+        };
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
         assert_or_internal_err!(
@@ -924,6 +1261,19 @@ impl ExternalSorter {
         // Reserve headroom for next merge sort
         if self.runtime.disk_manager.tmp_files_enabled() {
             let size = self.sort_spill_reservation_bytes;
+            if self.background_merge_batches > 0 {
+                // Kept as idle merge workspace, which the background merges use too, see
+                // `Self::spawn_background_merges`. Those are all done before any other
+                // merge, and leave it as it was.
+                if self.merge_pool.reserved() < size {
+                    self.merge_reservation
+                        .try_resize(size)
+                        .map_err(Self::err_with_oom_context)?;
+                    self.merge_pool.retain(size);
+                    self.merge_reservation.free();
+                }
+                return Ok(());
+            }
             if self.merge_reservation.size() != size {
                 self.merge_reservation
                     .try_resize(size)
@@ -937,20 +1287,30 @@ impl ExternalSorter {
 
     /// Reserves memory to be able to accommodate the given batch.
     /// If memory is scarce, tries to spill current in-memory batches to disk first.
+    /// Returns how much was reserved.
     async fn reserve_memory_for_batch_and_maybe_spill(
         &mut self,
         input: &RecordBatch,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         let size = get_reserved_bytes_for_next_record_batch(
             input,
             self.in_mem_batches_counter.as_mut(),
         )?;
 
         match self.reservation.try_grow(size) {
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(size),
             Err(e) => {
-                if self.in_mem_batches.is_empty() {
+                if !self.has_buffered_batches() {
                     return Err(Self::err_with_oom_context(e));
+                }
+
+                // The background tasks free what their batches no longer need once
+                // they are done, which may be enough to avoid spilling.
+                if !self.background.tasks.is_empty() {
+                    self.wait_for_background_tasks(true).await?;
+                    if self.reservation.try_grow(size).is_ok() {
+                        return Ok(size);
+                    }
                 }
 
                 // Spill and try again. Nothing is buffered after the spill, so
@@ -962,7 +1322,8 @@ impl ExternalSorter {
                 )?;
                 self.reservation
                     .try_grow(size)
-                    .map_err(Self::err_with_oom_context)
+                    .map_err(Self::err_with_oom_context)?;
+                Ok(size)
             }
         }
     }
@@ -996,6 +1357,285 @@ impl ExternalSorter {
 
         stream
     }
+}
+
+/// Batches sorted into one order, with the memory they hold.
+struct SortedRun {
+    batches: Vec<RecordBatch>,
+    /// Covers the batches, and once reserved for it (see [`Self::missing_reservation`]),
+    /// what merging them needs.
+    reservation: MemoryReservation,
+    /// The memory of the largest batch.
+    max_batch_size: usize,
+    /// Upper bound of what a merge's cursor holds for one batch of this run: the sort keys
+    /// of the largest batch, plus their row format overhead.
+    max_batch_cursor_size: usize,
+}
+
+impl SortedRun {
+    fn new(
+        batches: Vec<RecordBatch>,
+        reservation: MemoryReservation,
+        expr: &LexOrdering,
+    ) -> Result<Self> {
+        let mut max_batch_size = 0;
+        let mut max_batch_cursor_size = 0;
+        for batch in &batches {
+            max_batch_size = max_batch_size.max(get_record_batch_memory_size(batch));
+            max_batch_cursor_size = max_batch_cursor_size.max(cursor_size(batch, expr)?);
+        }
+        Ok(Self {
+            batches,
+            reservation,
+            max_batch_size,
+            max_batch_cursor_size,
+        })
+    }
+
+    fn memory_size(&self) -> usize {
+        self.batches.iter().map(get_record_batch_memory_size).sum()
+    }
+
+    /// What the run needs reserved to be merged, in the background or by the final
+    /// merge: its batches, a cursor over its keys, and room for the rows of the run a
+    /// merge's output can take. An output batch has at most `batch_size` rows, and so do
+    /// the run's batches, so its rows of the run come from at most two of them, the run's
+    /// largest rows in the worst case. A background merge's output is the run's merged
+    /// copy, which that room covers too.
+    fn reservation_to_merge(&self) -> usize {
+        let memory_size = self.memory_size();
+        memory_size
+            + memory_size.min(2 * self.max_batch_size)
+            + self.max_batch_cursor_size
+    }
+
+    /// How much more [`Self::reservation_to_merge`] needs than is reserved.
+    fn missing_reservation(&self) -> usize {
+        self.reservation_to_merge()
+            .saturating_sub(self.reservation.size())
+    }
+
+    /// Fits the reservation to the run, now that it was sorted or merged and only its
+    /// batches are left, freeing what the batches it came from needed beyond what merging
+    /// it needs (a slice of larger buffers, buffers with spare capacity).
+    ///
+    /// The batches themselves are already in memory, so if they take more than is
+    /// reserved, they are reserved in full, failing like the sort would without background
+    /// sorting when the pool can't take them.
+    fn fit_reservation(&self) -> Result<()> {
+        let memory_size = self.memory_size();
+        let to_merge = self.reservation_to_merge();
+        let reserved = self.reservation.size();
+        if reserved > to_merge {
+            self.reservation.shrink(reserved - to_merge);
+        } else if reserved < memory_size {
+            self.reservation
+                .try_grow(memory_size - reserved)
+                .map_err(ExternalSorter::err_with_oom_context)?;
+        }
+        Ok(())
+    }
+
+    /// Streams the run's batches into the final merge, or a spill, releasing what was kept
+    /// to merge them, and then the memory of each batch as it is emitted, so the merge can
+    /// account for it instead.
+    fn into_stream(self, schema: SchemaRef) -> Result<SendableRecordBatchStream> {
+        let memory_size = self.memory_size();
+        let reserved = self.reservation.size();
+        if reserved > memory_size {
+            self.reservation.shrink(reserved - memory_size);
+        } else {
+            self.reservation
+                .try_grow(memory_size - reserved)
+                .map_err(ExternalSorter::err_with_oom_context)?;
+        }
+        Ok(Box::pin(ReservationStream::new(
+            Arc::clone(&schema),
+            Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                futures::stream::iter(self.batches.into_iter().map(Ok)),
+            )),
+            self.reservation,
+        )))
+    }
+}
+
+/// Sorting and merging that an [`ExternalSorter`] runs in the background, see
+/// `datafusion.execution.sort_background_merge_batches`.
+///
+/// Every inserted batch is sorted in a task of its own as soon as it is admitted, and
+/// every `background_merge_batches` sorted batches are merged into one sorted run in a
+/// task of its own, so sorts of new batches and merges of earlier ones run at the same
+/// time, alongside reading the input. A merge only reads those few batches, so their keys
+/// and the rows copied out of them stay in cache, unlike one merge of every batch at the
+/// end. Merged runs are kept apart until the final merge, they are never merged again
+/// into later runs.
+///
+/// ```text
+///  input batch
+///      │
+///      ▼
+///  ExternalSorter::insert_batch ── reserve the batch's memory ──┐ not enough
+///      │                                                       ▼
+///      │                         wait for the background tasks, which free what
+///      │                         their batches no longer need, and try again;
+///      │                         spill (merge everything into a file) if still
+///      │                         not enough
+///      │ spawn, with the batch's reservation (but the part for buffers it may
+///      │ share with other buffered batches)
+///  ┌ ─ ┼ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+///   background tasks, running at the same time
+///  │   ▼                                                                    │
+///    sort task: sort the batch on its own, drop the unsorted input
+///  │   │                                                                    │
+///      ▼
+///  │ sorted: [s1] [s2] .. [sN]    (one sorted run per batch)                 │
+///      │ every `background_merge_batches` of them reserved for merging
+///  │   ▼                                                                    │
+///    merge task: merge sort them in the merge workspace (if it can't hold
+///  │   │         the merge, or the merge runs out, they stay unmerged)      │
+///      ▼
+///  │ runs: [run 1] [run 2] .. [run K]    (never merged again here)          │
+///  └ ─ ┼ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+///      │ the input ended, or memory ran out: wait for every task
+///      ▼
+///  ┌──────────────────────────────────────────┐
+///  │ merge of [run 1] .. [run K] [s1] .. [sM] │──▶ sorted output, or a spill
+///  │ (with the spill files, if any)           │    file when memory ran out
+///  └──────────────────────────────────────────┘
+/// ```
+///
+/// # Memory
+///
+/// Every batch is admitted with the same reservation as without sorting in the
+/// background, buffers it shares with other buffered batches counted once. The part for
+/// its sorted copy goes with it into its task. The part for its input buffers stays with
+/// the sort until every buffered batch is sorted, as another one may still hold buffers
+/// it shares, unless batches are not counted together, when it goes along too.
+///
+/// Once a batch is sorted, or batches are merged, the run's reservation is fitted to its
+/// batches and what merging them needs, see [`SortedRun::fit_reservation`], freeing what
+/// the batches it came from took beyond that. Released input reservations first make up
+/// what sorted runs miss to be merged, and only runs that have it are merged in the
+/// background, so a merge's output is always covered. What a merge holds besides (the
+/// current batches of its runs, a cursor over their keys) comes from the sort's merge
+/// workspace, which the sort keeps reserved anyway, and which every background merge is
+/// done with before any other merge uses it.
+///
+/// All reservations are adjusted by the sort itself as it collects finished tasks, never
+/// by the tasks, so it always knows what they hold. A task that is aborted, when the sort
+/// is dropped, frees all it holds.
+#[derive(Default)]
+struct BackgroundSorts {
+    tasks: JoinSet<Result<BackgroundOutput>>,
+    /// How many sort tasks are not done.
+    pending_sorts: usize,
+    /// Sorted batches, waiting for enough of them to be merged.
+    sorted: Vec<SortedRun>,
+    /// Runs that are no longer merged in the background: merged runs, and sorted batches
+    /// that could not be merged.
+    runs: Vec<SortedRun>,
+}
+
+impl BackgroundSorts {
+    fn is_empty(&self) -> bool {
+        self.tasks.is_empty() && self.sorted.is_empty() && self.runs.is_empty()
+    }
+}
+
+/// What a background task produces.
+enum BackgroundOutput {
+    /// A sorted batch.
+    Sorted(SortedRun),
+    /// The merged run, with the reservations of the runs merged into it.
+    Merged(SortedRun),
+    /// The runs of a merge that ran out of memory, as they were.
+    NotMerged(Vec<SortedRun>),
+}
+
+/// Merges `runs` into a single run, see [`BackgroundSorts`].
+///
+/// `workspace` is the merge workspace the merge needs, besides its runs and their merged
+/// copy which their reservations cover, lent until it starts, so no other merge takes it
+/// meanwhile. The merge then accounts for what it holds in `merge_reservation`, a
+/// reservation of the merge workspace's pool, which it grows into.
+async fn merge_sorted_runs(
+    runs: Vec<SortedRun>,
+    workspace: WorkspaceLoan,
+    merge_reservation: MemoryReservation,
+    schema: SchemaRef,
+    expr: LexOrdering,
+    batch_size: usize,
+    metrics: BackgroundSortMetrics,
+) -> Result<BackgroundOutput> {
+    let _timer = metrics.timer();
+    // The merge reads clones of the runs, so if it runs out of memory, the runs are still
+    // there to be merged at the end instead. Their reservations stay whole meanwhile.
+    let streams = runs
+        .iter()
+        .map(|run| {
+            Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&schema),
+                futures::stream::iter(run.batches.clone().into_iter().map(Ok)),
+            )) as SendableRecordBatchStream
+        })
+        .collect();
+    drop(workspace);
+
+    let merged = async {
+        let mut merged_stream = StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_schema(Arc::clone(&schema))
+            .with_expressions(&expr)
+            // Not reported, the merge is timed by `metrics`, and its output is not the
+            // sort's output.
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            .with_batch_size(batch_size)
+            .with_fetch(None)
+            .with_reservation(merge_reservation)
+            .build()?;
+        let mut batches = vec![];
+        while let Some(batch) = merged_stream.next().await {
+            batches.push(batch?);
+        }
+        Ok::<_, DataFusionError>(batches)
+    }
+    .await;
+
+    let batches = match merged {
+        Ok(batches) => batches,
+        Err(e) if matches!(e.find_root(), DataFusionError::ResourcesExhausted(_)) => {
+            return Ok(BackgroundOutput::NotMerged(runs));
+        }
+        Err(e) => return Err(e),
+    };
+    let reservation = runs[0].reservation.new_empty();
+    for run in runs {
+        // The runs are dropped here, their reservations now cover the merged copy.
+        reservation.grow(run.reservation.free());
+    }
+    Ok(BackgroundOutput::Merged(SortedRun::new(
+        batches,
+        reservation,
+        &expr,
+    )?))
+}
+
+/// Upper bound of what a merge's cursor holds for `batch`: its sort keys, encoded in the
+/// row format when there are several (one null byte per key and an offset per row on top).
+fn cursor_size(batch: &RecordBatch, expr: &LexOrdering) -> Result<usize> {
+    let keys_size = expr
+        .iter()
+        .map(|sort_expr| {
+            Ok(sort_expr
+                .expr
+                .evaluate(batch)?
+                .into_array(batch.num_rows())?
+                .get_array_memory_size())
+        })
+        .sum::<Result<usize>>()?;
+    let row_overhead = batch.num_rows() * (expr.len() + size_of::<usize>());
+    Ok(keys_size + row_overhead)
 }
 
 /// Estimate how much memory is needed to sort a `RecordBatch`.
@@ -1654,7 +2294,10 @@ impl ExecutionPlan for SortExec {
                     context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
-                )?;
+                )?
+                .with_background_merge_batches(
+                    execution_options.sort_background_merge_batches,
+                );
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
@@ -4423,6 +5066,310 @@ mod tests {
 
         // Sorting the whole input keeps 10 rows in total.
         assert_eq!(num_rows(&topk(false), None)?, Precision::Exact(10));
+        Ok(())
+    }
+
+    /// Batches of an unsorted two column key (with nulls and repeated values) and a payload.
+    fn background_sort_input() -> Result<(SchemaRef, Vec<RecordBatch>)> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("payload", DataType::Int64, false),
+        ]));
+        let batches = (0..37)
+            .map(|batch_idx| {
+                let rows = 0..100 + batch_idx * 7;
+                let a: Int32Array = rows
+                    .clone()
+                    .map(|row| {
+                        let v = (batch_idx * 1000 + row) * 7919 % 211;
+                        (v % 13 != 0).then_some(v)
+                    })
+                    .collect();
+                let b: StringArray = rows
+                    .clone()
+                    .map(|row| Some(format!("key-{}", (batch_idx + row) % 17)))
+                    .collect();
+                let payload: Int64Array =
+                    rows.map(|row| (batch_idx * 1000 + row) as i64).collect();
+                Ok(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(a), Arc::new(b), Arc::new(payload)],
+                )?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok((schema, batches))
+    }
+
+    fn background_sort_ordering(schema: &Schema) -> Result<LexOrdering> {
+        Ok([
+            PhysicalSortExpr::new(col("a", schema)?, SortOptions::default()),
+            PhysicalSortExpr::new(
+                col("b", schema)?,
+                SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            ),
+            PhysicalSortExpr::new_default(col("payload", schema)?),
+        ]
+        .into())
+    }
+
+    /// Sorts [`background_sort_input`], checking all memory is returned once it is done.
+    async fn run_background_sort(
+        background_merge_batches: usize,
+        memory_limit: Option<usize>,
+        sort_spill_reservation_bytes: Option<usize>,
+    ) -> Result<(Vec<RecordBatch>, MetricsSet)> {
+        let (schema, batches) = background_sort_input()?;
+        let mut runtime = RuntimeEnvBuilder::new();
+        if let Some(limit) = memory_limit {
+            runtime = runtime.with_memory_limit(limit, 1.0);
+        }
+        let mut session_config = SessionConfig::new()
+            .with_batch_size(64)
+            .with_sort_background_merge_batches(background_merge_batches);
+        if let Some(bytes) = sort_spill_reservation_bytes {
+            session_config = session_config.with_sort_spill_reservation_bytes(bytes);
+        }
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime.build_arc()?),
+        );
+        let sort_exec = Arc::new(SortExec::new(
+            background_sort_ordering(&schema)?,
+            TestMemoryExec::try_new_exec(&[batches], schema, None)?,
+        ));
+        let result = collect(Arc::clone(&sort_exec) as _, Arc::clone(&task_ctx)).await?;
+        assert_eq!(
+            task_ctx.runtime_env().memory_pool.reserved(),
+            0,
+            "The sort should have returned all memory used back to the memory manager"
+        );
+        Ok((result, sort_exec.metrics().unwrap()))
+    }
+
+    fn metric(metrics: &MetricsSet, name: &str) -> usize {
+        metrics
+            .sum_by_name(name)
+            .map_or(0, |value| value.as_usize())
+    }
+
+    /// Sorting in the background, merging every few sorted batches, gives the same output
+    /// as sorting everything at the end, in memory and when spilling.
+    async fn assert_background_sort_matches() -> Result<()> {
+        let (expected, _) = run_background_sort(0, None, None).await?;
+        let expected = batches_to_string(&expected);
+        for background_merge_batches in [1, 3, 8, 100] {
+            let (result, metrics) =
+                run_background_sort(background_merge_batches, None, None).await?;
+            assert_eq!(batches_to_string(&result), expected);
+            assert_eq!(metrics.spill_count(), Some(0));
+            let background_sort_time = metric(&metrics, "background_sort_time");
+            assert!(background_sort_time > 0);
+            // The background work is part of the operator's elapsed compute.
+            assert!(metrics.elapsed_compute().unwrap() >= background_sort_time);
+            let merges = metric(&metrics, "background_merges");
+            assert_eq!(
+                merges > 0,
+                background_merge_batches > 1 && background_merge_batches <= 37,
+                "{merges} background merges of {background_merge_batches} batches"
+            );
+
+            let (result, metrics) = run_background_sort(
+                background_merge_batches,
+                Some(10 * 1024 * 1024 + 64 * 1024),
+                None,
+            )
+            .await?;
+            assert_eq!(batches_to_string(&result), expected);
+            assert!(
+                metrics.spill_count().unwrap() > 0,
+                "expected the memory limit to cause spills"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_background_sort_matches() -> Result<()> {
+        assert_background_sort_matches().await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_background_sort_matches_multi_thread() -> Result<()> {
+        assert_background_sort_matches().await
+    }
+
+    /// Sorting in the background never needs more memory than sorting at the end: under
+    /// every memory limit the plain sort completes with, the background sort completes too,
+    /// with the same output and with all of its memory returned, across merge workspace
+    /// sizes.
+    async fn assert_background_sort_needs_no_more_memory() -> Result<()> {
+        let (expected, _) = run_background_sort(0, None, None).await?;
+        let expected = batches_to_string(&expected);
+        for workspace in [16 * 1024, 64 * 1024, 1024 * 1024] {
+            let mut baseline_completed = 0;
+            for limit in (1..=48).map(|step| workspace + step * 8 * 1024) {
+                if run_background_sort(0, Some(limit), Some(workspace))
+                    .await
+                    .is_err()
+                {
+                    continue;
+                }
+                baseline_completed += 1;
+                for background_merge_batches in [2, 8] {
+                    let (result, _) = run_background_sort(
+                        background_merge_batches,
+                        Some(limit),
+                        Some(workspace),
+                    )
+                    .await
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "background sort of {background_merge_batches} batches failed \
+                             under a {limit} bytes limit the plain sort completes with: {e}"
+                        )
+                    });
+                    assert_eq!(batches_to_string(&result), expected);
+                }
+            }
+            assert!(baseline_completed > 0, "no memory limit was large enough");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_background_sort_needs_no_more_memory() -> Result<()> {
+        assert_background_sort_needs_no_more_memory().await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_background_sort_needs_no_more_memory_multi_thread() -> Result<()> {
+        assert_background_sort_needs_no_more_memory().await
+    }
+
+    fn background_sorter(
+        schema: &SchemaRef,
+        runtime: &Arc<RuntimeEnv>,
+        metrics: &ExecutionPlanMetricsSet,
+        background_merge_batches: usize,
+    ) -> Result<ExternalSorter> {
+        Ok(ExternalSorter::new(
+            0,
+            Arc::clone(schema),
+            background_sort_ordering(schema)?,
+            64,
+            1024 * 1024,
+            1024 * 1024,
+            SpillCompression::Uncompressed,
+            metrics,
+            Arc::clone(runtime),
+        )?
+        .with_background_merge_batches(background_merge_batches))
+    }
+
+    /// Dropping a sorter while batches are being sorted or merged in the background returns
+    /// all of their memory.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_background_sort_drop_frees_memory() -> Result<()> {
+        let (schema, batches) = background_sort_input()?;
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        for inserted in [1, 2, 5, 17, batches.len()] {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let mut sorter = background_sorter(&schema, &runtime, &metrics, 4)?;
+            for batch in &batches[..inserted] {
+                sorter.insert_batch(batch.clone()).await?;
+            }
+            assert!(runtime.memory_pool.reserved() > 0);
+            drop(sorter);
+
+            // The background tasks are aborted on drop, and free what they hold once
+            // they stop.
+            for _ in 0..1000 {
+                if runtime.memory_pool.reserved() == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            assert_eq!(
+                runtime.memory_pool.reserved(),
+                0,
+                "dropping the sorter after {inserted} batches should return all its memory"
+            );
+        }
+        Ok(())
+    }
+
+    /// Slices of one batch share its buffers, which are reserved once, with the first
+    /// slice, and stay reserved until every slice is sorted. Then what the sorted runs need
+    /// to be merged is made up from them, and the rest is freed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_background_sort_keeps_shared_buffers_until_all_sorted() -> Result<()> {
+        let (schema, batches) = background_sort_input()?;
+        let parent = concat_batches(&schema, &batches)?;
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let metrics = ExecutionPlanMetricsSet::new();
+        // Never merged, so the sorted batches are what is left.
+        let mut sorter = background_sorter(&schema, &runtime, &metrics, 1000)?;
+        let slices = (0..10)
+            .map(|i| parent.slice(i * 100, 100))
+            .collect::<Vec<_>>();
+        let mut counter = RecordBatchMemoryCounter::new();
+        let mut reserved_for_slices = 0;
+        for slice in &slices {
+            reserved_for_slices +=
+                get_reserved_bytes_for_next_record_batch(slice, Some(&mut counter))?;
+            sorter.insert_batch(slice.clone()).await?;
+        }
+        // Shared buffers are counted once.
+        assert!(reserved_for_slices < 2 * get_record_batch_memory_size(&parent));
+
+        sorter.wait_for_background_tasks(false).await?;
+
+        let sorted = &sorter.background.sorted;
+        assert_eq!(sorted.len(), slices.len());
+        assert_eq!(sorter.background.pending_sorts, 0);
+        // The input reservation was released into the runs or freed.
+        assert_eq!(sorter.reservation.size(), 0);
+        let runs_reserved: usize = sorted.iter().map(|run| run.reservation.size()).sum();
+        assert_eq!(
+            runtime.memory_pool.reserved(),
+            runs_reserved + sorter.merge_pool.reserved()
+        );
+        assert!(runs_reserved <= reserved_for_slices);
+        for run in sorted {
+            assert!(run.reservation.size() >= run.memory_size());
+        }
+        Ok(())
+    }
+
+    /// Background merges run in the merge workspace the sort keeps reserved, so they run
+    /// even when the pool has nothing to spare beyond it and the batches' reservations.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_background_merges_run_in_merge_workspace() -> Result<()> {
+        let (_, batches) = background_sort_input()?;
+        let workspace = 1024 * 1024;
+        let mut counter = RecordBatchMemoryCounter::new();
+        let batches_reserved: usize = batches
+            .iter()
+            .map(|batch| {
+                get_reserved_bytes_for_next_record_batch(batch, Some(&mut counter))
+            })
+            .sum::<Result<_>>()?;
+        let (_, metrics) = run_background_sort(
+            8,
+            Some(workspace + batches_reserved + 4 * 1024),
+            Some(workspace),
+        )
+        .await?;
+        assert_eq!(metrics.spill_count(), Some(0));
+        assert!(
+            metric(&metrics, "background_merges") > 0,
+            "no merge ran in the merge workspace"
+        );
         Ok(())
     }
 }

@@ -534,6 +534,18 @@ impl SessionConfig {
         self
     }
 
+    /// Set [`sort_background_merge_batches`]
+    ///
+    /// [`sort_background_merge_batches`]: datafusion_common::config::ExecutionOptions::sort_background_merge_batches
+    pub fn with_sort_background_merge_batches(
+        mut self,
+        sort_background_merge_batches: usize,
+    ) -> Self {
+        self.options_mut().execution.sort_background_merge_batches =
+            sort_background_merge_batches;
+        self
+    }
+
     /// Set [`enforce_batch_size_in_joins`]
     ///
     /// [`enforce_batch_size_in_joins`]: datafusion_common::config::ExecutionOptions::enforce_batch_size_in_joins

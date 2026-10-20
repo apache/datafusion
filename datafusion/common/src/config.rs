@@ -1006,6 +1006,14 @@ config_namespace! {
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
 
+        /// When greater than 0, a sort sorts every input batch in a background task as
+        /// soon as it is buffered, and merges every this many sorted batches into one
+        /// sorted run in a background task, so sorting overlaps reading the input and
+        /// little is left to merge once it ends. Each merge only reads that many batches,
+        /// so keep it small enough for their sort keys and rows to fit in the CPU cache.
+        /// 0 sorts the buffered batches once the input ends or memory runs out.
+        pub sort_background_merge_batches: usize, default = 8
+
         /// Maximum buffer capacity (in bytes) per partition for BufferExec
         /// inserted during sort pushdown optimization.
         ///
