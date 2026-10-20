@@ -2277,9 +2277,8 @@ SELECT i, -i AS n FROM (
 -128 -128
 NULL NULL
 
-# EnsureRequirements removes the sort on `k` because `k` is constant on the
-# probe side of the join, but the join output does not report `k` as constant.
-# The sort must then be kept so the plan can be checked and run.
+# `k` is constant on the probe side of the join, so the join output reports
+# it as constant and no sort on `k` is needed.
 # https://github.com/apache/datafusion/issues/26283
 statement ok
 CREATE TABLE probe_constant_t(a INT, b INT) AS VALUES (1, 1), (2, 2), (3, 3), (4, 4);
@@ -2321,15 +2320,14 @@ logical_plan
 08)------------TableScan: probe_constant_v projection=[x]
 09)------TableScan: probe_constant_u projection=[a]
 physical_plan
-01)SortPreservingMergeExec: [k@0 DESC]
-02)--SortExec: expr=[k@0 DESC], preserve_partitioning=[true]
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)], projection=[k@2, a@1]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)--------ProjectionExec: expr=[a@0 as a, -2 as k]
-07)----------NestedLoopJoinExec: join_type=Inner, filter=b@0 != x@1, projection=[a@1]
-08)------------DataSourceExec: partitions=1, partition_sizes=[1]
-09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+01)CoalescePartitionsExec
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)], projection=[k@2, a@1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)------ProjectionExec: expr=[a@0 as a, -2 as k]
+06)--------NestedLoopJoinExec: join_type=Inner, filter=b@0 != x@1, projection=[a@1]
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 SET datafusion.execution.target_partitions = 1;
@@ -2340,6 +2338,65 @@ FROM probe_constant_u JOIN (SELECT a, 'x' AS k FROM probe_constant_t) AS s
   ON s.a = probe_constant_u.a;
 ----
 1 x 1
+
+query TT
+EXPLAIN SELECT s.a, s.k, row_number() OVER (PARTITION BY s.a ORDER BY s.k) AS r
+FROM probe_constant_u JOIN (SELECT a, 'x' AS k FROM probe_constant_t) AS s
+  ON s.a = probe_constant_u.a;
+----
+logical_plan
+01)Projection: s.a, s.k, row_number() PARTITION BY [s.a] ORDER BY [s.k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r
+02)--WindowAggr: windowExpr=[[row_number() PARTITION BY [s.a] ORDER BY [s.k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----Projection: s.a, s.k
+04)------Inner Join: probe_constant_u.a = s.a
+05)--------TableScan: probe_constant_u projection=[a]
+06)--------SubqueryAlias: s
+07)----------Projection: probe_constant_t.a, Utf8("x") AS k
+08)------------TableScan: probe_constant_t projection=[a]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, k@1 as k, row_number() PARTITION BY [s.a] ORDER BY [s.k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as r]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [s.a] ORDER BY [s.k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [s.a] ORDER BY [s.k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)], projection=[a@1, k@2]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+06)--------FilterExec: DynamicFilter [ empty ]
+07)----------ProjectionExec: expr=[a@0 as a, x as k]
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Unmatched rows of a left join pad the probe side with NULLs, so `k` is not
+# constant in the join output and the sort on `k` is kept.
+query TT
+EXPLAIN SELECT u.a, s.k
+FROM (VALUES (1), (10)) AS u(a) LEFT JOIN (SELECT a, 'x' AS k FROM probe_constant_t) AS s
+  ON s.a = u.a
+ORDER BY s.k DESC NULLS FIRST, u.a;
+----
+logical_plan
+01)Sort: s.k DESC NULLS FIRST, u.a ASC NULLS LAST
+02)--Projection: u.a, s.k
+03)----Left Join: u.a = CAST(s.a AS Int64)
+04)------SubqueryAlias: u
+05)--------Projection: column1 AS a
+06)----------Values: (Int64(1)), (Int64(10))
+07)------SubqueryAlias: s
+08)--------Projection: probe_constant_t.a, Utf8("x") AS k
+09)----------TableScan: probe_constant_t projection=[a]
+physical_plan
+01)SortExec: expr=[k@1 DESC, a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, CAST(s.a AS Int64)@2)], projection=[a@0, k@2]
+03)----ProjectionExec: expr=[column1@0 as a]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----ProjectionExec: expr=[a@0 as a, x as k, CAST(a@0 AS Int64) as CAST(s.a AS Int64)]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IT
+SELECT u.a, s.k
+FROM (VALUES (1), (10)) AS u(a) LEFT JOIN (SELECT a, 'x' AS k FROM probe_constant_t) AS s
+  ON s.a = u.a
+ORDER BY s.k DESC NULLS FIRST, u.a;
+----
+10 NULL
+1 x
 
 statement ok
 SET datafusion.execution.target_partitions = 4;
