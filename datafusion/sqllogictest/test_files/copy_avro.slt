@@ -138,7 +138,7 @@ EXPLAIN ANALYZE COPY (SELECT col1, upper(col2) AS col2_upper FROM source_table O
 ----
 Plan with Metrics
 01)DataSinkExec: sink=AvroFileSink(file_groups=[]), metrics=[]
-02)--SortExec: expr=[col1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=<slt:ignore>, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+02)--SortExec: expr=[col1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=<slt:ignore>, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0, background_merges=0, background_sort_time=<slt:ignore>, background_sort_wait_time=<slt:ignore>]
 03)----ProjectionExec: expr=[col1@0 as col1, upper(col2@1) as col2_upper], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, expr_0_eval_time=<slt:ignore>, expr_1_eval_time=<slt:ignore>]
 04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
 
