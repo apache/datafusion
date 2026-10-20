@@ -4821,6 +4821,90 @@ NULL 1
 statement ok
 DROP TABLE t;
 
+# Test for ignore nulls in LAST_VALUE, FIRST_VALUE and NTH_VALUE over partitions that span many
+# batches, with runs of NULLs that cross several words of the validity bitmap. Partition 0
+# alternates NULLs, partition 1 has runs of 497 NULLs, partition 2 is all NULLs and partition 3
+# has none. `v` increases with `i` in every partition, so the last (first) non-NULL value of a
+# frame is also its maximum (minimum), which `max` (`min`) computes independently.
+statement ok
+set datafusion.execution.batch_size = 100;
+
+statement ok
+CREATE TABLE ignore_nulls_t AS
+SELECT i % 4 AS p, i,
+  CASE i % 4
+    WHEN 0 THEN CASE WHEN (i / 4) % 2 = 0 THEN i END
+    WHEN 1 THEN CASE WHEN (i / 4) % 500 < 3 THEN i END
+    WHEN 3 THEN i
+  END AS v
+FROM (SELECT value AS i FROM generate_series(1, 30000));
+
+query IIII
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END),
+  count(fv), sum(CASE WHEN fv IS DISTINCT FROM mn THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(v) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS lv,
+  max(v) OVER (PARTITION BY p ORDER BY i) AS mx,
+  FIRST_VALUE(v) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS fv,
+  min(v) OVER (PARTITION BY p ORDER BY i) AS mn
+FROM ignore_nulls_t);
+----
+22499 0 22499 0
+
+query IIII
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END),
+  count(fv), sum(CASE WHEN fv IS DISTINCT FROM mn THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(v) IGNORE NULLS OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS lv,
+  max(v) OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS mx,
+  FIRST_VALUE(v) IGNORE NULLS OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS fv,
+  min(v) OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS mn
+FROM ignore_nulls_t);
+----
+22499 0 22499 0
+
+query IIII
+SELECT count(n1), sum(CASE WHEN n1 IS DISTINCT FROM mn THEN 1 ELSE 0 END),
+  count(nl), sum(CASE WHEN nl IS DISTINCT FROM mx THEN 1 ELSE 0 END)
+FROM (SELECT
+  NTH_VALUE(v, 1) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS n1,
+  min(v) OVER (PARTITION BY p ORDER BY i) AS mn,
+  NTH_VALUE(v, -1) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS nl,
+  max(v) OVER (PARTITION BY p ORDER BY i) AS mx
+FROM ignore_nulls_t);
+----
+22499 0 22499 0
+
+query II
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(v) IGNORE NULLS OVER (PARTITION BY p ORDER BY i
+    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS lv,
+  max(v) OVER (PARTITION BY p ORDER BY i
+    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS mx
+FROM ignore_nulls_t);
+----
+22500 0
+
+# With peers in a RANGE frame, the last non-NULL value comes from the last peer group that has
+# one. All non-NULL values of a peer group are equal here, so it is still the frame's maximum.
+query II
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(CASE WHEN v IS NOT NULL THEN i / 28 END) IGNORE NULLS
+    OVER (PARTITION BY p ORDER BY i / 28) AS lv,
+  max(CASE WHEN v IS NOT NULL THEN i / 28 END) OVER (PARTITION BY p ORDER BY i / 28) AS mx
+FROM ignore_nulls_t);
+----
+22500 0
+
+statement ok
+DROP TABLE ignore_nulls_t;
+
 
 # Test for ignore nulls in nth_VALUE without null values
 statement ok
