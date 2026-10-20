@@ -962,12 +962,14 @@ async fn short_column_statistics_are_reported() -> Result<()> {
     })?;
 
     // `count(b)` reads the statistics; a plain scan fails during planning too.
-    for (sql, entries) in [("SELECT count(b) FROM t", 0), ("SELECT * FROM t", 1)] {
+    for (sql, entries, fields) in
+        [("SELECT count(b) FROM t", 0, 1), ("SELECT * FROM t", 1, 2)]
+    {
         let err = ctx.sql(sql).await?.collect().await.expect_err(sql);
         assert_contains!(
             err.to_string(),
             format!(
-                "Statistics provider ClosureStatisticsProvider returned {entries} column statistics for DataSourceExec"
+                "Statistics provider ClosureStatisticsProvider returned {entries} column statistics for DataSourceExec, expected {fields} (one per field of its schema)"
             )
         );
     }
@@ -998,7 +1000,7 @@ async fn table_statistics_for_a_projected_scan_are_reported() -> Result<()> {
     let err = ctx.sql(sql).await?.collect().await.expect_err(sql);
     assert_contains!(
         err.to_string(),
-        "Statistics provider ClosureStatisticsProvider returned 2 column statistics for DataSourceExec"
+        "Statistics provider ClosureStatisticsProvider returned 2 column statistics for DataSourceExec, expected 1 (one per field of its schema)"
     );
     Ok(())
 }

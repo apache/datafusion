@@ -2856,7 +2856,7 @@ mod tests {
             assert_contains!(
                 err.to_string(),
                 format!(
-                    "MockSourceExec::statistics_from_inputs returned {num_columns} column statistics"
+                    "MockSourceExec returned {num_columns} column statistics, expected 2 (one per field of its schema)"
                 )
             );
         }
@@ -2880,7 +2880,7 @@ mod tests {
             assert_contains!(
                 err.to_string(),
                 format!(
-                    "Statistics provider ClosureStatisticsProvider returned {num_columns} column statistics for MockSourceExec"
+                    "Statistics provider ClosureStatisticsProvider returned {num_columns} column statistics for MockSourceExec, expected 2 (one per field of its schema)"
                 )
             );
         }

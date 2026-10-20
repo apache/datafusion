@@ -28,7 +28,7 @@ use crate::operator_statistics::{
 use datafusion_common::extensions::Extensions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err,
+    Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err, internal_err,
 };
 use log::debug;
 use parking_lot::Mutex;
@@ -713,10 +713,11 @@ impl StatisticsContext {
     }
 }
 
-/// Validates that `statistics`, computed for `plan` by `provider` or, if
-/// `None`, by the operator itself, holds one [`ColumnStatistics`] per field of
-/// `plan`'s schema, as [`Statistics::column_statistics`] requires. Consumers
-/// index it by column, so a mismatch could make them go out of bounds.
+/// Returns an error unless `statistics`, computed for `plan` by `provider` or,
+/// if `None`, by the operator itself, hold one [`ColumnStatistics`] per field
+/// of `plan`'s schema, as [`Statistics::column_statistics`] requires. Consumers
+/// index it by column, so a mismatch could make them go out of bounds or read
+/// the statistics of another column.
 ///
 /// [`ColumnStatistics`]: datafusion_common::ColumnStatistics
 fn validate_column_statistics(
@@ -726,21 +727,18 @@ fn validate_column_statistics(
 ) -> Result<()> {
     let column_statistics = statistics.column_statistics.len();
     let fields = plan.schema().fields().len();
+    if column_statistics == fields {
+        return Ok(());
+    }
+    let name = plan.name();
     match provider {
-        Some(provider) => assert_eq_or_internal_err!(
-            column_statistics,
-            fields,
-            "Statistics provider {provider:?} returned {column_statistics} column statistics for {}, expected one per schema field",
-            plan.name()
+        Some(provider) => internal_err!(
+            "Statistics provider {provider:?} returned {column_statistics} column statistics for {name}, expected {fields} (one per field of its schema)"
         ),
-        None => assert_eq_or_internal_err!(
-            column_statistics,
-            fields,
-            "{}::statistics_from_inputs returned {column_statistics} column statistics, expected one per schema field",
-            plan.name()
+        None => internal_err!(
+            "{name} returned {column_statistics} column statistics, expected {fields} (one per field of its schema)"
         ),
     }
-    Ok(())
 }
 
 #[cfg(all(test, feature = "test_utils"))]
