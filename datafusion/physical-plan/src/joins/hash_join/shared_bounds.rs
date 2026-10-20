@@ -90,7 +90,8 @@ impl PartitionBounds {
     }
 
     /// Bounds covering both `self` and `other`, or `None` if they do not
-    /// describe the same columns.
+    /// describe the same columns. A NULL bound means the partition holds no
+    /// non-null key in that column, so it never widens the other side's bound.
     fn union(self, other: &PartitionBounds) -> Option<PartitionBounds> {
         if self.column_bounds.len() != other.column_bounds.len() {
             return None;
@@ -100,8 +101,16 @@ impl PartitionBounds {
             .into_iter()
             .zip(&other.column_bounds)
             .map(|(a, b)| {
-                let min = if b.min < a.min { b.min.clone() } else { a.min };
-                let max = if b.max > a.max { b.max.clone() } else { a.max };
+                let min = if !b.min.is_null() && (a.min.is_null() || b.min < a.min) {
+                    b.min.clone()
+                } else {
+                    a.min
+                };
+                let max = if !b.max.is_null() && (a.max.is_null() || b.max > a.max) {
+                    b.max.clone()
+                } else {
+                    a.max
+                };
                 ColumnBounds::new(min, max)
             })
             .collect();
