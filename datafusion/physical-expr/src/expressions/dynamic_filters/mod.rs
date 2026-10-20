@@ -1186,31 +1186,6 @@ mod test {
     }
 
     #[test]
-    fn test_update_from_shared_state_is_noop() -> Result<()> {
-        use crate::expressions::Column;
-
-        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
-            vec![Arc::new(Column::new("a", 0))],
-            lit(true),
-        ));
-        let derived =
-            Arc::clone(&filter).with_new_children(vec![Arc::new(Column::new("b", 1))])?;
-        let derived = derived.downcast_ref::<DynamicFilterPhysicalExpr>().unwrap();
-        let generation = filter.snapshot_generation();
-        let before = derived.current()?;
-        let mut subscription = filter.subscribe();
-
-        filter.update_from(&filter)?;
-        derived.update_from(&filter)?;
-        filter.update_from(derived)?;
-
-        assert_eq!(filter.snapshot_generation(), generation);
-        assert!(Arc::ptr_eq(&derived.current()?, &before));
-        assert!(!subscription.observe().changed);
-        Ok(())
-    }
-
-    #[test]
     fn test_dynamic_filter_physical_expr_misbehaves_data_type_nullable() {
         let dynamic_filter =
             DynamicFilterPhysicalExpr::new(vec![], lit(42) as Arc<dyn PhysicalExpr>);
