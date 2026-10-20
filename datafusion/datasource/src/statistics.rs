@@ -26,10 +26,10 @@ use crate::PartitionedFile;
 use crate::file_groups::FileGroup;
 
 use arrow::array::RecordBatch;
-use arrow::compute::SortColumn;
-use arrow::datatypes::SchemaRef;
+use arrow::compute::{SortColumn, SortOptions};
+use arrow::datatypes::{Field, SchemaRef};
 use arrow::row::{Row, Rows};
-use datafusion_common::stats::NdvFallback;
+use datafusion_common::stats::{NdvFallback, Precision};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, plan_datafusion_err, plan_err,
 };
@@ -83,16 +83,46 @@ impl MinMaxStatistics {
         };
 
         // Helper function to get min/max statistics for a given column of projected_schema
-        let get_min_max = |i: usize| -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
+        let get_min_max = |i: usize,
+                           field: &Field,
+                           options: SortOptions|
+         -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
+            let null = ScalarValue::try_new_null(field.data_type())?;
             Ok(statistics_and_partition_values
                 .iter()
                 .map(|(s, pv)| {
                     if i < s.column_statistics.len() {
-                        s.column_statistics[i]
-                            .min_value
-                            .get_value()
-                            .cloned()
-                            .zip(s.column_statistics[i].max_value.get_value().cloned())
+                        let column_statistics = &s.column_statistics[i];
+                        let all_null = matches!(
+                            (s.num_rows, column_statistics.null_count),
+                            (Precision::Exact(rows), Precision::Exact(nulls))
+                                if rows > 0 && rows == nulls
+                        );
+                        let may_have_nulls = match column_statistics.null_count {
+                            Precision::Exact(nulls) => nulls > 0,
+                            _ => field.is_nullable(),
+                        };
+                        // Self::new swaps the bounds for descending sort keys.
+                        let nulls_on_min = options.nulls_first != options.descending;
+                        let min = if all_null || (may_have_nulls && nulls_on_min) {
+                            Some(null.clone())
+                        } else {
+                            column_statistics
+                                .min_value
+                                .get_value()
+                                .filter(|value| !value.is_null())
+                                .cloned()
+                        };
+                        let max = if all_null || (may_have_nulls && !nulls_on_min) {
+                            Some(null.clone())
+                        } else {
+                            column_statistics
+                                .max_value
+                                .get_value()
+                                .filter(|value| !value.is_null())
+                                .cloned()
+                        };
+                        min.zip(max)
                             .ok_or_else(|| plan_datafusion_err!("statistics not found"))
                     } else if let Some(partition_value) =
                         pv.get(i - s.column_statistics.len())
@@ -135,7 +165,8 @@ impl MinMaxStatistics {
 
         let (min_values, max_values): (Vec<_>, Vec<_>) = sort_columns
             .iter()
-            .map(|c| {
+            .zip(projected_sort_order.iter())
+            .map(|(c, sort_expr)| {
                 // Reverse the projection to get the index of the column in the full statistics
                 // The file statistics contains _every_ column , but the sort column's index()
                 // refers to the index in projected_schema
@@ -143,9 +174,11 @@ impl MinMaxStatistics {
                     .map(|p| p[c.index()])
                     .unwrap_or_else(|| c.index());
 
-                let (min, max) = get_min_max(i).map_err(|e| {
-                    e.context(format!("get min/max for column: '{}'", c.name()))
-                })?;
+                let (min, max) =
+                    get_min_max(i, projected_schema.field(c.index()), sort_expr.options)
+                        .map_err(|e| {
+                            e.context(format!("get min/max for column: '{}'", c.name()))
+                        })?;
                 Ok((
                     ScalarValue::iter_to_array(min)?,
                     ScalarValue::iter_to_array(max)?,

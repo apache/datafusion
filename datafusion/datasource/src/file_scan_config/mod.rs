@@ -2184,6 +2184,9 @@ mod tests {
                         .map(|stats| {
                             stats
                                 .map(|(min, max)| ColumnStatistics {
+                                    null_count: Precision::Exact(usize::from(
+                                        min.is_none() || max.is_none(),
+                                    )),
                                     min_value: Precision::Exact(ScalarValue::Float64(
                                         min,
                                     )),
@@ -3824,6 +3827,114 @@ mod tests {
                 }],
             },
         ))
+    }
+
+    #[test]
+    fn file_group_ordering_includes_nulls() -> Result<()> {
+        // Arrange
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        for (descending, nulls_first) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let sort = PhysicalSortExpr::new(
+                Arc::new(Column::new("a", 0)),
+                arrow::compute::SortOptions {
+                    descending,
+                    nulls_first,
+                },
+            );
+            for null_count in [
+                Precision::Exact(0),
+                Precision::Exact(1),
+                Precision::Absent,
+                Precision::Inexact(0),
+            ] {
+                let mut files = vec![
+                    make_file_with_null_stats("low", 0.0, 9.0, 0),
+                    make_file_with_null_stats("high", 10.0, 19.0, 0),
+                ];
+                for file in &mut files {
+                    Arc::make_mut(file.statistics.as_mut().unwrap()).column_statistics
+                        [0]
+                    .null_count = null_count;
+                }
+                if descending {
+                    files.reverse();
+                }
+                let config = FileScanConfigBuilder::new(
+                    ObjectStoreUrl::local_filesystem(),
+                    Arc::new(MockSource::new(TableSchema::from(&schema))),
+                )
+                .with_file_groups(vec![FileGroup::new(files)])
+                .with_output_ordering(vec![[sort.clone()].into()])
+                .build();
+
+                // Act
+                let ordered = config.eq_properties().ordering_satisfy([sort.clone()])?;
+
+                // Assert
+                assert_eq!(
+                    ordered,
+                    null_count == Precision::Exact(0),
+                    "descending={descending}, nulls_first={nulls_first}, null_count={null_count:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn file_group_ordering_with_all_null_or_empty_file() -> Result<()> {
+        // Arrange
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        for (descending, nulls_first) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let sort = PhysicalSortExpr::new(
+                Arc::new(Column::new("a", 0)),
+                arrow::compute::SortOptions {
+                    descending,
+                    nulls_first,
+                },
+            );
+            for (num_rows, file_first) in [(0, false), (0, true), (2, false), (2, true)] {
+                let file = PartitionedFile::new("nulls_or_empty", 1024).with_statistics(
+                    Arc::new(Statistics {
+                        num_rows: Precision::Exact(num_rows),
+                        column_statistics: vec![ColumnStatistics {
+                            null_count: Precision::Exact(num_rows),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                );
+                let mut files =
+                    vec![file, make_file_with_null_stats("non_null", 1.0, 2.0, 0)];
+                if !file_first {
+                    files.reverse();
+                }
+                let config = FileScanConfigBuilder::new(
+                    ObjectStoreUrl::local_filesystem(),
+                    Arc::new(MockSource::new(TableSchema::from(&schema))),
+                )
+                .with_file_groups(vec![FileGroup::new(files)])
+                .with_output_ordering(vec![[sort.clone()].into()])
+                .build();
+
+                // Act
+                let ordered = config.eq_properties().ordering_satisfy([sort.clone()])?;
+
+                // Assert
+                assert_eq!(
+                    ordered,
+                    num_rows == 0 || file_first == nulls_first,
+                    "descending={descending}, nulls_first={nulls_first}, num_rows={num_rows}, file_first={file_first}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]
