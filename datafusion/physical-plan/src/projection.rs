@@ -622,18 +622,6 @@ impl ExecutionPlan for ProjectionExec {
         }
     }
 
-    fn with_preserve_order(
-        &self,
-        preserve_order: bool,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.input
-            .with_preserve_order(preserve_order)
-            .and_then(|new_input| {
-                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
-                    .ok()
-            })
-    }
-
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
