@@ -505,6 +505,15 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 if !is_distinct {
                     self.can_pull_up = self.can_pull_up && self.can_pull_over_aggregation;
                 }
+                // A scalar aggregate below returns one row for every outer row,
+                // but once pulled up it returns no row for the outer rows whose
+                // correlated filter matches nothing. This aggregate would then
+                // run over an empty input instead of that one row, and the count
+                // bug handling only covers the aggregate the join reads.
+                // See https://github.com/apache/datafusion/issues/26508.
+                if self.pulled_up_scalar_agg {
+                    self.can_pull_up = false;
+                }
                 let mut local_correlated_cols = BTreeSet::new();
                 collect_local_correlated_cols(
                     &plan,
@@ -588,8 +597,6 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     }
                 }
                 if aggregate.group_expr.is_empty() {
-                    // TODO: how do we handle the case where we have pulled multiple aggregations? For example,
-                    // a group agg with a scalar agg as child.
                     self.pulled_up_scalar_agg = true;
                 }
                 let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
