@@ -32,4 +32,14 @@ impl ExprPlanner for DatetimeFunctionPlanner {
             ScalarFunction::new_udf(crate::datetime::date_part(), args),
         )))
     }
+
+    /// `<expr> AT TIME ZONE 'tz'` is `timezone('tz', <expr>)`.
+    fn plan_at_time_zone(
+        &self,
+        args: Vec<Expr>,
+    ) -> datafusion_common::Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(crate::datetime::timezone(), args),
+        )))
+    }
 }
