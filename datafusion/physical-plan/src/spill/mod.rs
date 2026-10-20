@@ -2510,11 +2510,6 @@ mod tests {
     /// way a sort combines its input batches: the combined array lists the
     /// dictionary buffer once per input and each output row cycles through
     /// the dictionary (<https://github.com/apache/datafusion/issues/23564>).
-    ///
-    /// The combined array is assembled by hand rather than with `interleave`,
-    /// which stopped repeating a shared buffer in
-    /// <https://github.com/apache/arrow-rs/pull/11281>. Other combinations
-    /// (and older arrow versions) still produce the repeated entries.
     fn shared_dictionary_views(
         dictionary_len: u32,
         inputs: u32,
