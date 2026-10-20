@@ -39,7 +39,6 @@ use crate::joins::hash_join::shared_bounds::{
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
-use crate::joins::integer_prefilter::{IntegerPrefilter, PrefilterState};
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::joins::utils::{
@@ -348,8 +347,6 @@ impl NullAwareMode {
 struct JoinBuildData {
     /// Hash table with row indices into `batch`, also shared with dynamic filters.
     map: Arc<Map>,
-    /// Optional exact integer membership bitmap shared by probe streams.
-    integer_prefilter: Option<IntegerPrefilter>,
     /// The input rows for the build side.
     batch: RecordBatch,
     /// Evaluated build-side key expressions, with float `-0.0` rewritten to
@@ -400,10 +397,6 @@ impl JoinLeftData {
     /// return a reference to the map
     pub(super) fn map(&self) -> &Map {
         &self.build.map
-    }
-
-    pub(super) fn integer_prefilter(&self) -> Option<&IntegerPrefilter> {
-        self.build.integer_prefilter.as_ref()
     }
 
     pub(super) fn null_aware_scope_map(&self) -> Option<&dyn JoinHashMapType> {
@@ -1841,28 +1834,6 @@ impl ExecutionPlan for HashJoinExec {
             .allow_join_dynamic_filter_pushdown(context.session_config().options())
             && self.dynamic_filter.is_some();
 
-        let integer_prefilter_state = PrefilterState::try_from_config(
-            &context.session_config().options().execution,
-        )?
-        .map(|state| {
-            let reservation = MemoryConsumer::new("HashJoinIntegerPrefilter")
-                .register(context.memory_pool());
-            (state, reservation)
-        });
-        let (probe_prefilter_rows_pruned, integer_prefilter_created_count) =
-            if integer_prefilter_state.is_some() {
-                (
-                    MetricBuilder::new(&self.metrics)
-                        .with_category(MetricCategory::Rows)
-                        .counter("probe_prefilter_rows_pruned", partition),
-                    MetricBuilder::new(&self.metrics)
-                        .counter("integer_prefilter_created_count", partition),
-                )
-            } else {
-                // Keep the default metrics unchanged when the prefilter is disabled.
-                (Count::new(), Count::new())
-            };
-
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         let null_aware = self.null_aware_mode()?;
@@ -1928,7 +1899,6 @@ impl ExecutionPlan for HashJoinExec {
                     self.null_equality,
                     null_aware,
                     array_map_created_count,
-                    integer_prefilter_created_count,
                     BuildMode::Ordinary,
                 ))
             })?,
@@ -1951,7 +1921,6 @@ impl ExecutionPlan for HashJoinExec {
                     self.null_equality,
                     null_aware,
                     array_map_created_count,
-                    integer_prefilter_created_count,
                     BuildMode::Ordinary,
                 ))
             }
@@ -2004,8 +1973,6 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             null_aware,
             self.fetch,
-            integer_prefilter_state,
-            probe_prefilter_rows_pruned,
         )))
     }
 
@@ -3252,7 +3219,6 @@ async fn collect_left_input(
     null_equality: NullEquality,
     null_aware: Option<NullAwareMode>,
     array_map_created_count: Count,
-    integer_prefilter_created_count: Count,
     mode: BuildMode,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
@@ -3647,6 +3613,10 @@ fn build_in_memory(
         }
     };
 
+    if is_phj_candidate && !should_compute_dynamic_filters {
+        bounds = None;
+    }
+
     let build_has_null = null_aware == Some(NullAwareMode::RightAnti)
         && !left_values.is_empty()
         && left_values[0].logical_null_count() > 0;
@@ -3691,40 +3661,9 @@ fn build_in_memory(
         )?;
     }
 
-    // Reserve optional memory only after all mandatory join state has been
-    // allocated. Reuse the bounds already computed for perfect hash join.
-    let integer_prefilter = if config.execution.enable_join_integer_prefilter
-        && null_aware.is_none()
-        && matches!(map.as_ref(), Map::HashMap(_))
-        && left_values.len() == 1
-    {
-        bounds
-            .as_ref()
-            .and_then(|bounds| bounds.get_column_bounds(0))
-            .and_then(|bounds| {
-                IntegerPrefilter::try_new(
-                    left_values[0].as_ref(),
-                    (&bounds.min, &bounds.max),
-                    config.execution.join_integer_prefilter_max_key_range,
-                    &reservation,
-                )
-            })
-    } else {
-        None
-    };
-    if let Some(filter) = &integer_prefilter {
-        metrics.build_mem_used.add(filter.size());
-        integer_prefilter_created_count.add(1);
-    }
-
-    if is_phj_candidate && !should_compute_dynamic_filters {
-        bounds = None;
-    }
-
     let data = JoinLeftData {
         build: Arc::new(JoinBuildData {
             map,
-            integer_prefilter,
             batch,
             values: normalized_values,
             left_mark_build_key_nulls,
@@ -3746,230 +3685,6 @@ fn build_in_memory(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn integer_prefilter_join(
-        build: ArrayRef,
-        probe: ArrayRef,
-    ) -> Result<Arc<HashJoinExec>> {
-        let table = |keys: ArrayRef| -> Result<Arc<dyn ExecutionPlan>> {
-            let schema = Arc::new(Schema::new(vec![Field::new(
-                "key",
-                keys.data_type().clone(),
-                true,
-            )]));
-            let batches = (0..keys.len())
-                .step_by(3)
-                .map(|offset| {
-                    RecordBatch::try_new(
-                        Arc::clone(&schema),
-                        vec![keys.slice(offset, 3.min(keys.len() - offset))],
-                    )
-                })
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            Ok(TestMemoryExec::try_new_exec(&[batches], schema, None)?)
-        };
-        let left = table(build)?;
-        let right = table(probe)?;
-        let on = vec![(col("key", &left.schema())?, col("key", &right.schema())?)];
-        Ok(Arc::new(HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::Full,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?))
-    }
-
-    fn integer_prefilter_context(enabled: bool) -> Arc<TaskContext> {
-        let mut config = SessionConfig::default().with_batch_size(2);
-        config.options_mut().execution.enable_join_integer_prefilter = enabled;
-        config
-            .options_mut()
-            .execution
-            .join_integer_prefilter_sample_rows =
-            datafusion_common::config::ConfigNonZeroUsize::try_new(3).unwrap();
-        Arc::new(TaskContext::default().with_session_config(config))
-    }
-
-    #[tokio::test]
-    async fn test_integer_prefilter_fallbacks() -> Result<()> {
-        let cases: Vec<(ArrayRef, ArrayRef, bool)> = vec![
-            (
-                Arc::new(Int32Array::from(vec![0, 1])),
-                Arc::new(Int32Array::from(vec![0, 2])),
-                true,
-            ),
-            (
-                Arc::new(StringArray::from(vec!["a", "c"])),
-                Arc::new(StringArray::from(vec!["a", "b"])),
-                false,
-            ),
-            (
-                Arc::new(Int32Array::from(vec![None, None])),
-                Arc::new(Int32Array::from(vec![None, Some(2)])),
-                false,
-            ),
-        ];
-        for (build, probe, phj) in cases {
-            let join = integer_prefilter_join(build, probe)?;
-            crate::collect(Arc::clone(&join) as _, integer_prefilter_context(true))
-                .await?;
-            let metrics = join.metrics().unwrap();
-            assert_phj_used(&metrics, phj);
-            assert_eq!(
-                metrics
-                    .sum_by_name("integer_prefilter_created_count")
-                    .unwrap()
-                    .as_usize(),
-                0
-            );
-            assert_eq!(
-                metrics
-                    .sum_by_name("probe_prefilter_rows_pruned")
-                    .unwrap()
-                    .as_usize(),
-                0
-            );
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_integer_prefilter_memory_fallback_preserves_join() -> Result<()> {
-        use datafusion_execution::memory_pool::GreedyMemoryPool;
-        let make_join = || {
-            integer_prefilter_join(
-                Arc::new(Int32Array::from(vec![0, 2048])),
-                Arc::new(Int32Array::from(vec![0, 1, 2049])),
-            )
-        };
-        // Measure mandatory build reservations, including the visited bitmap.
-        let baseline = make_join()?;
-        let expected =
-            crate::collect(Arc::clone(&baseline) as _, integer_prefilter_context(false))
-                .await?;
-        let bytes = baseline
-            .metrics()
-            .unwrap()
-            .sum_by_name("build_mem_used")
-            .unwrap()
-            .as_usize();
-        // Either only mandatory state fits, or the build bitmap fits but the
-        // additional probe masks do not. Both must preserve normal join output.
-        for bitmap_bytes in [0, 2049_usize.div_ceil(64) * size_of::<u64>()] {
-            let pool = Arc::new(GreedyMemoryPool::new(bytes + bitmap_bytes));
-            let runtime = RuntimeEnvBuilder::new()
-                .with_memory_pool(Arc::clone(&pool) as _)
-                .build_arc()?;
-            let context = integer_prefilter_context(true);
-            let context = Arc::new(
-                TaskContext::default()
-                    .with_session_config(context.session_config().clone())
-                    .with_runtime(runtime),
-            );
-            let join = make_join()?;
-            let result = crate::collect(Arc::clone(&join) as _, context).await?;
-            assert_eq!(
-                batches_to_sort_string(&result),
-                batches_to_sort_string(&expected)
-            );
-            let metrics = join.metrics().unwrap();
-            assert_eq!(
-                metrics
-                    .sum_by_name("integer_prefilter_created_count")
-                    .unwrap()
-                    .as_usize(),
-                usize::from(bitmap_bytes > 0)
-            );
-            assert_eq!(
-                metrics
-                    .sum_by_name("probe_prefilter_rows_pruned")
-                    .unwrap()
-                    .as_usize(),
-                0
-            );
-            assert_eq!(
-                metrics.sum_by_name("build_mem_used").unwrap().as_usize(),
-                bytes + bitmap_bytes
-            );
-            drop(join);
-            use datafusion_execution::memory_pool::MemoryPool;
-            assert_eq!(pool.reserved(), 0);
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_integer_prefilter_shared_build() -> Result<()> {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, false)]));
-        let hits = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![0; 12]))],
-        )?;
-        let misses = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![1; 12]))],
-        )?;
-        let mut expected = None;
-        for enabled in [false, true] {
-            let build = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Int32Array::from(vec![0, 2048]))],
-            )?;
-            let left =
-                TestMemoryExec::try_new_exec(&[vec![build]], Arc::clone(&schema), None)?;
-            // Partition 0 pauses on hits; partition 1 must independently prune.
-            let right = TestMemoryExec::try_new_exec(
-                &[vec![hits.clone()], vec![misses.clone()]],
-                Arc::clone(&schema),
-                None,
-            )?;
-            let on = vec![(col("key", &schema)?, col("key", &schema)?)];
-            let join = Arc::new(HashJoinExec::try_new(
-                left,
-                right,
-                on,
-                None,
-                &JoinType::Full,
-                None,
-                PartitionMode::CollectLeft,
-                NullEquality::NullEqualsNothing,
-                false,
-            )?);
-            let result = crate::collect(
-                Arc::clone(&join) as _,
-                integer_prefilter_context(enabled),
-            )
-            .await?;
-            let output = batches_to_sort_string(&result);
-            if enabled {
-                assert_eq!(&output, expected.as_ref().unwrap());
-                let metrics = join.metrics().unwrap();
-                assert_eq!(
-                    metrics
-                        .sum_by_name("integer_prefilter_created_count")
-                        .unwrap()
-                        .as_usize(),
-                    1
-                );
-                assert_eq!(
-                    metrics
-                        .sum_by_name("probe_prefilter_rows_pruned")
-                        .unwrap()
-                        .as_usize(),
-                    12
-                );
-            } else {
-                expected = Some(output);
-            }
-        }
-        Ok(())
-    }
 
     fn assert_phj_used(metrics: &MetricsSet, use_phj: bool) {
         if use_phj {
@@ -4038,6 +3753,7 @@ mod tests {
         test::exec::MockExec,
     };
 
+    use crate::joins::join_hash_map::ProbeOffset::AtRow;
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, DictionaryArray,
         Float32Array, Float64Array, Int32Array, Int64Array, StringArray, StringViewArray,
@@ -4058,7 +3774,7 @@ mod tests {
     };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Literal, col};
+    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
         EquivalenceProperties, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
@@ -4836,7 +4552,6 @@ mod tests {
             Arc::new(ConfigOptions::default()),
             NullEquality::NullEqualsNothing,
             None,
-            Count::new(),
             Count::new(),
             BuildMode::Ordinary,
         )
@@ -7459,7 +7174,7 @@ mod tests {
             &hashes_buffer,
             None,
             8192,
-            (0, None),
+            AtRow { row: 0 },
             &mut probe_indices_buffer,
             &mut build_indices_buffer,
             &mut None,
@@ -7522,7 +7237,7 @@ mod tests {
             &hashes_buffer,
             None,
             8192,
-            (0, None),
+            AtRow { row: 0 },
             &mut probe_indices_buffer,
             &mut build_indices_buffer,
             &mut None,

@@ -46,10 +46,6 @@ use substrait::proto::{
 
 /// Convert Substrait Rel to DataFusion ExecutionPlan
 #[async_recursion]
-#[expect(
-    clippy::double_must_use,
-    reason = "`async_recursion` adds `#[must_use]` to the boxed future it returns"
-)]
 pub async fn from_substrait_rel(
     _ctx: &SessionContext,
     rel: &Rel,

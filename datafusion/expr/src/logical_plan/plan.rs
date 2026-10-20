@@ -39,12 +39,13 @@ use crate::expr_rewriter::{
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
+use crate::logical_plan::materialized_cte::MaterializedCte;
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
     check_aggregate_and_window_nesting, check_no_window_functions,
     enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
     find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    merge_schema, split_conjunction,
+    merge_schema, passthrough_field_index, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -69,7 +70,6 @@ use datafusion_common::{
     aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
 };
-use indexmap::IndexSet;
 use itertools::Itertools as _;
 
 // backwards compatibility
@@ -611,13 +611,19 @@ impl LogicalPlan {
                     })
                     .map_or(Ok(None), |v| v.map(Some))
             }
+            // A materialized CTE outputs the output of its continuation.
+            LogicalPlan::Extension(Extension { node }) => {
+                match node.as_any().downcast_ref::<MaterializedCte>() {
+                    Some(cte) => cte.continuation.head_output_expr(),
+                    None => Ok(None),
+                }
+            }
             LogicalPlan::Subquery(_) => Ok(None),
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
-            | LogicalPlan::Extension(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::Ddl(_)
@@ -4386,15 +4392,14 @@ fn calc_func_dependencies_for_aggregate(
     //   that GROUP BY expression results will be unique.
     // - Otherwise, it may be possible to propagate functional dependencies.
     if !contains_grouping_set(group_expr) {
-        let group_by_expr_names = group_expr
-            .iter()
-            .map(|item| item.schema_name().to_string())
-            .collect::<IndexSet<_>>()
+        // One entry per GROUP BY output field, in the order of `aggr_schema`
+        let group_by_input_indices = grouping_set_to_exprlist(group_expr)?
             .into_iter()
+            .map(|item| passthrough_field_index(item, input.schema()))
             .collect::<Vec<_>>();
         let aggregate_func_dependencies = aggregate_functional_dependencies(
             input.schema(),
-            &group_by_expr_names,
+            &group_by_input_indices,
             aggr_schema,
         );
         Ok(aggregate_func_dependencies)
@@ -4420,19 +4425,9 @@ fn calc_func_dependencies_for_project(
         return Ok(FunctionalDependencies::empty());
     }
 
-    // Map each input field name to its first index so that projection
-    // expressions resolve with a hash lookup instead of a linear scan.
-    let input_fields = input.schema().field_names();
-    let mut input_index_by_name: HashMap<&str, usize> =
-        HashMap::with_capacity(input_fields.len());
-    for (index, name) in input_fields.iter().enumerate() {
-        input_index_by_name.entry(name.as_str()).or_insert(index);
-    }
-    let input_index = |name: &str| {
-        input_index_by_name
-            .get(name)
-            .copied()
-            .unwrap_or(COMPUTED_EXPR_INDEX)
+    let input_schema = input.schema();
+    let input_index = |expr: &Expr| {
+        passthrough_field_index(expr, input_schema).unwrap_or(COMPUTED_EXPR_INDEX)
     };
 
     // Map each projection output position to its input column index.
@@ -4453,16 +4448,14 @@ fn calc_func_dependencies_for_project(
                     wildcard_fields
                         .into_iter()
                         .map(|(qualifier, f)| {
-                            let flat_name = qualifier
-                                .map(|t| format!("{}.{}", t, f.name()))
-                                .unwrap_or_else(|| f.name().clone());
-                            input_index(&flat_name)
+                            input_schema
+                                .index_of_column_by_name(qualifier.as_ref(), f.name())
+                                .unwrap_or(COMPUTED_EXPR_INDEX)
                         })
                         .collect::<Vec<_>>(),
                 )
             }
-            Expr::Alias(alias) => Ok(vec![input_index(&format!("{}", alias.expr))]),
-            _ => Ok(vec![input_index(&format!("{expr}"))]),
+            _ => Ok(vec![input_index(expr)]),
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -5268,8 +5261,47 @@ impl Unnest {
 
         let metadata = input_schema.metadata().clone();
         let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
-        // We can use the existing functional dependencies:
-        let deps = input_schema.functional_dependencies().clone();
+        let list_indices: HashSet<_> =
+            list_columns.iter().map(|(index, _)| *index).collect();
+        // Struct unnest may replace one input column with several output columns,
+        // so remap dependencies using the input index of each output column.
+        let remap_indices = |indices: &[usize], exclude_lists: bool| {
+            dependency_indices
+                .iter()
+                .enumerate()
+                .filter_map(|(output_index, input_index)| {
+                    (indices.contains(input_index)
+                        && (!exclude_lists || !list_indices.contains(input_index)))
+                    .then_some(output_index)
+                })
+                .collect()
+        };
+        let deps = FunctionalDependencies::new(
+            input_schema
+                .functional_dependencies()
+                .iter()
+                // A list input no longer determines the rows produced by unnest.
+                // A struct input is also unsafe as a source: a null struct and
+                // a non-null struct with all-null fields have the same outputs.
+                .filter(|dep| {
+                    dep.source_indices.iter().all(|index| {
+                        !list_indices.contains(index) && !struct_columns.contains(index)
+                    })
+                })
+                .map(|dep| FunctionalDependence {
+                    source_indices: remap_indices(&dep.source_indices, false),
+                    // The unnested values are not determined by the input key.
+                    target_indices: remap_indices(&dep.target_indices, true),
+                    // One input row can produce multiple output rows.
+                    mode: if list_indices.is_empty() {
+                        dep.mode
+                    } else {
+                        Dependency::Multi
+                    },
+                    ..dep.clone()
+                })
+                .collect(),
+        );
         let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
 
         Ok(Unnest {
@@ -5375,7 +5407,7 @@ mod tests {
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
-    use datafusion_common::{Constraint, not_impl_err};
+    use datafusion_common::{Constraint, RecursionUnnestOption, not_impl_err};
     use insta::{assert_debug_snapshot, assert_snapshot};
     use std::hash::DefaultHasher;
 
@@ -5453,6 +5485,80 @@ mod tests {
             Field::new("state", DataType::Utf8, false),
             Field::new("salary", DataType::Int32, false),
         ])
+    }
+
+    #[test]
+    fn unnest_remaps_functional_dependencies() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new_struct(
+                "s",
+                vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
+                ],
+                true,
+            ),
+            Field::new("k", DataType::Int32, false),
+            Field::new_list(
+                "xs",
+                Field::new_list(
+                    "item",
+                    Field::new_list_field(DataType::Int32, true),
+                    true,
+                ),
+                true,
+            ),
+            Field::new("payload", DataType::Utf8, true),
+        ]));
+        let constraints = Constraints::new_unverified(vec![
+            Constraint::PrimaryKey(vec![1]),
+            Constraint::Unique(vec![0]),
+            Constraint::Unique(vec![2]),
+        ]);
+        let source: Arc<dyn TableSource> =
+            Arc::new(LogicalTableSource::new(schema).with_constraints(constraints));
+
+        // Expanding a struct preserves row count and remaps keys and targets,
+        // but a dependency sourced from the struct itself cannot be kept.
+        let struct_only = LogicalPlanBuilder::scan("t", Arc::clone(&source), None)?
+            .unnest_column("s")?
+            .build()?;
+        assert_eq!(
+            struct_only.schema().functional_dependencies(),
+            &FunctionalDependencies::new(vec![
+                FunctionalDependence::new(vec![2], vec![0, 1, 2, 3, 4], false)
+                    .with_mode(Dependency::Single),
+                FunctionalDependence::new(vec![3], vec![0, 1, 2, 3, 4], true)
+                    .with_mode(Dependency::Single),
+            ])
+        );
+
+        // The two recursion outputs both replace the same list input. Neither
+        // is determined by k, and a list-sourced dependency is no longer valid.
+        let options = UnnestOptions::default()
+            .with_recursions(RecursionUnnestOption {
+                input_column: "xs".into(),
+                output_column: "xs_depth_1".into(),
+                depth: 1,
+            })
+            .with_recursions(RecursionUnnestOption {
+                input_column: "xs".into(),
+                output_column: "xs_depth_2".into(),
+                depth: 2,
+            });
+        let plan = LogicalPlanBuilder::scan("t", source, None)?
+            .unnest_columns_with_options(vec!["s".into(), "xs".into()], options)?
+            .build()?;
+        assert_eq!(plan.schema().fields().len(), 6);
+        assert_eq!(
+            plan.schema().functional_dependencies(),
+            &FunctionalDependencies::new(vec![
+                FunctionalDependence::new(vec![2], vec![0, 1, 2, 5], false,)
+                    .with_mode(Dependency::Multi)
+            ])
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -5565,16 +5671,37 @@ mod tests {
     }
 
     #[test]
-    fn projection_duplicate_flattened_name_uses_first_input_index() -> Result<()> {
+    fn aggregate_group_by_repeated_key_keeps_key_dependency() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        // `id` is in the GROUP BY list two times: as itself and as `k`.
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .aggregate(
+                vec![col("id"), col("state"), col("id").alias("k")],
+                Vec::<Expr>::new(),
+            )?
+            .build()?;
+
+        // `id` alone still determines the row.
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].target_indices, vec![0, 1, 2]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_resolves_columns_not_flattened_names() -> Result<()> {
         // Build an input schema where a qualified field (`orders`.`id`) and an
-        // unqualified field that is literally named `"orders.id"` flatten to
-        // the exact same lookup key that `calc_func_dependencies_for_project`
-        // uses to resolve projection expressions against input fields. This is
-        // the only way two entries of `DFSchema::field_names()` can collide
-        // (`DFSchema::check_names` otherwise forbids duplicate names), and it
-        // pins that the hash-map based lookup resolves such a collision to the
-        // *first* matching index, exactly like the linear `position()` scan it
-        // replaces.
+        // unqualified field that is literally named `"orders.id"` (the name of
+        // e.g. `CAST(orders.id AS INT)`) have the same flattened name. The
+        // projection must resolve the column it references, not the first
+        // field with the same flattened name.
         let schema = DFSchema::new_with_metadata(
             vec![
                 (
@@ -5597,11 +5724,14 @@ mod tests {
             schema: Arc::new(schema),
         });
 
-        // References the *unqualified* second field, whose flattened name
-        // ("orders.id") collides with the first (qualified) field's.
+        // References the *unqualified* second field, which is not a key.
         let exprs = vec![Expr::Column(Column::new_unqualified("orders.id"))];
         let deps = calc_func_dependencies_for_project(&exprs, &input)?;
+        assert!(deps.is_empty());
 
+        // References the qualified first field, which is a key.
+        let exprs = vec![Expr::Column(Column::new(Some("orders"), "id"))];
+        let deps = calc_func_dependencies_for_project(&exprs, &input)?;
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].source_indices, vec![0]);
 
