@@ -2188,6 +2188,8 @@ pub(crate) struct NestedLoopJoinStream {
     buffered_left_data: Option<Arc<JoinLeftData>>,
     /// Index into the left buffered batch. Used in `ProbeRight` state
     left_probe_idx: usize,
+    /// Exclusive end of the short range last observed to be unmatched.
+    left_unmatched_end: usize,
     /// Index into the left buffered batch. Used in `EmitLeftUnmatched` state
     left_emit_idx: usize,
     /// Should we go back to `BufferingLeft` state again after `EmitLeftUnmatched`
@@ -2553,6 +2555,7 @@ impl NestedLoopJoinStream {
             right_existence_probe: None,
             state: NLJState::BufferingLeft,
             left_probe_idx: 0,
+            left_unmatched_end: 0,
             left_emit_idx: 0,
             left_exhausted: false,
             handled_empty_output: false,
@@ -2807,6 +2810,7 @@ impl NestedLoopJoinStream {
         active.left_chunk_barrier.finish_chunk();
 
         self.left_probe_idx = 0;
+        self.left_unmatched_end = 0;
         if self.left_exhausted {
             self.enter_state_after_last_left_chunk();
         } else {
@@ -2897,6 +2901,7 @@ impl NestedLoopJoinStream {
                 }
 
                 self.left_probe_idx = 0;
+                self.left_unmatched_end = 0;
                 self.state = NLJState::ProbeRight;
                 ControlFlow::Continue(())
             }
@@ -2938,6 +2943,7 @@ impl NestedLoopJoinStream {
             Ok(false) => {
                 // Left exhausted, transition to FetchingRight
                 self.left_probe_idx = 0;
+                self.left_unmatched_end = 0;
 
                 // Selectivity Metric: Update total possibilities for the batch (left_rows * right_rows)
                 // If memory-limited execution is implemented, this logic must be updated accordingly.
@@ -3348,12 +3354,22 @@ impl NestedLoopJoinStream {
         if matches!(
             self.join_type,
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
-        ) {
+        ) && self.left_probe_idx >= self.left_unmatched_end
+        {
             let bitmap = left_data.bitmap().lock();
-            while self.left_probe_idx < left_data.batch().num_rows()
-                && bitmap.get_bit(self.left_probe_idx)
-            {
+            let left_rows = left_data.batch().num_rows();
+            while self.left_probe_idx < left_rows && bitmap.get_bit(self.left_probe_idx) {
                 self.left_probe_idx += 1;
+            }
+            // Amortize the lock over a short consecutive unmatched range. Other
+            // partitions may match these rows meanwhile; probing them again is
+            // harmless. Bound the lookahead so we check shared matches regularly.
+            self.left_unmatched_end = self.left_probe_idx;
+            let end = left_rows.min(self.left_probe_idx.saturating_add(64));
+            while self.left_unmatched_end < end
+                && !bitmap.get_bit(self.left_unmatched_end)
+            {
+                self.left_unmatched_end += 1;
             }
         }
 
