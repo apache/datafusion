@@ -184,10 +184,12 @@ pub struct FileScanConfig {
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
-    /// Whether the scan's limit is order sensitive
-    /// When `true`, files must be read in the exact order specified to produce
-    /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
-    /// DataFusion may reorder file processing for optimization without affecting correctness.
+    /// Read files in the order of [`Self::file_groups`].
+    ///
+    /// [`FileScanConfigBuilder::build`] sets this when the scan has an output
+    /// ordering. Readers use [`Self::preserves_file_order`], which also checks
+    /// the current [`Self::output_ordering`], so clearing this flag never
+    /// reorders a scan that advertises an ordering.
     pub preserve_order: bool,
     /// All equivalent lexicographical output orderings of this file scan, in terms of
     /// [`FileSource::table_schema`]. See [`FileScanConfigBuilder::with_output_ordering`] for more
@@ -333,14 +335,10 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set whether the limit should be order-sensitive.
-    ///
-    /// When `true`, files must be read in the exact order specified to produce
-    /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
-    /// DataFusion may reorder file processing for optimization without
-    /// affecting correctness.
-    pub fn with_preserve_order(mut self, order_sensitive: bool) -> Self {
-        self.preserve_order = order_sensitive;
+    /// Set whether files must be read in the order of the file groups even
+    /// when the scan has no output ordering. See [`FileScanConfig::preserve_order`].
+    pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
+        self.preserve_order = preserve_order;
         self
     }
 
@@ -910,7 +908,9 @@ impl DataSource for FileScanConfig {
         )
         .with_constraints(self.constraints.clone());
 
-        if let Some(filter) = self.file_source.filter() {
+        // Only a filter that the source applies exactly gives valid equivalences.
+        // A filter that is used only for pruning lets non-matching rows through.
+        if let Some(filter) = self.file_source.exact_filter() {
             // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with.
             // Note that this will *ignore* any non-projected columns: these don't factor into ordering / equivalence.
             match Self::add_filter_equivalence_info(&filter, &mut eq_properties, schema) {
@@ -1186,18 +1186,6 @@ impl DataSource for FileScanConfig {
         }
     }
 
-    fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
-        if self.preserve_order == preserve_order {
-            return Some(Arc::new(self.clone()));
-        }
-
-        let new_config = FileScanConfig {
-            preserve_order,
-            ..self.clone()
-        };
-        Some(Arc::new(new_config))
-    }
-
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
@@ -1218,7 +1206,7 @@ impl DataSource for FileScanConfig {
         &self,
         config: &ConfigOptions,
     ) -> Option<Arc<dyn Any + Send + Sync>> {
-        if self.preserve_order
+        if self.preserves_file_order()
             || self.output_partitioning.is_some()
             || !config.execution.enable_file_stream_work_stealing
         {
@@ -1267,6 +1255,16 @@ fn append_known_empty_files(
 }
 
 impl FileScanConfig {
+    /// Returns true if files must be read in the order of the file groups.
+    ///
+    /// Parents such as `SortPreservingMergeExec` rely on the output ordering
+    /// this scan advertises, so a scan with an output ordering never shares
+    /// files between partitions (work stealing) and never skips rows based on
+    /// its limit (limit pruning).
+    pub fn preserves_file_order(&self) -> bool {
+        self.preserve_order || !self.output_ordering.is_empty()
+    }
+
     /// Returns only the output orderings that are validated against actual
     /// file group statistics.
     ///
@@ -3032,6 +3030,39 @@ mod tests {
             }
             .boxed())
         }
+    }
+
+    /// A scan that advertises an output ordering never shares files between
+    /// partitions, even if `preserve_order` is cleared after it is built.
+    #[test]
+    fn output_ordering_keeps_files_in_order() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let mut config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(MockSource::new(schema)),
+        )
+        .with_file_groups(vec![
+            FileGroup::new(vec![make_file_with_stats("file1", 0.0, 9.0)]),
+            FileGroup::new(vec![make_file_with_stats("file2", 10.0, 19.0)]),
+        ])
+        .with_output_ordering(vec![LexOrdering::new(vec![sort_expr]).unwrap()])
+        .build();
+        let options = ConfigOptions::default();
+
+        config.preserve_order = false;
+        assert!(config.preserves_file_order());
+        assert!(config.create_sibling_state(&options).is_none());
+
+        config.output_ordering = vec![];
+        assert!(!config.preserves_file_order());
+        assert!(config.create_sibling_state(&options).is_some());
+
+        // An explicit `preserve_order` keeps file order without an output ordering
+        config.preserve_order = true;
+        assert!(config.preserves_file_order());
+        assert!(config.create_sibling_state(&options).is_none());
     }
 
     #[test]

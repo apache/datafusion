@@ -106,8 +106,11 @@ pub fn compile_regex(
 /// compiles a single pattern up front, before it reads any value, takes
 /// `None`: it compiles that pattern whatever the values are.
 ///
-/// This is `pub` only so that the crates that call the kernels can reach it.
-// Not public API.
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
 #[doc(hidden)]
 pub fn explain_regexp_kernel_error(
     function_name: &str,

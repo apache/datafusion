@@ -71,14 +71,13 @@ impl ParamValues {
                         &format!(" at index {i}"),
                     )?;
                 }
-                Ok(())
             }
             ParamValues::Map(_) => {
                 // If it is a named query, variables can be reused,
                 // but the lengths are not necessarily equal
-                Ok(())
             }
         }
+        Ok(())
     }
 
     pub fn get_placeholders_with_values(&self, id: &str) -> Result<ScalarAndMetadata> {

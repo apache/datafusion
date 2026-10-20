@@ -16,6 +16,28 @@
 // under the License.
 
 //! [`PushDownFilter`] applies filters as early as possible
+//!
+//! # Precedence: pure extraction projections win
+//!
+//! [`PushDownLeafProjections`] moves a *pure extraction projection* towards the
+//! leaves. Such a projection has only `__datafusion_extracted_N` aliases and
+//! pass-through columns. [`PushDownFilter`] moves filters towards the leaves
+//! too. For an adjacent filter and pure extraction projection the two rules
+//! want the opposite order, so they undo each other on every optimizer pass.
+//!
+//! **Invariant: `PushDownFilter` yields to a pure extraction projection.** A
+//! filter is never moved below such a projection. The extraction projection
+//! stays at the bottom of the plan, next to the scan, and the filter stays
+//! above it.
+//!
+//! The reason is that the extraction projection is the node a source absorbs.
+//! A Parquet scan merges it into the file projection and reads only the struct
+//! leaf, which is what the rule exists for. Keeping the filter one node higher
+//! costs nothing at the scan, because `PushDownFilter` records the predicate in
+//! [`TableScan::filters`](datafusion_expr::logical_plan::TableScan) in the pass
+//! that runs before the extraction projection exists.
+//!
+//! [`PushDownLeafProjections`]: crate::extract_leaf_expressions::PushDownLeafProjections
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -30,8 +52,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, Result, assert_eq_or_internal_err, internal_err, plan_err,
-    qualified_name,
+    Column, DFSchema, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
+    plan_err, qualified_name,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -40,10 +62,12 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, ExprSchemable, Filter, Operator, Projection,
-    TableProviderFilterPushDown, and, or,
+    BinaryExpr, Distinct, EmptyRelation, Expr, Extension, Filter, MaterializedCte,
+    Operator, Projection, TableProviderFilterPushDown, UserDefinedLogicalNodeCore, and,
+    or,
 };
 
+use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
 use crate::utils::{
@@ -173,10 +197,14 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
         // No columns from the right side of the join can be referenced in output
-        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+        // predicates for semi/anti joins. The right side must stay `false`:
+        // `PullUpCorrelatedExpr` uses it to refuse to pull a correlated filter
+        // out of a side that the join does not output.
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         // No columns from the left side of the join can be referenced in output
-        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+        // predicates for semi/anti joins. The left side must stay `false`:
+        // `PullUpCorrelatedExpr` uses it to refuse to pull a correlated filter
+        // out of a side that the join does not output.
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
@@ -229,22 +257,18 @@ impl<'a> ColumnChecker<'a> {
 
 /// Determine whether the predicate can evaluate as the join conditions
 fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
-    let mut is_evaluate = true;
-    predicate.apply(|expr| match expr {
-        Expr::Column(_)
-        | Expr::Literal(_, _)
-        | Expr::Placeholder(_)
-        | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
+    Ok(!predicate.exists(|expr| match expr {
         Expr::Exists { .. }
         | Expr::InSubquery(_)
         | Expr::SetComparison(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
-        | Expr::Unnest(_) => {
-            is_evaluate = false;
-            Ok(TreeNodeRecursion::Stop)
-        }
-        Expr::Alias(_)
+        | Expr::Unnest(_) => Ok(true),
+        Expr::Column(_)
+        | Expr::Literal(_, _)
+        | Expr::Placeholder(_)
+        | Expr::ScalarVariable(_, _)
+        | Expr::Alias(_)
         | Expr::BinaryExpr(_)
         | Expr::Like(_)
         | Expr::SimilarTo(_)
@@ -266,15 +290,14 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::ScalarFunction(_)
         | Expr::HigherOrderFunction(_)
         | Expr::Lambda(_)
-        | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
+        | Expr::LambdaVariable(_) => Ok(false),
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
         | Expr::Wildcard { .. }
         | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
-    })?;
-    Ok(is_evaluate)
+    })?)
 }
 
 /// examine OR clause to see if any useful clauses can be extracted and push down.
@@ -761,8 +784,9 @@ fn infer_join_predicates_impl<
     input_predicates: &[Expr],
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
+    let mut join_cols_to_replace = HashMap::new();
     for predicate in input_predicates {
-        let mut join_cols_to_replace = HashMap::new();
+        join_cols_to_replace.clear();
 
         for &col in &predicate.column_refs() {
             for (l, r) in join_col_keys.iter() {
@@ -786,6 +810,45 @@ fn infer_join_predicates_impl<
     Ok(())
 }
 
+/// Whether `expr` depends on any of the columns named in `names`.
+///
+/// This is the columns `Expr::column_refs` would collect plus the outer columns
+/// that any subquery inside `expr` correlates on. A subquery records those in
+/// `Subquery::outer_ref_columns` rather than as an `Expr::Column` in the
+/// predicate, and `Expr`'s own traversal does not descend into that field, so
+/// looking only at `column_refs` would report such a predicate as depending on
+/// nothing and let it be pushed past a node that asked to keep those columns.
+fn references_any_column(expr: &Expr, names: &HashSet<String>) -> bool {
+    let mut found = false;
+    expr.apply(|e| {
+        let outer_refs = match e {
+            Expr::Column(col) => {
+                if names.contains(&col.name) {
+                    found = true;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+                return Ok(TreeNodeRecursion::Continue);
+            }
+            Expr::Exists(exists) => &exists.subquery.outer_ref_columns,
+            Expr::InSubquery(in_subquery) => &in_subquery.subquery.outer_ref_columns,
+            Expr::ScalarSubquery(subquery) => &subquery.outer_ref_columns,
+            Expr::SetComparison(set_comparison) => {
+                &set_comparison.subquery.outer_ref_columns
+            }
+            _ => return Ok(TreeNodeRecursion::Continue),
+        };
+        if outer_refs.iter().any(|outer_ref| {
+            matches!(outer_ref, Expr::OuterReferenceColumn(_, c) if names.contains(&c.name))
+        }) {
+            found = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("traversal is infallible");
+    found
+}
+
 impl OptimizerRule for PushDownFilter {
     fn name(&self) -> &str {
         "push_down_filter"
@@ -793,10 +856,6 @@ impl OptimizerRule for PushDownFilter {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
     }
 
     fn rewrite(
@@ -831,8 +890,25 @@ impl OptimizerRule for PushDownFilter {
         // predicates on rows that have already been filtered out.
         let (new_predicates, reorder_changed) = reorder_predicates(new_predicates);
 
-        let count_changed = old_predicate_len != new_predicates.len();
-        if count_changed || reorder_changed {
+        // An OR branch can change without changing the number of conjuncts.
+        // Ignore permutations from grouping comparisons by column: the cost
+        // reordering above decides when to change predicate evaluation order.
+        let predicates_changed = if old_predicate_len != new_predicates.len() {
+            true
+        } else {
+            let old_predicates = split_conjunction(&filter.predicate);
+            new_predicates
+                .iter()
+                .zip(&old_predicates)
+                .any(|(new, old)| new != *old)
+                && {
+                    let new_predicates: IndexSet<_> = new_predicates.iter().collect();
+                    old_predicates
+                        .iter()
+                        .any(|old| !new_predicates.contains(old))
+                }
+        };
+        if predicates_changed || reorder_changed {
             let Some(new_predicate) = conjunction(new_predicates) else {
                 // new_predicates is empty - remove the filter entirely
                 // Return the child plan without the filter
@@ -841,14 +917,32 @@ impl OptimizerRule for PushDownFilter {
             filter.predicate = new_predicate;
         }
 
+        // A provider accepting Exact pushdown would absorb FALSE into its scan,
+        // hiding the contradiction from EliminateFilter and still invoking scan().
+        if matches!(
+            filter.predicate,
+            Expr::Literal(ScalarValue::Boolean(Some(false)), _)
+        ) {
+            return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                EmptyRelation {
+                    produce_one_row: false,
+                    schema: Arc::clone(filter.input.schema()),
+                },
+            )));
+        }
+
         // If the child has a fetch (limit) or skip (offset), pushing a filter
         // below it would change semantics: the limit/offset should apply before
         // the filter, not after.
         if filter.input.fetch()?.is_some() || filter.input.skip()?.is_some() {
-            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+            return Ok(Transformed::new(
+                LogicalPlan::Filter(filter),
+                predicates_changed || reorder_changed,
+                TreeNodeRecursion::Continue,
+            ));
         }
 
-        match Arc::unwrap_or_clone(filter.input) {
+        let result = match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(mut child_filter) => {
                 // Child filters first to preserve execution order.
                 // Use IndexSet to remove duplicates while preserving predicate order.
@@ -891,7 +985,8 @@ impl OptimizerRule for PushDownFilter {
                 Ok(Transformed::yes(LogicalPlan::Sort(sort)))
             }
             LogicalPlan::SubqueryAlias(mut subquery_alias) => {
-                let mut replace_map = HashMap::new();
+                let mut replace_map =
+                    HashMap::with_capacity(subquery_alias.input.schema().fields().len());
                 for (i, (qualifier, field)) in
                     subquery_alias.input.schema().iter().enumerate()
                 {
@@ -942,9 +1037,10 @@ impl OptimizerRule for PushDownFilter {
                     }
                 }
 
+                let mut accum: HashSet<Column> = HashSet::new();
                 for predicate in predicates {
                     // collect all the Expr::Column in predicate recursively
-                    let mut accum: HashSet<Column> = HashSet::new();
+                    accum.clear();
                     expr_to_columns(&predicate, &mut accum)?;
 
                     let contains_list_columns =
@@ -965,7 +1061,11 @@ impl OptimizerRule for PushDownFilter {
                 // If no non-unnest predicates exist, early return
                 if non_unnest_predicates.is_empty() {
                     filter.input = Arc::new(LogicalPlan::Unnest(unnest));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
 
                 // Push down non-unnest filter predicate
@@ -990,8 +1090,9 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::Union(mut union) => {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
+                let mut replace_map = HashMap::with_capacity(union.schema.fields().len());
                 for input in union.inputs {
-                    let mut replace_map = HashMap::new();
+                    replace_map.clear();
                     for (i, (qualifier, field)) in input.schema().iter().enumerate() {
                         let (union_qualifier, union_field) =
                             union.schema.qualified_field(i);
@@ -1028,7 +1129,7 @@ impl OptimizerRule for PushDownFilter {
                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
                 // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
-                let mut replace_map = HashMap::new();
+                let mut replace_map = HashMap::with_capacity(agg.group_expr.len());
                 for expr in &agg.group_expr {
                     replace_map.insert(expr.schema_name().to_string(), unalias(expr));
                 }
@@ -1074,10 +1175,14 @@ impl OptimizerRule for PushDownFilter {
                 // multiple window functions, each with potentially different partition keys.
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
-                fn extract_partition_keys(func: &WindowFunction) -> HashSet<Column> {
-                    expr_columns(&func.params.partition_by)
+                // Arrow buffer memory accounting does not affect expression hashing.
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                fn extract_partition_keys(func: &WindowFunction) -> HashSet<&Expr> {
+                    func.params.partition_by.iter().collect()
                 }
 
+                // Arrow buffer memory accounting does not affect expression hashing.
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                 let potential_partition_keys = window
                     .window_expr
                     .iter()
@@ -1111,8 +1216,11 @@ impl OptimizerRule for PushDownFilter {
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
                 for expr in predicates {
-                    let cols = expr.column_refs();
-                    if cols.iter().all(|c| potential_partition_keys.contains(c)) {
+                    // A volatile predicate has to stay above the window: pushing it
+                    // changes which rows the window function sees.
+                    if !expr.is_volatile()
+                        && reads_only_partition_keys(&expr, &potential_partition_keys)?
+                    {
                         push_predicates.push(expr);
                     } else {
                         keep_predicates.push(expr);
@@ -1120,12 +1228,11 @@ impl OptimizerRule for PushDownFilter {
                 }
 
                 // Unlike with aggregations, there are no cases where we have to replace, e.g.,
-                // `a+b` with Column(a)+Column(b). This is because partition expressions are not
-                // available as standalone columns to the user. For example, while an aggregation on
-                // `a+b` becomes Column(a + b), in a window partition it becomes
-                // `func() PARTITION BY [a + b] ...`. Thus, filters on expressions always remain in
-                // place, so we can use `push_predicates` directly. This is consistent with other
-                // optimizers, such as the one used by Postgres.
+                // `a+b` with Column(a+b). This is because partition expressions are not available
+                // as standalone columns to the user: while an aggregation on `a+b` becomes
+                // Column(a + b), in a window partition it stays `func() PARTITION BY [a + b] ...`.
+                // That is why the predicate is matched against the key expressions themselves and
+                // can be pushed unchanged.
 
                 // If we have a filter to push, we push it down to the input of the aggregate
                 let result = if let Some(predicate) = conjunction(push_predicates) {
@@ -1171,41 +1278,27 @@ impl OptimizerRule for PushDownFilter {
                                 })
                         });
 
-                // A literal comparison on an equal, same-typed key has the
-                // same value for every matching pair. Mirroring it to the
-                // right can prune groups without changing the ASOF candidate.
+                // Every matching pair has equal key values, so a deterministic
+                // predicate that refers only to left keys also holds for the
+                // corresponding right keys. Expression-based join keys are not
+                // mirrored because they cannot be replaced column-for-column.
+                let key_replacements = join
+                    .on
+                    .iter()
+                    .filter_map(|(left, right)| {
+                        Some((left.try_as_col()?, right.try_as_col()?))
+                    })
+                    .collect::<HashMap<_, _>>();
                 let mut right_predicates = Vec::new();
                 for predicate in &push_predicates {
-                    let Expr::BinaryExpr(BinaryExpr {
-                        left,
-                        op: Operator::Eq,
-                        right,
-                    }) = predicate
-                    else {
-                        continue;
-                    };
-                    let ((Expr::Column(left_column), Expr::Literal(_, _))
-                    | (Expr::Literal(_, _), Expr::Column(left_column))) =
-                        (left.as_ref(), right.as_ref())
-                    else {
-                        continue;
-                    };
-                    for (left_key, right_key) in &join.on {
-                        let (Some(left_key_column), Some(right_key_column)) =
-                            (left_key.try_as_col(), right_key.try_as_col())
-                        else {
-                            continue;
-                        };
-                        if left_column == left_key_column
-                            && left_key.get_type(join.left.schema())?
-                                == right_key.get_type(join.right.schema())?
-                        {
-                            let replacements =
-                                HashMap::from([(left_key_column, right_key_column)]);
-                            right_predicates
-                                .push(replace_col(predicate.clone(), &replacements)?);
-                            break;
-                        }
+                    let columns = predicate.column_refs();
+                    if !columns.is_empty()
+                        && columns
+                            .iter()
+                            .all(|column| key_replacements.contains_key(column))
+                    {
+                        right_predicates
+                            .push(replace_col(predicate.clone(), &key_replacements)?);
                     }
                 }
                 if let Some(predicate) = conjunction(right_predicates) {
@@ -1256,7 +1349,11 @@ impl OptimizerRule for PushDownFilter {
                     .all(|res| res == &TableProviderFilterPushDown::Unsupported)
                 {
                     filter.input = Arc::new(LogicalPlan::TableScan(scan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
 
                 // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
@@ -1282,7 +1379,11 @@ impl OptimizerRule for PushDownFilter {
                     && scan.filters == new_scan_filters
                 {
                     filter.input = Arc::new(LogicalPlan::TableScan(scan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 } else {
                     scan.filters = new_scan_filters;
                 }
@@ -1302,12 +1403,33 @@ impl OptimizerRule for PushDownFilter {
                     LogicalPlan::TableScan(scan),
                 )))
             }
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<MaterializedCte>() =>
+            {
+                // The output is the output of the continuation, so the filter
+                // moves onto the continuation. The body is shared by every scan
+                // of the CTE and is never filtered for one of them.
+                let cte = node.as_any().downcast_ref::<MaterializedCte>().unwrap();
+                let continuation = LogicalPlan::Filter(Filter::new(
+                    filter.predicate,
+                    Arc::new(cte.continuation.clone()),
+                ));
+                let cte = cte
+                    .with_exprs_and_inputs(vec![], vec![cte.cte.clone(), continuation])?;
+                Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(cte),
+                })))
+            }
             LogicalPlan::Extension(extension_plan) => {
                 // This check prevents the Filter from being removed when the extension node has no children,
                 // so we return the original Filter unchanged.
                 if extension_plan.node.inputs().is_empty() {
                     filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
                 let prevent_cols =
                     extension_plan.node.prevent_predicate_push_down_columns();
@@ -1318,18 +1440,17 @@ impl OptimizerRule for PushDownFilter {
                 let predicate_push_or_keep: Vec<bool> =
                     split_conjunction(&filter.predicate)
                         .iter()
-                        .map(|expr| {
-                            !expr
-                                .column_refs()
-                                .iter()
-                                .any(|c| prevent_cols.contains(&c.name))
-                        })
+                        .map(|expr| !references_any_column(expr, &prevent_cols))
                         .collect();
 
                 // all predicates are kept, no changes needed
                 if predicate_push_or_keep.iter().all(|&x| !x) {
                     filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
 
                 // going to push some predicates down, so split the predicates
@@ -1370,7 +1491,11 @@ impl OptimizerRule for PushDownFilter {
                 filter.input = Arc::new(child);
                 Ok(Transformed::no(LogicalPlan::Filter(filter)))
             }
-        }
+        };
+        result.map(|mut result| {
+            result.transformed |= predicates_changed || reorder_changed;
+            result
+        })
     }
 }
 
@@ -1405,6 +1530,27 @@ fn rewrite_projection(
     predicates: Vec<Expr>,
     mut projection: Projection,
 ) -> Result<(Transformed<LogicalPlan>, Vec<Expr>)> {
+    // Precedence rule: a filter never moves below a pure extraction projection.
+    //
+    // `PushDownLeafProjections` moves such a projection below an adjacent
+    // filter, so a filter that moved below it is put back above it in the same
+    // optimizer pass. The two rules then undo each other on every pass until
+    // the pass limit stops them, and the surviving plan is decided by rule
+    // order alone. `PushDownFilter` yields here, because the extraction
+    // projection is the node the source absorbs: leaving it at the bottom keeps
+    // Parquet struct field pruning, and a filter kept one node higher still
+    // reaches the scan through `TableScan::filters`, which the pass that
+    // created the extraction projection has already set.
+    //
+    // See the module documentation of `extract_leaf_expressions` for the
+    // full statement of the invariant.
+    if is_pure_extraction_projection(&projection.expr) {
+        return Ok((
+            Transformed::no(LogicalPlan::Projection(projection)),
+            predicates,
+        ));
+    }
+
     // Partition projection expressions into non-pushable vs pushable.
     // Non-pushable expressions are volatile (must not be duplicated) or
     // MoveTowardsLeafNodes (cheap expressions like get_field where re-inlining
@@ -1508,19 +1654,10 @@ fn unalias(expr: &Expr) -> &Expr {
 
 /// check whether the expression uses the columns in `check_map`.
 fn contain<T>(e: &Expr, check_map: &HashMap<String, T>) -> bool {
-    let mut is_contain = false;
-    e.apply(|expr| {
-        if let Expr::Column(c) = &expr
-            && check_map.contains_key(&c.flat_name())
-        {
-            is_contain = true;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
+    e.exists(|expr| {
+        Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(&c.flat_name())))
     })
-    .unwrap();
-    is_contain
+    .unwrap()
 }
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
@@ -1529,6 +1666,55 @@ fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
     } else {
         plan
     }
+}
+
+/// Can `expr` be evaluated below a window with these `PARTITION BY` keys?
+///
+/// A predicate that reads only the partition keys is constant within each
+/// partition, so filtering before the window drops whole partitions and leaves
+/// the surviving rows' window values unchanged. "Reads only the keys" is checked
+/// structurally: every column reference must sit inside a subtree that is equal
+/// to one of the keys. Given `PARTITION BY a, b + c`:
+///
+/// * `a < 5`, `b + c = 4` and `(b + c) + 1 > 10` can be pushed down
+/// * `d < 5` and `b < 5` cannot (`b` on its own is not a key), and neither can
+///   `c + b = 4` (the match is structural, `c + b` is not `b + c`)
+///
+/// A predicate containing a subquery is never pushed: what the subquery reads is
+/// not visible from the expression tree.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Arrow buffer memory accounting does not affect expression hashing.
+fn reads_only_partition_keys(
+    expr: &Expr,
+    partition_keys: &HashSet<&Expr>,
+) -> Result<bool> {
+    let mut reads_something_else = false;
+    expr.apply(|node| {
+        Ok(if partition_keys.contains(&node) {
+            // the whole key was matched, so whatever it reads is accounted for
+            TreeNodeRecursion::Jump
+        } else if reads_beyond_this_node(node) {
+            reads_something_else = true;
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })?;
+    Ok(!reads_something_else)
+}
+
+/// Does this node read data that walking its children cannot account for? A
+/// column reads itself; a subquery reads whatever its plan reads, which
+/// `Expr::apply` does not visit.
+fn reads_beyond_this_node(node: &Expr) -> bool {
+    matches!(
+        node,
+        Expr::Column(_)
+            | Expr::OuterReferenceColumn(..)
+            | Expr::ScalarSubquery(_)
+            | Expr::Exists(_)
+            | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
+    )
 }
 
 fn expr_columns(exprs: &[Expr]) -> HashSet<Column> {
@@ -1549,14 +1735,14 @@ mod tests {
     use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
     use async_trait::async_trait;
 
-    use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
-    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue, Spans};
+    use datafusion_expr::expr::{ScalarFunction, SetComparison, SetQuantifier};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
-        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScan, TableSource,
-        TableType, UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col,
-        in_list, in_subquery, lit,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Subquery, TableScan,
+        TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
+        WindowFunctionDefinition, col, exists, in_list, in_subquery, lit, out_ref_col,
     };
 
     use crate::OptimizerContext;
@@ -1902,10 +2088,12 @@ mod tests {
         )
     }
 
-    /// verifies that filters on partition expressions are not pushed, as the single expression
-    /// column is not available to the user, unlike with aggregations
+    /// verifies that a filter on an expression partition key is pushed; the
+    /// remaining shapes (mixed keys, operand order, subqueries, volatile
+    /// predicates, several windows) are covered in
+    /// `push_down_filter_regression.slt`
     #[test]
-    fn filter_expression_keep_window() -> Result<()> {
+    fn filter_expression_move_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let window = Expr::from(WindowFunction::new(
@@ -1921,49 +2109,14 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![window])?
-            // unlike with aggregations, single partition column "test.a + test.b" is not available
-            // to the plan, so we use multiple columns when filtering
-            .filter(add(col("a"), col("b")).gt(lit(10i64)))?
+            .filter(add(col("a"), col("b")).gt(lit(10i64)))? // a + b > 10
             .build()?;
 
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Filter: test.a + test.b > Int64(10)
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
-        "
-        )
-    }
-
-    /// verifies that filters are not pushed on order by columns (that are not used in partitioning)
-    #[test]
-    fn filter_order_keep_window() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![col("a")])
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(col("c").gt(lit(10i64)))?
-            .build()?;
-        assert_plan_not_transformed!(plan.clone());
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: test.c > Int64(10)
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test.a + test.b > Int64(10)]
         "
         )
     }
@@ -2209,6 +2362,90 @@ mod tests {
         fn supports_limit_pushdown(&self) -> bool {
             false // Disallow limit push-down by default
         }
+    }
+
+    #[test]
+    fn user_defined_plan_outer_referenced_column() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // A subquery correlated on `test.c` — the column `NoopPlan` refuses to
+        // have predicates pushed past. The correlation is carried by the
+        // subquery's `outer_ref_columns`, not by an `Expr::Column` in the
+        // predicate itself.
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+            .filter(out_ref_col(DataType::UInt32, "test.c").eq(col("sq.a")))?
+            .project(vec![col("sq.a")])?
+            .build()?;
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone()],
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .filter(exists(Arc::new(subquery)))?
+            .build()?;
+
+        // The predicate depends on `test.c`, so it must stay above NoopPlan.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: EXISTS (<subquery>)
+          Subquery:
+            Projection: sq.a
+              TableScan: sq, full_filters=[outer_ref(test.c) = sq.a]
+          NoopPlan
+            TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn user_defined_plan_outer_referenced_column_set_comparison() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // `test.a > ANY (SELECT sq.a FROM sq WHERE test.c = sq.a)`: the
+        // comparison expression names only `test.a`, so the dependency on
+        // `test.c` exists solely in the subquery's `outer_ref_columns`.
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+            .filter(out_ref_col(DataType::UInt32, "test.c").eq(col("sq.a")))?
+            .project(vec![col("sq.a")])?
+            .build()?;
+        let outer_ref_columns = subquery.all_out_ref_exprs();
+        let set_comparison = Expr::SetComparison(SetComparison::new(
+            Box::new(col("test.a")),
+            Subquery {
+                subquery: Arc::new(subquery),
+                outer_ref_columns,
+                spans: Spans::new(),
+            },
+            Operator::Gt,
+            SetQuantifier::Any,
+        ));
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone()],
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .filter(set_comparison)?
+            .build()?;
+
+        // The predicate depends on `test.c`, so it must stay above NoopPlan.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a > ANY (<subquery>)
+          Subquery:
+            Projection: sq.a
+              TableScan: sq, full_filters=[outer_ref(test.c) = sq.a]
+          NoopPlan
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -3247,7 +3484,8 @@ mod tests {
             projection,
             source: Arc::new(test_provider),
             fetch: None,
-            statistics_requests: std::collections::BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         });
 
         Ok(LogicalPlanBuilder::from(table_scan))
@@ -4497,14 +4735,8 @@ mod tests {
           TestUserNode
         ",
         );
-        // Check that the filter is pushed down to the user-defined node
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: Boolean(false)
-          TestUserNode
-        "
-        )
+        // An impossible filter eliminates even a leaf extension before pushdown.
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 
     /// Test that filters are NOT pushed through MoveTowardsLeafNodes projections.
@@ -4567,6 +4799,129 @@ mod tests {
         Filter: val > Int64(150)
           Projection: leaf_udf(test.a) AS val, test.b, test.c
             TableScan: test, full_filters=[test.b > Int64(5)]
+        "
+        )
+    }
+
+    /// A filter is not moved below a pure extraction projection, even when its
+    /// predicate only references pass-through columns.
+    ///
+    /// `PushDownLeafProjections` moves such a projection back below the filter,
+    /// so pushing here would make the two rules undo each other on every
+    /// optimizer pass. See <https://github.com/apache/datafusion/issues/14540>
+    /// and the module documentation.
+    #[test]
+    fn filter_not_pushed_through_pure_extraction_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // The shape `ExtractLeafExpressions` produces: one extraction alias
+        // plus pass-through columns.
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                col("b"),
+                col("c"),
+            ])?
+            .build()?;
+
+        // `b` is a plain pass-through column, so without the precedence rule
+        // this predicate would reach the scan as a `full_filters` entry.
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("b").gt(lit(5i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.b > Int64(5)
+          Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b, test.c
+            TableScan: test
+        "
+        )
+    }
+
+    /// Runs the default optimizer and returns, for each pass, the names of the
+    /// rules that changed the plan in that pass.
+    fn rules_that_changed_plan_per_pass(plan: LogicalPlan) -> Result<Vec<Vec<String>>> {
+        let optimizer = Optimizer::new();
+        let rules_per_pass = optimizer.rules.len();
+        let mut previous = plan.display_indent().to_string();
+        let mut calls = 0;
+        let mut passes: Vec<Vec<String>> = vec![];
+        optimizer.optimize(plan, &OptimizerContext::new(), |plan, rule| {
+            if calls % rules_per_pass == 0 {
+                passes.push(vec![]);
+            }
+            calls += 1;
+            let current = plan.display_indent().to_string();
+            if current != previous {
+                passes.last_mut().unwrap().push(rule.name().to_string());
+                previous = current;
+            }
+        })?;
+        Ok(passes)
+    }
+
+    /// `PushDownFilter` and `PushDownLeafProjections` must not undo each other
+    /// for a filter next to a pure extraction projection
+    /// (<https://github.com/apache/datafusion/issues/14540>). Neither rule may
+    /// change the plan in the last optimizer pass. The source does not absorb
+    /// filters, so the `Filter` node stays in the plan.
+    #[test]
+    fn filter_and_extraction_projection_reach_fixed_point() -> Result<()> {
+        let scan = || {
+            table_scan_with_pushdown_provider_builder(
+                TableProviderFilterPushDown::Unsupported,
+                vec![],
+                None,
+            )
+        };
+        let simple = scan()?
+            .filter(col("b").gt(lit(5)))?
+            .project(vec![leaf_udf_expr(col("a"))])?
+            .build()?;
+        // Two filters, one of them on an extracted leaf.
+        let two_filters = scan()?
+            .filter(col("b").gt(lit(5)))?
+            .filter(leaf_udf_expr(col("a")).eq(lit(1)))?
+            .project(vec![leaf_udf_expr(col("a")), col("b")])?
+            .build()?;
+
+        for plan in [simple, two_filters] {
+            let passes = rules_that_changed_plan_per_pass(plan)?;
+            let last = passes.last().unwrap();
+            assert!(
+                !last.iter().any(|rule| rule == "push_down_filter"
+                    || rule == "push_down_leaf_projections"),
+                "pushdown rules changed the plan in the last pass: {passes:?}"
+            );
+        }
+        Ok(())
+    }
+
+    /// A projection that mixes an extraction alias with a computed expression is
+    /// not a pure extraction projection, so the filter still moves below it.
+    #[test]
+    fn filter_pushed_through_mixed_extraction_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                (col("b") + lit(1i64)).alias("b_plus"),
+                col("c"),
+            ])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("c").gt(lit(5i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b + Int64(1) AS b_plus, test.c
+          TableScan: test, full_filters=[test.c > Int64(5)]
         "
         )
     }

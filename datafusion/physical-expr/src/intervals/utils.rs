@@ -81,7 +81,12 @@ fn check_support_with(
             false
         }
     } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
-        check_support_with(cast.expr(), schema, is_type_supported)
+        // The cast target type must itself be one we can reason about. Casting
+        // interval endpoints to a type with a different ordering (e.g. integers
+        // to strings) does not preserve the interval, so such expressions are
+        // left unanalyzed rather than producing bogus bounds.
+        is_type_supported(cast.cast_type())
+            && check_support_with(cast.expr(), schema, is_type_supported)
     } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
         check_support_with(negative.arg(), schema, is_type_supported)
     } else {

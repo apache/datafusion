@@ -24,6 +24,7 @@ use super::{DFSqlLogicTestError, error::Result, normalize};
 use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::output::{DFColumnType, DFOutput};
 use crate::is_spark_path;
+use crate::memory_drift::rewrap_replaced_pool;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
@@ -156,6 +157,7 @@ impl sqllogictest::AsyncDB for DataFusion {
         let start = Instant::now();
         let result = run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await;
         let duration = start.elapsed();
+        rewrap_replaced_pool(&self.ctx, &self.relative_path.display().to_string());
 
         self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 
