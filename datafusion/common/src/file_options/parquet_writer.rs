@@ -22,7 +22,7 @@ use std::sync::Arc;
 use crate::{
     _internal_datafusion_err, DataFusionError, Result,
     config::{ParquetCdcOptions, ParquetOptions, TableParquetOptions},
-    parquet_config::DFParquetCompression,
+    parquet_config::{DFParquetCompression, DFParquetEncoding},
 };
 
 use arrow::datatypes::Schema;
@@ -228,6 +228,7 @@ impl ParquetOptions {
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
+            write_row_group_number_distinct_values,
             content_defined_chunking,
 
             // not in WriterProperties
@@ -269,7 +270,10 @@ impl ParquetOptions {
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_statistics_truncate_length(*statistics_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
-            .set_bloom_filter_enabled(*bloom_filter_on_write);
+            .set_bloom_filter_enabled(*bloom_filter_on_write)
+            .set_write_row_group_number_distinct_values(
+                *write_row_group_number_distinct_values,
+            );
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
@@ -287,7 +291,7 @@ impl ParquetOptions {
             builder = builder.set_compression((*compression).into());
         }
         if let Some(encoding) = encoding {
-            builder = builder.set_encoding(parse_encoding_string(encoding)?);
+            builder = builder.set_encoding((*encoding).into());
         }
         builder = builder.set_content_defined_chunking(content_defined_chunking.into());
 
@@ -295,31 +299,11 @@ impl ParquetOptions {
     }
 }
 
-/// Parses datafusion.execution.parquet.encoding String to a parquet::basic::Encoding
+/// Parses a column-specific parquet encoding string.
 pub(crate) fn parse_encoding_string(
     str_setting: &str,
 ) -> Result<parquet::basic::Encoding> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-    match str_setting_lower {
-        "plain" => Ok(parquet::basic::Encoding::PLAIN),
-        "plain_dictionary" => Ok(parquet::basic::Encoding::PLAIN_DICTIONARY),
-        "rle" => Ok(parquet::basic::Encoding::RLE),
-        #[expect(deprecated)]
-        "bit_packed" => Ok(parquet::basic::Encoding::BIT_PACKED),
-        "delta_binary_packed" => Ok(parquet::basic::Encoding::DELTA_BINARY_PACKED),
-        "delta_length_byte_array" => {
-            Ok(parquet::basic::Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        }
-        "delta_byte_array" => Ok(parquet::basic::Encoding::DELTA_BYTE_ARRAY),
-        "rle_dictionary" => Ok(parquet::basic::Encoding::RLE_DICTIONARY),
-        "byte_stream_split" => Ok(parquet::basic::Encoding::BYTE_STREAM_SPLIT),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet encoding: \
-        {str_setting}. Valid values are: plain, plain_dictionary, rle, \
-        bit_packed, delta_binary_packed, delta_length_byte_array, \
-        delta_byte_array, rle_dictionary, and byte_stream_split."
-        ))),
-    }
+    str_setting.parse::<DFParquetEncoding>().map(Into::into)
 }
 
 /// Parses datafusion.execution.parquet.compression String to a parquet::basic::Compression
@@ -353,7 +337,8 @@ mod tests {
         ParquetEncryptionOptions, ParquetOptions,
     };
     use crate::parquet_config::{
-        DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion,
+        DFParquetCompression, DFParquetEncoding, DFParquetStatistics,
+        DFParquetWriterVersion,
     };
     use parquet::basic::Compression;
     use parquet::file::properties::{
@@ -402,10 +387,12 @@ mod tests {
             column_index_truncate_length: Some(42),
             statistics_truncate_length: Some(42),
             data_page_row_count_limit: 42,
-            encoding: Some("BYTE_STREAM_SPLIT".into()),
+            encoding: Some(DFParquetEncoding::ByteStreamSplit),
             bloom_filter_on_write: !defaults.bloom_filter_on_write,
             bloom_filter_fpp: Some(0.42),
             bloom_filter_ndv: Some(42),
+            write_row_group_number_distinct_values: !defaults
+                .write_row_group_number_distinct_values,
 
             // not in WriterProperties, but itemizing here to not skip newly added props
             enable_page_index: defaults.enable_page_index,
@@ -519,7 +506,10 @@ mod tests {
                 data_page_row_count_limit: props.data_page_row_count_limit(),
 
                 // global options which set the default column props
-                encoding: default_col_props.encoding,
+                encoding: default_col_props
+                    .encoding
+                    .as_deref()
+                    .map(|encoding| encoding.parse().expect("valid parquet encoding")),
                 compression: match props.compression(&default_col) {
                     Compression::ZSTD(level) => {
                         Some(DFParquetCompression::Zstd(level.compression_level() as u32))
@@ -557,6 +547,8 @@ mod tests {
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
+                write_row_group_number_distinct_values: props
+                    .write_row_group_number_distinct_values(),
                 coerce_int96: None,
                 coerce_int96_tz: None,
                 content_defined_chunking: props.content_defined_chunking().into(),

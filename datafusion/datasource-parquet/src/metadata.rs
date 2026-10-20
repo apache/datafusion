@@ -19,6 +19,7 @@
 //! and schema information.
 
 use crate::file_format::ObjectStoreFetch;
+use crate::leaf_resolver::LeafResolver;
 use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp::eq;
@@ -42,7 +43,7 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
+use parquet::arrow::parquet_to_arrow_schema;
 use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
@@ -611,26 +612,27 @@ impl<'a> DFParquetMetadata<'a> {
             physical_file_schema = merged;
         }
 
-        statistics.column_statistics =
-            if has_statistics {
-                let (mut max_accs, mut min_accs) =
-                    create_max_min_accs(logical_file_schema);
-                let mut null_counts_array =
-                    vec![Precision::Absent; logical_file_schema.fields().len()];
-                let mut column_byte_sizes =
-                    vec![Precision::Absent; logical_file_schema.fields().len()];
-                let mut is_max_value_exact =
-                    vec![Some(true); logical_file_schema.fields().len()];
-                let mut is_min_value_exact =
-                    vec![Some(true); logical_file_schema.fields().len()];
-                let mut distinct_counts_array =
-                    vec![Precision::Absent; logical_file_schema.fields().len()];
-                logical_file_schema.fields().iter().enumerate().for_each(
-                    |(idx, field)| match StatisticsConverter::try_new(
-                        field.name(),
-                        &physical_file_schema,
-                        file_metadata.schema_descr(),
-                    ) {
+        let leaf_resolver =
+            LeafResolver::new(file_metadata.schema_descr(), &physical_file_schema);
+
+        statistics.column_statistics = if has_statistics {
+            let (mut max_accs, mut min_accs) = create_max_min_accs(logical_file_schema);
+            let mut null_counts_array =
+                vec![Precision::Absent; logical_file_schema.fields().len()];
+            let mut column_byte_sizes =
+                vec![Precision::Absent; logical_file_schema.fields().len()];
+            let mut is_max_value_exact =
+                vec![Some(true); logical_file_schema.fields().len()];
+            let mut is_min_value_exact =
+                vec![Some(true); logical_file_schema.fields().len()];
+            let mut distinct_counts_array =
+                vec![Precision::Absent; logical_file_schema.fields().len()];
+            logical_file_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .for_each(|(idx, field)| {
+                    match leaf_resolver.converter(field.name()) {
                         Ok(stats_converter) => {
                             // An omitted count must not become an exact zero in
                             // file statistics used for pruning and aggregates.
@@ -676,44 +678,39 @@ impl<'a> DFParquetMetadata<'a> {
                             debug!("Failed to create statistics converter: {e}");
                             null_counts_array[idx] = Precision::Exact(num_rows);
                         }
-                    },
-                );
+                    }
+                });
 
-                let mut accumulators = StatisticsAccumulators {
-                    min_accs: &mut min_accs,
-                    max_accs: &mut max_accs,
-                    null_counts_array: &mut null_counts_array,
-                    is_min_value_exact: &mut is_min_value_exact,
-                    is_max_value_exact: &mut is_max_value_exact,
-                    column_byte_sizes: &mut column_byte_sizes,
-                    distinct_counts_array: &mut distinct_counts_array,
-                };
-                accumulators.build_column_statistics(logical_file_schema)
-            } else {
-                // Record column sizes
-                logical_file_schema
-                    .fields()
-                    .iter()
-                    .enumerate()
-                    .map(|(logical_file_schema_index, field)| {
-                        let arrow_field =
-                            logical_file_schema.field(logical_file_schema_index);
-                        let parquet_idx = parquet_column(
-                            file_metadata.schema_descr(),
-                            &physical_file_schema,
-                            arrow_field.name(),
-                        )
-                        .map(|(idx, _)| idx);
-                        let byte_size = compute_arrow_column_size(
-                            field.data_type(),
-                            row_groups_metadata,
-                            parquet_idx,
-                            num_rows,
-                        );
-                        ColumnStatistics::new_unknown().with_byte_size(byte_size)
-                    })
-                    .collect()
+            let mut accumulators = StatisticsAccumulators {
+                min_accs: &mut min_accs,
+                max_accs: &mut max_accs,
+                null_counts_array: &mut null_counts_array,
+                is_min_value_exact: &mut is_min_value_exact,
+                is_max_value_exact: &mut is_max_value_exact,
+                column_byte_sizes: &mut column_byte_sizes,
+                distinct_counts_array: &mut distinct_counts_array,
             };
+            accumulators.build_column_statistics(logical_file_schema)
+        } else {
+            // Record column sizes
+            logical_file_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(logical_file_schema_index, field)| {
+                    let arrow_field =
+                        logical_file_schema.field(logical_file_schema_index);
+                    let parquet_idx = leaf_resolver.leaf_index(arrow_field.name());
+                    let byte_size = compute_arrow_column_size(
+                        field.data_type(),
+                        row_groups_metadata,
+                        parquet_idx,
+                        num_rows,
+                    );
+                    ColumnStatistics::new_unknown().with_byte_size(byte_size)
+                })
+                .collect()
+        };
 
         #[cfg(debug_assertions)]
         {
@@ -850,7 +847,7 @@ fn summarize_column_statistics(
         summarize_null_counts(stats_converter, row_groups_metadata)?;
 
     accumulators.distinct_counts_array[logical_schema_index] =
-        summarize_distinct_counts(parquet_index, row_groups_metadata);
+        summarize_distinct_counts(stats_converter, row_groups_metadata)?;
 
     let arrow_field = logical_file_schema.field(logical_schema_index);
     accumulators.column_byte_sizes[logical_schema_index] = compute_arrow_column_size(
@@ -1001,29 +998,27 @@ where
 
 /// Extract distinct counts from row group column statistics.
 fn summarize_distinct_counts(
-    parquet_idx: Option<usize>,
+    stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
-) -> Precision<usize> {
-    let Some(parquet_idx) = parquet_idx else {
-        return Precision::Absent;
-    };
+) -> Result<Precision<usize>> {
+    if stats_converter.parquet_column_index().is_none() {
+        return Ok(Precision::Absent);
+    }
 
     let num_row_groups = row_groups_metadata.len();
     if num_row_groups == 0 {
-        return Precision::Absent;
+        return Ok(Precision::Absent);
     }
 
     let required_count = (num_row_groups as f64 * PARTIAL_NDV_THRESHOLD).ceil() as usize;
+    let distinct_counts =
+        stats_converter.row_group_distinct_counts(row_groups_metadata)?;
+
     let mut ndv_count = 0;
     let mut max_distinct_count: Option<u64> = None;
 
-    for (row_group_idx, row_group) in row_groups_metadata.iter().enumerate() {
-        if let Some(distinct_count) = row_group
-            .columns()
-            .get(parquet_idx)
-            .and_then(|col| col.statistics())
-            .and_then(|stats| stats.distinct_count_opt())
-        {
+    for (row_group_idx, value) in distinct_counts.iter().enumerate() {
+        if let Some(distinct_count) = value {
             ndv_count += 1;
             max_distinct_count = Some(match max_distinct_count {
                 Some(max) => max.max(distinct_count),
@@ -1034,17 +1029,14 @@ fn summarize_distinct_counts(
         // Return early if there's no chance to reach the required coverage.
         let remaining = num_row_groups - row_group_idx - 1;
         if ndv_count + remaining < required_count {
-            return Precision::Absent;
+            return Ok(Precision::Absent);
         }
     }
 
-    match max_distinct_count {
-        Some(distinct_count) if num_row_groups == 1 => {
-            Precision::Exact(distinct_count as usize)
-        }
+    Ok(match max_distinct_count {
         Some(distinct_count) => Precision::Inexact(distinct_count as usize),
         None => Precision::Absent,
-    }
+    })
 }
 
 /// Compute the Arrow in-memory size for a single column
@@ -1606,7 +1598,7 @@ mod tests {
 
         #[test]
         fn test_distinct_count_single_row_group_with_ndv() {
-            // Single row group with distinct count should return Exact
+            // Single row group with distinct count should return Inexact
             let schema_descr = create_schema_descr(1);
             let arrow_schema = create_arrow_schema(1);
 
@@ -1631,7 +1623,7 @@ mod tests {
 
             assert_eq!(
                 result.column_statistics[0].distinct_count,
-                Precision::Exact(42)
+                Precision::Inexact(42)
             );
         }
 
@@ -1818,7 +1810,7 @@ mod tests {
 
             assert_eq!(
                 result.column_statistics[0].distinct_count,
-                Precision::Exact(5)
+                Precision::Inexact(5)
             );
             assert_eq!(
                 result.column_statistics[1].distinct_count,
@@ -1826,7 +1818,7 @@ mod tests {
             );
             assert_eq!(
                 result.column_statistics[2].distinct_count,
-                Precision::Exact(100)
+                Precision::Inexact(100)
             );
         }
 
@@ -1995,15 +1987,15 @@ mod tests {
             // category: 10 distinct values
             assert_eq!(
                 result.column_statistics[1].distinct_count,
-                Precision::Exact(10),
-                "category column should have Exact(10) distinct_count"
+                Precision::Inexact(10),
+                "category column should have Inexact(10) distinct_count"
             );
 
             // name: 5 distinct values
             assert_eq!(
                 result.column_statistics[2].distinct_count,
-                Precision::Exact(5),
-                "name column should have Exact(5) distinct_count"
+                Precision::Inexact(5),
+                "name column should have Inexact(5) distinct_count"
             );
         }
     }

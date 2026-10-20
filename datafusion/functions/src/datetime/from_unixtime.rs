@@ -212,11 +212,9 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         Ok(true)
     }
 
-    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
-        // `from_unixtime` stores the input's exact `Int64` value as a
-        // `Timestamp(Second)`: the mapping is one-to-one, order-preserving,
-        // and maps nulls to nulls.
-        Ok(true)
+    fn strictly_order_preserving(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        // A lossless cast cannot restore strictness lost by its input.
+        Ok(inputs[0].strictly_order_preserving)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

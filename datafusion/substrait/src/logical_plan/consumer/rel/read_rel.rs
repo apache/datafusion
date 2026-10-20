@@ -139,7 +139,7 @@ pub async fn from_read_rel(
                 }));
             }
 
-            let mut rows = vec![];
+            let mut rows = Vec::with_capacity(vt.expressions.len());
             for row in &vt.expressions {
                 if row.fields.len() != substrait_schema.fields().len() {
                     return substrait_err!(
@@ -149,7 +149,7 @@ pub async fn from_read_rel(
                     );
                 }
 
-                let mut row_exprs = vec![];
+                let mut row_exprs = Vec::with_capacity(row.fields.len());
                 let mut name_idx = 0;
                 for expression in &row.fields {
                     // Top-level names are provided through schema

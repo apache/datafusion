@@ -62,7 +62,7 @@ pub fn from_window_function(
     // function reference
     let function_anchor = producer.register_function(fun.to_string());
     // arguments
-    let mut arguments: Vec<FunctionArgument> = vec![];
+    let mut arguments: Vec<FunctionArgument> = Vec::with_capacity(args.len());
     for arg in args {
         arguments.push(FunctionArgument {
             arg_type: Some(ArgType::Value(producer.handle_expr(arg, schema)?)),

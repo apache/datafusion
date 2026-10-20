@@ -38,12 +38,13 @@ use super::build::JoinBuildState;
 use super::stream::lookup_join_hashmap;
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::hash_utils::create_hashes;
+use crate::joins::Map;
+use crate::joins::join_hash_map::ProbeOffset;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinKeyComparator,
     adjust_indices_by_join_type, apply_join_filter_to_indices,
     build_batch_empty_build_side, build_batch_from_indices, matchable_join_keys,
 };
-use crate::joins::{Map, MapOffset};
 
 /// Join semantics and output settings for one probe partition.
 pub(super) struct HashJoinTableConfig {
@@ -172,7 +173,7 @@ pub(super) struct HashJoinTable {
     /// Current execution phase.
     phase: Phase,
     /// Where to resume candidate lookup; `None` means this batch is exhausted.
-    next_offset: Option<MapOffset>,
+    next_offset: Option<ProbeOffset>,
     /// Last probe row passing the full ON condition. Unmatched probe rows
     /// are considered after this row, even when its matches span chunks.
     joined_probe_idx: Option<usize>,
@@ -325,7 +326,7 @@ impl HashJoinTable {
 
         // Every cursor and cached comparator belongs to these input arrays.
         // Keep the scratch allocations, but reset all progress together.
-        self.next_offset = Some((0, None));
+        self.next_offset = Some(ProbeOffset::AtRow { row: 0 });
         self.joined_probe_idx = None;
         self.matched_probe_idx = None;
         self.key_comparator = None;
