@@ -17,7 +17,7 @@
 
 use datafusion::prelude::*;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{TableReference, assert_contains};
+use datafusion_common::{TableReference, assert_batches_eq, assert_contains};
 use datafusion_expr::dml::MergeIntoOp;
 use datafusion_expr::{Expr, LogicalPlan, WriteOp};
 
@@ -137,7 +137,22 @@ async fn copy_can_be_disabled_independently_from_dml() {
 
     ctx.sql_with_options("INSERT INTO test VALUES (1)", options)
         .await
+        .unwrap()
+        .collect()
+        .await
         .unwrap();
+
+    let results = ctx
+        .sql_with_options("SELECT x FROM test", options)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(["+---+", "| x |", "+---+", "| 1 |", "+---+"], &results);
+
+    let options = options.with_allow_copy(true);
+    ctx.sql_with_options(&sql, options).await.unwrap();
 }
 
 #[tokio::test]
