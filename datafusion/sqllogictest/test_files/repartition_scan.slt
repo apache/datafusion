@@ -138,7 +138,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [column1@0 ASC NULLS LAST]
 02)--FilterExec: column1@0 != 42
-03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/1.parquet:0..258], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/1.parquet:258..510, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:0..6], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:6..264], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:264..521]]}, projection=[column1], output_ordering=[column1@0 ASC NULLS LAST], file_type=parquet, predicate=column1@0 != 42, pruning_predicate=column1_null_count@2 != row_count@3 AND (column1_min@0 != 42 OR 42 != column1_max@1), required_guarantees=[column1 not in (42)]
+03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/1.parquet:0..255], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:0..260], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:260..521], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/1.parquet:255..510]]}, projection=[column1], output_ordering=[column1@0 ASC NULLS LAST], file_type=parquet, predicate=column1@0 != 42, pruning_predicate=column1_null_count@2 != row_count@3 AND (column1_min@0 != 42 OR 42 != column1_max@1), required_guarantees=[column1 not in (42)]
 
 # Cleanup
 statement ok
@@ -146,6 +146,53 @@ DROP TABLE parquet_table;
 
 statement ok
 DROP TABLE parquet_table_with_order;
+
+## An ordered scan gets size-balanced groups when statistics prove that
+## every new group is still sorted
+
+statement ok
+COPY (VALUES (1), (2), (3), (4), (5))
+TO 'test_files/scratch/repartition_scan/ordered_files/1.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (VALUES (100), (200))
+TO 'test_files/scratch/repartition_scan/ordered_files/2.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE ordered_files(column1 bigint)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/repartition_scan/ordered_files'
+WITH ORDER (column1 ASC);
+
+query I
+SELECT column1 FROM ordered_files WHERE column1 <> 42 ORDER BY column1;
+----
+1
+2
+3
+4
+5
+100
+200
+
+# A group may span files when reading them in order keeps the declared
+# ordering: all of 1.parquet's values are below 2.parquet's
+query TT
+EXPLAIN SELECT column1 FROM ordered_files WHERE column1 <> 42 ORDER BY column1;
+----
+logical_plan
+01)Sort: ordered_files.column1 ASC NULLS LAST
+02)--Filter: ordered_files.column1 != Int64(42)
+03)----TableScan: ordered_files projection=[column1], partial_filters=[ordered_files.column1 != Int64(42)]
+physical_plan
+01)SortPreservingMergeExec: [column1@0 ASC NULLS LAST]
+02)--FilterExec: column1@0 != 42
+03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/ordered_files/1.parquet:0..258], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/ordered_files/1.parquet:258..516], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/ordered_files/1.parquet:516..521, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/ordered_files/2.parquet:0..253], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/ordered_files/2.parquet:253..510]]}, projection=[column1], output_ordering=[column1@0 ASC NULLS LAST], file_type=parquet, predicate=column1@0 != 42, pruning_predicate=column1_null_count@2 != row_count@3 AND (column1_min@0 != 42 OR 42 != column1_max@1), required_guarantees=[column1 not in (42)]
+
+statement ok
+DROP TABLE ordered_files;
 
 ## Either row group range assignment reads each row of a split file once
 
