@@ -330,8 +330,6 @@ impl ArrayAggAccumulator {
     }
 }
 
-/// Returns the mask of non-null rows in `values` when `ignore_nulls` is set
-/// and some row is null.
 /// Returns the sort options for `ARRAY_AGG(DISTINCT ...)`, or an error if the
 /// ORDER BY cannot be combined with DISTINCT.
 ///
@@ -359,6 +357,8 @@ fn distinct_sort_options(acc_args: &AccumulatorArgs) -> Result<Option<SortOption
     }
 }
 
+/// Returns the mask of non-null rows in `values` when `ignore_nulls` is set
+/// and some row is null.
 fn non_null_mask(values: &dyn Array, ignore_nulls: bool) -> Option<BooleanArray> {
     if !ignore_nulls {
         return None;
