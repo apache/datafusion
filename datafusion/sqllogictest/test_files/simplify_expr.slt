@@ -769,6 +769,58 @@ physical_plan
 01)FilterExec: ts_milli@1 >= 124
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# A non-aligned widening literal has no singleton source preimage. Ordered
+# comparisons use the empty preimage interval `[floor + 1, floor + 1)`, so both
+# strict and inclusive bounds move to the first source value at or above the
+# literal: `> 123456789ns` and `>= 123456789ns` become `>= 124ms`, while
+# `< 123456789ns` and `<= 123456789ns` become `< 124ms`. The matched rows are
+# unchanged; only the boundary predicate is expressed in source units.
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) > arrow_cast(123456789, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_milli >= TimestampMillisecond(124, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_milli@1 >= 124
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) < arrow_cast(123456789, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_milli < TimestampMillisecond(124, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_milli@1 < 124
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) <= arrow_cast(123456789, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_milli < TimestampMillisecond(124, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_milli@1 < 124
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Equality-like operators keep the CAST: a non-aligned literal has no
+# equivalent source-domain singleton, so there is nothing to fold.
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) = arrow_cast(123456789, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: CAST(cast_preimage_ts.ts_milli AS Timestamp(ns)) = TimestampNanosecond(123456789, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: CAST(ts_milli@1 AS Timestamp(ns)) = 123456789
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
 query TT
 EXPLAIN SELECT * FROM cast_preimage_ts
 WHERE CAST(ts_nano AS TIMESTAMP(3)) = arrow_cast(-1, 'Timestamp(ms)');
@@ -780,6 +832,63 @@ physical_plan
 01)FilterExec: ts_nano@0 >= -1999999 AND ts_nano@0 < -999999
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Signed boundary rows, selected by id so the returned rows are explicit.
+statement ok
+CREATE TABLE cast_preimage_ms AS
+SELECT id, arrow_cast(v, 'Timestamp(ms)') AS ts_milli
+FROM (VALUES (1, 123), (2, 124), (3, -124), (4, -123)) AS t(id, v);
+
+statement ok
+CREATE TABLE cast_preimage_nano AS
+SELECT id, arrow_cast(v, 'Timestamp(ns)') AS ts_nano
+FROM (VALUES (1, -1999999), (2, -1999998), (3, -1000000), (4, -1000001),
+             (5, -999999), (6, -999998)) AS t(id, v);
+
+# Negative non-aligned widening: `> -123456789ns` becomes `>= -123ms`, so the
+# negative neighbour -124ms is excluded while -123ms stays (ids 4, 1, 2).
+query I
+SELECT id FROM cast_preimage_ms
+WHERE CAST(ts_milli AS TIMESTAMP(9)) > arrow_cast(-123456789, 'Timestamp(ns)')
+ORDER BY ts_milli;
+----
+4
+1
+2
+
+# Non-aligned equality keeps the CAST and matches nothing: no millisecond value
+# equals a sub-millisecond literal.
+query I
+SELECT count(*) FROM cast_preimage_ms
+WHERE CAST(ts_milli AS TIMESTAMP(9)) = arrow_cast(-123456789, 'Timestamp(ns)');
+----
+0
+
+# The narrowing bucket for -1ms is `[-1999999ns, -999999ns)`: ids 1-4 truncate
+# to -1, while ids 5 and 6 truncate to 0 and are excluded.
+query I
+SELECT id FROM cast_preimage_nano
+WHERE CAST(ts_nano AS TIMESTAMP(3)) = arrow_cast(-1, 'Timestamp(ms)')
+ORDER BY ts_nano;
+----
+1
+2
+4
+3
+
+# A typed NULL literal in a narrowing cast has no truncation bucket, so the CAST
+# is not rewritten and the query still matches no rows (three-valued logic).
+query I
+SELECT count(*) FROM cast_preimage_ts
+WHERE CAST(ts_nano AS TIMESTAMP(3)) = arrow_cast(NULL, 'Timestamp(ms)');
+----
+0
+
+statement ok
+DROP TABLE cast_preimage_nano;
+
+statement ok
+DROP TABLE cast_preimage_ms;
+
 statement ok
 DROP TABLE cast_preimage_ts;
 
@@ -788,9 +897,10 @@ DROP TABLE cast_preimage_ts;
 # Arrow reads a timezone-naive timestamp as local wall-clock time and shifts it
 # to UTC when the target is timezone-aware (`adjust_timestamp_to_timezone`), so
 # `CAST(ts AS Timestamp(unit, Some(tz))) OP literal` is not a pure unit change.
-# The shared precision arithmetic works on raw source units and does not model
-# that shift, so the CAST must stay on the column for same-unit, widening and
-# narrowing targets alike.
+# The timestamp preimage works on raw source units and does not model that
+# shift, so the CAST must stay on the column for same-unit, widening and
+# narrowing targets alike; a rejected timestamp cast never falls back to a
+# generic cast-family rewrite.
 #
 # `2024-01-01T00:00:00.5` is 1704067200500000000 ns of naive wall-clock time;
 # read in `+07:00` and shifted to UTC it is 1704042000500000000 ns
@@ -813,9 +923,8 @@ where arrow_cast(ts, 'Timestamp(Millisecond, Some("+07:00"))')
 ----
 1
 
-# Narrowing (ns -> ms) with a literal. This pair was already guarded before the
-# shared gate existed, so it stays at 1; without the guard the rewrite would
-# return 0.
+# Narrowing (ns -> ms) with a literal: the naive -> aware rejection applies to
+# the bucket path too, so it stays at 1 (without the guard it would return 0).
 query I
 select count(*) from cast_preimage_tz
 where arrow_cast(ts, 'Timestamp(Millisecond, Some("+07:00"))')
@@ -823,9 +932,9 @@ where arrow_cast(ts, 'Timestamp(Millisecond, Some("+07:00"))')
 ----
 1
 
-# Same unit, only the timezone changes: this is the pair the shared gate has to
-# reject. Without it the literal folds to a naive nanosecond literal and the
-# comparison drops the row (0).
+# Same unit, only the timezone changes: this pair must be rejected. Without the
+# guard the literal folds to a naive nanosecond literal and the comparison drops
+# the row (0).
 query I
 select count(*) from cast_preimage_tz
 where arrow_cast(ts, 'Timestamp(Nanosecond, Some("+07:00"))')
@@ -833,8 +942,8 @@ where arrow_cast(ts, 'Timestamp(Nanosecond, Some("+07:00"))')
 ----
 1
 
-# Widening (ms -> ns) with an aligned literal goes through the exact-preimage
-# path and must be rejected there too.
+# Widening (ms -> ns) with an aligned literal goes through the same timestamp
+# preimage and must be rejected there too.
 query I
 select count(*) from cast_preimage_tz_ms
 where arrow_cast(ts_milli, 'Timestamp(Nanosecond, Some("+07:00"))')
@@ -842,9 +951,9 @@ where arrow_cast(ts_milli, 'Timestamp(Nanosecond, Some("+07:00"))')
 ----
 1
 
-# The IN-list rewrite uses the same exact-preimage helper and must be rejected
-# as well. Two literal items keep this on the IN-list path rather than folding
-# to a single equality.
+# The IN-list rewrite uses `exact_preimage_cast`, which routes timestamp casts
+# through the same helper, and must be rejected as well. Two literal items keep
+# this on the IN-list path rather than folding to a single equality.
 query I
 select count(*) from cast_preimage_tz
 where arrow_cast(ts, 'Timestamp(Nanosecond, Some("+07:00"))')

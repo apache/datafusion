@@ -359,12 +359,12 @@ mod tests {
     /// Unit-specific timestamp literal, e.g. `0` in milliseconds or nanoseconds.
     fn timestamp_literal(
         unit: &TimeUnit,
-        value: i64,
+        value: Option<i64>,
         tz: Option<Arc<str>>,
     ) -> ScalarValue {
         match unit {
-            TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(Some(value), tz),
-            TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(Some(value), tz),
+            TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(value, tz),
+            TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(value, tz),
             other => unreachable!("unsupported test time unit {other:?}"),
         }
     }
@@ -374,9 +374,9 @@ mod tests {
         let tz: Option<Arc<str>> = Some("+07:00".into());
 
         // cast(naive_ts AS Timestamp(unit, "+07:00")) must NOT unwrap for CAST or
-        // TRY_CAST: Arrow adjusts naive values to UTC, which the precision-only
-        // preimage arithmetic does not model. Same unit, widening and narrowing
-        // targets are all rejected by the shared gate.
+        // TRY_CAST: Arrow reads the naive value as local wall-clock time in
+        // "+07:00" and shifts it to UTC, which the unit arithmetic does not
+        // model. Same unit, widening and narrowing targets are all rejected.
         for (source_unit, target_unit) in [
             (TimeUnit::Nanosecond, TimeUnit::Nanosecond),
             (TimeUnit::Millisecond, TimeUnit::Nanosecond),
@@ -385,7 +385,7 @@ mod tests {
             let schema = timestamp_schema(source_unit);
             let column_expr = col("ts", &schema).unwrap();
             let target_type = DataType::Timestamp(target_unit, tz.clone());
-            let literal = lit(timestamp_literal(&target_unit, 0, tz.clone()));
+            let literal = lit(timestamp_literal(&target_unit, Some(0), tz.clone()));
 
             for try_cast in [false, true] {
                 let cast_expr: Arc<dyn PhysicalExpr> = if try_cast {
@@ -428,6 +428,79 @@ mod tests {
 
         let result = unwrap_cast_in_comparison(binary_expr, &ms_schema).unwrap();
         assert!(result.transformed);
+    }
+
+    #[test]
+    fn test_timestamp_precision_narrowing_typed_null_literal_kept() {
+        let schema = timestamp_schema(TimeUnit::Nanosecond);
+
+        // A typed NULL literal has no truncation bucket, so the CAST is kept
+        // rather than folded to an unbounded interval.
+        for op in [Operator::Eq, Operator::Gt, Operator::IsDistinctFrom] {
+            let binary_expr = Arc::new(BinaryExpr::new(
+                Arc::new(CastExpr::new(
+                    col("ts", &schema).unwrap(),
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    None,
+                )),
+                op,
+                lit(ScalarValue::TimestampMillisecond(None, None)),
+            ));
+            let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+            assert!(!result.transformed, "unexpected rewrite for {op:?}");
+        }
+    }
+
+    #[test]
+    fn test_timestamp_dictionary_source_keeps_source_type() {
+        let key_type = Box::new(DataType::Int32);
+        let source_type = DataType::Dictionary(
+            key_type.clone(),
+            Box::new(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some("+05:30".into()),
+            )),
+        );
+        let schema = Schema::new(vec![Field::new("ts", source_type.clone(), false)]);
+
+        // Narrowing a dictionary-typed column must keep the source dictionary
+        // key, unit and timezone on both bucket bounds.
+        let binary_expr = Arc::new(BinaryExpr::new(
+            Arc::new(CastExpr::new(
+                col("ts", &schema).unwrap(),
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                None,
+            )),
+            Operator::Eq,
+            lit(ScalarValue::TimestampMillisecond(
+                Some(-1),
+                Some("UTC".into()),
+            )),
+        ));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+        assert!(result.transformed);
+        let and_binary = result.data.downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(*and_binary.op(), Operator::And);
+
+        for (binary, expected) in [
+            (and_binary.left(), -1_999_999),
+            (and_binary.right(), -999_999),
+        ] {
+            let binary = binary.downcast_ref::<BinaryExpr>().unwrap();
+            let literal = binary.right().downcast_ref::<Literal>().unwrap();
+            assert_eq!(literal.value().data_type(), source_type);
+            assert_eq!(
+                literal.value(),
+                &ScalarValue::Dictionary(
+                    key_type.clone(),
+                    Box::new(ScalarValue::TimestampNanosecond(
+                        Some(expected),
+                        Some("+05:30".into())
+                    ))
+                )
+            );
+        }
     }
 
     #[test]
@@ -847,14 +920,14 @@ mod tests {
             123,
         );
 
-        for (literal, floor, ceil) in
-            [(123_456_789, 123, 124), (-123_456_789, -124, -123)]
-        {
-            for (op, bound) in [
-                (Operator::GtEq, ceil),
-                (Operator::Gt, floor),
-                (Operator::Lt, ceil),
-                (Operator::LtEq, floor),
+        // A non-aligned widening literal maps from no source value, so the
+        // rewrite uses the empty interval `[floor + 1, floor + 1)`.
+        for (literal, ceil) in [(123_456_789, 124), (-123_456_789, -123)] {
+            for (op, expected_op) in [
+                (Operator::GtEq, Operator::GtEq),
+                (Operator::Gt, Operator::GtEq),
+                (Operator::Lt, Operator::Lt),
+                (Operator::LtEq, Operator::Lt),
             ] {
                 assert_timestamp_widening_rewrite(
                     &schema,
@@ -864,8 +937,8 @@ mod tests {
                         op,
                         ScalarValue::TimestampNanosecond(Some(literal), None),
                     ),
-                    op,
-                    bound,
+                    expected_op,
+                    ceil,
                 );
             }
         }
@@ -901,11 +974,11 @@ mod tests {
     #[test]
     fn test_timestamp_widening_literal_left_ordered() {
         let schema = timestamp_schema(TimeUnit::Millisecond);
-        for (op, expected_op, expected_value) in [
-            (Operator::Lt, Operator::Gt, 123),
-            (Operator::LtEq, Operator::GtEq, 124),
-            (Operator::Gt, Operator::Lt, 124),
-            (Operator::GtEq, Operator::LtEq, 123),
+        for (op, expected_op) in [
+            (Operator::Lt, Operator::GtEq),
+            (Operator::LtEq, Operator::GtEq),
+            (Operator::Gt, Operator::Lt),
+            (Operator::GtEq, Operator::Lt),
         ] {
             let cast_expr = Arc::new(CastExpr::new(
                 col("ts", &schema).unwrap(),
@@ -917,12 +990,7 @@ mod tests {
                 op,
                 cast_expr,
             ));
-            assert_timestamp_widening_rewrite(
-                &schema,
-                binary_expr,
-                expected_op,
-                expected_value,
-            );
+            assert_timestamp_widening_rewrite(&schema, binary_expr, expected_op, 124);
         }
 
         let try_cast_expr = Arc::new(TryCastExpr::new(
@@ -936,8 +1004,8 @@ mod tests {
                 Operator::GtEq,
                 try_cast_expr,
             )),
-            Operator::LtEq,
-            -124,
+            Operator::Lt,
+            -123,
         );
     }
 

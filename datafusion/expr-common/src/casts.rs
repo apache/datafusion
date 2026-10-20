@@ -40,14 +40,14 @@ use datafusion_common::{Result, ScalarValue};
 /// Source-domain preimage of `CAST(source_expr AS target_type) OP literal`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CastPredicatePreimage {
-    /// An exact same-operator source bound or literal.
-    ///
-    /// For equality-like predicates this is a singleton literal. For ordered
-    /// timestamp widening predicates it is a source-unit bound, not a
-    /// singleton equality preimage.
+    /// An exact same-operator source bound or literal, i.e. the rewrite is
+    /// `source_expr OP value` with the original comparison operator.
     Exact(ScalarValue),
-    /// A half-open source-domain interval `[lower, upper)`. The caller must
-    /// map the comparison operator to range predicates.
+    /// A half-open source-domain interval `[lower, upper)`; the caller maps the
+    /// comparison operator onto its bounds. Equal bounds mean no single source
+    /// value maps to the literal, an empty equality preimage, while ordered
+    /// comparisons still compare against that bound as in `< bound` or
+    /// `>= bound`.
     Range(Interval),
 }
 
@@ -119,23 +119,26 @@ pub fn try_cast_literal_to_type(
 /// [`CastPredicatePreimage::Exact`] where moving the cast preserves comparison
 /// semantics subject to the documented family-level overflow exceptions, and a
 /// [`CastPredicatePreimage::Range`] for many-to-one casts with known preimages
-/// such as timestamp precision narrowing.
+/// (timestamp precision narrowing) or for non-aligned timestamp widening
+/// literals.
 pub fn cast_predicate_preimage(
     source_type: &DataType,
     target_type: &DataType,
     op: Operator,
     lit_value: &ScalarValue,
 ) -> Result<Option<CastPredicatePreimage>> {
-    // Arrow adjusts a timezone-naive value to UTC when the target is
-    // timezone-aware (`adjust_timestamp_to_timezone`). The precision-only
-    // arithmetic here does not model that adjustment, so retain the cast. This
-    // dispatcher check covers the range, exact and widening paths below.
-    if is_naive_to_tz_timestamp_cast(source_type, target_type) {
-        return Ok(None);
-    }
-
-    if let Some(preimage) = maybe_range_preimage(source_type, target_type, lit_value)? {
-        return Ok(Some(preimage));
+    // Timestamp casts have their own rules: a truncation bucket when the cast
+    // narrows, and the source values equal to the literal when it does not. A
+    // rejected timestamp cast keeps its `CAST` instead of falling back to
+    // another cast family.
+    if let Some((source, target)) = timestamp_cast_types(source_type, target_type) {
+        return Ok(timestamp_preimage(
+            source_type,
+            source,
+            target,
+            op,
+            lit_value,
+        ));
     }
 
     if let Some(value) =
@@ -144,60 +147,43 @@ pub fn cast_predicate_preimage(
         return Ok(Some(CastPredicatePreimage::Exact(value)));
     }
 
-    if let Some(value) = exact_preimage_cast(source_type, target_type, lit_value) {
-        return Ok(Some(CastPredicatePreimage::Exact(value)));
-    }
-
-    Ok(
-        timestamp_widening_ordered_preimage(source_type, target_type, op, lit_value)
-            .map(CastPredicatePreimage::Exact),
-    )
-}
-
-fn maybe_range_preimage(
-    source_type: &DataType,
-    target_type: &DataType,
-    lit_value: &ScalarValue,
-) -> Result<Option<CastPredicatePreimage>> {
-    if !is_timestamp_precision_narrowing_cast(source_type, target_type) {
-        return Ok(None);
-    }
-
-    Ok(
-        timestamp_narrowing_range_preimage(source_type, target_type, lit_value)?
-            .map(CastPredicatePreimage::Range),
-    )
+    Ok(exact_preimage_cast(source_type, target_type, lit_value)
+        .map(CastPredicatePreimage::Exact))
 }
 
 /// Computes a singleton source-domain literal for exact cast-predicate rewrites.
 ///
-/// This intentionally returns `None` for timestamp precision narrowing: those
-/// casts are many-to-one and need range preimages instead.
+/// This intentionally returns `None` for timestamp precision narrowing and for
+/// non-aligned timestamp widening: those casts need range preimages instead.
 pub fn exact_preimage_cast(
     source_type: &DataType,
     target_type: &DataType,
     lit_value: &ScalarValue,
 ) -> Option<ScalarValue> {
+    // Timestamp casts need unit arithmetic rather than a literal round trip; only
+    // their singleton preimages are valid here.
+    if let Some((source, target)) = timestamp_cast_types(source_type, target_type) {
+        return match timestamp_preimage(
+            source_type,
+            source,
+            target,
+            Operator::Eq,
+            lit_value,
+        )? {
+            CastPredicatePreimage::Exact(value) => Some(value),
+            CastPredicatePreimage::Range(_) => None,
+        };
+    }
+
     // Apply a family-level gate: the source→target cast must normally preserve
     // the full source domain. Integer or decimal sources to a decimal target
     // are admitted by scale instead (see `is_exact_cast_safe`), accepting
     // precision/width overflow as a boolean result for out-of-range rows.
-    // Timestamp precision narrowing is a Range preimage, not an Exact one;
-    // timestamp widening / equal-unit casts still need the round-trip check
-    // below.
     if !is_exact_cast_safe(source_type, target_type) {
         return None;
     }
 
-    let source_value = try_cast_literal_to_type(lit_value, source_type)?;
-    if is_timestamp_cast(source_type, target_type) {
-        let round_tripped = try_cast_literal_to_type(&source_value, target_type)?;
-        if &round_tripped != lit_value {
-            return None;
-        }
-    }
-
-    Some(source_value)
+    try_cast_literal_to_type(lit_value, source_type)
 }
 
 /// Returns true when casting a timestamp from `source_type` to `target_type`
@@ -215,31 +201,25 @@ pub fn is_timestamp_precision_narrowing_cast(
     timestamp_unit_scale(source_unit) > timestamp_unit_scale(target_unit)
 }
 
-fn is_timestamp_cast(source_type: &DataType, target_type: &DataType) -> bool {
-    matches!(
-        (source_type, target_type),
-        (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
-    )
-}
-
-/// Returns true when casting a timezone-naive timestamp to a timezone-aware one.
-///
-/// Arrow adjusts such values to UTC (`adjust_timestamp_to_timezone`), which the
-/// precision-only preimage arithmetic here does not model, so the cast is kept.
-fn is_naive_to_tz_timestamp_cast(source_type: &DataType, target_type: &DataType) -> bool {
-    matches!(
-        (source_type, target_type),
-        (
-            DataType::Timestamp(_, None),
-            DataType::Timestamp(_, Some(_))
-        )
-    )
+/// Returns the source and target types of a timestamp cast, each unwrapped from
+/// at most one `Dictionary` level.
+fn timestamp_cast_types<'a>(
+    source_type: &'a DataType,
+    target_type: &'a DataType,
+) -> Option<(&'a DataType, &'a DataType)> {
+    let unwrap = |data_type: &'a DataType| match data_type {
+        DataType::Dictionary(_, value_type) => value_type.as_ref(),
+        data_type => data_type,
+    };
+    let (source, target) = (unwrap(source_type), unwrap(target_type));
+    (matches!(source, DataType::Timestamp(_, _))
+        && matches!(target, DataType::Timestamp(_, _)))
+    .then_some((source, target))
 }
 
 /// Returns `true` when casting `source_type` to `target_type` is exact and
-/// order-preserving over the source values the cast succeeds on. Timestamp
-/// widening retains its pre-existing overflow limitation. Integer or decimal
-/// sources to a decimal target are admitted when the source scale is
+/// order-preserving over the source values the cast succeeds on. Integer or
+/// decimal sources to a decimal target are admitted when the source scale is
 /// nonnegative and the target scale is at least the source scale: a successful
 /// cast only multiplies the unscaled value by an integral power of ten.
 /// Precision or width overflow is the explicit exception: `CAST` errors and
@@ -247,11 +227,9 @@ fn is_naive_to_tz_timestamp_cast(source_type: &DataType, target_type: &DataType)
 /// compares the source value and returns TRUE/FALSE. This rule is type-based
 /// and does not distinguish implicit coercions from explicit casts.
 ///
-/// This is a conservative gate used by [`exact_preimage_cast`]. Timestamp
-/// precision narrowing is not exact-safe (it is handled by
-/// [`CastPredicatePreimage::Range`]); timestamp widening / equal-unit casts are
-/// family-safe subject to their documented overflow limitations and still
-/// require the caller's literal round-trip check.
+/// This is a conservative gate used by [`exact_preimage_cast`] for the non
+/// timestamp cast families; timestamp casts are handled by
+/// [`timestamp_preimage`] instead.
 fn is_exact_cast_safe(source_type: &DataType, target_type: &DataType) -> bool {
     // Unwrap at most one level of dictionary for family-level checking.
     let (src, tgt) = match (source_type, target_type) {
@@ -278,13 +256,6 @@ fn is_exact_cast_safe(source_type: &DataType, target_type: &DataType) -> bool {
 
     if src == tgt {
         return true;
-    }
-    if is_timestamp_cast(src, tgt) {
-        // Timestamp precision narrowing is handled as a Range preimage, and a
-        // naive → timezone-aware cast reads the raw value as local wall-clock
-        // time and shifts it to UTC; neither is an exact preimage.
-        return !is_timestamp_precision_narrowing_cast(src, tgt)
-            && !is_naive_to_tz_timestamp_cast(src, tgt);
     }
 
     // Whitelist of family-level safe casts.  Anything not listed here is
@@ -433,111 +404,113 @@ fn exact_preimage_int_to_str_eq_like(
     }
 }
 
-/// Computes the source-domain preimage interval for timestamp precision
-/// narrowing casts.
+/// Computes the source-domain preimage of `CAST(source AS target) OP literal`
+/// for a timestamp precision cast.
 ///
-/// Bounds are source-domain literals, so they preserve `source_tz`. The target
-/// timezone belongs to the cast result and is not copied into the bounds.
-/// Timezone-naive sources with timezone-aware targets are rejected by
-/// [`is_naive_to_tz_timestamp_cast`] in the dispatcher.
-fn timestamp_narrowing_range_preimage(
-    source_type: &DataType,
-    target_type: &DataType,
-    lit_value: &ScalarValue,
-) -> Result<Option<Interval>> {
-    let (
-        DataType::Timestamp(source_unit, source_tz),
-        DataType::Timestamp(target_unit, _),
-    ) = (source_type, target_type)
-    else {
-        return Ok(None);
-    };
-
-    let source_scale = i128::from(timestamp_unit_scale(source_unit));
-    let target_scale = i128::from(timestamp_unit_scale(target_unit));
-    if source_scale <= target_scale {
-        return Ok(None);
-    }
-
-    let Some(target_value) = timestamp_literal_value(lit_value, target_unit) else {
-        return Ok(None);
-    };
-
-    let bucket_width = source_scale / target_scale;
-    let Some((lower, upper)) = trunc_toward_zero_bucket(target_value, bucket_width)
-    else {
-        return Ok(None);
-    };
-
-    let Ok(lower) = i64::try_from(lower) else {
-        return Ok(None);
-    };
-    let Ok(upper) = i64::try_from(upper) else {
-        return Ok(None);
-    };
-
-    Interval::try_new(
-        timestamp_scalar(source_unit, source_tz.clone(), lower),
-        timestamp_scalar(source_unit, source_tz.clone(), upper),
-    )
-    .map(Some)
-}
-
-/// Computes a same-operator source bound for an ordered timestamp precision
-/// widening cast with a non-aligned target literal.
+/// `source` and `target` are already unwrapped from one `Dictionary` level;
+/// `source_type` is the original source type, whose dictionary key is applied to
+/// every bound together with the source unit and timezone, so nothing from the
+/// target type leaks into the rewritten predicate. Rejected casts return `None`.
 ///
-/// This deliberately follows the accepted timestamp-widening policy for this
-/// PR: at extreme source values where widening overflows, `CAST` can error and
-/// `TRY_CAST` can return `NULL`, while the rewritten source-unit comparison
-/// returns a Boolean. It is therefore not a global full-domain equivalence
-/// claim for those overflow cases; a guarded-preimage redesign is out of scope.
-fn timestamp_widening_ordered_preimage(
+/// Retained policy: at extreme source values where the cast itself overflows,
+/// `CAST` can error and `TRY_CAST` can return `NULL` while the rewritten
+/// source-unit comparison returns a Boolean.
+fn timestamp_preimage(
     source_type: &DataType,
-    target_type: &DataType,
+    source: &DataType,
+    target: &DataType,
     op: Operator,
     lit_value: &ScalarValue,
-) -> Option<ScalarValue> {
+) -> Option<CastPredicatePreimage> {
     let (
         DataType::Timestamp(source_unit, source_tz),
         DataType::Timestamp(target_unit, target_tz),
-    ) = (source_type, target_type)
+    ) = (source, target)
     else {
         return None;
     };
 
-    if source_tz != target_tz
-        || lit_value.is_null()
-        || lit_value.data_type() != *target_type
-        || !matches!(
-            op,
-            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
-        )
-    {
+    // Arrow reads a naive value as local wall-clock time in the target timezone
+    // and shifts it to UTC (`adjust_timestamp_to_timezone`), which this unit
+    // arithmetic does not model, so the cast is kept.
+    if source_tz.is_none() && target_tz.is_some() {
         return None;
     }
+
+    // The literal must already be a timestamp in the target unit and timezone; it
+    // is never converted, and at most one dictionary wrapper is unwrapped.
+    let literal = match lit_value {
+        ScalarValue::Dictionary(_, inner) => inner.as_ref(),
+        literal => literal,
+    };
+    if literal.data_type() != *target {
+        return None;
+    }
+    let (ScalarValue::TimestampSecond(literal_value, _)
+    | ScalarValue::TimestampMillisecond(literal_value, _)
+    | ScalarValue::TimestampMicrosecond(literal_value, _)
+    | ScalarValue::TimestampNanosecond(literal_value, _)) = literal
+    else {
+        return None;
+    };
+
+    let bound = |value| {
+        let scalar = timestamp_scalar(source_unit, source_tz.clone(), value);
+        match source_type {
+            DataType::Dictionary(key_type, _) => {
+                ScalarValue::Dictionary(key_type.clone(), Box::new(scalar))
+            }
+            _ => scalar,
+        }
+    };
 
     let source_scale = i128::from(timestamp_unit_scale(source_unit));
     let target_scale = i128::from(timestamp_unit_scale(target_unit));
-    if target_scale <= source_scale {
-        return None;
-    }
 
-    let target_value = i128::from(timestamp_literal_value(lit_value, target_unit)?);
-    let quotient = target_scale / source_scale;
-    let floor = target_value.div_euclid(quotient);
-    let remainder = target_value.rem_euclid(quotient);
-    if remainder == 0 {
-        return None;
-    }
-    let ceil = floor + 1;
-    let bound = match op {
-        Operator::GtEq | Operator::Lt => ceil,
-        Operator::Gt | Operator::LtEq => floor,
-        _ => return None,
+    let Some(literal_value) = *literal_value else {
+        // A narrowing NULL has no bucket; widening and same-unit casts keep the
+        // NULL on the source side.
+        return (source_scale <= target_scale)
+            .then(|| CastPredicatePreimage::Exact(bound(None)));
     };
 
-    let bound = i64::try_from(bound).ok()?;
-    Some(timestamp_scalar(source_unit, source_tz.clone(), bound))
+    // A single source-domain half-open interval `[lower, upper)`: narrowing casts
+    // many values onto the literal, so it is the truncation bucket; a widening or
+    // same-unit cast maps the literal from one source value when it is aligned and
+    // from none otherwise.
+    let (lower, upper) = if source_scale > target_scale {
+        trunc_toward_zero_bucket(literal_value, source_scale / target_scale)?
+    } else {
+        let ratio = target_scale / source_scale;
+        let literal_value = i128::from(literal_value);
+        let floor = literal_value.div_euclid(ratio);
+        let ceil = floor + i128::from(literal_value.rem_euclid(ratio) != 0);
+        (ceil, floor + 1)
+    };
+
+    if lower == upper {
+        // No source value maps to the literal, so only ordered comparisons can
+        // move the cast, and only when both sides share the source timezone.
+        if source_tz != target_tz
+            || !matches!(
+                op,
+                Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+            )
+        {
+            return None;
+        }
+    } else if upper == lower + 1 {
+        // Exactly one source value maps to the literal. Its exclusive upper bound
+        // can sit one past `i64::MAX`, so only `lower` is range-checked.
+        return Some(CastPredicatePreimage::Exact(bound(Some(
+            i64::try_from(lower).ok()?,
+        ))));
+    }
+
+    let (lower, upper) = (i64::try_from(lower).ok()?, i64::try_from(upper).ok()?);
+    Interval::try_new(bound(Some(lower)), bound(Some(upper)))
+        .ok()
+        .map(CastPredicatePreimage::Range)
 }
 
 /// Returns the half-open source-domain bucket `[lower, upper)` that truncates
@@ -577,18 +550,6 @@ fn trunc_toward_zero_bucket(value: i64, bucket_width: i128) -> Option<(i128, i12
     }
 }
 
-fn timestamp_literal_value(lit_value: &ScalarValue, unit: &TimeUnit) -> Option<i64> {
-    match (lit_value, unit) {
-        (ScalarValue::TimestampSecond(Some(value), _), TimeUnit::Second)
-        | (ScalarValue::TimestampMillisecond(Some(value), _), TimeUnit::Millisecond)
-        | (ScalarValue::TimestampMicrosecond(Some(value), _), TimeUnit::Microsecond)
-        | (ScalarValue::TimestampNanosecond(Some(value), _), TimeUnit::Nanosecond) => {
-            Some(*value)
-        }
-        _ => None,
-    }
-}
-
 fn timestamp_unit_scale(unit: &TimeUnit) -> i64 {
     match unit {
         TimeUnit::Second => 1,
@@ -598,12 +559,17 @@ fn timestamp_unit_scale(unit: &TimeUnit) -> i64 {
     }
 }
 
-fn timestamp_scalar(unit: &TimeUnit, tz: Option<Arc<str>>, value: i64) -> ScalarValue {
+/// Builds a timestamp scalar in `unit` and `tz`.
+fn timestamp_scalar(
+    unit: &TimeUnit,
+    tz: Option<Arc<str>>,
+    value: Option<i64>,
+) -> ScalarValue {
     match unit {
-        TimeUnit::Second => ScalarValue::TimestampSecond(Some(value), tz),
-        TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(Some(value), tz),
-        TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(Some(value), tz),
-        TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(Some(value), tz),
+        TimeUnit::Second => ScalarValue::TimestampSecond(value, tz),
+        TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(value, tz),
+        TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(value, tz),
+        TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(value, tz),
     }
 }
 
@@ -1815,12 +1781,50 @@ mod tests {
 
     #[test]
     fn test_cast_predicate_preimage_timestamp_narrowing_range() {
-        for (lit_ms, lower_ns, upper_ns) in [
-            (1000, 1_000_000_000, 1_001_000_000),
-            (0, -999_999, 1_000_000),
-            (-1, -1_999_999, -999_999),
+        // Truncation toward zero decides the bucket by sign: positive, zero spans
+        // both sides, and negative buckets shift by one.
+        for (source_unit, target_unit, lit, lower, upper) in [
+            (
+                TimeUnit::Nanosecond,
+                TimeUnit::Millisecond,
+                1000,
+                1_000_000_000,
+                1_001_000_000,
+            ),
+            (
+                TimeUnit::Nanosecond,
+                TimeUnit::Millisecond,
+                0,
+                -999_999,
+                1_000_000,
+            ),
+            (
+                TimeUnit::Nanosecond,
+                TimeUnit::Millisecond,
+                -1,
+                -1_999_999,
+                -999_999,
+            ),
+            (
+                TimeUnit::Microsecond,
+                TimeUnit::Second,
+                1,
+                1_000_000,
+                2_000_000,
+            ),
+            (
+                TimeUnit::Nanosecond,
+                TimeUnit::Second,
+                -2,
+                -2_999_999_999,
+                -1_999_999_999,
+            ),
+            (TimeUnit::Nanosecond, TimeUnit::Microsecond, 0, -999, 1_000),
+            (TimeUnit::Millisecond, TimeUnit::Second, 1, 1000, 2000),
+            (TimeUnit::Millisecond, TimeUnit::Second, -1, -1999, -999),
+            (TimeUnit::Microsecond, TimeUnit::Millisecond, 0, -999, 1000),
         ] {
-            assert_timestamp_narrowing_range(lit_ms, lower_ns, upper_ns);
+            assert_timestamp_narrowing_range(source_unit, target_unit, lit, lower, upper);
         }
     }
 
@@ -1833,11 +1837,11 @@ mod tests {
     }
 
     #[test]
-    fn test_naive_to_timezone_timestamp_gate_rejected() {
+    fn test_naive_to_timezone_timestamp_rejected() {
         // Same unit, widening and narrowing targets: Arrow adjusts naive
-        // values to UTC, which the precision-only arithmetic does not model.
-        // The literal is unit-aligned (0), so the rejection comes from the
-        // timezone adjustment and not from an unaligned widening bound.
+        // values to UTC, which the precision arithmetic does not model. The
+        // literal is unit-aligned (0), so the rejection comes from the timezone
+        // adjustment and not from an unaligned widening bound.
         for (source_unit, target_unit) in [
             (TimeUnit::Nanosecond, TimeUnit::Nanosecond),
             (TimeUnit::Millisecond, TimeUnit::Nanosecond),
@@ -1845,12 +1849,8 @@ mod tests {
         ] {
             let source = DataType::Timestamp(source_unit, None);
             let target = DataType::Timestamp(target_unit, Some("+07:00".into()));
-            let literal = timestamp_scalar(&target_unit, Some("+07:00".into()), 0);
+            let literal = timestamp_scalar(&target_unit, Some("+07:00".into()), Some(0));
 
-            assert!(
-                !is_exact_cast_safe(&source, &target),
-                "{source:?} -> {target:?} must not be exact-safe"
-            );
             assert!(
                 exact_preimage_cast(&source, &target, &literal).is_none(),
                 "{source:?} -> {target:?} must not have an exact preimage"
@@ -1870,7 +1870,6 @@ mod tests {
         let source = DataType::Timestamp(TimeUnit::Nanosecond, None);
         for tz in ["UTC", "+00:00"] {
             let target = DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.into()));
-            assert!(!is_exact_cast_safe(&source, &target));
             assert_preimage_none(
                 &source,
                 &target,
@@ -1879,43 +1878,62 @@ mod tests {
             );
         }
 
-        // Positive control: a timezone-aware source keeps the existing accepted
-        // policies (same unit and widening stay exact-safe).
+        // Positive control: a timezone-aware source keeps the accepted same-unit
+        // and widening policies.
         let aware_ms = DataType::Timestamp(TimeUnit::Millisecond, Some("+07:00".into()));
         let aware_ns = DataType::Timestamp(TimeUnit::Nanosecond, Some("+07:00".into()));
-        assert!(is_exact_cast_safe(&aware_ns, &aware_ns));
-        assert!(is_exact_cast_safe(&aware_ms, &aware_ns));
+        assert_preimage_exact(
+            &aware_ns,
+            &aware_ns,
+            Operator::Eq,
+            &ScalarValue::TimestampNanosecond(Some(7), Some("+07:00".into())),
+            ScalarValue::TimestampNanosecond(Some(7), Some("+07:00".into())),
+        );
+        assert_preimage_exact(
+            &aware_ms,
+            &aware_ns,
+            Operator::Eq,
+            &ScalarValue::TimestampNanosecond(Some(7_000_000), Some("+07:00".into())),
+            ScalarValue::TimestampMillisecond(Some(7), Some("+07:00".into())),
+        );
     }
 
     #[test]
-    fn test_naive_to_timezone_dictionary_wrapped_gate_rejected() {
+    fn test_naive_to_timezone_dictionary_wrapped_rejected() {
         let dict = |inner: DataType| {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(inner))
         };
         let naive_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
         let aware_ns = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+        let literal = ScalarValue::TimestampNanosecond(Some(0), Some("UTC".into()));
 
-        // `is_exact_cast_safe` unwraps one level of dictionary, so a wrapped
+        // Timestamp preimages unwrap one level of dictionary, so a wrapped
         // naive -> aware pair is rejected like the bare pair.
-        assert!(!is_exact_cast_safe(&naive_ns, &aware_ns));
-        assert!(!is_exact_cast_safe(
+        assert_preimage_none(&naive_ns, &aware_ns, Operator::Eq, &literal);
+        assert_preimage_none(
             &dict(naive_ns.clone()),
-            &dict(aware_ns.clone())
-        ));
-        assert!(!is_exact_cast_safe(&dict(naive_ns.clone()), &aware_ns));
-        assert!(!is_exact_cast_safe(&naive_ns, &dict(aware_ns.clone())));
+            &dict(aware_ns.clone()),
+            Operator::Eq,
+            &literal,
+        );
+        assert_preimage_none(&dict(naive_ns.clone()), &aware_ns, Operator::Eq, &literal);
+        assert_preimage_none(&naive_ns, &dict(aware_ns.clone()), Operator::Eq, &literal);
 
-        // Safe controls stay allowed: aware -> aware unit widening, identity,
-        // and dropping the timezone to a naive target.
-        assert!(is_exact_cast_safe(
+        // Safe controls stay allowed: aware -> aware unit widening and identity.
+        assert_preimage_exact(
             &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             &DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-        ));
-        assert!(is_exact_cast_safe(&naive_ns, &naive_ns));
-        assert!(is_exact_cast_safe(
-            &DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-            &naive_ns,
-        ));
+            Operator::Eq,
+            &ScalarValue::TimestampNanosecond(Some(1_000_000), Some("UTC".into())),
+            ScalarValue::TimestampMillisecond(Some(1), Some("UTC".into())),
+        );
+        assert_preimage_exact(
+            &aware_ns,
+            &aware_ns,
+            Operator::Eq,
+            &literal,
+            ScalarValue::TimestampNanosecond(Some(0), Some("UTC".into())),
+        );
     }
 
     #[test]
@@ -1951,20 +1969,30 @@ mod tests {
     }
 
     #[test]
-    fn test_timestamp_widening_ordered_preimage_rejections_and_timezone() {
+    fn test_timestamp_widening_ordered_rejections_and_timezone() {
         let source_type = DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()));
         let target_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
         let literal =
             ScalarValue::TimestampNanosecond(Some(123_456_789), Some("UTC".into()));
 
-        assert_preimage_exact(
-            &source_type,
-            &target_type,
-            Operator::GtEq,
-            &literal,
-            ScalarValue::TimestampMillisecond(Some(124), Some("UTC".into())),
-        );
-
+        // A non-aligned literal has no singleton source value, so ordered
+        // comparisons use the empty interval and equality-like ones keep the
+        // cast. `123_456_789 / 1_000_000` floors to 123, so the interval is
+        // `[124, 124)`.
+        let empty = Some(CastPredicatePreimage::Range(
+            Interval::try_new(
+                ScalarValue::TimestampMillisecond(Some(124), Some("UTC".into())),
+                ScalarValue::TimestampMillisecond(Some(124), Some("UTC".into())),
+            )
+            .unwrap(),
+        ));
+        for op in [Operator::GtEq, Operator::Gt, Operator::Lt, Operator::LtEq] {
+            assert_eq!(
+                cast_predicate_preimage(&source_type, &target_type, op, &literal)
+                    .unwrap(),
+                empty
+            );
+        }
         for op in [
             Operator::Eq,
             Operator::NotEq,
@@ -1974,49 +2002,59 @@ mod tests {
             assert_preimage_none(&source_type, &target_type, op, &literal);
         }
 
-        assert!(
-            timestamp_widening_ordered_preimage(
-                &source_type,
-                &target_type,
-                Operator::GtEq,
-                &ScalarValue::TimestampNanosecond(None, Some("UTC".into())),
-            )
-            .is_none()
-        );
-        assert!(
-            timestamp_widening_ordered_preimage(
-                &source_type,
-                &target_type,
-                Operator::GtEq,
-                &ScalarValue::TimestampMicrosecond(Some(123_456), Some("UTC".into())),
-            )
-            .is_none()
-        );
-        assert!(
-            timestamp_widening_ordered_preimage(
-                &source_type,
-                &DataType::Timestamp(TimeUnit::Nanosecond, None),
-                Operator::GtEq,
-                &ScalarValue::TimestampNanosecond(Some(123_456_789), None),
-            )
-            .is_none()
+        // A literal of the wrong unit or the wrong timezone is not converted.
+        for literal in [
+            ScalarValue::TimestampMicrosecond(Some(123_456), Some("UTC".into())),
+            ScalarValue::TimestampNanosecond(Some(123_456_789), None),
+            ScalarValue::Int64(Some(123_456_789)),
+        ] {
+            for op in [Operator::Eq, Operator::GtEq, Operator::LtEq] {
+                assert_preimage_none(&source_type, &target_type, op, &literal);
+            }
+        }
+
+        // A source/target timezone change has no source-domain bound.
+        assert_preimage_none(
+            &source_type,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            Operator::GtEq,
+            &ScalarValue::TimestampNanosecond(Some(123_456_789), None),
         );
     }
 
     #[test]
-    fn test_cast_predicate_preimage_timestamp_null_literal_unsupported() {
+    fn test_cast_predicate_preimage_timestamp_null_literal() {
         let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
         let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
         let null_ms = ScalarValue::TimestampMillisecond(None, None);
 
+        // Narrowing a typed NULL literal has no source-domain bucket.
         for op in [
             Operator::Eq,
+            Operator::NotEq,
             Operator::IsDistinctFrom,
             Operator::IsNotDistinctFrom,
+            Operator::Gt,
+            Operator::LtEq,
         ] {
+            assert_preimage_none(&ts_ns, &ts_ms, op, &null_ms);
+        }
+
+        // Widening and same-unit casts keep the NULL result on the source side.
+        // The literal must be typed in the target unit, as SQL coercion produces.
+        for target_unit in [TimeUnit::Millisecond, TimeUnit::Nanosecond] {
+            let target_type = DataType::Timestamp(target_unit, None);
             assert_eq!(
-                cast_predicate_preimage(&ts_ns, &ts_ms, op, &null_ms).unwrap(),
-                None
+                cast_predicate_preimage(
+                    &ts_ms,
+                    &target_type,
+                    Operator::Eq,
+                    &timestamp_scalar(&target_unit, None, None),
+                )
+                .unwrap(),
+                Some(CastPredicatePreimage::Exact(
+                    ScalarValue::TimestampMillisecond(None, None)
+                ))
             );
         }
     }
@@ -2462,8 +2500,9 @@ mod tests {
         let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
         let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
 
-        // These millisecond values expand beyond i64 range in nanoseconds,
-        // so the preimage should return None rather than panicking.
+        // These millisecond values expand beyond i64 range in nanoseconds, so
+        // the bucket has no representable endpoint and the preimage is None
+        // rather than a clamped or unbounded interval.
         for value in [i64::MAX, i64::MIN] {
             assert_preimage_none(
                 &ts_ns,
@@ -2472,6 +2511,101 @@ mod tests {
                 &ScalarValue::TimestampMillisecond(Some(value), None),
             );
         }
+
+        // A widening literal at the i64 boundary produces a checked source
+        // endpoint: `i64::MAX` ns floors to 9223372036s with a 854775807ns
+        // remainder, so the empty-interval bound `floor + 1` is 9223372037s,
+        // still a representable second.
+        let source_type = DataType::Timestamp(TimeUnit::Second, None);
+        let target_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let empty = Some(CastPredicatePreimage::Range(
+            Interval::try_new(
+                ScalarValue::TimestampSecond(Some(9_223_372_037), None),
+                ScalarValue::TimestampSecond(Some(9_223_372_037), None),
+            )
+            .unwrap(),
+        ));
+        assert_eq!(
+            cast_predicate_preimage(
+                &source_type,
+                &target_type,
+                Operator::Lt,
+                &ScalarValue::TimestampNanosecond(Some(i64::MAX), None),
+            )
+            .unwrap(),
+            empty
+        );
+
+        // A bucket whose upper endpoint is not representable in the source unit
+        // yields `None` rather than a clamped or unbounded interval.
+        assert_preimage_none(
+            &ts_ns,
+            &ts_ms,
+            Operator::Eq,
+            &ScalarValue::TimestampMillisecond(Some(9_223_372_036_854), None),
+        );
+    }
+
+    #[test]
+    fn test_cast_predicate_preimage_timestamp_identity_anchors() {
+        // Same-unit casts anchor both ends of the domain, zero and NULL: the
+        // literal passes through untouched, including `i64::MAX`, whose exclusive
+        // upper bound would not fit in an `i64`.
+        for (unit, scalar) in [
+            (TimeUnit::Second, Some(i64::MIN)),
+            (TimeUnit::Second, None),
+            (TimeUnit::Second, Some(0)),
+            (TimeUnit::Second, Some(i64::MAX)),
+            (TimeUnit::Millisecond, Some(i64::MIN)),
+            (TimeUnit::Millisecond, Some(0)),
+            (TimeUnit::Millisecond, Some(i64::MAX)),
+            (TimeUnit::Microsecond, Some(i64::MIN)),
+            (TimeUnit::Microsecond, Some(0)),
+            (TimeUnit::Microsecond, Some(i64::MAX)),
+            (TimeUnit::Nanosecond, Some(i64::MIN)),
+            (TimeUnit::Nanosecond, Some(0)),
+            (TimeUnit::Nanosecond, Some(i64::MAX)),
+        ] {
+            let data_type = DataType::Timestamp(unit, None);
+            let literal = timestamp_scalar(&unit, None, scalar);
+            assert_preimage_exact(
+                &data_type,
+                &data_type,
+                Operator::Eq,
+                &literal,
+                literal.clone(),
+            );
+            assert_eq!(
+                exact_preimage_cast(&data_type, &data_type, &literal),
+                Some(literal)
+            );
+        }
+    }
+
+    #[test]
+    fn test_cast_predicate_preimage_timestamp_rejects_nested_wrapper() {
+        let dict = |inner: ScalarValue| {
+            ScalarValue::Dictionary(Box::new(DataType::Int32), Box::new(inner))
+        };
+        let source_type = DataType::Timestamp(TimeUnit::Millisecond, None);
+        let target_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let literal = ScalarValue::TimestampNanosecond(Some(123_000_000), None);
+
+        // One dictionary level is unwrapped.
+        assert_preimage_exact(
+            &source_type,
+            &target_type,
+            Operator::Eq,
+            &dict(literal.clone()),
+            ScalarValue::TimestampMillisecond(Some(123), None),
+        );
+        // A second wrapper is rejected rather than recursively unwrapped.
+        assert_preimage_none(
+            &source_type,
+            &target_type,
+            Operator::Eq,
+            &dict(dict(literal)),
+        );
     }
 
     #[test]
@@ -2484,6 +2618,7 @@ mod tests {
         let result =
             cast_predicate_preimage(&source_type, &target_type, Operator::Eq, &lit)
                 .unwrap();
+        assert_preimage_data_type(result.as_ref(), &source_type);
 
         match result {
             Some(CastPredicatePreimage::Range(interval)) => {
@@ -2507,6 +2642,107 @@ mod tests {
             }
             other => panic!("Expected CastPredicatePreimage::Range but got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_cast_predicate_preimage_timestamp_dictionary() {
+        let key_type = Box::new(DataType::Int32);
+        let dict = |key: &DataType, inner: DataType| {
+            DataType::Dictionary(Box::new(key.clone()), Box::new(inner))
+        };
+        let wrap = |value: ScalarValue| {
+            ScalarValue::Dictionary(key_type.clone(), Box::new(value))
+        };
+        let source_tz: Option<Arc<str>> = Some("+05:30".into());
+
+        // The target dictionary key (`Int16`) differs from the source key
+        // (`Int32`) so a leaked target key cannot go unnoticed.
+        let source_type = dict(
+            &DataType::Int32,
+            DataType::Timestamp(TimeUnit::Nanosecond, source_tz.clone()),
+        );
+        let target_type = dict(
+            &DataType::Int16,
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+        );
+        let lit = ScalarValue::TimestampMillisecond(Some(1000), Some("UTC".into()));
+
+        let result =
+            cast_predicate_preimage(&source_type, &target_type, Operator::Eq, &lit)
+                .unwrap();
+        // `ScalarValue` equality ignores timestamp timezones, so the data type
+        // (dictionary key + source unit + source timezone) is asserted too.
+        assert_preimage_data_type(result.as_ref(), &source_type);
+        assert_eq!(
+            result,
+            Some(CastPredicatePreimage::Range(
+                Interval::try_new(
+                    wrap(ScalarValue::TimestampNanosecond(
+                        Some(1_000_000_000),
+                        source_tz.clone(),
+                    )),
+                    wrap(ScalarValue::TimestampNanosecond(
+                        Some(1_001_000_000),
+                        source_tz,
+                    )),
+                )
+                .unwrap()
+            ))
+        );
+
+        // Exact preimages are dictionary-wrapped the same way.
+        let ms_source = dict(
+            &DataType::Int32,
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+        );
+        let ns_target = dict(
+            &DataType::Int16,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        );
+        let result = cast_predicate_preimage(
+            &ms_source,
+            &ns_target,
+            Operator::Eq,
+            &ScalarValue::TimestampNanosecond(Some(123_000_000), None),
+        )
+        .unwrap();
+        assert_preimage_data_type(result.as_ref(), &ms_source);
+        assert_eq!(
+            result,
+            Some(CastPredicatePreimage::Exact(wrap(
+                ScalarValue::TimestampMillisecond(Some(123), None)
+            )))
+        );
+
+        // A dictionary-wrapped literal is accepted for the same cast.
+        let result = cast_predicate_preimage(
+            &ms_source,
+            &ns_target,
+            Operator::Eq,
+            &wrap(ScalarValue::TimestampNanosecond(Some(123_000_000), None)),
+        )
+        .unwrap();
+        assert_preimage_data_type(result.as_ref(), &ms_source);
+        assert_eq!(
+            result,
+            Some(CastPredicatePreimage::Exact(wrap(
+                ScalarValue::TimestampMillisecond(Some(123), None)
+            )))
+        );
+
+        // `exact_preimage_cast` (the IN-list path) returns the same source-domain
+        // scalar, still dictionary-wrapped with the source key.
+        let scalar = exact_preimage_cast(
+            &ms_source,
+            &ns_target,
+            &ScalarValue::TimestampNanosecond(Some(123_000_000), None),
+        )
+        .unwrap();
+        assert_eq!(scalar.data_type(), ms_source);
+        assert_eq!(
+            scalar,
+            wrap(ScalarValue::TimestampMillisecond(Some(123), None))
+        );
     }
 
     // ── Gate safety tests ──────────────────────────────────────────────
@@ -3063,6 +3299,9 @@ mod tests {
     ) {
         let result =
             cast_predicate_preimage(source_type, target_type, op, lit_value).unwrap();
+        // The preimage must be a source-domain value: same unit, timezone and
+        // dictionary key as the source, never the target.
+        assert_preimage_data_type(result.as_ref(), source_type);
         assert_eq!(
             result,
             Some(CastPredicatePreimage::Exact(expected_source)),
@@ -3084,96 +3323,130 @@ mod tests {
         );
     }
 
+    /// Asserts that every endpoint of a preimage has the expected data type.
+    ///
+    /// [`ScalarValue`] equality ignores a timestamp's timezone metadata, and a
+    /// dictionary wrapper is compared only by key type plus inner value, so
+    /// value-based assertions alone cannot catch a leaked target timezone, unit
+    /// or dictionary key. This check must accompany them.
+    fn assert_preimage_data_type(
+        preimage: Option<&CastPredicatePreimage>,
+        expected: &DataType,
+    ) {
+        let (lower, upper) = match preimage {
+            Some(CastPredicatePreimage::Exact(value)) => (value, value),
+            Some(CastPredicatePreimage::Range(interval)) => {
+                (interval.lower(), interval.upper())
+            }
+            None => return,
+        };
+        assert_eq!(&lower.data_type(), expected);
+        assert_eq!(&upper.data_type(), expected);
+    }
+
+    /// Asserts the widening preimage shapes for a `source → target` unit pair
+    /// with `target` finer than `source`.
     fn assert_timestamp_widening_ordered(source_unit: TimeUnit, target_unit: TimeUnit) {
         let source_type = DataType::Timestamp(source_unit, None);
         let target_type = DataType::Timestamp(target_unit, None);
         let quotient = i128::from(timestamp_unit_scale(&target_unit))
             / i128::from(timestamp_unit_scale(&source_unit));
+        assert!(quotient > 1, "expected a widening unit pair");
 
-        for (target_value, floor, ceil) in [
-            (i64::try_from(quotient + 1).unwrap(), 1, 2),
-            (i64::try_from(1 - quotient).unwrap(), -1, 0),
+        // Aligned literals have a singleton preimage for every operator.
+        let aligned = timestamp_scalar(
+            &target_unit,
+            None,
+            Some(i64::try_from(123 * quotient).unwrap()),
+        );
+        for op in [
+            Operator::Eq,
+            Operator::NotEq,
+            Operator::IsDistinctFrom,
+            Operator::IsNotDistinctFrom,
+            Operator::GtEq,
+            Operator::Gt,
+            Operator::Lt,
+            Operator::LtEq,
         ] {
-            for (op, expected) in [
-                (Operator::GtEq, ceil),
-                (Operator::Gt, floor),
-                (Operator::Lt, ceil),
-                (Operator::LtEq, floor),
-            ] {
-                assert_preimage_exact(
-                    &source_type,
-                    &target_type,
-                    op,
-                    &timestamp_scalar(&target_unit, None, target_value),
-                    timestamp_scalar(&source_unit, None, expected),
-                );
-            }
-        }
-
-        // Aligned literals continue through the exact-preimage path.
-        for op in [Operator::GtEq, Operator::Gt, Operator::Lt, Operator::LtEq] {
             assert_preimage_exact(
                 &source_type,
                 &target_type,
                 op,
-                &timestamp_scalar(
-                    &target_unit,
-                    None,
-                    i64::try_from(123 * quotient).unwrap(),
-                ),
-                timestamp_scalar(&source_unit, None, 123),
+                &aligned,
+                timestamp_scalar(&source_unit, None, Some(123)),
             );
         }
 
-        // The accepted widening policy applies the Euclidean source bound to
-        // boundary literals as well, despite CAST/TRY_CAST overflow caveats.
-        for target_value in [i64::MIN, i64::MAX] {
-            let target_value = i128::from(target_value);
-            let floor = target_value.div_euclid(quotient);
-            let ceil = floor + i128::from(target_value.rem_euclid(quotient) != 0);
-            for (op, expected) in [
-                (Operator::GtEq, ceil),
-                (Operator::Gt, floor),
-                (Operator::Lt, ceil),
-                (Operator::LtEq, floor),
-            ] {
-                assert_preimage_exact(
-                    &source_type,
-                    &target_type,
-                    op,
-                    &timestamp_scalar(
-                        &target_unit,
-                        None,
-                        i64::try_from(target_value).unwrap(),
-                    ),
-                    timestamp_scalar(
-                        &source_unit,
-                        None,
-                        i64::try_from(expected).unwrap(),
-                    ),
+        // A non-aligned literal has no singleton preimage: ordered comparisons
+        // get the empty interval `[floor + 1, floor + 1)` and equality-like ones
+        // keep the cast. The bounds are checked real source-unit values, so the
+        // extreme literal is covered without any clamping.
+        for target_value in [
+            quotient + 1,
+            1 - quotient,
+            i128::from(i64::MAX),
+            i128::from(i64::MIN),
+        ] {
+            let literal = timestamp_scalar(&target_unit, None, Some(target_value as i64));
+            let bound = i64::try_from(target_value.div_euclid(quotient) + 1).unwrap();
+            let empty = Some(CastPredicatePreimage::Range(
+                Interval::try_new(
+                    timestamp_scalar(&source_unit, None, Some(bound)),
+                    timestamp_scalar(&source_unit, None, Some(bound)),
+                )
+                .unwrap(),
+            ));
+
+            for op in [Operator::GtEq, Operator::Gt, Operator::Lt, Operator::LtEq] {
+                let result =
+                    cast_predicate_preimage(&source_type, &target_type, op, &literal)
+                        .unwrap();
+                assert_preimage_data_type(result.as_ref(), &source_type);
+                assert_eq!(
+                    result, empty,
+                    "unexpected preimage for {source_unit:?} → {target_unit:?} {op:?} {target_value}"
                 );
+            }
+            for op in [
+                Operator::Eq,
+                Operator::NotEq,
+                Operator::IsDistinctFrom,
+                Operator::IsNotDistinctFrom,
+            ] {
+                assert_preimage_none(&source_type, &target_type, op, &literal);
             }
         }
     }
 
-    fn assert_timestamp_narrowing_range(lit_ms: i64, lower_ns: i64, upper_ns: i64) {
-        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
-        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
-        assert_eq!(
-            cast_predicate_preimage(
-                &ts_ns,
-                &ts_ms,
-                Operator::Eq,
-                &ScalarValue::TimestampMillisecond(Some(lit_ms), None),
+    /// Asserts the truncation bucket `[lower, upper)` of a narrowing cast.
+    fn assert_timestamp_narrowing_range(
+        source_unit: TimeUnit,
+        target_unit: TimeUnit,
+        lit: i64,
+        lower: i64,
+        upper: i64,
+    ) {
+        let source_type = DataType::Timestamp(source_unit, None);
+        let target_type = DataType::Timestamp(target_unit, None);
+        let expected = Some(CastPredicatePreimage::Range(
+            Interval::try_new(
+                timestamp_scalar(&source_unit, None, Some(lower)),
+                timestamp_scalar(&source_unit, None, Some(upper)),
             )
             .unwrap(),
-            Some(CastPredicatePreimage::Range(
-                Interval::try_new(
-                    ScalarValue::TimestampNanosecond(Some(lower_ns), None),
-                    ScalarValue::TimestampNanosecond(Some(upper_ns), None),
-                )
-                .unwrap()
-            ))
+        ));
+        let result = cast_predicate_preimage(
+            &source_type,
+            &target_type,
+            Operator::Eq,
+            &timestamp_scalar(&target_unit, None, Some(lit)),
+        )
+        .unwrap();
+        assert_preimage_data_type(result.as_ref(), &source_type);
+        assert_eq!(
+            result, expected,
+            "unexpected narrowing bucket for {source_unit:?} → {target_unit:?} {lit}"
         );
     }
 }

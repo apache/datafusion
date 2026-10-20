@@ -371,14 +371,16 @@ mod tests {
         let expected = col("ts_milli").eq(lit_timestamp_millis(123));
         assert_eq!(optimize_test(expr, &schema), expected);
 
-        for (literal, floor, ceil) in
-            [(123_456_789, 123, 124), (-123_456_789, -124, -123)]
-        {
-            for (op, bound) in [
-                (Operator::GtEq, ceil),
-                (Operator::Gt, floor),
-                (Operator::Lt, ceil),
-                (Operator::LtEq, floor),
+        // A non-aligned widening literal maps from no source value, so only
+        // ordered comparisons are rewritten, and the bound lands on the first
+        // source value above the literal: `Gt`/`GtEq` become `GtEq` and
+        // `Lt`/`LtEq` become `Lt` against `floor + 1`.
+        for (literal, ceil) in [(123_456_789, 124), (-123_456_789, -123)] {
+            for (op, expected_op) in [
+                (Operator::GtEq, Operator::GtEq),
+                (Operator::Gt, Operator::GtEq),
+                (Operator::Lt, Operator::Lt),
+                (Operator::LtEq, Operator::Lt),
             ] {
                 let expr = binary_expr(
                     cast(col("ts_milli"), timestamp_nano_type()),
@@ -386,7 +388,7 @@ mod tests {
                     lit_timestamp_nano(literal),
                 );
                 let expected =
-                    binary_expr(col("ts_milli"), op, lit_timestamp_millis(bound));
+                    binary_expr(col("ts_milli"), expected_op, lit_timestamp_millis(ceil));
                 assert_eq!(optimize_test(expr, &schema), expected);
             }
         }
@@ -420,22 +422,19 @@ mod tests {
     fn test_cast_preimage_timestamp_widening_literal_left_ordered() {
         let schema = expr_test_schema();
 
-        for (op, expected_op, expected_value) in [
-            (Operator::Lt, Operator::Gt, 123),
-            (Operator::LtEq, Operator::GtEq, 124),
-            (Operator::Gt, Operator::Lt, 124),
-            (Operator::GtEq, Operator::LtEq, 123),
+        for (op, expected_op) in [
+            (Operator::Lt, Operator::GtEq),
+            (Operator::LtEq, Operator::GtEq),
+            (Operator::Gt, Operator::Lt),
+            (Operator::GtEq, Operator::Lt),
         ] {
             let expr = binary_expr(
                 lit_timestamp_nano(123_456_789),
                 op,
                 cast(col("ts_milli"), timestamp_nano_type()),
             );
-            let expected = binary_expr(
-                col("ts_milli"),
-                expected_op,
-                lit_timestamp_millis(expected_value),
-            );
+            let expected =
+                binary_expr(col("ts_milli"), expected_op, lit_timestamp_millis(124));
             assert_eq!(optimize_test(expr, &schema), expected);
         }
 
@@ -444,8 +443,88 @@ mod tests {
             Operator::GtEq,
             try_cast(col("ts_milli"), timestamp_nano_type()),
         );
-        let expected = col("ts_milli").lt_eq(lit_timestamp_millis(-124));
+        let expected = col("ts_milli").lt(lit_timestamp_millis(-123));
         assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_cast_preimage_timestamp_dictionary_and_naive_aware() {
+        let dictionary = |data_type: DataType| {
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(data_type))
+        };
+        let dict_scalar = |value: ScalarValue| {
+            ScalarValue::Dictionary(Box::new(DataType::Int32), Box::new(value))
+        };
+        let source_tz: Option<Arc<str>> = Some("+05:30".into());
+        let schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![
+                    Field::new(
+                        "ts_dict",
+                        dictionary(DataType::Timestamp(
+                            TimeUnit::Nanosecond,
+                            source_tz.clone(),
+                        )),
+                        false,
+                    ),
+                    Field::new(
+                        "ts",
+                        DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        false,
+                    ),
+                ]
+                .into(),
+                HashMap::new(),
+            )
+            .unwrap(),
+        );
+
+        // Narrowing a dictionary-wrapped source keeps the source dictionary key,
+        // unit and timezone on both bounds. The literal is already in the target
+        // unit and timezone, as SQL coercion produces.
+        let expr = cast(
+            col("ts_dict"),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+        )
+        .eq(lit(ScalarValue::TimestampMillisecond(
+            Some(1000),
+            Some("UTC".into()),
+        )));
+        let expected =
+            col("ts_dict")
+                .gt_eq(lit(dict_scalar(ScalarValue::TimestampNanosecond(
+                    Some(1_000_000_000),
+                    source_tz.clone(),
+                ))))
+                .and(col("ts_dict").lt(lit(dict_scalar(
+                    ScalarValue::TimestampNanosecond(Some(1_001_000_000), source_tz),
+                ))));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        // Naive -> timezone-aware casts stay in place for exact, narrowing and
+        // IN-list shapes: Arrow reads the naive value as local wall-clock time in
+        // the target timezone and shifts it to UTC, which the unit arithmetic does
+        // not model.
+        let aware_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+        let aware_literal = ScalarValue::TimestampNanosecond(Some(0), Some("UTC".into()));
+        let expr = cast(col("ts"), aware_type.clone()).eq(lit(aware_literal.clone()));
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
+
+        let expr = cast(col("ts"), aware_type.clone()).gt(lit(aware_literal.clone()));
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
+
+        let expr = in_list(
+            cast(col("ts"), aware_type),
+            vec![
+                lit(aware_literal.clone()),
+                lit(ScalarValue::TimestampNanosecond(
+                    Some(1_000_000_000),
+                    Some("UTC".into()),
+                )),
+            ],
+            false,
+        );
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
     }
 
     #[test]
