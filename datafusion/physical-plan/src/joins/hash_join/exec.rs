@@ -31,10 +31,12 @@ use crate::filter_pushdown::{
 };
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
+use crate::joins::hash_join::bloom_filter::SortedKeyHashes;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
-    ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
+    ColumnBounds, GlobalFilterOptions, PartitionBounds, PushdownStrategy,
+    SharedBuildAccumulator,
 };
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
@@ -364,6 +366,9 @@ struct JoinBuildData {
     bounds: Option<PartitionBounds>,
     /// IN-list values or a hash-table reference used for filter pushdown.
     membership: PushdownStrategy,
+    /// Sorted bloom filter hashes of the keys, for the global dynamic filter.
+    /// `None` when no bloom filter is possible for this build.
+    key_hashes: Option<Arc<SortedKeyHashes>>,
     // Keep the reservation after the allocations it accounts for.
     reservation: MemoryReservation,
 }
@@ -452,6 +457,11 @@ impl JoinLeftData {
     /// returns a reference to the InList values for filter pushdown
     pub(super) fn membership(&self) -> &PushdownStrategy {
         &self.build.membership
+    }
+
+    /// Sorted bloom filter hashes of the build keys, for the dynamic filter.
+    pub(super) fn key_hashes(&self) -> Option<&Arc<SortedKeyHashes>> {
+        self.build.key_hashes.as_ref()
     }
 
     /// Borrow bounds without sharing a consuming join's dynamic-filter state.
@@ -1864,6 +1874,8 @@ impl ExecutionPlan for HashJoinExec {
                             repartition_random_state,
                             self.null_equality,
                             null_aware,
+                            GlobalFilterOptions::new(context.session_config().options())
+                                .with_memory_pool(Arc::clone(context.memory_pool())),
                         ))
                     })))
                 })
@@ -3561,6 +3573,30 @@ async fn collect_left_input(
         bounds = None;
     }
 
+    // Hash and sort the keys here, in the build task of this partition, so the
+    // finalizing task only writes the bloom filter bits in order. Skip it when
+    // this partition alone is too big for a bloom filter, or the memory pool
+    // cannot hold the hashes.
+    let bloom_options = GlobalFilterOptions::new(&config).bloom_filter;
+    let key_hashes = if !should_compute_dynamic_filters
+        || matches!(membership, PushdownStrategy::Empty)
+        || left_values.is_empty()
+        || !bloom_options.fits(map.num_of_distinct_key())
+    {
+        None
+    } else {
+        let estimated = SortedKeyHashes::estimated_size(&left_values);
+        if reservation.try_grow(estimated).is_ok() {
+            let hashes = SortedKeyHashes::try_new(&left_values)?;
+            let size = hashes.as_ref().map_or(0, SortedKeyHashes::size);
+            reservation.shrink(estimated.saturating_sub(size));
+            metrics.build_mem_used.add(size);
+            hashes.map(Arc::new)
+        } else {
+            None
+        }
+    };
+
     let build_has_null = null_aware == Some(NullAwareMode::RightAnti)
         && !left_values.is_empty()
         && left_values[0].logical_null_count() > 0;
@@ -3613,6 +3649,7 @@ async fn collect_left_input(
             left_mark_build_key_nulls,
             bounds,
             membership,
+            key_hashes,
             reservation,
         }),
         null_aware_scope_map,
@@ -9983,9 +10020,7 @@ mod tests {
     ///
     /// Here the build-side logical NULL lives in exactly one build partition, so
     /// the `keys_have_null` flag has to survive the per-partition aggregation in
-    /// `build_partitioned_filter` and widen the *routed* filter as a whole: the
-    /// probe NULL is routed to a single `CASE` branch, and OR-ing `IS NULL` into
-    /// that one branch would still drop it for every other route.
+    /// `build_partitioned_filter` and widen the global filter as a whole.
     #[tokio::test]
     async fn test_partitioned_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
     -> Result<()> {
@@ -10064,22 +10099,11 @@ mod tests {
 
         dynamic_filter.wait_complete().await;
         let filter = dynamic_filter.current()?.to_string();
-        // The aggregated build-side NULL must widen the routed filter once, at the
-        // top: `c2 IS NULL OR CASE hash(c2) % 4 WHEN ... END`.
-        //
-        // Under `force_hash_collisions` every key hashes to the same value, so the
-        // repartition routes all build rows to a single partition and
-        // `build_partitioned_filter` collapses to that partition's filter with no
-        // routing `CASE`. The NULL widening this test guards is asserted either way.
-        if cfg!(not(feature = "force_hash_collisions")) {
-            assert!(
-                filter.contains("CASE"),
-                "expected a routed partitioned filter, got: {filter}"
-            );
-        }
+        // The aggregated build-side NULL must widen the global filter once, at the
+        // top: `c2 IS NULL OR <filter of all partitions>`.
         assert!(
             filter.starts_with("c2@0 IS NULL OR"),
-            "expected the IS NULL disjunct to wrap the whole routed filter, got: {filter}"
+            "expected the IS NULL disjunct to wrap the whole filter, got: {filter}"
         );
 
         // The NULL-NULL row (d1 = 200, d2 = 20) is only produced if the probe
