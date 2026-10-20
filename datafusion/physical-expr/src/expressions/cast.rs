@@ -144,6 +144,21 @@ fn can_cast_named_struct_types(source: &DataType, target: &DataType) -> bool {
     validate_data_type_compatibility("", source, target).is_ok()
 }
 
+/// Whether a CAST or TRY_CAST from `source` to `target` can be planned.
+///
+/// Casts involving structs (including nested inside Lists, Dictionaries, etc.)
+/// are allowed if they pass name-based compatibility validation. This validation
+/// is applied at planning time to fail fast, rather than deferring errors to
+/// execution time. The name-based casting logic is executed at runtime via
+/// `ColumnarValue::cast_to`.
+pub(crate) fn can_plan_cast(source: &DataType, target: &DataType) -> bool {
+    if requires_nested_struct_cast(source, target) {
+        can_cast_named_struct_types(source, target)
+    } else {
+        can_cast_types(source, target)
+    }
+}
+
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
 #[derive(Debug, Clone, Eq)]
 pub struct CastExpr {
@@ -791,13 +806,7 @@ pub fn cast_with_options(
         return Ok(Arc::clone(&expr));
     }
 
-    let can_build_cast = if requires_nested_struct_cast(&expr_type, &cast_type) {
-        can_cast_named_struct_types(&expr_type, &cast_type)
-    } else {
-        can_cast_types(&expr_type, &cast_type)
-    };
-
-    if !can_build_cast {
+    if !can_plan_cast(&expr_type, &cast_type) {
         return not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}");
     }
 
@@ -841,18 +850,7 @@ pub fn cast_with_target_field(
         }
     }
 
-    let can_build_cast = if requires_nested_struct_cast(&expr_type, cast_type) {
-        // Allow casts involving structs (including nested inside Lists, Dictionaries,
-        // etc.) that pass name-based compatibility validation. This validation is
-        // applied at planning time (now) to fail fast, rather than deferring errors
-        // to execution time. The name-based casting logic will be executed at runtime
-        // via ColumnarValue::cast_to.
-        can_cast_named_struct_types(&expr_type, cast_type)
-    } else {
-        can_cast_types(&expr_type, cast_type)
-    };
-
-    if !can_build_cast {
+    if !can_plan_cast(&expr_type, cast_type) {
         return not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}");
     }
 

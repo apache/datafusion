@@ -19,13 +19,12 @@ use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use super::cast::can_plan_cast;
 use crate::PhysicalExpr;
-use arrow::compute;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
-use compute::can_cast_types;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{Result, not_impl_err};
@@ -307,7 +306,7 @@ pub fn try_cast(
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {
         Ok(Arc::clone(&expr))
-    } else if can_cast_types(&expr_type, &cast_type) {
+    } else if can_plan_cast(&expr_type, &cast_type) {
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
     } else {
         not_impl_err!("Unsupported TRY_CAST from {expr_type} to {cast_type}")
@@ -351,7 +350,7 @@ pub fn try_cast_with_target_field(
         }
     }
 
-    if !can_cast_types(&expr_type, cast_type) {
+    if !can_plan_cast(&expr_type, cast_type) {
         return not_impl_err!("Unsupported TRY_CAST from {expr_type} to {cast_type}");
     }
 
