@@ -631,10 +631,26 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     hashes_buffer: &mut [u64],
     multi_col: bool,
 ) -> Result<()> {
+    let dict_values = array.values();
+
+    // Slicing a dictionary only slices its keys and retains the complete values
+    // array. Hashing every retained value can therefore be much more expensive
+    // than hashing the logical rows in a small slice. Expand only for this
+    // sparse-backing case; normal dictionaries keep the hash-once-and-scatter
+    // path below.
+    if dict_values.len() > array.len().saturating_mul(4) {
+        let logical_values = take(dict_values.as_ref(), array.keys(), None)?;
+        return hash_single_array(
+            logical_values.as_ref(),
+            random_state,
+            hashes_buffer,
+            multi_col,
+        );
+    }
+
     // Hash each dictionary value once, and then use that computed
     // hash for each key value to avoid a potentially expensive
     // redundant hashing for large dictionary elements (e.g. strings)
-    let dict_values = array.values();
     let mut dict_hashes = vec![0; dict_values.len()];
     create_hashes([dict_values], random_state, &mut dict_hashes)?;
     dispatch_dictionary_scatter(array, &dict_hashes, hashes_buffer, multi_col);
@@ -2162,6 +2178,54 @@ mod tests {
         assert_eq!(two_col_hashes.len(), 3);
 
         assert_ne!(one_col_hashes, two_col_hashes);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn sparse_dictionary_hashes_match_expanded_values() {
+        let values = (0..64)
+            .map(|i| (i != 7).then(|| format!("value-{i}")))
+            .collect::<Vec<_>>();
+        let values: ArrayRef =
+            Arc::new(StringArray::from_iter(values.iter().map(Option::as_deref)));
+        let keys = Int32Array::from(vec![Some(63), None, Some(7), Some(2)]);
+        let logical_values = take(values.as_ref(), &keys, None).unwrap();
+        let dictionary: ArrayRef =
+            Arc::new(DictionaryArray::<Int32Type>::new(keys, Arc::clone(&values)));
+        let prefix: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let random_state = RandomState::with_seed(0);
+
+        let mut dictionary_hashes = vec![0; dictionary.len()];
+        create_hashes(
+            &[Arc::clone(&dictionary)],
+            &random_state,
+            &mut dictionary_hashes,
+        )
+        .unwrap();
+        let mut expanded_hashes = vec![0; logical_values.len()];
+        create_hashes(
+            &[Arc::clone(&logical_values)],
+            &random_state,
+            &mut expanded_hashes,
+        )
+        .unwrap();
+        assert_eq!(dictionary_hashes, expanded_hashes);
+
+        dictionary_hashes.fill(0);
+        create_hashes(
+            &[Arc::clone(&prefix), dictionary],
+            &random_state,
+            &mut dictionary_hashes,
+        )
+        .unwrap();
+        expanded_hashes.fill(0);
+        create_hashes(
+            &[prefix, logical_values],
+            &random_state,
+            &mut expanded_hashes,
+        )
+        .unwrap();
+        assert_eq!(dictionary_hashes, expanded_hashes);
     }
 
     #[test]

@@ -409,6 +409,31 @@ fn sliced_array_benchmark(c: &mut Criterion) {
     }
 }
 
+/// Benchmark dictionary arrays whose keys reference a much larger values array.
+///
+/// This shape is produced when a large aggregate dictionary is split into
+/// smaller record batches: slicing changes the keys but retains the complete
+/// dictionary values array.
+fn sparse_dictionary_benchmark(c: &mut Criterion) {
+    for ratio in [1, 2, 4, 8, 32, 128] {
+        let values_len = BATCH_SIZE * ratio;
+        let values: ArrayRef = Arc::new(GenericStringArray::<i32>::from_iter_values(
+            (0..values_len).map(|i| format!("value-{i:016x}-with-a-long-suffix")),
+        ));
+        let keys =
+            Int32Array::from_iter_values((0..BATCH_SIZE).map(|i| (i * ratio) as i32));
+        let dictionary: ArrayRef =
+            Arc::new(DictionaryArray::<Int32Type>::new(keys, values));
+
+        c.bench_function(
+            &format!(
+                "dictionary_utf8_sparse_backing: {BATCH_SIZE} rows / {values_len} values"
+            ),
+            |b| do_hash_test(b, std::slice::from_ref(&dictionary)),
+        );
+    }
+}
+
 fn do_hash_test_with_len(b: &mut Bencher, arrays: &[ArrayRef], expected_len: usize) {
     let state = RandomState::default();
     b.iter(|| {
@@ -662,6 +687,7 @@ criterion_group!(
     benches,
     criterion_benchmark,
     sliced_array_benchmark,
+    sparse_dictionary_benchmark,
     mixed_columns_benchmark
 );
 criterion_main!(benches);
