@@ -242,7 +242,7 @@ config_namespace! {
         /// virtual tables for displaying schema information
         pub information_schema: bool, default = false
 
-        /// The system schema name - when set together with `information_schema`, the
+        /// The system catalog name - when set together with `information_schema`, the
         /// `information_schema` for each catalog will only describe objects contained in the
         /// catalog itself. The global, cross-catalog `information_schema` is available under
         /// the virtual catalog named by this option.
