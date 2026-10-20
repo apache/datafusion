@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Schema};
 #[cfg(feature = "proto")]
 use datafusion_common::internal_datafusion_err;
 use datafusion_common::{
-    Result,
+    Result, internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 
@@ -81,9 +81,9 @@ pub struct DynamicFilterPhysicalExpr {
     /// per HashJoin build or once per TopK threshold refresh, but `evaluate`
     /// is called per batch), the cache serves the remapped expression
     /// without re-running the `transform_up` tree walk in
-    /// [`Self::remap_children`]. Reset on `update()` (by generation bump)
-    /// and populated with `None` on `with_new_children` (each derived
-    /// filter owns its own cache).
+    /// [`Self::remap_children`]. Invalidated by the generation bump in
+    /// `update()` or `update_from()`, and populated with `None` on
+    /// `with_new_children` (each derived filter owns its own cache).
     current_cache: CurrentExprCache,
     /// The source of dynamic filters.
     inner: Arc<RwLock<Inner>>,
@@ -147,6 +147,18 @@ impl Inner {
     /// Clone the inner expression.
     fn expr(&self) -> &Arc<dyn PhysicalExpr> {
         &self.expr
+    }
+
+    fn state(&self) -> FilterState {
+        if self.is_complete {
+            FilterState::Complete {
+                generation: self.generation,
+            }
+        } else {
+            FilterState::InProgress {
+                generation: self.generation,
+            }
+        }
     }
 }
 
@@ -268,9 +280,9 @@ impl DynamicFilterPhysicalExpr {
     /// [`PhysicalExpr::evaluate`]). The remap walk is O(tree size) and, for
     /// dynamic filters that carry a large `InListExpr` (join key IN list),
     /// dominated by `InListExpr::with_new_children` cloning the whole list.
-    /// The inner generation only changes when [`Self::update`] fires, so we
-    /// cache the remapped expression per generation and return it directly
-    /// on subsequent per-batch calls.
+    /// The inner generation only changes when [`Self::update`] or
+    /// [`Self::update_from`] fires, so we cache the remapped expression per
+    /// generation and return it directly on subsequent per-batch calls.
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
         // Fast path: cache hit for the current generation.
         let (expr, generation) = {
@@ -324,22 +336,67 @@ impl DynamicFilterPhysicalExpr {
             new_expr,
         )?;
 
-        // Load the current inner, increment generation, and store the new one
         let mut current = self.inner.write();
-        let new_generation = current.generation + 1;
-        *current = Inner {
-            // Preserve the expression id across updates.
-            expression_id: current.expression_id,
-            generation: new_generation,
-            expr: new_expr,
-            is_complete: current.is_complete,
-        };
-        drop(current); // Release the lock before broadcasting
+        current.generation += 1;
+        current.expr = new_expr;
 
-        // Broadcast the new state to all waiters
-        let _ = self.state_watch.send(FilterState::InProgress {
-            generation: new_generation,
-        });
+        // Publish while holding the lock so concurrent updates and completion
+        // cannot reorder notifications. Retain the state for future subscribers.
+        self.state_watch.send_replace(current.state());
+        Ok(())
+    }
+
+    /// Apply an update from an independent copy of the same dynamic filter.
+    ///
+    /// This is useful when propagating filter updates between execution plans
+    /// or processes. Both filters must have the same [`PhysicalExpr::expression_id`]
+    /// and original children, as preserved by serialization, but may have
+    /// different children remapped by [`PhysicalExpr::with_new_children`].
+    ///
+    /// Copies the source's original expression without applying either filter's
+    /// remapping. The target and its existing consumers continue sharing their
+    /// state and each applies its own remapping in [`Self::current`]. Subsequent
+    /// updates to the source are independent of the target.
+    ///
+    /// The expression and completion flag are read together. A complete source
+    /// marks the target complete; an incomplete source does not clear completion.
+    /// The target's generation is incremented and waiters are notified. The
+    /// source's generation is not copied or used to order updates, so callers
+    /// must apply updates in the intended order.
+    ///
+    /// If the filters already share their state, this is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without modifying the target if the expression IDs or
+    /// original children differ.
+    pub fn update_from(&self, source: &Self) -> Result<()> {
+        if Arc::ptr_eq(&self.inner, &source.inner) {
+            return Ok(());
+        }
+
+        // Release the source lock before acquiring the target lock, including
+        // when two independent filters are copying updates from each other.
+        let source_state = source.inner.read().clone();
+        if self.children != source.children {
+            return internal_err!(
+                "Cannot update dynamic filters with different original children"
+            );
+        }
+
+        let mut current = self.inner.write();
+        if current.expression_id != source_state.expression_id {
+            return internal_err!(
+                "Cannot update dynamic filters with different expression IDs: {} and {}",
+                current.expression_id,
+                source_state.expression_id
+            );
+        }
+
+        current.generation += 1;
+        current.expr = source_state.expr;
+        current.is_complete |= source_state.is_complete;
+        self.state_watch.send_replace(current.state());
         Ok(())
     }
 
@@ -349,20 +406,14 @@ impl DynamicFilterPhysicalExpr {
     /// Waiters using [`Self::wait_complete`] will be notified.
     pub fn mark_complete(&self) {
         let mut current = self.inner.write();
-        let current_generation = current.generation;
         current.is_complete = true;
-        drop(current);
-
-        // Broadcast completion to all waiters
-        let _ = self.state_watch.send(FilterState::Complete {
-            generation: current_generation,
-        });
+        self.state_watch.send_replace(current.state());
     }
 
     /// Wait asynchronously for any update to this filter.
     ///
-    /// This method will return when [`Self::update`] is called and the generation increases.
-    /// It does not guarantee that the filter is complete.
+    /// This method will return when [`Self::update`] or [`Self::update_from`]
+    /// increases the generation. It does not guarantee that the filter is complete.
     ///
     /// Producers (e.g.) HashJoinExec may never update the expression or mark it as completed if there are no consumers.
     /// If you call this method on a dynamic filter created by such a producer and there are no consumers registered this method would wait indefinitely.
@@ -379,7 +430,8 @@ impl DynamicFilterPhysicalExpr {
     /// Wait asynchronously until this dynamic filter is marked as complete.
     ///
     /// This method returns immediately if the filter is already complete.
-    /// Otherwise, it waits until [`Self::mark_complete`] is called.
+    /// Otherwise, it waits until [`Self::mark_complete`] is called or
+    /// [`Self::update_from`] receives a complete filter.
     ///
     /// Unlike [`Self::wait_update`], this method guarantees that when it returns,
     /// the filter is fully complete with no more updates expected.
@@ -399,7 +451,8 @@ impl DynamicFilterPhysicalExpr {
     }
 
     /// Returns `true` if this filter has been marked complete via
-    /// [`Self::mark_complete`] and will therefore never change again.
+    /// [`Self::mark_complete`] or [`Self::update_from`] and will therefore never
+    /// change again.
     pub fn is_complete(&self) -> bool {
         self.inner.read().is_complete
     }
@@ -471,16 +524,7 @@ impl DynamicFilterPhysicalExpr {
         remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
         inner: Inner,
     ) -> Self {
-        let state = if inner.is_complete {
-            FilterState::Complete {
-                generation: inner.generation,
-            }
-        } else {
-            FilterState::InProgress {
-                generation: inner.generation,
-            }
-        };
-        let (state_watch, _) = watch::channel(state);
+        let (state_watch, _) = watch::channel(inner.state());
 
         Self {
             children,
@@ -824,6 +868,16 @@ static EXPR_ID_SOURCE: ExpressionIdAtomicCounter = ExpressionIdAtomicCounter::ne
 
 #[cfg(test)]
 impl DynamicFilterPhysicalExpr {
+    /// Model an independently deserialized copy without requiring protobuf in
+    /// tests of the filter's update API.
+    fn independent_copy_for_test(&self) -> Self {
+        Self::from_parts(
+            self.children.clone(),
+            self.remapped_children.clone(),
+            self.inner.read().clone(),
+        )
+    }
+
     /// Test-only clone that produces a fresh outer instance sharing the
     /// same `inner`. Used by the concurrent stress test to obtain a
     /// standalone `Arc<Self>` without going through `with_new_children`
@@ -852,6 +906,7 @@ mod test {
         datatypes::{DataType, Field, Schema},
     };
     use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
 
     use super::*;
 
@@ -863,7 +918,7 @@ mod test {
         ]));
         let expr = Arc::new(BinaryExpr::new(
             col("a", &table_schema).unwrap(),
-            datafusion_expr::Operator::Eq,
+            Operator::Eq,
             lit(42) as Arc<dyn PhysicalExpr>,
         ));
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
@@ -937,7 +992,7 @@ mod test {
         // Note that we update the *original* expression and that should be reflected in both the derived expressions
         let new_expr = Arc::new(BinaryExpr::new(
             col("a", &table_schema).unwrap(),
-            datafusion_expr::Operator::Gt,
+            Operator::Gt,
             lit(43) as Arc<dyn PhysicalExpr>,
         ));
         dynamic_filter
@@ -975,6 +1030,204 @@ mod test {
         // Take another snapshot
         let snapshot = dynamic_filter.snapshot().unwrap();
         assert_eq!(snapshot, Some(new_expr));
+    }
+
+    #[test]
+    fn test_update_from_preserves_remapping_and_independence() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]));
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let c = col("c", &schema)?;
+        let d = col("d", &schema)?;
+        let source = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&a), Arc::clone(&b)],
+            lit(true),
+        ));
+        let target = Arc::new(source.independent_copy_for_test());
+
+        // The source mapping cannot be inverted, and the target's swapped
+        // mapping would give the wrong result if it were applied twice.
+        let source_view = Arc::clone(&source)
+            .with_new_children(vec![Arc::clone(&c), Arc::clone(&c)])?;
+        let source_view = source_view
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .unwrap();
+        let target_view = Arc::clone(&target)
+            .with_new_children(vec![Arc::clone(&b), Arc::clone(&a)])?;
+        let target_view = target_view
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .unwrap();
+        let sibling = Arc::clone(&target).with_new_children(vec![c, d])?;
+        let sibling = sibling.downcast_ref::<DynamicFilterPhysicalExpr>().unwrap();
+
+        target.update(lit(false))?;
+        for filter in [target.as_ref(), target_view, sibling] {
+            // Populate every consumer's cache before transferring the update.
+            assert_eq!(filter.current()?.as_ref(), lit(false).as_ref());
+        }
+
+        let predicate =
+            Arc::new(BinaryExpr::new(a, Operator::Gt, b)) as Arc<dyn PhysicalExpr>;
+        source.update(Arc::clone(&predicate))?;
+        let generation = target.snapshot_generation();
+        // Copying the source generation would leave the target's caches stale.
+        assert_eq!(generation, source.snapshot_generation());
+        target_view.update_from(source_view)?;
+        assert_eq!(target.snapshot_generation(), generation + 1);
+        assert_eq!(target.expression_id(), source.expression_id());
+
+        let batch = RecordBatch::try_new(
+            schema,
+            [20, 10, 40, 30]
+                .into_iter()
+                .map(|value| ScalarValue::Int32(Some(value)).to_array_of_size(1))
+                .collect::<Result<Vec<_>>>()?,
+        )?;
+        for (filter, expected) in [
+            (source_view, false),    // c > c
+            (target.as_ref(), true), // a > b
+            (target_view, false),    // b > a
+            (sibling, true),         // c > d
+        ] {
+            let actual = filter.evaluate(&batch)?.into_array(1)?;
+            let expected = ScalarValue::Boolean(Some(expected)).to_array_of_size(1)?;
+            assert_eq!(actual.as_ref(), expected.as_ref());
+        }
+
+        source.update(lit(false))?;
+        source.mark_complete();
+        assert_eq!(target.current()?.as_ref(), predicate.as_ref());
+        assert_eq!(target.snapshot_generation(), generation + 1);
+        assert!(!target.is_complete());
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_from_notifies_waiters_and_preserves_completion() -> Result<()> {
+        use std::future::Future;
+        use std::pin::pin;
+        use std::task::{Context, Poll, Waker};
+
+        let source = DynamicFilterPhysicalExpr::new(vec![], lit(true));
+        let target = source.independent_copy_for_test();
+        let incomplete = source.independent_copy_for_test();
+        let mut subscription = target.subscribe();
+        let mut context = Context::from_waker(Waker::noop());
+        let mut completion = pin!(target.wait_complete());
+        assert!(completion.as_mut().poll(&mut context).is_pending());
+
+        for complete in [false, true] {
+            let mut update = pin!(target.wait_update());
+            assert!(update.as_mut().poll(&mut context).is_pending());
+            source.update(lit(false))?;
+            if complete {
+                source.mark_complete();
+            }
+
+            target.update_from(&source)?;
+
+            assert!(update.as_mut().poll(&mut context).is_ready());
+            assert_eq!(target.is_complete(), complete);
+            assert_eq!(
+                completion.as_mut().poll(&mut context),
+                if complete {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                },
+            );
+            assert_eq!(
+                subscription.observe(),
+                DynamicFilterChange {
+                    changed: true,
+                    complete,
+                },
+            );
+        }
+
+        // Completion is monotonic in both the synchronous state and the
+        // notifications used by dynamic-filter trackers.
+        target.update_from(&incomplete)?;
+        assert!(target.is_complete());
+        assert_eq!(
+            subscription.observe(),
+            DynamicFilterChange {
+                changed: true,
+                complete: true,
+            },
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_from_rejects_incompatible_filters() -> Result<()> {
+        use crate::expressions::Column;
+        use datafusion_common::assert_contains;
+
+        let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let target = DynamicFilterPhysicalExpr::new(vec![Arc::clone(&a)], lit(true));
+        let different_id = DynamicFilterPhysicalExpr::new(vec![a], lit(false));
+        let different_children = DynamicFilterPhysicalExpr::from_parts(
+            vec![Arc::new(Column::new("b", 0))],
+            None,
+            target.inner.read().clone(),
+        );
+        let before = target.current()?;
+        let generation = target.snapshot_generation();
+        let mut subscription = target.subscribe();
+
+        for (source, expected_error) in [
+            (different_id, "different expression IDs"),
+            (different_children, "different original children"),
+        ] {
+            source.update(lit(false))?;
+            source.mark_complete();
+            assert_contains!(
+                target.update_from(&source).unwrap_err().to_string(),
+                expected_error
+            );
+            assert!(Arc::ptr_eq(&target.current()?, &before));
+            assert_eq!(target.snapshot_generation(), generation);
+            assert!(!target.is_complete());
+            assert_eq!(
+                subscription.observe(),
+                DynamicFilterChange {
+                    changed: false,
+                    complete: false,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_from_shared_state_is_noop() -> Result<()> {
+        use crate::expressions::Column;
+
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("a", 0))],
+            lit(true),
+        ));
+        let derived =
+            Arc::clone(&filter).with_new_children(vec![Arc::new(Column::new("b", 1))])?;
+        let derived = derived.downcast_ref::<DynamicFilterPhysicalExpr>().unwrap();
+        let generation = filter.snapshot_generation();
+        let before = derived.current()?;
+        let mut subscription = filter.subscribe();
+
+        filter.update_from(&filter)?;
+        derived.update_from(&filter)?;
+        filter.update_from(derived)?;
+
+        assert_eq!(filter.snapshot_generation(), generation);
+        assert!(Arc::ptr_eq(&derived.current()?, &before));
+        assert!(!subscription.observe().changed);
+        Ok(())
     }
 
     #[test]
@@ -1050,7 +1303,7 @@ mod test {
 
         let expr = Arc::new(BinaryExpr::new(
             Arc::clone(&col_a),
-            datafusion_expr::Operator::Plus,
+            Operator::Plus,
             Arc::clone(&col_b),
         ));
 
@@ -1273,7 +1526,7 @@ mod test {
         // Create a dynamic filter with children
         let expr = Arc::new(BinaryExpr::new(
             Arc::clone(&col_a),
-            datafusion_expr::Operator::Gt,
+            Operator::Gt,
             lit(10) as Arc<dyn PhysicalExpr>,
         ));
         let filter = DynamicFilterPhysicalExpr::new(
@@ -1393,7 +1646,7 @@ mod test {
         let col_a = col("a", &table_schema).unwrap();
         let expr = Arc::new(BinaryExpr::new(
             Arc::clone(&col_a),
-            datafusion_expr::Operator::Gt,
+            Operator::Gt,
             lit(10) as Arc<dyn PhysicalExpr>,
         ));
         // Force the remap path to actually run: give the filter a distinct
@@ -1452,7 +1705,7 @@ mod test {
         filter
             .update(Arc::new(BinaryExpr::new(
                 Arc::clone(&col_a),
-                datafusion_expr::Operator::Gt,
+                Operator::Gt,
                 lit(42) as Arc<dyn PhysicalExpr>,
             )) as Arc<dyn PhysicalExpr>)
             .unwrap();
@@ -1479,7 +1732,7 @@ mod test {
         let col_a = col("a", &schema).unwrap();
         let expr = Arc::new(BinaryExpr::new(
             Arc::clone(&col_a),
-            datafusion_expr::Operator::Gt,
+            Operator::Gt,
             lit(10) as Arc<dyn PhysicalExpr>,
         ));
         let filter = Arc::new(DynamicFilterPhysicalExpr::new(
