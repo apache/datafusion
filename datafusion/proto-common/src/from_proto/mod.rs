@@ -492,7 +492,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     )
                 })?;
 
-                let mut dict_by_id: HashMap<i64, ArrayRef> = HashMap::new();
+                let mut dict_by_id: HashMap<i64, ArrayRef> =
+                    HashMap::with_capacity(dictionaries.len());
                 for protobuf::scalar_nested_value::Dictionary {
                     ipc_message,
                     arrow_data,
@@ -1252,11 +1253,12 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 "data_page_row_count_limit",
             )?,
             encoding: value
-                .encoding_opt.clone()
+                .encoding_opt
+                .as_ref()
                 .map(|opt| match opt {
-                    protobuf::parquet_options::EncodingOpt::Encoding(v) => Some(v),
+                    protobuf::parquet_options::EncodingOpt::Encoding(v) => v.parse(),
                 })
-                .unwrap_or(None),
+                .transpose()?,
             bloom_filter_on_read: value.bloom_filter_on_read,
             bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp: value.clone()
@@ -1282,12 +1284,12 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             )?,
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
-            coerce_int96: value.coerce_int96_opt.clone().map(|opt| match opt {
-                protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => Some(v),
-            }).unwrap_or(None),
-            coerce_int96_tz: value.coerce_int96_tz_opt.clone().map(|opt| match opt {
-                protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => Some(v),
-            }).unwrap_or(None),
+            coerce_int96: value.coerce_int96_opt.as_ref().map(|opt| match opt {
+                protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => v.parse(),
+            }).transpose()?,
+            coerce_int96_tz: value.coerce_int96_tz_opt.as_ref().map(|opt| match opt {
+                protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => v.parse(),
+            }).transpose()?,
             skip_arrow_metadata: value.skip_arrow_metadata,
             write_row_group_number_distinct_values: value.write_row_group_number_distinct_values,
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
@@ -1371,7 +1373,7 @@ impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
         value: &protobuf::TableParquetOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
         let mut column_specific_options: HashMap<String, ParquetColumnOptions> =
-            HashMap::new();
+            HashMap::with_capacity(value.column_specific_options.len());
         for protobuf::ParquetColumnSpecificOptions {
             column_name,
             options: maybe_options,
@@ -1453,7 +1455,8 @@ mod tests {
         MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
     };
     use datafusion_common::parquet_config::{
-        DFParquetCompression, DFParquetStatistics, RowGroupRangeAssignment,
+        DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFTimeUnit,
+        RowGroupRangeAssignment,
     };
 
     #[test]
@@ -1668,15 +1671,26 @@ mod tests {
     }
 
     #[test]
-    fn test_parquet_options_coerce_int96_tz_set_round_trip() {
+    fn test_parquet_options_coerce_int96_tz_without_unit_round_trip() {
         let opts = ParquetOptions {
-            coerce_int96: Some("us".to_string()),
-            coerce_int96_tz: Some("UTC".to_string()),
+            coerce_int96_tz: Some("+08".parse().unwrap()),
             ..ParquetOptions::default()
         };
         let recovered = parquet_options_proto_round_trip(opts.clone());
-        assert_eq!(recovered.coerce_int96, Some("us".to_string()));
-        assert_eq!(recovered.coerce_int96_tz, Some("UTC".to_string()));
+        assert_eq!(recovered.coerce_int96, None);
+        assert_eq!(recovered.coerce_int96_tz, opts.coerce_int96_tz);
+    }
+
+    #[test]
+    fn test_parquet_options_coerce_int96_tz_set_round_trip() {
+        let opts = ParquetOptions {
+            coerce_int96: Some(DFTimeUnit::Microsecond),
+            coerce_int96_tz: Some("UTC".parse().unwrap()),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts.clone());
+        assert_eq!(recovered.coerce_int96, Some(DFTimeUnit::Microsecond));
+        assert_eq!(recovered.coerce_int96_tz, opts.coerce_int96_tz);
     }
 
     #[test]
@@ -1721,6 +1735,37 @@ mod tests {
     }
 
     #[test]
+    fn test_parquet_encoding_round_trip() {
+        for encoding in [None, Some(DFParquetEncoding::ByteStreamSplit)] {
+            let opts = ParquetOptions {
+                encoding,
+                ..ParquetOptions::default()
+            };
+            let recovered = parquet_options_proto_round_trip(opts);
+            assert_eq!(recovered.encoding, encoding);
+        }
+    }
+
+    #[test]
+    fn test_invalid_parquet_encoding_rejected_from_proto() {
+        let opts = ParquetOptions::default();
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        proto.encoding_opt = Some(
+            crate::protobuf_common::parquet_options::EncodingOpt::Encoding(
+                "invalid".to_string(),
+            ),
+        );
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unknown or unsupported parquet encoding: invalid"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn test_invalid_parquet_compression_rejected_from_proto() {
         let opts = ParquetOptions::default();
         let mut proto: crate::protobuf_common::ParquetOptions =
@@ -1735,6 +1780,46 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("zstd compression requires specifying a level such as zstd(4)"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_invalid_parquet_coerce_int96_tz_rejected_from_proto() {
+        // Rejected even when no coerce_int96 unit is set.
+        let opts = ParquetOptions::default();
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        proto.coerce_int96_tz_opt = Some(
+            crate::protobuf_common::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(
+                "Not/A_Timezone".to_string(),
+            ),
+        );
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid time zone: Not/A_Timezone."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_invalid_parquet_coerce_int96_rejected_from_proto() {
+        let opts = ParquetOptions::default();
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        proto.coerce_int96_opt = Some(
+            crate::protobuf_common::parquet_options::CoerceInt96Opt::CoerceInt96(
+                "nanos".to_string(),
+            ),
+        );
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "Invalid parquet coerce_int96 setting: nanos. Expected one of: ns, us, ms, s"
+            ),
             "unexpected error: {err}"
         );
     }
@@ -1777,13 +1862,13 @@ mod tests {
     #[test]
     fn test_table_parquet_options_coerce_int96_tz_round_trip() {
         let mut opts = TableParquetOptions::default();
-        opts.global.coerce_int96 = Some("us".to_string());
-        opts.global.coerce_int96_tz = Some("America/Los_Angeles".to_string());
+        opts.global.coerce_int96 = Some(DFTimeUnit::Microsecond);
+        opts.global.coerce_int96_tz = Some("America/Los_Angeles".parse().unwrap());
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
-        assert_eq!(recovered.global.coerce_int96, Some("us".to_string()));
+        assert_eq!(recovered.global.coerce_int96, Some(DFTimeUnit::Microsecond));
         assert_eq!(
             recovered.global.coerce_int96_tz,
-            Some("America/Los_Angeles".to_string())
+            opts.global.coerce_int96_tz
         );
     }
 

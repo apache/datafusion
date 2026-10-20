@@ -3441,7 +3441,7 @@ impl NestedLoopJoinStream {
             )?
         } else {
             // No filter: all pairs match
-            BooleanArray::from(vec![true; total_rows])
+            BooleanArray::new(BooleanBuffer::new_set(total_rows), None)
         };
 
         // Update the global left or right bitmap for matched indices
@@ -3573,7 +3573,7 @@ impl NestedLoopJoinStream {
         let cur_right_bitmap = if let Some(filter) = &self.join_filter {
             apply_filter_to_row_join_batch(left_row, right_batch, filter)?
         } else {
-            BooleanArray::from(vec![true; right_row_count])
+            BooleanArray::new(BooleanBuffer::new_set(right_row_count), None)
         };
 
         self.update_matched_bitmap(l_index, &cur_right_bitmap)?;

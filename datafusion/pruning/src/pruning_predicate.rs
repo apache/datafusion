@@ -41,9 +41,7 @@ use log::{debug, trace};
 
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{TransformedResult, TreeNodeRecursion};
-use datafusion_common::{
-    _internal_datafusion_err, Column, DFSchema, assert_eq_or_internal_err,
-};
+use datafusion_common::{_internal_datafusion_err, Column, assert_eq_or_internal_err};
 use datafusion_common::{
     ScalarValue, internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
@@ -765,7 +763,7 @@ impl PruningPredicate {
     /// used in the predicate. For example, it can be used to avoid reading
     /// unneeded bloom filters (a non trivial operation).
     pub fn literal_columns(&self) -> Vec<String> {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::with_capacity(self.literal_guarantees.len());
         self.literal_guarantees
             .iter()
             .map(|e| &e.column.name)
@@ -1063,7 +1061,7 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
     statistics: &S,
     required_columns: &RequiredColumns,
 ) -> Result<RecordBatch> {
-    let mut arrays = Vec::<ArrayRef>::new();
+    let mut arrays = Vec::<ArrayRef>::with_capacity(required_columns.columns.len());
     // For each needed statistics column:
     for (column, statistics_type, stat_field) in required_columns.iter() {
         let column = Column::from_name(column.name());
@@ -1155,13 +1153,8 @@ impl<'a> PruningExpressionBuilder<'a> {
             }
         };
 
-        let df_schema = DFSchema::try_from(Arc::clone(schema))?;
-        let (column_expr, correct_operator, scalar_expr) = rewrite_expr_to_prunable(
-            column_expr,
-            correct_operator,
-            scalar_expr,
-            df_schema,
-        )?;
+        let (column_expr, correct_operator, scalar_expr) =
+            rewrite_expr_to_prunable(column_expr, correct_operator, scalar_expr, schema)?;
         let Some((_, field)) = schema.column_with_name(column.name()) else {
             return plan_err!("Field not found in schema");
         };
@@ -1251,7 +1244,7 @@ fn rewrite_expr_to_prunable(
     column_expr: &PhysicalExprRef,
     op: Operator,
     scalar_expr: &PhysicalExprRef,
-    schema: DFSchema,
+    schema: &Schema,
 ) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
     if !is_compare_op(op) {
         return plan_err!("rewrite_expr_to_prunable only support compare expression");
@@ -1329,12 +1322,9 @@ fn rewrite_cast_child_to_prunable(
     cast_type: &DataType,
     op: Operator,
     scalar_expr: &PhysicalExprRef,
-    schema: DFSchema,
+    schema: &Schema,
 ) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
-    verify_support_type_for_prune(
-        &cast_child_expr.data_type(schema.as_arrow())?,
-        cast_type,
-    )?;
+    verify_support_type_for_prune(&cast_child_expr.data_type(schema)?, cast_type)?;
     rewrite_expr_to_prunable(cast_child_expr, op, scalar_expr, schema)
 }
 
@@ -4959,7 +4949,7 @@ mod tests {
     #[test]
     fn row_group_predicate_cast_int_int() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64)";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64;N) <= 1 AND 1 <= CAST(c1_max@1 AS Int64;N)";
 
         // test cast(c1 as int64) = 1
         // test column on the left
@@ -4997,7 +4987,7 @@ mod tests {
     #[test]
     fn row_group_predicate_cast_string_string() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Utf8) <= 1 AND 1 <= CAST(c1_max@1 AS Utf8)";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Utf8;N) <= 1 AND 1 <= CAST(c1_max@1 AS Utf8;N)";
 
         // test column on the left
         let expr = cast(col("c1"), DataType::Utf8)
@@ -5061,7 +5051,7 @@ mod tests {
     #[test]
     fn row_group_predicate_date_date() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Date64) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Date64)";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Date64;N) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Date64;N)";
 
         // test column on the left
         let expr =
@@ -5160,7 +5150,7 @@ mod tests {
         .eq(lit(ScalarValue::Utf8(Some("test".to_string()))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Utf8)) <= test AND test <= CAST(c1_max@1 AS Dictionary(UInt16, Utf8))";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Utf8);N) <= test AND test <= CAST(c1_max@1 AS Dictionary(UInt16, Utf8);N)";
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -5174,7 +5164,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Int32)),
             false,
         )]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 123 AND 123 <= CAST(c1_max@1 AS Int64)";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64;N) <= 123 AND 123 <= CAST(c1_max@1 AS Int64;N)";
 
         // Test with literal of a different type
         let expr =
@@ -5220,7 +5210,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Date32)),
             false,
         )]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Date64)) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Dictionary(UInt16, Date64))";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Date64);N) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Dictionary(UInt16, Date64);N)";
 
         // Test with a cast to a different date type
         let expr = cast(
@@ -5292,7 +5282,7 @@ mod tests {
             ],
             false,
         ));
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64) OR c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 2 AND 2 <= CAST(c1_max@1 AS Int64) OR c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 3 AND 3 <= CAST(c1_max@1 AS Int64)";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64;N) <= 1 AND 1 <= CAST(c1_max@1 AS Int64;N) OR c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64;N) <= 2 AND 2 <= CAST(c1_max@1 AS Int64;N) OR c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64;N) <= 3 AND 3 <= CAST(c1_max@1 AS Int64;N)";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -5306,7 +5296,7 @@ mod tests {
             ],
             true,
         ));
-        let expected_expr = "c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64) != 1 OR 1 != CAST(c1_max@1 AS Int64)) AND c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64) != 2 OR 2 != CAST(c1_max@1 AS Int64)) AND c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64) != 3 OR 3 != CAST(c1_max@1 AS Int64))";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64;N) != 1 OR 1 != CAST(c1_max@1 AS Int64;N)) AND c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64;N) != 2 OR 2 != CAST(c1_max@1 AS Int64;N)) AND c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64;N) != 3 OR 3 != CAST(c1_max@1 AS Int64;N))";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -6753,20 +6743,15 @@ mod tests {
     #[test]
     fn test_rewrite_expr_to_prunable() {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-        let df_schema = DFSchema::try_from(schema.clone()).unwrap();
 
         // column op lit
         let left_input = col("a");
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int32(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
-        let (result_left, _, result_right) = rewrite_expr_to_prunable(
-            &left_input,
-            Operator::Eq,
-            &right_input,
-            df_schema.clone(),
-        )
-        .unwrap();
+        let (result_left, _, result_right) =
+            rewrite_expr_to_prunable(&left_input, Operator::Eq, &right_input, &schema)
+                .unwrap();
         assert_eq!(result_left.to_string(), left_input.to_string());
         assert_eq!(result_right.to_string(), right_input.to_string());
 
@@ -6775,14 +6760,11 @@ mod tests {
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Decimal128(Some(12), 20, 3));
         let right_input = logical2physical(&right_input, &schema);
-        let (result_left, _, result_right) = rewrite_expr_to_prunable(
-            &left_input,
-            Operator::Gt,
-            &right_input,
-            df_schema.clone(),
-        )
-        .unwrap();
-        assert_eq!(result_left.to_string(), left_input.to_string());
+        let (result_left, _, result_right) =
+            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema)
+                .unwrap();
+        // The rewrite rebuilds the cast with its nullable target field
+        assert_eq!(result_left.to_string(), "CAST(a@0 AS Decimal128(20, 3);N)");
         assert_eq!(result_right.to_string(), right_input.to_string());
 
         // try_cast op lit
@@ -6791,7 +6773,7 @@ mod tests {
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
         let (result_left, _, result_right) =
-            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, df_schema)
+            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema)
                 .unwrap();
         assert_eq!(result_left.to_string(), left_input.to_string());
         assert_eq!(result_right.to_string(), right_input.to_string());
@@ -6872,17 +6854,12 @@ mod tests {
         // cast string value to numeric value
         // this cast is not supported
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
-        let df_schema = DFSchema::try_from(schema.clone()).unwrap();
         let left_input = cast(col("a"), DataType::Int64);
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
-        let result = rewrite_expr_to_prunable(
-            &left_input,
-            Operator::Gt,
-            &right_input,
-            df_schema.clone(),
-        );
+        let result =
+            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema);
         assert!(result.is_err());
 
         // other expr
@@ -6891,7 +6868,7 @@ mod tests {
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
         let result =
-            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, df_schema);
+            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema);
         assert!(result.is_err());
         // TODO: add other negative test for other case and op
     }

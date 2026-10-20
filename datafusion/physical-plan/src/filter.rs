@@ -30,7 +30,7 @@ use super::{
 };
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::common::can_project;
-use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
+use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, FilterRemapper, PushedDown,
@@ -962,18 +962,6 @@ impl ExecutionPlan for FilterExec {
         }))
     }
 
-    fn with_preserve_order(
-        &self,
-        preserve_order: bool,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.input
-            .with_preserve_order(preserve_order)
-            .and_then(|new_input| {
-                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
-                    .ok()
-            })
-    }
-
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
@@ -1150,7 +1138,7 @@ fn restricted_column(expr: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
             return None;
         }
         let column = in_list.expr().downcast_ref::<Column>()?;
-        let mut values: Vec<&ScalarValue> = vec![];
+        let mut values: Vec<&ScalarValue> = Vec::with_capacity(in_list.list().len());
         for expr in in_list.list() {
             let value = expr.downcast_ref::<Literal>()?.value();
             if !value.is_null() && !values.contains(&value) {
