@@ -558,10 +558,8 @@ impl NthValueEvaluator {
 /// Returns the index of the last set bit in `bits`, or `None` if no bit is set.
 ///
 /// The bits are read a 64-bit word at a time from the end, so the cost grows with the distance
-/// from the end to the last set bit rather than with the length of `bits`. `LAST_VALUE ...
-/// IGNORE NULLS` looks up the last valid row of every frame, and a frame that starts at the
-/// partition's first row grows with every row, so enumerating the frame's valid rows from its
-/// start makes the partition quadratic.
+/// from the end to the last set bit rather than with the length of `bits`. Enumerating the set
+/// bits from the start instead is quadratic for a frame that grows with every row.
 fn last_set_bit(bits: &BooleanBuffer) -> Option<usize> {
     let chunk = UnalignedBitChunk::new(bits.values(), bits.offset(), bits.len());
     // The words hold `lead_padding` unset bits before `bits` and `trailing_padding` after it.
