@@ -32,6 +32,8 @@ const MAX_BUCKETS: u64 = 1 << 20;
 pub(crate) enum KeyRangePart<'a> {
     /// The partition's own bitmap.
     Bitmap(&'a KeyRangeBitmap),
+    /// The partition's build keys, which must lie within its `[min, max]`.
+    Keys(&'a dyn Array),
     /// The partition has no bitmap, so any key in `[min, max]` may be present.
     Range {
         min: &'a ScalarValue,
@@ -131,7 +133,7 @@ impl KeyRangeBitmap {
         let mut words = MutableBuffer::new_null(buckets as usize);
         let bytes = words.as_slice_mut();
         // Sets the buckets covering keys `lo..=hi`, given as offsets from `offset`.
-        let mut set_range = |lo: u64, hi: u64| {
+        let set_range = |bytes: &mut [u8], lo: u64, hi: u64| {
             for bucket in (lo >> shift)..=(hi.min(span) >> shift) {
                 bit_util::set_bit(bytes, bucket as usize);
             }
@@ -146,13 +148,19 @@ impl KeyRangeBitmap {
                     for bucket in part.bits.set_indices() {
                         let lo = (bucket as u64) << part.shift;
                         let hi = lo.saturating_add(width).min(part.span);
-                        set_range(base + lo, base + hi);
+                        set_range(bytes, base + lo, base + hi);
                     }
+                }
+                KeyRangePart::Keys(keys) => {
+                    if !ArrayMap::is_supported_type(keys.data_type()) {
+                        return None;
+                    }
+                    set_bucket_bits(*keys, offset, shift, buckets, bytes);
                 }
                 KeyRangePart::Range { min, max } => {
                     let lo = ArrayMap::key_to_u64(min)?.wrapping_sub(offset);
                     let hi = ArrayMap::key_to_u64(max)?.wrapping_sub(offset);
-                    set_range(lo, hi);
+                    set_range(bytes, lo, hi);
                 }
             }
         }
@@ -223,9 +231,20 @@ impl KeyRangeBitmap {
 /// One bit per bucket, set for each bucket holding a non-null key of `keys`.
 fn bucket_bits(keys: &dyn Array, offset: u64, shift: u32, buckets: u64) -> BooleanBuffer {
     let mut words = MutableBuffer::new_null(buckets as usize);
+    set_bucket_bits(keys, offset, shift, buckets, words.as_slice_mut());
+    BooleanBuffer::new(words.into(), 0, buckets as usize)
+}
+
+/// Sets the bit of each bucket holding a non-null key of `keys` in `bytes`.
+fn set_bucket_bits(
+    keys: &dyn Array,
+    offset: u64,
+    shift: u32,
+    buckets: u64,
+    bytes: &mut [u8],
+) {
     downcast_integer_array!(
         keys => {
-            let bytes = words.as_slice_mut();
             let mut set = |key: u64| {
                 let bucket = (key.wrapping_sub(offset) >> shift).min(buckets - 1);
                 bit_util::set_bit(bytes, bucket as usize);
@@ -238,7 +257,6 @@ fn bucket_bits(keys: &dyn Array, offset: u64, shift: u32, buckets: u64) -> Boole
         }
         _ => unreachable!("guarded by ArrayMap::is_supported_type"),
     );
-    BooleanBuffer::new(words.into(), 0, buckets as usize)
 }
 
 #[cfg(test)]

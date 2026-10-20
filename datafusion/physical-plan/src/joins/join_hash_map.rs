@@ -410,15 +410,22 @@ where
     }
 }
 
-/// Builds one map holding the union of `maps`' hash values, so a single
-/// [`JoinHashMapType::contain_hashes`] call checks membership in all of them.
+/// Builds one map holding the union of `maps`' hash values and `hashes`, so a
+/// single [`JoinHashMapType::contain_hashes`] call checks membership in all of
+/// them.
 ///
 /// Its row indices number the merged hash values rather than rows of any build
 /// batch, so it is only meaningful for membership checks, never to produce
 /// join matches.
-pub(crate) fn union_hash_maps(maps: &[&dyn JoinHashMapType]) -> Box<dyn JoinHashMapType> {
-    let len = maps.iter().map(|map| map.len()).sum();
-    let hashes = maps.iter().flat_map(|map| map.hash_values());
+pub(crate) fn union_hash_maps(
+    maps: &[&dyn JoinHashMapType],
+    hashes: &[u64],
+) -> Box<dyn JoinHashMapType> {
+    let len = maps.iter().map(|map| map.len()).sum::<usize>() + hashes.len();
+    let hashes = maps
+        .iter()
+        .flat_map(|map| map.hash_values())
+        .chain(hashes.iter().copied());
     if len > u32::MAX as usize {
         let mut union = JoinHashMapU64::with_capacity(len);
         for (row, hash) in hashes.enumerate() {

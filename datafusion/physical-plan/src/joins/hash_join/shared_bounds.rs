@@ -34,12 +34,14 @@ use crate::joins::hash_join::partitioned_hash_eval::{
 use crate::joins::join_hash_map::union_hash_maps;
 use crate::joins::key_range_bitmap::{KeyRangeBitmap, KeyRangePart};
 use crate::repartition::RangeExpr;
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, AsArray};
+use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigOptions, OptimizerOptions};
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{
     DataFusionError, NullEquality, Result, ScalarValue, SharedResult,
-    assert_or_internal_err,
+    assert_or_internal_err, internal_err,
 };
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
@@ -294,6 +296,12 @@ pub(crate) struct SharedBuildAccumulator {
     /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
     null_aware: Option<NullAwareMode>,
+    /// Largest merged IN list, in bytes, that partitioned filters keep as an IN
+    /// list: `hash_join_inlist_pushdown_max_size`, as for a single build.
+    in_list_max_size: usize,
+    /// Largest merged IN list, in values, that partitioned filters keep as an IN
+    /// list: `hash_join_inlist_pushdown_max_distinct_values`, as for a single build.
+    in_list_max_values: usize,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -406,6 +414,7 @@ impl SharedBuildAccumulator {
         repartition_random_state: SeededRandomState,
         null_equality: NullEquality,
         null_aware: Option<NullAwareMode>,
+        optimizer: &OptimizerOptions,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -463,6 +472,8 @@ impl SharedBuildAccumulator {
             probe_range_partitioning,
             null_equality,
             null_aware,
+            in_list_max_size: optimizer.hash_join_inlist_pushdown_max_size,
+            in_list_max_values: optimizer.hash_join_inlist_pushdown_max_distinct_values,
         }
     }
 
@@ -688,10 +699,9 @@ impl SharedBuildAccumulator {
         let mut empty_partition_ids = Vec::new();
         let mut has_canceled_unknown = false;
         let mut keys_have_null = false;
-        // Every non-empty partition's hash table, pruning bitmap, and bounds,
-        // merged into one membership lookup below; `None` once a partition's
-        // build side cannot be merged.
-        let mut hash_maps = Some(Vec::with_capacity(partitions.len()));
+        // Every non-empty partition's membership strategy and bounds, merged into
+        // one membership filter below; `None` once a partition cannot be merged.
+        let mut members = Some(Vec::with_capacity(partitions.len()));
         let mut merged_bounds: Option<PartitionBounds> = None;
 
         for (partition_id, partition) in partitions.into_iter().enumerate() {
@@ -710,19 +720,17 @@ impl SharedBuildAccumulator {
                 }) => {
                     real_partition_ids.push(partition_id);
                     keys_have_null |= partition_keys_have_null;
-                    hash_maps = match (&pushdown, hash_maps) {
-                        (PushdownStrategy::Map(map, bitmap), Some(mut hash_maps))
-                            if matches!(map.as_ref(), Map::HashMap(_)) =>
-                        {
-                            hash_maps.push((
-                                Arc::clone(map),
-                                bitmap.clone(),
-                                bounds.clone(),
-                            ));
-                            Some(hash_maps)
+                    let mergeable = match &pushdown {
+                        PushdownStrategy::Map(map, _) => {
+                            matches!(map.as_ref(), Map::HashMap(_))
                         }
-                        _ => None,
+                        PushdownStrategy::InList(_) => true,
+                        PushdownStrategy::Empty => false,
                     };
+                    members = members.filter(|_| mergeable).map(|mut members| {
+                        members.push((pushdown.clone(), bounds.clone()));
+                        members
+                    });
                     merged_bounds = match (merged_bounds, real_partition_ids.len()) {
                         (None, 1) => Some(bounds.clone()),
                         (Some(merged), _) => merged.union(&bounds),
@@ -744,8 +752,8 @@ impl SharedBuildAccumulator {
                 PartitionStatus::CanceledUnknown => {
                     has_canceled_unknown = true;
                     partition_filters.push(lit(true));
-                    // Rows routed here must pass, which a merged lookup cannot express.
-                    hash_maps = None;
+                    // Rows routed here must pass, which a merged filter cannot express.
+                    members = None;
                     // A canceled partition's build content is unknown, so it
                     // may hold a NULL key.
                     keys_have_null = true;
@@ -775,56 +783,8 @@ impl SharedBuildAccumulator {
             // Only one build partition contains rows, so its filter covers every
             // possible probe match without routing.
             Arc::clone(&partition_filters[real_partition_ids[0]])
-        } else if let Some(hash_maps) = hash_maps {
-            // Every non-empty partition is a hash table. A key is only ever built
-            // into the partition it is routed to, so membership in the union of
-            // all tables equals membership in the routed table, and needs neither
-            // a routing hash nor a CASE over per-partition filters.
-            let tables = hash_maps
-                .iter()
-                .filter_map(|(map, _, _)| match map.as_ref() {
-                    Map::HashMap(table) => Some(table.as_ref()),
-                    Map::ArrayMap(_) => None,
-                })
-                .collect::<Vec<_>>();
-            let union = Arc::new(Map::HashMap(union_hash_maps(&tables)));
-            // Container pruning reads one bitmap, so merge the partitions' bitmaps.
-            // A partition without one may hold a key anywhere in its bounds. Not
-            // worth building when no partition has a bitmap to contribute gaps.
-            let pruning_bitmap = merged_bounds
-                .as_ref()
-                .and_then(|merged| merged.get_column_bounds(0))
-                .filter(|_| {
-                    self.on_right.len() == 1
-                        && hash_maps.iter().any(|(_, bitmap, _)| bitmap.is_some())
-                })
-                .and_then(|merged| {
-                    let parts = hash_maps
-                        .iter()
-                        .map(|(_, bitmap, bounds)| match bitmap {
-                            Some(bitmap) => Some(KeyRangePart::Bitmap(bitmap)),
-                            None => bounds.get_column_bounds(0).map(|bounds| {
-                                KeyRangePart::Range {
-                                    min: &bounds.min,
-                                    max: &bounds.max,
-                                }
-                            }),
-                        })
-                        .collect::<Option<Vec<_>>>()?;
-                    KeyRangeBitmap::union(&merged.min, &merged.max, &parts)
-                })
-                .map(Arc::new);
-            let membership = Arc::new(HashTableLookupExpr::new(
-                self.on_right.clone(),
-                HASH_JOIN_SEED,
-                union,
-                String::from("hash_lookup"),
-                pruning_bitmap,
-            )) as Arc<dyn PhysicalExpr>;
-            let bounds = merged_bounds
-                .and_then(|bounds| create_bounds_predicate(&self.on_right, &bounds));
-            combine_membership_and_bounds(Some(membership), bounds)
-                .expect("membership predicate is always present")
+        } else if let Some(members) = members {
+            self.merged_membership_filter(&members, merged_bounds)?
         } else {
             // Builds the shared sparse `CASE` for partition filter routing.
             // Without cancellation, omitted branches are known empty and safely fall
@@ -897,6 +857,126 @@ impl SharedBuildAccumulator {
 
         self.dynamic_filter
             .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)
+    }
+
+    /// One membership filter over every partition's build keys, replacing the
+    /// `CASE` over per-partition filters. A key is only ever built into the
+    /// partition it is routed to, so membership in the union of all partitions'
+    /// keys equals membership in the routed partition's keys, and needs neither
+    /// a routing hash nor per-partition branches.
+    ///
+    /// `members` holds each non-empty partition's strategy, which must be an IN
+    /// list or a hash table, and bounds.
+    fn merged_membership_filter(
+        &self,
+        members: &[(PushdownStrategy, PartitionBounds)],
+        merged_bounds: Option<PartitionBounds>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let mut tables = Vec::with_capacity(members.len());
+        let mut lists = Vec::with_capacity(members.len());
+        for (pushdown, _) in members {
+            match pushdown {
+                PushdownStrategy::Map(map, _) => match map.as_ref() {
+                    Map::HashMap(table) => tables.push(table.as_ref()),
+                    Map::ArrayMap(_) => {
+                        return internal_err!("array maps cannot be merged");
+                    }
+                },
+                PushdownStrategy::InList(values) => lists.push(values),
+                PushdownStrategy::Empty => {}
+            }
+        }
+
+        // Every partition is an IN list, and together they still fit the limits a
+        // single build uses to pick an IN list: one combined list keeps the
+        // statistics and bloom filter pruning an IN list allows. Past those
+        // limits, a hash lookup is cheaper per row and carries a pruning bitmap.
+        let combined_in_list = tables.is_empty() && {
+            let values = lists.iter().map(|list| list.len()).sum::<usize>();
+            let bytes = lists
+                .iter()
+                .map(|list| list.get_array_memory_size())
+                .sum::<usize>();
+            values <= self.in_list_max_values && bytes <= self.in_list_max_size
+        };
+        let membership = if combined_in_list {
+            let values = concat(&lists.iter().map(|l| l.as_ref()).collect::<Vec<_>>())?;
+            create_membership_predicate(
+                &self.on_right,
+                PushdownStrategy::InList(values),
+                &HASH_JOIN_SEED,
+                self.probe_schema.as_ref(),
+            )?
+            .expect("an IN list always has a membership predicate")
+        } else {
+            // IN list keys join the hash tables' keys, hashed as the probe side
+            // hashes its join keys: one column per join key.
+            let mut hashes = vec![0; lists.iter().map(|l| l.len()).sum()];
+            let mut start = 0;
+            for values in &lists {
+                let columns = match values.as_struct_opt() {
+                    Some(columns) if self.on_right.len() > 1 => columns.columns(),
+                    _ => std::slice::from_ref(*values),
+                };
+                let end = start + values.len();
+                create_hashes(
+                    columns,
+                    HASH_JOIN_SEED.random_state(),
+                    &mut hashes[start..end],
+                )?;
+                start = end;
+            }
+            let union = Arc::new(Map::HashMap(union_hash_maps(&tables, &hashes)));
+            Arc::new(HashTableLookupExpr::new(
+                self.on_right.clone(),
+                HASH_JOIN_SEED,
+                union,
+                String::from("hash_lookup"),
+                self.merged_pruning_bitmap(members, merged_bounds.as_ref()),
+            ))
+        };
+
+        let bounds = merged_bounds
+            .and_then(|bounds| create_bounds_predicate(&self.on_right, &bounds));
+        Ok(combine_membership_and_bounds(Some(membership), bounds)
+            .expect("membership predicate is always present"))
+    }
+
+    /// Container pruning reads one bitmap, so merge the partitions' key ranges:
+    /// a hash table's bitmap, an IN list's keys, or else a partition's whole
+    /// bounds. `None` when no partition narrows its bounds, as the bounds
+    /// predicate already prunes that much.
+    fn merged_pruning_bitmap(
+        &self,
+        members: &[(PushdownStrategy, PartitionBounds)],
+        merged_bounds: Option<&PartitionBounds>,
+    ) -> Option<Arc<KeyRangeBitmap>> {
+        if self.on_right.len() != 1 {
+            return None;
+        }
+        let merged = merged_bounds?.get_column_bounds(0)?;
+        let parts = members
+            .iter()
+            .map(|(pushdown, bounds)| match pushdown {
+                PushdownStrategy::Map(_, Some(bitmap)) => {
+                    Some(KeyRangePart::Bitmap(bitmap))
+                }
+                PushdownStrategy::InList(keys) => Some(KeyRangePart::Keys(keys.as_ref())),
+                _ => bounds
+                    .get_column_bounds(0)
+                    .map(|bounds| KeyRangePart::Range {
+                        min: &bounds.min,
+                        max: &bounds.max,
+                    }),
+            })
+            .collect::<Option<Vec<_>>>()?;
+        if parts
+            .iter()
+            .all(|part| matches!(part, KeyRangePart::Range { .. }))
+        {
+            return None;
+        }
+        KeyRangeBitmap::union(&merged.min, &merged.max, &parts).map(Arc::new)
     }
 
     /// Keeps probe rows with a NULL key when the join semantics need them.
@@ -995,6 +1075,8 @@ pub(super) fn make_partitioned_accumulator_for_test(
         probe_range_partitioning: None,
         null_equality: NullEquality::NullEqualsNothing,
         null_aware: None,
+        in_list_max_size: 128 * 1024,
+        in_list_max_values: 150,
     }
 }
 
@@ -1061,6 +1143,8 @@ mod tests {
             probe_range_partitioning: None,
             null_equality: NullEquality::NullEqualsNothing,
             null_aware: None,
+            in_list_max_size: 128 * 1024,
+            in_list_max_values: 150,
         }
     }
 
@@ -1258,17 +1342,80 @@ mod tests {
         );
     }
 
+    /// A hash table holding `keys`, hashed as the build side hashes them.
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn hash_map_of(keys: &[i32]) -> PushdownStrategy {
+        use crate::joins::join_hash_map::JoinHashMapType;
+        let keys: ArrayRef = Arc::new(Int32Array::from(keys.to_vec()));
+        let mut hashes = vec![0; keys.len()];
+        create_hashes([&keys], HASH_JOIN_SEED.random_state(), &mut hashes).unwrap();
+        let mut map = JoinHashMapU32::with_capacity(keys.len());
+        map.update_from_iter(Box::new(hashes.iter().enumerate()), 0);
+        PushdownStrategy::Map(Arc::new(Map::HashMap(Box::new(map))), None)
+    }
+
+    /// Partitions that chose an IN list and partitions that chose a hash table
+    /// merge into one lookup without routing: rows holding any partition's key
+    /// pass, and rows holding none are filtered.
     #[test]
-    fn partitioned_in_list_partition_keeps_case() {
-        let acc = make_partitioned_expr_accumulator_for_test(2);
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn partitioned_in_list_and_hash_map_partitions_merge() {
+        let acc = make_partitioned_expr_accumulator_for_test(3);
 
         acc.build_filter(FinalizeInput::Partitioned(vec![
-            reported(hash_map(), no_bounds()),
+            reported(hash_map_of(&[7, 9]), no_bounds()),
             reported(in_list(&[2]), no_bounds()),
+            reported(PushdownStrategy::Empty, no_bounds()),
         ]))
         .unwrap();
 
-        assert!(current_expr(&acc).downcast_ref::<CaseExpr>().is_some());
+        assert!(
+            current_expr(&acc).downcast_ref::<CaseExpr>().is_none(),
+            "expected a merged lookup, got: {}",
+            current_expr(&acc)
+        );
+        assert_matches(&acc, &[2, 7, 9, 3, 8], &[true, true, true, false, false]);
+    }
+
+    /// IN list partitions whose combined list passes the IN list limits merge
+    /// into a hash lookup rather than one oversized IN list, which must still
+    /// accept every partition's keys.
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn partitioned_in_lists_past_limit_merge_into_hash_lookup() {
+        let mut acc = make_partitioned_expr_accumulator_for_test(3);
+        acc.in_list_max_values = 2;
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), no_bounds()),
+            reported(in_list(&[2]), no_bounds()),
+            reported(in_list(&[3]), no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(
+            expr.downcast_ref::<CaseExpr>().is_none()
+                && expr.downcast_ref::<InListExpr>().is_none(),
+            "expected a hash lookup, got: {expr}"
+        );
+        assert_matches(&acc, &[1, 2, 3, 4], &[true, true, true, false]);
+    }
+
+    /// Evaluates the current filter over probe keys `keys`.
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn assert_matches(acc: &SharedBuildAccumulator, keys: &[i32], expected: &[bool]) {
+        let probe = RecordBatch::try_new(
+            test_probe_schema(),
+            vec![Arc::new(Int32Array::from(keys.to_vec()))],
+        )
+        .unwrap();
+        let matched = current_expr(acc)
+            .evaluate(&probe)
+            .unwrap()
+            .into_array(keys.len())
+            .unwrap();
+        assert_eq!(matched.as_boolean(), &BooleanArray::from(expected.to_vec()));
     }
 
     #[test]
@@ -1591,6 +1738,8 @@ mod tests {
                 correlated: false,
                 value_keys: 1,
             }),
+            in_list_max_size: 128 * 1024,
+            in_list_max_values: 150,
         }
     }
 
@@ -1638,9 +1787,9 @@ mod tests {
         acc
     }
 
-    /// The IS NULL disjunct must wrap the routed `CASE` as a whole. A probe NULL
-    /// takes exactly one route, so widening only the branch of the partition that
-    /// reported the NULL would still drop it on every other route.
+    /// The IS NULL disjunct must wrap the merged filter as a whole. A probe NULL
+    /// belongs to exactly one partition, so widening only the filter of the
+    /// partition that reported the NULL would still drop it everywhere else.
     #[test]
     fn partitioned_null_keys_in_one_partition_widen_whole_routed_filter() {
         let acc = null_equal_partitioned_accumulator(2);
@@ -1658,7 +1807,7 @@ mod tests {
             widened.left().downcast_ref::<IsNullExpr>().is_some(),
             "expected the IS NULL disjunct first, got: {expr}"
         );
-        case_expr(widened.right());
+        assert_in_list_column_values(widened.right(), "probe_key", 0, &[1, 2]);
         assert_eq!(
             format!("{expr}").matches("IS NULL").count(),
             1,
@@ -1806,6 +1955,8 @@ mod tests {
                     correlated: true,
                     value_keys,
                 }),
+                in_list_max_size: 128 * 1024,
+                in_list_max_values: 150,
             };
 
             let bounds = PartitionBounds::new(

@@ -1864,6 +1864,7 @@ impl ExecutionPlan for HashJoinExec {
                             repartition_random_state,
                             self.null_equality,
                             null_aware,
+                            &context.session_config().options().optimizer,
                         ))
                     })))
                 })
@@ -10064,19 +10065,8 @@ mod tests {
 
         dynamic_filter.wait_complete().await;
         let filter = dynamic_filter.current()?.to_string();
-        // The aggregated build-side NULL must widen the routed filter once, at the
-        // top: `c2 IS NULL OR CASE hash(c2) % 4 WHEN ... END`.
-        //
-        // Under `force_hash_collisions` every key hashes to the same value, so the
-        // repartition routes all build rows to a single partition and
-        // `build_partitioned_filter` collapses to that partition's filter with no
-        // routing `CASE`. The NULL widening this test guards is asserted either way.
-        if cfg!(not(feature = "force_hash_collisions")) {
-            assert!(
-                filter.contains("CASE"),
-                "expected a routed partitioned filter, got: {filter}"
-            );
-        }
+        // The aggregated build-side NULL must widen the whole merged filter once,
+        // at the top: `c2 IS NULL OR <membership over every partition>`.
         assert!(
             filter.starts_with("c2@0 IS NULL OR"),
             "expected the IS NULL disjunct to wrap the whole routed filter, got: {filter}"
