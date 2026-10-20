@@ -1,0 +1,653 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for the SequenceSortedInputs physical optimizer rule.
+# When the partitions feeding a SortPreservingMergeExec are
+# non-overlapping ranges of the merge ordering, the rule replaces
+# the merge with a ProgressiveEvalExec that # concatenates the
+# partitions, inserting a ReorderPartitionsExec first when
+# the partitions are not already laid out in the required order.
+
+# One partition per file for deterministic grouping
+statement ok
+set datafusion.execution.target_partitions = 3;
+
+# Exact per-partition statistics are required
+statement ok
+set datafusion.execution.collect_statistics = true;
+
+statement ok
+set datafusion.optimizer.sequence_sorted_inputs = true;
+
+statement ok
+CREATE TABLE src_nine (int_col INT, sec_col INT) AS VALUES
+(1, 10), (2, 20), (3, 30),
+(4, 40), (5, 50), (6, 60),
+(7, 70), (8, 80), (9, 90);
+
+# Split the test data into 3 files, kept in sort order
+
+query I
+COPY (SELECT * FROM src_nine WHERE int_col <= 3 ORDER BY int_col)
+TO 'test_files/scratch/sequence_sorted_inputs/ordered/0.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM src_nine WHERE int_col > 3 AND int_col <= 6 ORDER BY int_col)
+TO 'test_files/scratch/sequence_sorted_inputs/ordered/1.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM src_nine WHERE int_col > 6 ORDER BY int_col)
+TO 'test_files/scratch/sequence_sorted_inputs/ordered/2.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE ordered_table (
+  int_col INT NOT NULL,
+  sec_col INT NOT NULL
+)
+STORED AS PARQUET
+WITH ORDER (int_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/sequence_sorted_inputs/ordered/';
+
+# Non-overlapping partitions already in the required order:
+# the merge is replaced by a ProgressiveEvalExec with no reordering.
+query TT
+EXPLAIN SELECT int_col, sec_col FROM ordered_table ORDER BY int_col;
+----
+logical_plan
+01)Sort: ordered_table.int_col ASC NULLS LAST
+02)--TableScan: ordered_table projection=[int_col, sec_col]
+physical_plan
+01)ProgressiveEvalExec: 
+02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/2.parquet]]}, projection=[int_col, sec_col], output_ordering=[int_col@0 ASC NULLS LAST], file_type=parquet
+
+query II
+SELECT int_col, sec_col FROM ordered_table ORDER BY int_col;
+----
+1 10
+2 20
+3 30
+4 40
+5 50
+6 60
+7 70
+8 80
+9 90
+
+# A LIMIT is pushed into the ProgressiveEvalExec as a fetch.
+query TT
+EXPLAIN SELECT int_col FROM ordered_table ORDER BY int_col LIMIT 4;
+----
+logical_plan
+01)Sort: ordered_table.int_col ASC NULLS LAST, fetch=4
+02)--TableScan: ordered_table projection=[int_col]
+physical_plan
+01)ProgressiveEvalExec: fetch=4, 
+02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/2.parquet]]}, projection=[int_col], limit=4, output_ordering=[int_col@0 ASC NULLS LAST], file_type=parquet
+
+query I
+SELECT int_col FROM ordered_table ORDER BY int_col LIMIT 4;
+----
+1
+2
+3
+4
+
+# A descending query with ascending data requires a sort and cannot
+# use ProgressiveEvalExec.
+query TT
+EXPLAIN SELECT int_col FROM ordered_table ORDER BY int_col DESC;
+----
+logical_plan
+01)Sort: ordered_table.int_col DESC NULLS FIRST
+02)--TableScan: ordered_table projection=[int_col]
+physical_plan
+01)SortPreservingMergeExec: [int_col@0 DESC]
+02)--SortExec: expr=[int_col@0 DESC], preserve_partitioning=[true]
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/2.parquet]]}, projection=[int_col], file_type=parquet, sort_order_for_reorder=[int_col@0 DESC], reverse_row_groups=true
+
+query I
+SELECT int_col FROM ordered_table ORDER BY int_col DESC;
+----
+9
+8
+7
+6
+5
+4
+3
+2
+1
+
+# Test that disabling the rule keeps a SortPreservingMergeExec.
+statement ok
+set datafusion.optimizer.sequence_sorted_inputs = false;
+
+query TT
+EXPLAIN SELECT int_col, sec_col FROM ordered_table ORDER BY int_col;
+----
+logical_plan
+01)Sort: ordered_table.int_col ASC NULLS LAST
+02)--TableScan: ordered_table projection=[int_col, sec_col]
+physical_plan
+01)SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/ordered/2.parquet]]}, projection=[int_col, sec_col], output_ordering=[int_col@0 ASC NULLS LAST], file_type=parquet
+
+# Re-enable the optimization
+statement ok
+set datafusion.optimizer.sequence_sorted_inputs = true;
+
+# Create a new table where the file order is the reverse of the sort order,
+# so partitions must be reordered when querying.
+
+query I
+COPY (SELECT * FROM src_nine WHERE int_col > 6 ORDER BY int_col)
+TO 'test_files/scratch/sequence_sorted_inputs/reversed/0.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM src_nine WHERE int_col > 3 AND int_col <= 6 ORDER BY int_col)
+TO 'test_files/scratch/sequence_sorted_inputs/reversed/1.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM src_nine WHERE int_col <= 3 ORDER BY int_col)
+TO 'test_files/scratch/sequence_sorted_inputs/reversed/2.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE reversed_table (
+  int_col INT NOT NULL,
+  sec_col INT NOT NULL
+)
+STORED AS PARQUET
+WITH ORDER (int_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/sequence_sorted_inputs/reversed/';
+
+# Expect a ReorderPartitionsExec to be used to rearrange the files.
+query TT
+EXPLAIN SELECT int_col FROM reversed_table ORDER BY int_col;
+----
+logical_plan
+01)Sort: reversed_table.int_col ASC NULLS LAST
+02)--TableScan: reversed_table projection=[int_col]
+physical_plan
+01)ProgressiveEvalExec: 
+02)--ReorderPartitionsExec: order=[2, 1, 0]
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/reversed/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/reversed/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/reversed/2.parquet]]}, projection=[int_col], output_ordering=[int_col@0 ASC NULLS LAST], file_type=parquet
+
+query I
+SELECT int_col FROM reversed_table ORDER BY int_col;
+----
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+# Test overlapping partitions: the merge must be kept
+
+query I
+COPY (SELECT * FROM src_nine WHERE int_col IN (1, 3, 5) ORDER BY int_col)
+TO 'test_files/scratch/sequence_sorted_inputs/overlapping/0.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM src_nine WHERE int_col IN (2, 4, 6) ORDER BY int_col)
+TO 'test_files/scratch/sequence_sorted_inputs/overlapping/1.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE overlapping_table (
+  int_col INT NOT NULL,
+  sec_col INT NOT NULL
+)
+STORED AS PARQUET
+WITH ORDER (int_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/sequence_sorted_inputs/overlapping/';
+
+query TT
+EXPLAIN SELECT int_col FROM overlapping_table ORDER BY int_col;
+----
+logical_plan
+01)Sort: overlapping_table.int_col ASC NULLS LAST
+02)--TableScan: overlapping_table projection=[int_col]
+physical_plan
+01)SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/overlapping/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/overlapping/1.parquet]]}, projection=[int_col], output_ordering=[int_col@0 ASC NULLS LAST], file_type=parquet
+
+query I
+SELECT int_col FROM overlapping_table ORDER BY int_col;
+----
+1
+2
+3
+4
+5
+6
+
+# Touching boundary: two files share the boundary value 5.
+# ProgressiveEvalExec can still be used.
+
+query I
+COPY (SELECT * FROM src_nine WHERE int_col <= 5 ORDER BY int_col)
+TO 'test_files/scratch/sequence_sorted_inputs/touching/0.parquet'
+STORED AS PARQUET;
+----
+5
+
+query I
+COPY (SELECT * FROM src_nine WHERE int_col >= 5 ORDER BY int_col)
+TO 'test_files/scratch/sequence_sorted_inputs/touching/1.parquet'
+STORED AS PARQUET;
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE touching_table (
+  int_col INT NOT NULL,
+  sec_col INT NOT NULL
+)
+STORED AS PARQUET
+WITH ORDER (int_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/sequence_sorted_inputs/touching/';
+
+query TT
+EXPLAIN SELECT int_col FROM touching_table ORDER BY int_col;
+----
+logical_plan
+01)Sort: touching_table.int_col ASC NULLS LAST
+02)--TableScan: touching_table projection=[int_col]
+physical_plan
+01)ProgressiveEvalExec: 
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/touching/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/touching/1.parquet]]}, projection=[int_col], output_ordering=[int_col@0 ASC NULLS LAST], file_type=parquet
+
+query I
+SELECT int_col FROM touching_table ORDER BY int_col;
+----
+1
+2
+3
+4
+5
+5
+6
+7
+8
+9
+
+# Test handling of nulls in the sort column
+
+statement ok
+CREATE TABLE src_nulls (n_col INT) AS VALUES
+(1), (2), (NULL),
+(3), (4), (5);
+
+# A null in the first partition when nulls are sorted last invalidates the rule,
+# the SortPreservingMerge must be kept.
+query I
+COPY (SELECT n_col FROM src_nulls WHERE n_col <= 2 OR n_col IS NULL ORDER BY n_col ASC NULLS LAST)
+TO 'test_files/scratch/sequence_sorted_inputs/nulls_mid/0.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT n_col FROM src_nulls WHERE n_col > 2 ORDER BY n_col ASC NULLS LAST)
+TO 'test_files/scratch/sequence_sorted_inputs/nulls_mid/1.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE nulls_mid_table (n_col INT)
+STORED AS PARQUET
+WITH ORDER (n_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/sequence_sorted_inputs/nulls_mid/';
+
+query TT
+EXPLAIN SELECT n_col FROM nulls_mid_table ORDER BY n_col ASC NULLS LAST;
+----
+logical_plan
+01)Sort: nulls_mid_table.n_col ASC NULLS LAST
+02)--TableScan: nulls_mid_table projection=[n_col]
+physical_plan
+01)SortPreservingMergeExec: [n_col@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/nulls_mid/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/nulls_mid/1.parquet]]}, projection=[n_col], output_ordering=[n_col@0 ASC NULLS LAST], file_type=parquet
+
+query I
+SELECT n_col FROM nulls_mid_table ORDER BY n_col ASC NULLS LAST;
+----
+1
+2
+3
+4
+5
+NULL
+
+# A null in the last partition when nulls are sorted last is OK, ProgressiveEvalExec can be used.
+query I
+COPY (SELECT n_col FROM src_nulls WHERE n_col <= 3 ORDER BY n_col ASC NULLS LAST)
+TO 'test_files/scratch/sequence_sorted_inputs/nulls_last/0.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT n_col FROM src_nulls WHERE n_col > 3 OR n_col IS NULL ORDER BY n_col ASC NULLS LAST)
+TO 'test_files/scratch/sequence_sorted_inputs/nulls_last/1.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE nulls_last_table (n_col INT)
+STORED AS PARQUET
+WITH ORDER (n_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/sequence_sorted_inputs/nulls_last/';
+
+query TT
+EXPLAIN SELECT n_col FROM nulls_last_table ORDER BY n_col ASC NULLS LAST;
+----
+logical_plan
+01)Sort: nulls_last_table.n_col ASC NULLS LAST
+02)--TableScan: nulls_last_table projection=[n_col]
+physical_plan
+01)ProgressiveEvalExec: 
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/nulls_last/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/nulls_last/1.parquet]]}, projection=[n_col], output_ordering=[n_col@0 ASC NULLS LAST], file_type=parquet
+
+query I
+SELECT n_col FROM nulls_last_table ORDER BY n_col ASC NULLS LAST;
+----
+1
+2
+3
+4
+5
+NULL
+
+# Test orders covering multiple columns.
+# When files share a boundary value on the first sort column, the min/max of
+# the second column must be used to determine whether overlap is possible.
+
+statement ok
+CREATE TABLE src_multi_a (int_col INT, sec_col INT) AS VALUES
+(1, 1), (2, 1), (5, 1), (5, 2);
+
+statement ok
+CREATE TABLE src_multi_b (int_col INT, sec_col INT) AS VALUES
+(5, 3), (5, 4), (8, 3), (9, 4);
+
+query I
+COPY (SELECT * FROM src_multi_a ORDER BY int_col, sec_col)
+TO 'test_files/scratch/sequence_sorted_inputs/multi_col/0.parquet'
+STORED AS PARQUET;
+----
+4
+
+query I
+COPY (SELECT * FROM src_multi_b ORDER BY int_col, sec_col)
+TO 'test_files/scratch/sequence_sorted_inputs/multi_col/1.parquet'
+STORED AS PARQUET;
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE multi_col_table (
+  int_col INT NOT NULL,
+  sec_col INT NOT NULL
+)
+STORED AS PARQUET
+WITH ORDER (int_col ASC NULLS LAST, sec_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/sequence_sorted_inputs/multi_col/';
+
+query TT
+EXPLAIN SELECT int_col, sec_col FROM multi_col_table ORDER BY int_col, sec_col;
+----
+logical_plan
+01)Sort: multi_col_table.int_col ASC NULLS LAST, multi_col_table.sec_col ASC NULLS LAST
+02)--TableScan: multi_col_table projection=[int_col, sec_col]
+physical_plan
+01)ProgressiveEvalExec: 
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/multi_col/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/multi_col/1.parquet]]}, projection=[int_col, sec_col], output_ordering=[int_col@0 ASC NULLS LAST, sec_col@1 ASC NULLS LAST], file_type=parquet
+
+query II
+SELECT int_col, sec_col FROM multi_col_table ORDER BY int_col, sec_col;
+----
+1 1
+2 1
+5 1
+5 2
+5 3
+5 4
+8 3
+9 4
+
+# Known limitation: with more target partitions than files (and enough rows
+# for repartitioning to look beneficial), the scan is byte-range split for
+# parallelism; the slices only carry whole-file statistics, so the partitions
+# are no longer provably non-overlapping and the merge is kept
+
+query I
+COPY (SELECT value AS int_col FROM generate_series(1, 10000) AS t(value) ORDER BY value)
+TO 'test_files/scratch/sequence_sorted_inputs/big/0.parquet'
+STORED AS PARQUET;
+----
+10000
+
+query I
+COPY (SELECT value AS int_col FROM generate_series(10001, 20000) AS t(value) ORDER BY value)
+TO 'test_files/scratch/sequence_sorted_inputs/big/1.parquet'
+STORED AS PARQUET;
+----
+10000
+
+query I
+COPY (SELECT value AS int_col FROM generate_series(20001, 30000) AS t(value) ORDER BY value)
+TO 'test_files/scratch/sequence_sorted_inputs/big/2.parquet'
+STORED AS PARQUET;
+----
+10000
+
+statement ok
+CREATE EXTERNAL TABLE big_table (int_col BIGINT NOT NULL)
+STORED AS PARQUET
+WITH ORDER (int_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/sequence_sorted_inputs/big/';
+
+# At the file-count partition target the rule applies.
+query TT
+EXPLAIN SELECT int_col FROM big_table ORDER BY int_col;
+----
+logical_plan
+01)Sort: big_table.int_col ASC NULLS LAST
+02)--TableScan: big_table projection=[int_col]
+physical_plan
+01)ProgressiveEvalExec: 
+02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/big/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/big/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/big/2.parquet]]}, projection=[int_col], output_ordering=[int_col@0 ASC NULLS LAST], file_type=parquet
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+statement ok
+set datafusion.optimizer.repartition_file_min_size = 1;
+
+# With 8 target partitions the three files are split into byte ranges and
+# the merge must be kept.
+query TT
+EXPLAIN SELECT int_col FROM big_table ORDER BY int_col;
+----
+logical_plan
+01)Sort: big_table.int_col ASC NULLS LAST
+02)--TableScan: big_table projection=[int_col]
+physical_plan
+01)SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={8 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/big/0.parquet:0..12185], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/big/1.parquet:0..9242], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/big/2.parquet:0..13863], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/big/0.parquet:12185..24370], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/big/1.parquet:9242..18484], ...]}, projection=[int_col], output_ordering=[int_col@0 ASC NULLS LAST], file_type=parquet
+
+# Results are still correct through the merge.
+query I
+SELECT int_col FROM big_table ORDER BY int_col LIMIT 3;
+----
+1
+2
+3
+
+query I
+SELECT count(*) FROM big_table;
+----
+30000
+
+# Test PushdownSort interaction. Create four files named so
+# alphabetical order does not match id order, but the groups are still
+# non-overlapping:
+#   group 0: aa (id 4-6), ab (id 1-3)   -> covers ids [1, 6]
+#   group 1: ac (id 10-12), ad (id 7-9) -> covers ids [7, 12]
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE TABLE src_pushdown_then_sequence (id INT, val INT) AS VALUES
+(1, 10), (2, 20), (3, 30),
+(4, 40), (5, 50), (6, 60),
+(7, 70), (8, 80), (9, 90),
+(10, 100), (11, 110), (12, 120);
+
+query I
+COPY (SELECT * FROM src_pushdown_then_sequence WHERE id BETWEEN 4 AND 6 ORDER BY id)
+TO 'test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/aa.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM src_pushdown_then_sequence WHERE id BETWEEN 1 AND 3 ORDER BY id)
+TO 'test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/ab.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM src_pushdown_then_sequence WHERE id BETWEEN 10 AND 12 ORDER BY id)
+TO 'test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/ac.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM src_pushdown_then_sequence WHERE id BETWEEN 7 AND 9 ORDER BY id)
+TO 'test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/ad.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE pushdown_then_sequence_table (
+  id INT NOT NULL,
+  val INT NOT NULL
+)
+STORED AS PARQUET
+WITH ORDER (id ASC NULLS LAST)
+LOCATION 'test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/';
+
+# Scenario 1: with PushdownSort disabled, each group's files are read in the wrong
+# order, so a SortExec is required. SequenceSortedInputs is still and applied to the
+# sort output, used due to the groups being non-overlapping.
+statement ok
+set datafusion.optimizer.enable_sort_pushdown = false;
+
+query TT
+EXPLAIN SELECT id FROM pushdown_then_sequence_table ORDER BY id;
+----
+logical_plan
+01)Sort: pushdown_then_sequence_table.id ASC NULLS LAST
+02)--TableScan: pushdown_then_sequence_table projection=[id]
+physical_plan
+01)ProgressiveEvalExec: 
+02)--SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/aa.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/ab.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/ac.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/ad.parquet]]}, projection=[id], file_type=parquet
+
+# Scenario 2: with PushdownSort re-enabled, it updates the file order within
+# each group, eliminating the SortExec.
+statement ok
+set datafusion.optimizer.enable_sort_pushdown = true;
+
+query TT
+EXPLAIN SELECT id FROM pushdown_then_sequence_table ORDER BY id;
+----
+logical_plan
+01)Sort: pushdown_then_sequence_table.id ASC NULLS LAST
+02)--TableScan: pushdown_then_sequence_table projection=[id]
+physical_plan
+01)ProgressiveEvalExec: 
+02)--BufferExec: capacity=1073741824
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/ab.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/aa.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/ad.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sequence_sorted_inputs/pushdown_then_sequence/ac.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+query I
+SELECT id FROM pushdown_then_sequence_table ORDER BY id;
+----
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+
+statement ok
+DROP TABLE src_pushdown_then_sequence;
+
+statement ok
+DROP TABLE pushdown_then_sequence_table;
+
+# Restore settings
+
+statement ok
+set datafusion.optimizer.repartition_file_min_size = 1048576;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.sequence_sorted_inputs = false;

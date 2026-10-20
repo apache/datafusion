@@ -28,7 +28,7 @@ use super::{FileScanConfig, partition_known_empty_files};
 use crate::file::FileSource;
 use crate::file_groups::FileGroup;
 use crate::source::DataSource;
-use crate::statistics::MinMaxStatistics;
+use crate::statistics::{MinMaxStatistics, compute_file_group_statistics};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
@@ -124,6 +124,7 @@ impl FileScanConfig {
                     &sort_order,
                     &projected_schema,
                     projection_indices.as_deref(),
+                    new_config.file_source.table_schema().table_schema(),
                 );
                 new_config.file_groups = result.file_groups;
                 result.all_non_overlapping
@@ -251,6 +252,7 @@ impl FileScanConfig {
             &sort_order,
             &projected_schema,
             projection_indices.as_deref(),
+            self.file_source.table_schema().table_schema(),
         );
 
         if !result.any_reordered {
@@ -316,6 +318,7 @@ pub(crate) fn sort_files_within_groups_by_statistics(
     sort_order: &LexOrdering,
     projected_schema: &SchemaRef,
     projection_indices: Option<&[usize]>,
+    table_schema: &SchemaRef,
 ) -> SortedFileGroups {
     let mut any_reordered = false;
     let mut confirmed_non_overlapping: usize = 0;
@@ -367,11 +370,29 @@ pub(crate) fn sort_files_within_groups_by_statistics(
             group.clone()
         } else {
             any_reordered = true;
-            sorted_files
+            let reordered: FileGroup = sorted_files
                 .iter()
                 .map(|file| (**file).clone())
                 .chain(empty_files.iter().map(|file| (**file).clone()))
-                .collect()
+                .collect();
+            // Recompute group-level statistics.
+            if reordered.iter().all(|file| file.statistics.is_some()) {
+                match compute_file_group_statistics(
+                    reordered.clone(),
+                    Arc::clone(table_schema),
+                    true,
+                ) {
+                    Ok(with_stats) => with_stats,
+                    Err(e) => {
+                        log::trace!(
+                            "Failed to recompute file group statistics after reorder: {e}"
+                        );
+                        reordered
+                    }
+                }
+            } else {
+                reordered
+            }
         };
 
         let is_non_overlapping = match MinMaxStatistics::new_from_files(
@@ -690,6 +711,7 @@ mod tests {
             &sort_order,
             &schema,
             None,
+            &schema,
         );
 
         assert!(sorted.any_reordered);

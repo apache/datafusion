@@ -191,8 +191,16 @@ impl ExecutionPlan for TestMemoryExec {
         _input_stats: &[Arc<Statistics>],
         args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        if args.partition().is_some() {
-            Ok(Arc::new(Statistics::new_unknown(&self.schema)))
+        if let Some(partition) = args.partition() {
+            if let Some(batches) = self.partitions.get(partition) {
+                Ok(Arc::new(common::compute_record_batch_statistics(
+                    std::slice::from_ref(batches),
+                    &self.schema,
+                    self.projection.clone(),
+                )))
+            } else {
+                Ok(Arc::new(Statistics::new_unknown(&self.projected_schema)))
+            }
         } else {
             Ok(Arc::new(self.statistics_inner()?))
         }
