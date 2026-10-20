@@ -100,11 +100,6 @@ pub struct PullUpCorrelatedExpr {
     /// grouping set that omits a correlated column can tell whether
     /// something above it reads the column the pull up would fill in.
     column_refs_above: Vec<BTreeSet<Column>>,
-    /// `LIMIT 0` forces the subquery to zero rows unconditionally, regardless
-    /// of whether the correlation matched, collapsing it to an `EmptyRelation`.
-    /// Join-compensation needs this flag to
-    /// distinguish "empty" from its usual "matched" default.
-    pub forces_empty_result: bool,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -128,7 +123,6 @@ impl PullUpCorrelatedExpr {
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
             column_refs_above: Vec::new(),
-            forces_empty_result: false,
         }
     }
 
@@ -291,7 +285,6 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 // with an empty relation.
                 let fetch = limit.get_fetch_type()?;
                 if matches!(fetch, FetchType::Literal(Some(0))) {
-                    self.forces_empty_result = true;
                     return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
                         EmptyRelation {
                             produce_one_row: false,

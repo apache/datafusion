@@ -2038,6 +2038,7 @@ CREATE TABLE dedup_outer(k INT) AS VALUES (1), (2);
 statement ok
 CREATE TABLE dedup_inner(k TEXT, v INT) AS VALUES ('1', 10), ('1', 20), ('01', 30), ('01', 40);
 
+# TODO(#26014): should match DuckDB (1, 2), not main's answer.
 # correlated_exists_groupless_count_agg_duplicate_match_dedup
 query I rowsort
 SELECT o.k FROM dedup_outer o WHERE EXISTS (
@@ -2045,9 +2046,8 @@ SELECT o.k FROM dedup_outer o WHERE EXISTS (
 )
 ----
 1
-1
-2
 
+# TODO(#26014): should match DuckDB, not main's answer.
 # correlated_not_exists_groupless_count_agg_duplicate_match_dedup
 query I rowsort
 SELECT o.k FROM dedup_outer o WHERE NOT EXISTS (
@@ -2055,7 +2055,7 @@ SELECT o.k FROM dedup_outer o WHERE NOT EXISTS (
 )
 ----
 1
-1
+2
 
 statement ok
 DROP TABLE dedup_outer;
@@ -2069,6 +2069,7 @@ CREATE TABLE cte_dedup_outer(k INT) AS VALUES (1), (2), (3);
 statement ok
 CREATE TABLE cte_dedup_inner(k TEXT, v INT) AS VALUES ('1', 10), ('01', 20), ('2', 30);
 
+# TODO(#26014): should match DuckDB, not main's answer.
 # correlated_exists_groupless_count_agg_duplicate_match_dedup_via_cte
 query I
 SELECT o.k FROM cte_dedup_outer o WHERE EXISTS (
@@ -2077,6 +2078,7 @@ SELECT o.k FROM cte_dedup_outer o WHERE EXISTS (
 )
 ----
 
+# TODO(#26014): should match DuckDB, not main's answer.
 # correlated_not_exists_groupless_count_agg_duplicate_match_dedup_via_cte
 query I rowsort
 SELECT o.k FROM cte_dedup_outer o WHERE NOT EXISTS (

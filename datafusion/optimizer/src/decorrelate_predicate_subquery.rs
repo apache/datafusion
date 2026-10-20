@@ -28,7 +28,9 @@ use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     Column, DFSchema, NullEquality, Result, ScalarValue, assert_or_internal_err,
     internal_datafusion_err, internal_err, not_impl_err, plan_err,
@@ -761,6 +763,30 @@ fn with_null_aware_value_keys(
     ))
 }
 
+fn subquery_operands_are_bare_columns(
+    join_filters: &[Expr],
+    subquery_cols: &BTreeSet<Column>,
+) -> bool {
+    join_filters.iter().all(|filter| {
+        let mut bare = true;
+        filter
+            .apply(|e| {
+                let refs = e.column_refs();
+                if !refs.is_empty() && refs.iter().all(|c| subquery_cols.contains(*c)) {
+                    bare = matches!(e, Expr::Column(_));
+                    return Ok(if bare {
+                        TreeNodeRecursion::Jump
+                    } else {
+                        TreeNodeRecursion::Stop
+                    });
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .expect("infallible");
+        bare
+    })
+}
+
 /// The outcome of [`build_join`].
 struct BuiltJoin {
     /// The outer plan with the subquery joined into it.
@@ -803,9 +829,18 @@ fn build_join(
             .flat_map(|f| f.column_refs())
             .any(|c| expr_map.contains_key(&c.name))
     });
+    let subquery_cols: BTreeSet<Column> = pull_up
+        .correlated_subquery_cols_map
+        .values()
+        .flatten()
+        .cloned()
+        .collect();
+    let keys_are_bare = count_bug_compensation.is_none()
+        || subquery_operands_are_bare_columns(&pull_up.join_filters, &subquery_cols);
     // Fall back to the uncompensated rewrite whenever compensation can't safely apply, so a HAVING never gets silently dropped.
     let compensable = pull_up.can_pull_up
         && !reads_agg_output
+        && keys_are_bare
         && (count_bug_compensation.is_some() || pull_up.pull_up_having_expr.is_none());
     if exists_sub_query && !compensable {
         (new_plan, pull_up) = rewrite(false)?;
@@ -841,7 +876,6 @@ fn build_join(
             alias,
             &expr_map,
             pull_up.pull_up_having_expr.as_ref(),
-            pull_up.forces_empty_result,
         )
         .map(|plan| {
             Some(BuiltJoin {
@@ -1111,7 +1145,6 @@ fn build_join(
 
 /// Builds the join for a correlated `EXISTS` subquery whose groupless
 /// aggregate requires count-bug compensation.
-#[expect(clippy::too_many_arguments)]
 fn build_join_with_count_bug(
     left: &LogicalPlan,
     sub_query_alias: LogicalPlan,
@@ -1120,8 +1153,22 @@ fn build_join_with_count_bug(
     alias: &str,
     expr_map: &crate::decorrelate::ExprResultMap,
     pull_up_having_expr: Option<&Expr>,
-    forces_empty_result: bool,
 ) -> Result<LogicalPlan> {
+    let pull_up_having_expr = pull_up_having_expr
+        .map(|f| {
+            f.clone()
+                .transform_up(|e| match e {
+                    Expr::Column(c) => Ok(Transformed::yes(Expr::Column(Column::new(
+                        Some(alias),
+                        c.name,
+                    )))),
+                    _ => Ok(Transformed::no(e)),
+                })
+                .data()
+        })
+        .transpose()?;
+    let pull_up_having_expr = pull_up_having_expr.as_ref();
+
     let joined = LogicalPlanBuilder::from(left.clone())
         .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?
         .build()?;
@@ -1164,24 +1211,17 @@ fn build_join_with_count_bug(
     // (1) the outer row joined against an inner group whose HAVING
     //     predicate failed,
     // (2) an unmatched outer row's own default aggregate values fail
-    //     that same HAVING clause,
-    // (3) the subquery was truncated to zero rows unconditionally
-    //     (LIMIT 0), which is false for every outer row regardless of
-    //     whether it matched.
-    let exists_expr = if forces_empty_result {
-        lit(false)
-    } else {
-        match having_arm {
-            Some(when_expr) => when(
-                indicator_col.clone().is_null(),
-                unmatched_having_default.is_true(),
-            )
-            .when(when_expr, lit(false))
-            .otherwise(lit(true))?
-            .rewrite(&mut expr_rewrite)
-            .data()?,
-            None => lit(true),
-        }
+    //     that same HAVING clause.
+    let exists_expr = match having_arm {
+        Some(when_expr) => when(
+            indicator_col.clone().is_null(),
+            unmatched_having_default.is_true(),
+        )
+        .when(when_expr, lit(false))
+        .otherwise(lit(true))?
+        .rewrite(&mut expr_rewrite)
+        .data()?,
+        None => lit(true),
     };
 
     let new_plan = match join_type {
