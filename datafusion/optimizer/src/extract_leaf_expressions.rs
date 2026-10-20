@@ -764,12 +764,32 @@ fn build_extraction_projection_impl(
             .filter_map(|e| resolve_against(input_schema, passthrough_column(e)?))
             .collect();
 
+        // The names the merged projection already produces. The merge keeps
+        // every expression of `existing`, so the parent can still read each of
+        // these names, and a pass-through column that carries one of them makes
+        // the output schema ambiguous.
+        let output_names: std::collections::HashSet<&str> = existing
+            .schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+
         for col in columns_needed {
+            // The projection produces this name, so the parent reads it from the
+            // projection's own output. Do not resolve the name through the rename
+            // map: a rename such as `t.a AS b` is a computed output, and its
+            // input column `t.a` beside the output field `a` of a second rename
+            // gives an ambiguous schema (issue #25446).
+            if output_names.contains(col.name.as_str()) {
+                continue;
+            }
             let col_expr = Expr::Column(col.clone());
             let resolved = replace_cols_by_name(col_expr, &replace_map)?;
             if let Expr::Column(resolved_col) = &resolved
                 && let Some(input_col) = resolve_against(input_schema, resolved_col)
                 && !existing_cols.contains(&input_col)
+                && !output_names.contains(input_col.name.as_str())
             {
                 proj_exprs.push(Expr::Column(input_col));
             }
@@ -1423,6 +1443,7 @@ fn try_push_into_inputs(
     // so if the TopDown pass later pushes a child further (changing its output
     // schema), the parent node's schema becomes stale.
     let mut new_inputs: Vec<LogicalPlan> = Vec::with_capacity(num_inputs);
+    let is_union = matches!(node, LogicalPlan::Union(_));
     for (idx, input) in inputs.into_iter().enumerate() {
         if per_input[idx].pairs.is_empty() {
             new_inputs.push(input.clone());
@@ -1458,9 +1479,14 @@ fn try_push_into_inputs(
             // this input (e.g., through Filter → existing extraction projection).
             // This ensures the input's output schema is stable and won't change
             // when the TopDown pass later visits children.
-            match try_push_input(&proj_plan, alias_generator)? {
-                Some(pushed) => new_inputs.push(pushed),
-                None => new_inputs.push(proj_plan),
+            let pushed = match try_push_input(&proj_plan, alias_generator)? {
+                Some(pushed) => pushed,
+                None => proj_plan,
+            };
+            if is_union {
+                new_inputs.push(align_union_input(pushed, &per_input[idx])?);
+            } else {
+                new_inputs.push(pushed);
             }
         }
     }
@@ -1479,6 +1505,40 @@ fn try_push_into_inputs(
     }
 
     Ok(Some(new_node))
+}
+
+/// Projects one input of a `Union` to the extracted aliases, in pair order,
+/// followed by the needed columns, in column order.
+///
+/// `Union` matches its inputs by position, not by name. A merge into an
+/// existing projection appends the aliases after the existing expressions,
+/// while a new projection puts them first. Without this, two inputs that take
+/// different paths disagree on the position of each column, and the union
+/// reads the alias of one input from an unrelated column of another input.
+fn align_union_input(
+    input: LogicalPlan,
+    target: &ExtractionTarget,
+) -> Result<LogicalPlan> {
+    let exprs: Vec<Expr> = target
+        .pairs
+        .iter()
+        .map(|(_, alias)| Expr::Column(Column::new_unqualified(alias)))
+        .chain(target.columns.iter().map(|col| Expr::Column(col.clone())))
+        .collect();
+    // Skip the extra projection when the input already has this exact layout.
+    let fields = input.schema().fields();
+    let already_aligned = fields.len() == exprs.len()
+        && target
+            .pairs
+            .iter()
+            .map(|(_, alias)| alias.as_str())
+            .chain(target.columns.iter().map(|col| col.name.as_str()))
+            .zip(fields.iter())
+            .all(|(name, field)| field.name() == name);
+    if already_aligned {
+        return Ok(input);
+    }
+    Projection::try_new(exprs, Arc::new(input)).map(LogicalPlan::Projection)
 }
 
 #[cfg(test)]
@@ -2955,14 +3015,11 @@ mod tests {
         ## After Pushdown
         Projection: __datafusion_extracted_1 AS leaf_udf(x,Utf8("a"))
           Filter: x IS NOT NULL
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 AS leaf_udf(x,Utf8("a"))
-          Filter: x IS NOT NULL
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
-              TableScan: test projection=[user]
+        (same as after pushdown)
         "#)
     }
 
@@ -2989,14 +3046,11 @@ mod tests {
         ## After Pushdown
         Projection: __datafusion_extracted_1 IS NOT NULL AS leaf_udf(x,Utf8("a")) IS NOT NULL
           Filter: x IS NOT NULL
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 IS NOT NULL AS leaf_udf(x,Utf8("a")) IS NOT NULL
-          Filter: x IS NOT NULL
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
-              TableScan: test projection=[user]
+        (same as after pushdown)
         "#)
     }
 
@@ -3018,17 +3072,92 @@ mod tests {
         ## After Extraction
         Projection: x
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
 
         ## After Pushdown
         (same as after extraction)
 
         ## Optimized
-        Projection: x
-          Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
-              TableScan: test projection=[user]
+        (same as after pushdown)
+        "#)
+    }
+
+    /// A projection that swaps two column names, below a filter and a struct
+    /// field read. The merge must not resolve the parent's column references
+    /// through the rename map: the input column `test.user` beside the output
+    /// field `user` of the other rename gives an ambiguous schema (#25446).
+    #[test]
+    fn test_extract_above_projection_that_swaps_column_names() -> Result<()> {
+        let table_scan = test_table_scan_with_struct()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("user").alias("id"), col("id").alias("user")])?
+            .filter(col("user").gt(lit(0u32)))?
+            .project(vec![col("id"), col("user"), leaf_udf(col("id"), "name")])?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Projection: id, user, leaf_udf(id, Utf8("name"))
+          Filter: user > UInt32(0)
+            Projection: test.user AS id, test.id AS user
+              TableScan: test projection=[id, user]
+
+        ## After Extraction
+        (same as original)
+
+        ## After Pushdown
+        Projection: id, user, __datafusion_extracted_1 AS leaf_udf(id,Utf8("name"))
+          Filter: user > UInt32(0)
+            Projection: test.user AS id, test.id AS user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
+              TableScan: test projection=[id, user]
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
+    /// A projection that gives a computed column the name of its own input
+    /// column. The extraction projection goes below the filter, which puts a
+    /// column named `id` under the rename, so the two plans have the same set
+    /// of field names. The recovery projection must stay, or the rename is lost
+    /// and the query gives wrong results.
+    #[test]
+    fn test_extract_above_projection_that_redefines_column_name() -> Result<()> {
+        let table_scan = test_table_scan_with_struct()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("id").gt(lit(0u32)))?
+            .project(vec![(col("id") * lit(10u32)).alias("id"), col("user")])?
+            .alias("sub")?
+            .project(vec![col("sub.id"), leaf_udf(col("sub.user"), "name")])?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Projection: sub.id, leaf_udf(sub.user, Utf8("name"))
+          SubqueryAlias: sub
+            Projection: test.id * UInt32(10) AS id, test.user
+              Filter: test.id > UInt32(0)
+                TableScan: test projection=[id, user]
+
+        ## After Extraction
+        (same as original)
+
+        ## After Pushdown
+        Projection: sub.id, __datafusion_extracted_1 AS leaf_udf(sub.user,Utf8("name"))
+          SubqueryAlias: sub
+            Projection: test.id * UInt32(10) AS id, test.user, __datafusion_extracted_1
+              Filter: test.id > UInt32(0)
+                Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id, test.user
+                  TableScan: test projection=[id, user]
+
+        ## Optimized
+        Projection: sub.id, __datafusion_extracted_1 AS leaf_udf(sub.user,Utf8("name"))
+          SubqueryAlias: sub
+            Projection: test.id * UInt32(10) AS id, __datafusion_extracted_1
+              Filter: test.id > UInt32(0)
+                Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id
+                  TableScan: test projection=[id, user]
         "#)
     }
 

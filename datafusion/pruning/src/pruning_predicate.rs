@@ -4949,7 +4949,7 @@ mod tests {
     #[test]
     fn row_group_predicate_cast_int_int() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64)";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64;N) <= 1 AND 1 <= CAST(c1_max@1 AS Int64;N)";
 
         // test cast(c1 as int64) = 1
         // test column on the left
@@ -4987,7 +4987,7 @@ mod tests {
     #[test]
     fn row_group_predicate_cast_string_string() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Utf8) <= 1 AND 1 <= CAST(c1_max@1 AS Utf8)";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Utf8;N) <= 1 AND 1 <= CAST(c1_max@1 AS Utf8;N)";
 
         // test column on the left
         let expr = cast(col("c1"), DataType::Utf8)
@@ -5051,7 +5051,7 @@ mod tests {
     #[test]
     fn row_group_predicate_date_date() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Date64) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Date64)";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Date64;N) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Date64;N)";
 
         // test column on the left
         let expr =
@@ -5150,7 +5150,7 @@ mod tests {
         .eq(lit(ScalarValue::Utf8(Some("test".to_string()))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Utf8)) <= test AND test <= CAST(c1_max@1 AS Dictionary(UInt16, Utf8))";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Utf8);N) <= test AND test <= CAST(c1_max@1 AS Dictionary(UInt16, Utf8);N)";
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -5164,7 +5164,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Int32)),
             false,
         )]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 123 AND 123 <= CAST(c1_max@1 AS Int64)";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64;N) <= 123 AND 123 <= CAST(c1_max@1 AS Int64;N)";
 
         // Test with literal of a different type
         let expr =
@@ -5210,7 +5210,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Date32)),
             false,
         )]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Date64)) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Dictionary(UInt16, Date64))";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Date64);N) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Dictionary(UInt16, Date64);N)";
 
         // Test with a cast to a different date type
         let expr = cast(
@@ -5282,7 +5282,7 @@ mod tests {
             ],
             false,
         ));
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64) OR c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 2 AND 2 <= CAST(c1_max@1 AS Int64) OR c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 3 AND 3 <= CAST(c1_max@1 AS Int64)";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64;N) <= 1 AND 1 <= CAST(c1_max@1 AS Int64;N) OR c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64;N) <= 2 AND 2 <= CAST(c1_max@1 AS Int64;N) OR c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64;N) <= 3 AND 3 <= CAST(c1_max@1 AS Int64;N)";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -5296,7 +5296,7 @@ mod tests {
             ],
             true,
         ));
-        let expected_expr = "c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64) != 1 OR 1 != CAST(c1_max@1 AS Int64)) AND c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64) != 2 OR 2 != CAST(c1_max@1 AS Int64)) AND c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64) != 3 OR 3 != CAST(c1_max@1 AS Int64))";
+        let expected_expr = "c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64;N) != 1 OR 1 != CAST(c1_max@1 AS Int64;N)) AND c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64;N) != 2 OR 2 != CAST(c1_max@1 AS Int64;N)) AND c1_null_count@2 != row_count@3 AND (CAST(c1_min@0 AS Int64;N) != 3 OR 3 != CAST(c1_max@1 AS Int64;N))";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -6763,7 +6763,8 @@ mod tests {
         let (result_left, _, result_right) =
             rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema)
                 .unwrap();
-        assert_eq!(result_left.to_string(), left_input.to_string());
+        // The rewrite rebuilds the cast with its nullable target field
+        assert_eq!(result_left.to_string(), "CAST(a@0 AS Decimal128(20, 3);N)");
         assert_eq!(result_right.to_string(), right_input.to_string());
 
         // try_cast op lit
