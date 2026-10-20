@@ -423,73 +423,71 @@ impl SessionState {
         let resolved_ref = self.resolve_table_ref(table_ref);
         let catalog_name = resolved_ref.catalog.as_ref();
 
-        if let Some(system_catalog) = self.inner.config.system_catalog()
-            && system_catalog == catalog_name
+        // Special case handling for `information_schema`.
+        if *resolved_ref.schema == *INFORMATION_SCHEMA
+            && self.inner.config.information_schema()
         {
-            if *resolved_ref.schema == *INFORMATION_SCHEMA {
-                return Ok(Arc::new(
-                    InformationSchemaProvider::new(Arc::clone(&self.inner.catalog_list))
-                        .with_table_functions(self.inner.table_functions.clone())
-                        .with_system_catalog(String::from(system_catalog)),
-                ));
-            }
-        } else {
-            let catalog =
-                self.inner
-                    .catalog_list
-                    .catalog(catalog_name)
-                    .ok_or_else(|| {
-                        plan_datafusion_err!("failed to resolve catalog: {catalog_name}")
-                    })?;
-
-            if self.inner.config.information_schema()
-                && *resolved_ref.schema == *INFORMATION_SCHEMA
-            {
-                #[derive(Debug)]
-                struct SingleCatalogList {
-                    catalog_name: String,
-                    catalog: Arc<dyn CatalogProvider>,
-                }
-
-                impl CatalogProviderList for SingleCatalogList {
-                    fn register_catalog(
-                        &self,
-                        _: String,
-                        _: Arc<dyn CatalogProvider>,
-                    ) -> Option<Arc<dyn CatalogProvider>> {
-                        None
-                    }
-
-                    fn catalog_names(&self) -> Vec<String> {
-                        vec![self.catalog_name.clone()]
-                    }
-
-                    fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-                        if name == self.catalog_name {
-                            Some(Arc::clone(&self.catalog))
-                        } else {
-                            None
-                        }
+            match self.inner.config.system_catalog() {
+                Some(system_catalog) => {
+                    if system_catalog == catalog_name {
+                        // Global catalog configured, catalog name references it
+                        //   => information schema provider for full catalog list
+                        return Ok(Arc::new(
+                            InformationSchemaProvider::new(Arc::clone(
+                                &self.inner.catalog_list,
+                            ))
+                            .with_table_functions(self.inner.table_functions.clone())
+                            .with_system_catalog(String::from(system_catalog)),
+                        ));
+                    } else {
+                        // Global catalog configured, catalog name is other catalog
+                        //   => information schema provider for named catalog
+                        let catalog = self.resolve_catalog(catalog_name)?;
+                        return Ok(Arc::new(
+                            InformationSchemaProvider::for_catalog(
+                                catalog_name.to_string(),
+                                catalog,
+                            )
+                            .with_table_functions(self.inner.table_functions.clone()),
+                        ));
                     }
                 }
-
-                let catalog_list = Arc::new(SingleCatalogList {
-                    catalog_name: catalog_name.to_string(),
-                    catalog,
-                });
-
-                return Ok(Arc::new(
-                    InformationSchemaProvider::new(catalog_list)
+                None => {
+                    // Global catalog not configured
+                    //   => information schema provider for full catalog list
+                    // Resolve the catalog (even though it's not needed for the InformationSchemaProvider)
+                    // so references to non-existent catalogs report an error.
+                    self.resolve_catalog(catalog_name)?;
+                    return Ok(Arc::new(
+                        InformationSchemaProvider::new(Arc::clone(
+                            &self.inner.catalog_list,
+                        ))
                         .with_table_functions(self.inner.table_functions.clone()),
-                ));
-            }
-
-            if let Some(schema) = catalog.schema(&resolved_ref.schema) {
-                return Ok(schema);
+                    ));
+                }
             }
         }
 
-        plan_err!("failed to resolve schema: {}", resolved_ref.schema)
+        let catalog = self.resolve_catalog(catalog_name)?;
+        let Some(schema) = catalog.schema(&resolved_ref.schema) else {
+            return plan_err!("failed to resolve schema: {}", resolved_ref.schema);
+        };
+
+        Ok(schema)
+    }
+
+    fn resolve_catalog(
+        &self,
+        catalog_name: &str,
+    ) -> Result<Arc<dyn CatalogProvider>, DataFusionError> {
+        let catalog = self
+            .inner
+            .catalog_list
+            .catalog(catalog_name)
+            .ok_or_else(|| {
+                plan_datafusion_err!("failed to resolve catalog: {catalog_name}")
+            })?;
+        Ok(catalog)
     }
 
     /// Add `analyzer_rule` to the end of the list of

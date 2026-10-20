@@ -44,6 +44,7 @@ use datafusion_expr::{TableType, Volatility};
 use datafusion_physical_plan::SendableRecordBatchStream;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::streaming::PartitionStream;
+use datafusion_session::CatalogProvider;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
@@ -81,6 +82,50 @@ pub struct InformationSchemaProvider {
 }
 
 impl InformationSchemaProvider {
+    /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
+    pub fn for_catalog(catalog_name: String, catalog: Arc<dyn CatalogProvider>) -> Self {
+        #[derive(Debug)]
+        struct SingleCatalogList {
+            catalog_name: String,
+            catalog: Arc<dyn CatalogProvider>,
+        }
+
+        impl CatalogProviderList for SingleCatalogList {
+            fn register_catalog(
+                &self,
+                _: String,
+                _: Arc<dyn CatalogProvider>,
+            ) -> Option<Arc<dyn CatalogProvider>> {
+                None
+            }
+
+            fn catalog_names(&self) -> Vec<String> {
+                vec![self.catalog_name.clone()]
+            }
+
+            fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+                if name == self.catalog_name {
+                    Some(Arc::clone(&self.catalog))
+                } else {
+                    None
+                }
+            }
+        }
+
+        let catalog_list = Arc::new(SingleCatalogList {
+            catalog_name,
+            catalog,
+        });
+
+        Self {
+            config: InformationSchemaConfig {
+                system_catalog_name: None,
+                catalog_list,
+                table_functions: HashMap::new(),
+            },
+        }
+    }
+
     /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
     pub fn new(catalog_list: Arc<dyn CatalogProviderList>) -> Self {
         Self {

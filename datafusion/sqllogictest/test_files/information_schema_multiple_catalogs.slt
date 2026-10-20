@@ -83,16 +83,70 @@ WHERE table_schema <> 'information_schema';
 ----
 my_catalog my_schema t1
 my_catalog my_schema t2
+my_other_catalog my_other_schema t3
 
 query TTT rowsort
 SELECT table_catalog, table_schema, table_name
 FROM my_other_catalog.information_schema.tables
 WHERE table_schema <> 'information_schema';
 ----
+my_catalog my_schema t1
+my_catalog my_schema t2
 my_other_catalog my_other_schema t3
 
 query TTTT rowsort
 SELECT * from information_schema.tables;
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
+datafusion information_schema schemata VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+my_catalog information_schema columns VIEW
+my_catalog information_schema df_settings VIEW
+my_catalog information_schema parameters VIEW
+my_catalog information_schema routines VIEW
+my_catalog information_schema schemata VIEW
+my_catalog information_schema tables VIEW
+my_catalog information_schema views VIEW
+my_catalog my_schema t1 BASE TABLE
+my_catalog my_schema t2 BASE TABLE
+my_other_catalog information_schema columns VIEW
+my_other_catalog information_schema df_settings VIEW
+my_other_catalog information_schema parameters VIEW
+my_other_catalog information_schema routines VIEW
+my_other_catalog information_schema schemata VIEW
+my_other_catalog information_schema tables VIEW
+my_other_catalog information_schema views VIEW
+my_other_catalog my_other_schema t3 BASE TABLE
+
+############
+# Configure a system catalog
+#
+# When `datafusion.catalog.system_catalog` is set, the `information_schema`
+# of each catalog only describes the objects in that catalog. Only the
+# `information_schema` of the system catalog describes all catalogs.
+###########
+statement ok
+set datafusion.catalog.system_catalog = system;
+
+query TTTT rowsort
+SELECT * FROM my_catalog.information_schema.tables;
+----
+my_catalog information_schema columns VIEW
+my_catalog information_schema df_settings VIEW
+my_catalog information_schema parameters VIEW
+my_catalog information_schema routines VIEW
+my_catalog information_schema schemata VIEW
+my_catalog information_schema tables VIEW
+my_catalog information_schema views VIEW
+my_catalog my_schema t1 BASE TABLE
+my_catalog my_schema t2 BASE TABLE
+
+query TTTT rowsort
+SELECT * FROM my_other_catalog.information_schema.tables;
 ----
 my_other_catalog information_schema columns VIEW
 my_other_catalog information_schema df_settings VIEW
@@ -102,6 +156,204 @@ my_other_catalog information_schema schemata VIEW
 my_other_catalog information_schema tables VIEW
 my_other_catalog information_schema views VIEW
 my_other_catalog my_other_schema t3 BASE TABLE
+
+query TTTT rowsort
+SELECT * FROM datafusion.information_schema.tables;
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
+datafusion information_schema schemata VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+
+# Unqualified `information_schema` resolves against the default catalog
+query TTTT rowsort
+SELECT * FROM information_schema.tables;
+----
+my_other_catalog information_schema columns VIEW
+my_other_catalog information_schema df_settings VIEW
+my_other_catalog information_schema parameters VIEW
+my_other_catalog information_schema routines VIEW
+my_other_catalog information_schema schemata VIEW
+my_other_catalog information_schema tables VIEW
+my_other_catalog information_schema views VIEW
+my_other_catalog my_other_schema t3 BASE TABLE
+
+query TTTT rowsort
+SELECT * FROM system.information_schema.tables;
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
+datafusion information_schema schemata VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+my_catalog information_schema columns VIEW
+my_catalog information_schema df_settings VIEW
+my_catalog information_schema parameters VIEW
+my_catalog information_schema routines VIEW
+my_catalog information_schema schemata VIEW
+my_catalog information_schema tables VIEW
+my_catalog information_schema views VIEW
+my_catalog my_schema t1 BASE TABLE
+my_catalog my_schema t2 BASE TABLE
+my_other_catalog information_schema columns VIEW
+my_other_catalog information_schema df_settings VIEW
+my_other_catalog information_schema parameters VIEW
+my_other_catalog information_schema routines VIEW
+my_other_catalog information_schema schemata VIEW
+my_other_catalog information_schema tables VIEW
+my_other_catalog information_schema views VIEW
+my_other_catalog my_other_schema t3 BASE TABLE
+system information_schema columns VIEW
+system information_schema df_settings VIEW
+system information_schema parameters VIEW
+system information_schema routines VIEW
+system information_schema schemata VIEW
+system information_schema tables VIEW
+system information_schema views VIEW
+
+query TTTTTTT rowsort
+SELECT * FROM my_catalog.information_schema.schemata;
+----
+my_catalog my_schema NULL NULL NULL NULL NULL
+
+query TTTTTTT rowsort
+SELECT * FROM my_other_catalog.information_schema.schemata;
+----
+my_other_catalog my_other_schema NULL NULL NULL NULL NULL
+
+query TTTTTTT rowsort
+SELECT * FROM system.information_schema.schemata;
+----
+datafusion public NULL NULL NULL NULL NULL
+my_catalog my_schema NULL NULL NULL NULL NULL
+my_other_catalog my_other_schema NULL NULL NULL NULL NULL
+
+query TTTT rowsort
+SELECT table_catalog, table_schema, table_name, column_name
+FROM my_catalog.information_schema.columns;
+----
+my_catalog my_schema t1 column1
+my_catalog my_schema t2 column1
+
+query TTTT rowsort
+SELECT table_catalog, table_schema, table_name, column_name
+FROM my_other_catalog.information_schema.columns;
+----
+my_other_catalog my_other_schema t3 column1
+
+query TTTT rowsort
+SELECT table_catalog, table_schema, table_name, column_name
+FROM system.information_schema.columns;
+----
+my_catalog my_schema t1 column1
+my_catalog my_schema t2 column1
+my_other_catalog my_other_schema t3 column1
+
+query TTT rowsort
+SELECT table_catalog, table_schema, table_name
+FROM my_catalog.information_schema.views
+WHERE table_schema <> 'information_schema';
+----
+my_catalog my_schema t1
+my_catalog my_schema t2
+
+query TTT rowsort
+SELECT table_catalog, table_schema, table_name
+FROM system.information_schema.views
+WHERE table_schema <> 'information_schema';
+----
+my_catalog my_schema t1
+my_catalog my_schema t2
+my_other_catalog my_other_schema t3
+
+# SHOW statements use the system catalog's information schema
+query TTTT rowsort
+SHOW TABLES;
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
+datafusion information_schema schemata VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+my_catalog information_schema columns VIEW
+my_catalog information_schema df_settings VIEW
+my_catalog information_schema parameters VIEW
+my_catalog information_schema routines VIEW
+my_catalog information_schema schemata VIEW
+my_catalog information_schema tables VIEW
+my_catalog information_schema views VIEW
+my_catalog my_schema t1 BASE TABLE
+my_catalog my_schema t2 BASE TABLE
+my_other_catalog information_schema columns VIEW
+my_other_catalog information_schema df_settings VIEW
+my_other_catalog information_schema parameters VIEW
+my_other_catalog information_schema routines VIEW
+my_other_catalog information_schema schemata VIEW
+my_other_catalog information_schema tables VIEW
+my_other_catalog information_schema views VIEW
+my_other_catalog my_other_schema t3 BASE TABLE
+system information_schema columns VIEW
+system information_schema df_settings VIEW
+system information_schema parameters VIEW
+system information_schema routines VIEW
+system information_schema schemata VIEW
+system information_schema tables VIEW
+system information_schema views VIEW
+
+query TTTTTT
+SHOW COLUMNS FROM my_catalog.my_schema.t1;
+----
+my_catalog my_schema t1 column1 Int64 NO
+
+# The information schema of a catalog that does not exist cannot be queried
+statement error DataFusion error: Error during planning: table 'no_such_catalog.information_schema.tables' not found
+SELECT * FROM no_such_catalog.information_schema.tables;
+
+# A system catalog can be an existing catalog. Its information schema then
+# describes all catalogs
+statement ok
+set datafusion.catalog.system_catalog = my_catalog;
+
+query TTT rowsort
+SELECT table_catalog, table_schema, table_name
+FROM my_catalog.information_schema.tables
+WHERE table_schema <> 'information_schema';
+----
+my_catalog my_schema t1
+my_catalog my_schema t2
+my_other_catalog my_other_schema t3
+
+query TTT rowsort
+SELECT table_catalog, table_schema, table_name
+FROM my_other_catalog.information_schema.tables
+WHERE table_schema <> 'information_schema';
+----
+my_other_catalog my_other_schema t3
+
+# Resetting the system catalog makes every information schema global again
+statement ok
+RESET datafusion.catalog.system_catalog;
+
+query TTT rowsort
+SELECT table_catalog, table_schema, table_name
+FROM my_other_catalog.information_schema.tables
+WHERE table_schema <> 'information_schema';
+----
+my_catalog my_schema t1
+my_catalog my_schema t2
+my_other_catalog my_other_schema t3
+
+# Without a system catalog, the information schema of a catalog that does not
+# exist cannot be queried either
+statement error DataFusion error: Error during planning: table 'no_such_catalog.information_schema.tables' not found
+SELECT * FROM no_such_catalog.information_schema.tables;
 
 # Cleanup
 
