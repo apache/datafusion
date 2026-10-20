@@ -33,13 +33,16 @@
 
 use std::sync::Arc;
 
-use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::datatypes::SchemaRef;
+use arrow::array::{ArrayData, ArrayRef, RecordBatch, RecordBatchOptions, cast::AsArray};
+use arrow::compute::cast;
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 
 use datafusion_common::Result;
+use datafusion_physical_expr::expressions::{CastExpr, Column};
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
+use parking_lot::Mutex;
 
 use parquet::arrow::ProjectionMask;
 use parquet::schema::types::SchemaDescriptor;
@@ -58,11 +61,148 @@ use crate::projection_read_plan::build_projection_read_plan;
 pub(crate) struct DecoderProjection {
     projection_mask: ProjectionMask,
     projector: Projector,
+    /// Input schema and per-column conversions used when `binary_as_string`
+    /// exposes a physical binary dictionary as a string dictionary.
+    dictionary_value_casts: Option<DictionaryValueCasts>,
     output_schema: SchemaRef,
     /// `true` when the projector's output schema differs from `output_schema`
     /// in metadata / nullability and [`map`](Self::map) must rebuild the batch
     /// with `output_schema`.
     replace_schema: bool,
+}
+
+/// Cast dictionary values once per Parquet dictionary instead of once per
+/// output batch. A row group's dictionary is shared by all of its batches.
+struct DictionaryValueCasts {
+    input_schema: SchemaRef,
+    columns: Vec<DictionaryValueCast>,
+}
+
+struct DictionaryValueCast {
+    column_index: usize,
+    target_value_type: DataType,
+    cached_values: Mutex<Option<CachedDictionaryValues>>,
+}
+
+struct CachedDictionaryValues {
+    source: ArrayData,
+    cast: ArrayRef,
+}
+
+impl DictionaryValueCast {
+    fn cast(&self, array: &ArrayRef) -> Result<ArrayRef> {
+        let dictionary = array.as_any_dictionary();
+        let source_values = dictionary.values();
+        let source_data = source_values.to_data();
+        let mut cached = self.cached_values.lock();
+        let cast_values = match cached.as_ref() {
+            Some(cached) if cached.source.ptr_eq(&source_data) => {
+                Arc::clone(&cached.cast)
+            }
+            _ => {
+                let cast_values = cast(source_values, &self.target_value_type)?;
+                *cached = Some(CachedDictionaryValues {
+                    source: source_data,
+                    cast: Arc::clone(&cast_values),
+                });
+                cast_values
+            }
+        };
+        Ok(dictionary.with_values(cast_values))
+    }
+}
+
+impl DictionaryValueCasts {
+    fn try_new(projection: &ProjectionExprs, stream_schema: &SchemaRef) -> Option<Self> {
+        let mut columns = Vec::new();
+        for projection in projection.iter() {
+            let Some(cast) = projection.expr.downcast_ref::<CastExpr>() else {
+                continue;
+            };
+            let Some(column) = cast.expr().downcast_ref::<Column>() else {
+                continue;
+            };
+            let source_type = stream_schema.field(column.index()).data_type();
+            let Some(target_value_type) =
+                binary_dictionary_string_cast(source_type, cast.cast_type())
+            else {
+                continue;
+            };
+            if columns.iter().any(|existing: &DictionaryValueCast| {
+                existing.column_index == column.index()
+            }) {
+                continue;
+            }
+            columns.push(DictionaryValueCast {
+                column_index: column.index(),
+                target_value_type,
+                cached_values: Mutex::new(None),
+            });
+        }
+        if columns.is_empty() {
+            return None;
+        }
+
+        let mut fields = stream_schema.fields().to_vec();
+        for column in &columns {
+            let field = stream_schema.field(column.column_index);
+            let DataType::Dictionary(key_type, _) = field.data_type() else {
+                unreachable!("binary_dictionary_string_cast checked the source type")
+            };
+            fields[column.column_index] =
+                Arc::new(field.as_ref().clone().with_data_type(DataType::Dictionary(
+                    key_type.clone(),
+                    Box::new(column.target_value_type.clone()),
+                )));
+        }
+        let input_schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            stream_schema.metadata().clone(),
+        ));
+
+        Some(Self {
+            input_schema,
+            columns,
+        })
+    }
+
+    fn cast_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let mut arrays = batch.columns().to_vec();
+        for column in &self.columns {
+            arrays[column.column_index] = column.cast(&arrays[column.column_index])?;
+        }
+        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+        Ok(RecordBatch::try_new_with_options(
+            Arc::clone(&self.input_schema),
+            arrays,
+            &options,
+        )?)
+    }
+}
+
+fn binary_dictionary_string_cast(
+    source_type: &DataType,
+    target_type: &DataType,
+) -> Option<DataType> {
+    let (
+        DataType::Dictionary(source_key, source_value),
+        DataType::Dictionary(target_key, target_value),
+    ) = (source_type, target_type)
+    else {
+        return None;
+    };
+    if source_key != target_key
+        || !matches!(
+            (source_value.as_ref(), target_value.as_ref()),
+            (
+                DataType::Binary | DataType::LargeBinary,
+                DataType::Utf8 | DataType::LargeUtf8
+            )
+        )
+    {
+        return None;
+    }
+    Some(target_value.as_ref().clone())
 }
 
 impl DecoderProjection {
@@ -118,7 +258,13 @@ impl DecoderProjection {
         let rebased_projection = projection
             .clone()
             .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
-        let projector = rebased_projection.make_projector(&stream_schema)?;
+        let dictionary_value_casts =
+            DictionaryValueCasts::try_new(&rebased_projection, &stream_schema);
+        let projector_input_schema = dictionary_value_casts
+            .as_ref()
+            .map(|casts| &casts.input_schema)
+            .unwrap_or(&stream_schema);
+        let projector = rebased_projection.make_projector(projector_input_schema)?;
 
         // Compare against the projector's *output* schema rather than the
         // stream schema, so future widening of the mask (e.g. for post-scan
@@ -128,6 +274,7 @@ impl DecoderProjection {
         Ok(Self {
             projection_mask: read_plan.projection_mask,
             projector,
+            dictionary_value_casts,
             output_schema: Arc::clone(output_schema),
             replace_schema,
         })
@@ -146,6 +293,14 @@ impl DecoderProjection {
     /// the data has no nulls; some logical schemas carry field-level metadata
     /// the file schema does not).
     pub(crate) fn map(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let cast_batch;
+        let batch = match &self.dictionary_value_casts {
+            Some(casts) => {
+                cast_batch = casts.cast_batch(batch)?;
+                &cast_batch
+            }
+            None => batch,
+        };
         let projected = self.projector.project_batch(batch)?;
         if !self.replace_schema {
             return Ok(projected);

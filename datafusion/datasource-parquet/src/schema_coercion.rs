@@ -222,11 +222,11 @@ fn coerce_data_type(
             coerce_map_entries(table_entries, file_entries)
                 .map(|entries| Map(entries, *sorted))
         }
-        // Promote a plain file column to the dictionary type the table expects.
-        (Dictionary(_, _), _)
-            if enable_rle && can_promote_to_dictionary_type(file_type, table_type) =>
-        {
-            Some(table_type.clone())
+        // Promote a plain file column to a dictionary reader type compatible with
+        // the table type. The reader type may preserve a physical binary value type
+        // that is subsequently cast to the table's string value type.
+        (Dictionary(_, _), _) if enable_rle => {
+            dictionary_reader_type(file_type, table_type, binary_to_string)
         }
         _ => None,
     }
@@ -352,16 +352,68 @@ fn can_promote_to_dictionary_type(
     {
         return false;
     }
+    can_promote_to_dictionary_key_type(file_field_type, table_key)
+}
+
+fn can_promote_to_dictionary_key_type(
+    file_field_type: &DataType,
+    table_key: &DataType,
+) -> bool {
     if let DataType::Dictionary(file_key, _) = file_field_type {
         return common_dictionary_key_type(file_key, table_key)
-            .is_some_and(|common| &common == table_key.as_ref());
+            .is_some_and(|common| &common == table_key);
     }
     // Plain file field: only allow promotion if the table key is at least Int32 wide.
     // A plain column can have any number of distinct values, so narrow keys (Int8, Int16)
     // are unsafe — uniform_dict_schemas widens to Int32 when a plain file is present, so
     // this guard handles the case where can_promote_to_dictionary_type is called directly.
     common_dictionary_key_type(&DataType::Int32, table_key)
-        .is_some_and(|common| &common == table_key.as_ref())
+        .is_some_and(|common| &common == table_key)
+}
+
+/// Return the type the Parquet reader should produce for a logical dictionary
+/// field.
+///
+/// `binary_as_string` changes the public table type from `Dictionary<K, Binary>`
+/// to `Dictionary<K, Utf8>`. The physical file remains binary, so preserve that
+/// value type in the reader schema and let the decoder projection cast only the
+/// dictionary values. Requesting plain binary here would expand the Parquet
+/// dictionary and then rebuild it row-by-row.
+fn dictionary_reader_type(
+    file_field_type: &DataType,
+    table_dictionary_type: &DataType,
+    binary_to_string: bool,
+) -> Option<DataType> {
+    if can_promote_to_dictionary_type(file_field_type, table_dictionary_type) {
+        return Some(table_dictionary_type.clone());
+    }
+
+    let DataType::Dictionary(table_key, table_value) = table_dictionary_type else {
+        return None;
+    };
+    let file_value = match file_field_type {
+        DataType::Dictionary(_, value) => value.as_ref(),
+        value => value,
+    };
+    let preserve_binary_values = binary_to_string
+        && matches!(
+            (file_value, table_value.as_ref()),
+            (
+                DataType::Binary | DataType::LargeBinary,
+                DataType::Utf8 | DataType::LargeUtf8
+            )
+        );
+
+    if !preserve_binary_values
+        || !can_promote_to_dictionary_key_type(file_field_type, table_key)
+    {
+        return None;
+    }
+
+    Some(DataType::Dictionary(
+        table_key.clone(),
+        Box::new(file_value.clone()),
+    ))
 }
 
 /// Normalize per-file schemas so that a column promoted to `Dictionary` in
@@ -1911,8 +1963,10 @@ mod tests {
 
     #[test]
     fn rle_schema_coercion_respects_dictionary_value_type() {
-        // Scan-time schema coercion can only use dictionary types already chosen by
-        // schema inference, and must leave incompatible file fields unchanged.
+        // Scan-time schema coercion must preserve the physical binary family when
+        // binary_as_string made the public table type a string dictionary. This lets
+        // the reader preserve Parquet dictionary keys and leaves only the dictionary
+        // values to be cast to the public string type.
         let cases = vec![
             (
                 "utf8",
@@ -1963,10 +2017,22 @@ mod tests {
                 dict(DataType::LargeBinary),
             ),
             (
-                "binary_not_utf8",
+                "binary_to_utf8_dict_preserves_binary_reader_values",
                 dict(DataType::Utf8),
                 DataType::Binary,
+                dict(DataType::Binary),
+            ),
+            (
+                "large_binary_to_utf8_dict_preserves_binary_reader_values",
+                dict(DataType::Utf8),
+                DataType::LargeBinary,
+                dict(DataType::LargeBinary),
+            ),
+            (
+                "binary_to_large_utf8_dict_preserves_binary_reader_values",
+                dict(DataType::LargeUtf8),
                 DataType::Binary,
+                dict(DataType::Binary),
             ),
             (
                 "utf8_not_binary",
