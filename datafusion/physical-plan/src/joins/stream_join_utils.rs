@@ -117,10 +117,6 @@ impl JoinHashMapType for PruningJoinHashMap {
     fn len(&self) -> usize {
         self.map.len()
     }
-
-    fn hash_values(&self) -> Box<dyn Iterator<Item = u64> + '_> {
-        Box::new(self.map.iter().map(|&(hash, _)| hash))
-    }
 }
 
 /// The `PruningJoinHashMap` is similar to a regular `JoinHashMap`, but with

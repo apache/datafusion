@@ -165,9 +165,6 @@ pub trait JoinHashMapType: Send + Sync {
 
     /// Returns the number of entries in the join hash map.
     fn len(&self) -> usize;
-
-    /// Returns every distinct hash value stored in the map.
-    fn hash_values(&self) -> Box<dyn Iterator<Item = u64> + '_>;
 }
 
 pub struct JoinHashMapU32 {
@@ -253,10 +250,6 @@ impl JoinHashMapType for JoinHashMapU32 {
 
     fn len(&self) -> usize {
         self.map.len()
-    }
-
-    fn hash_values(&self) -> Box<dyn Iterator<Item = u64> + '_> {
-        Box::new(self.map.iter().map(|&(hash, _)| hash))
     }
 }
 
@@ -344,10 +337,6 @@ impl JoinHashMapType for JoinHashMapU64 {
     fn len(&self) -> usize {
         self.map.len()
     }
-
-    fn hash_values(&self) -> Box<dyn Iterator<Item = u64> + '_> {
-        Box::new(self.map.iter().map(|&(hash, _)| hash))
-    }
 }
 
 use crate::joins::chain::traverse_chain;
@@ -367,78 +356,29 @@ where
 {
     let mut chained = false;
     for (row, &hash_value) in iter {
-        chained |= insert_hash(map, next, row, hash_value, deleted_offset);
+        let entry = map.entry(
+            hash_value,
+            |&(hash, _)| hash_value == hash,
+            |&(hash, _)| hash,
+        );
+
+        match entry {
+            Occupied(mut occupied_entry) => {
+                // Already exists: add index to next array
+                let (_, index) = occupied_entry.get_mut();
+                let prev_index = *index;
+                // Store new value inside hashmap
+                *index = T::try_from(row + 1).unwrap();
+                // Update chained Vec at `row` with previous value
+                next[row - deleted_offset] = prev_index;
+                chained = true;
+            }
+            Vacant(vacant_entry) => {
+                vacant_entry.insert((hash_value, T::try_from(row + 1).unwrap()));
+            }
+        }
     }
     chained
-}
-
-/// Inserts `row` under `hash_value`, chaining it onto any row already stored
-/// there. Returns `true` if it was chained.
-#[inline]
-fn insert_hash<T>(
-    map: &mut HashTable<(u64, T)>,
-    next: &mut [T],
-    row: usize,
-    hash_value: u64,
-    deleted_offset: usize,
-) -> bool
-where
-    T: Copy + TryFrom<usize>,
-    <T as TryFrom<usize>>::Error: Debug,
-{
-    let entry = map.entry(
-        hash_value,
-        |&(hash, _)| hash_value == hash,
-        |&(hash, _)| hash,
-    );
-
-    match entry {
-        Occupied(mut occupied_entry) => {
-            // Already exists: add index to next array
-            let (_, index) = occupied_entry.get_mut();
-            let prev_index = *index;
-            // Store new value inside hashmap
-            *index = T::try_from(row + 1).unwrap();
-            // Update chained Vec at `row` with previous value
-            next[row - deleted_offset] = prev_index;
-            true
-        }
-        Vacant(vacant_entry) => {
-            vacant_entry.insert((hash_value, T::try_from(row + 1).unwrap()));
-            false
-        }
-    }
-}
-
-/// Builds one map holding the union of `maps`' hash values and `hashes`, so a
-/// single [`JoinHashMapType::contain_hashes`] call checks membership in all of
-/// them.
-///
-/// Its row indices number the merged hash values rather than rows of any build
-/// batch, so it is only meaningful for membership checks, never to produce
-/// join matches.
-pub(crate) fn union_hash_maps(
-    maps: &[&dyn JoinHashMapType],
-    hashes: &[u64],
-) -> Box<dyn JoinHashMapType> {
-    let len = maps.iter().map(|map| map.len()).sum::<usize>() + hashes.len();
-    let hashes = maps
-        .iter()
-        .flat_map(|map| map.hash_values())
-        .chain(hashes.iter().copied());
-    if len > u32::MAX as usize {
-        let mut union = JoinHashMapU64::with_capacity(len);
-        for (row, hash) in hashes.enumerate() {
-            union.chained |= insert_hash(&mut union.map, &mut union.next, row, hash, 0);
-        }
-        Box::new(union)
-    } else {
-        let mut union = JoinHashMapU32::with_capacity(len);
-        for (row, hash) in hashes.enumerate() {
-            union.chained |= insert_hash(&mut union.map, &mut union.next, row, hash, 0);
-        }
-        Box::new(union)
-    }
 }
 
 pub fn get_matched_indices<'a, T>(
