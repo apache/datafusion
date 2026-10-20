@@ -108,11 +108,9 @@ SELECT stack(2, array(1), [2]), stack(2, named_struct('a', array(1)), named_stru
 ----
 [{col0: [1]}, {col0: [2]}] [{col0: {a: [1]}}, {col0: {a: [2]}}] [{col0: {a: 1}}, {col0: {b: 2}}]
 
-# Nullability does not make types differ
-query ?
-SELECT stack(2, arrow_cast([1], 'List(non-null Int64)'), [2]);
-----
-[{col0: [1]}, {col0: [2]}]
+# Nullability must match, as in Spark
+query error The data type of the column \(0\) do not have the same type
+SELECT stack(2, arrow_cast([1], 'List(non-null Int64)'), [2, NULL]);
 
 # Integer literals are BIGINT here but INT in Spark, so one that fits can follow an
 # INT value
@@ -186,7 +184,7 @@ query error The first parameter of `stack` must be an integer literal, however "
 SELECT stack(3 - 1, 1, '2', NULL, NULL);
 
 # The generated rows are materialized, so their number is limited
-query error stack: 1 rows of 2000000000 generated rows exceed the limit
+query error stack: generating 2000000000 rows for each of 1 input rows exceeds the limit
 SELECT stack(2000000000, 1);
 
 # The values of a column must have the same type. The first mismatch in

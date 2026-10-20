@@ -142,6 +142,9 @@ impl ScalarUDFImpl for SparkStack {
             return internal_err!("stack: `n` must be a scalar");
         };
         let n = parse_n(n)?;
+        // All-scalar values return one list, which the caller expands to
+        // `number_rows` copies
+        check_generated_rows(n, number_rows)?;
         if values.iter().all(|v| matches!(v, ColumnarValue::Scalar(_))) {
             let list = stack(values, item, n, 1)?;
             return Ok(ColumnarValue::Scalar(ScalarValue::List(Arc::new(list))));
@@ -195,7 +198,7 @@ fn column_types(
         let col = i % num_fields;
         let literal = scalar_arguments.get(i).copied().flatten();
         let actual = if has_int32[col]
-            && arg_field.data_type().is_integer()
+            && arg_field.data_type() == &DataType::Int64
             && literal.is_some_and(|literal| literal.cast_to(&DataType::Int32).is_ok())
         {
             &DataType::Int32
@@ -218,12 +221,13 @@ fn column_types(
 
 /// Whether two Arrow types are the same Spark type. Types of one logical type, such
 /// as `Utf8` and `Utf8View`, match, and list elements and map entries match
-/// regardless of their field names, which Spark types do not have. As in Spark's
-/// `sameType`, nullability is ignored.
+/// regardless of their field names, which Spark types do not have. Nullability
+/// must match, as in Spark.
 fn same_spark_type(left: &DataType, right: &DataType) -> bool {
     use DataType::*;
     fn same_field(left: &FieldRef, right: &FieldRef) -> bool {
-        same_spark_type(left.data_type(), right.data_type())
+        left.is_nullable() == right.is_nullable()
+            && same_spark_type(left.data_type(), right.data_type())
     }
     left == right
         || match (left, right) {
@@ -254,6 +258,17 @@ fn same_spark_type(left: &DataType, right: &DataType) -> bool {
         }
 }
 
+/// Errors if generating `n` rows for each of `number_rows` input rows exceeds
+/// `MAX_GENERATED_ROWS`.
+fn check_generated_rows(n: usize, number_rows: usize) -> Result<()> {
+    if number_rows.saturating_mul(n) > MAX_GENERATED_ROWS {
+        return Err(resources_datafusion_err!(
+            "stack: generating {n} rows for each of {number_rows} input rows exceeds the limit of {MAX_GENERATED_ROWS} rows per batch"
+        ));
+    }
+    Ok(())
+}
+
 /// Generates `n` rows of `item`'s struct type for each of `number_rows` input
 /// rows. Field `j` of generated row `i` is `values[i * num_fields + j]`, or NULL
 /// past the last value.
@@ -273,11 +288,7 @@ fn stack(
             values.len().div_ceil(n)
         );
     }
-    if number_rows.saturating_mul(n) > MAX_GENERATED_ROWS {
-        return Err(resources_datafusion_err!(
-            "stack: {number_rows} rows of {n} generated rows exceed the limit of {MAX_GENERATED_ROWS} rows per batch"
-        ));
-    }
+    check_generated_rows(n, number_rows)?;
     // Every array is one value per input row, which the kernels rely on
     if let Some(len) = values.iter().find_map(|value| match value {
         ColumnarValue::Array(array) if array.len() != number_rows => Some(array.len()),
@@ -486,11 +497,62 @@ mod tests {
         let values = [ColumnarValue::Scalar(ScalarValue::Int64(Some(1)))];
         let err = stack(&values, &item, i32::MAX as usize, 1).unwrap_err();
         assert!(
-            err.to_string()
-                .contains("1 rows of 2147483647 generated rows exceed the limit"),
+            err.to_string().contains(
+                "generating 2147483647 rows for each of 1 input rows exceeds the limit"
+            ),
             "{err}"
         );
         assert!(stack(&values, &item, MAX_GENERATED_ROWS, 1).is_ok());
+    }
+
+    #[test]
+    fn test_stack_all_scalar_limit_uses_batch_size() {
+        let item = item(vec![Field::new("col0", DataType::Int64, true)]);
+        let return_field = Arc::new(Field::new(
+            "stack",
+            DataType::List(Arc::clone(&item)),
+            false,
+        ));
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(1 << 20))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ],
+            arg_fields: vec![],
+            number_rows: 8192,
+            return_field,
+            config_options: Arc::default(),
+        };
+        let err = SparkStack::new().invoke_with_args(args).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "generating 1048576 rows for each of 8192 input rows exceeds the limit"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_column_types_widen_only_bigint_literals() {
+        let fields = |types: [DataType; 2]| -> Vec<FieldRef> {
+            types.map(|t| Arc::new(Field::new("a", t, true))).to_vec()
+        };
+        let small = ScalarValue::Int16(Some(0));
+        let err = column_types(
+            &fields([DataType::Int32, DataType::Int16]),
+            &[None, Some(&small)],
+            1,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("\"Int32\" (1) <> \"Int16\" (2)"));
+        let big = ScalarValue::Int64(Some(0));
+        let types = column_types(
+            &fields([DataType::Int32, DataType::Int64]),
+            &[None, Some(&big)],
+            1,
+        )
+        .unwrap();
+        assert_eq!(types, [DataType::Int32]);
     }
 
     #[test]
