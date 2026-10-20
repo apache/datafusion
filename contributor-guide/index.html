@@ -635,6 +635,28 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
 <section id="github-runners">
 <h3>GitHub Runners<a class="headerlink" href="#github-runners" title="Link to this heading">#</a></h3>
 <p>We also use standard GitHub runners for some actions in the main repository; these are also runnable in forks.</p>
+<section id="pull-requests-from-forks">
+<h4>Pull Requests from Forks<a class="headerlink" href="#pull-requests-from-forks" title="Link to this heading">#</a></h4>
+<p>DataFusion and its subprojects use substantial CI runner time. ASF Infrastructure
+identified them among its largest GitHub Actions users in
+<a class="reference external" href="https://github.com/apache/datafusion/issues/25148">#25148</a>. Fork CI reduces
+duplicate work on ASF’s shared runners.</p>
+<p>A pull request from a fork to <code class="docutils literal notranslate"><span class="pre">main</span></code> runs the Rust workflow on your fork, with
+your own GitHub Actions runners. The main repository runs only the fast lint jobs for
+such a pull request and adds a <code class="docutils literal notranslate"><span class="pre">Rust</span> <span class="pre">(fork)</span></code> check that links to the run on
+your fork. The merge queue runs the full workflow on the merged result before
+a pull request merges, so a green fork run does not replace it.</p>
+<p>To make this work:</p>
+<ol class="arabic simple">
+<li><p>Before you push your branch, open the <strong>Actions</strong> tab on your fork.
+Confirm the prompt to enable workflows.</p></li>
+<li><p>Keep the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch of your fork in sync with upstream. Runs on your
+branches restore the build caches that a run on your <code class="docutils literal notranslate"><span class="pre">main</span></code> saves, so a
+synced fork builds much faster.</p></li>
+<li><p>Rebase your branch before you push. The fork run tests your branch as it
+is, while the merge queue tests it merged with <code class="docutils literal notranslate"><span class="pre">main</span></code>.</p></li>
+</ol>
+</section>
 </section>
 </section>
 </section>
@@ -710,7 +732,10 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#spot-instances">Spot Instances</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#github-runners">GitHub Runners</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#github-runners">GitHub Runners</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#pull-requests-from-forks">Pull Requests from Forks</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
