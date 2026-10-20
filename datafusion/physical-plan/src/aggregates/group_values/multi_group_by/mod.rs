@@ -2164,6 +2164,26 @@ mod tests {
         group_values.intern(&[second], &mut groups).unwrap();
         assert_eq!(groups, vec![1, 0, 1]);
 
+        let emitted = group_values.emit(EmitTo::First(1)).unwrap();
+        let emitted = emitted[0].as_dictionary::<Int32Type>();
+        assert_eq!(emitted.values().len(), 1);
+        assert_eq!(
+            emitted
+                .values()
+                .as_string::<i32>()
+                .value(emitted.key(0).unwrap()),
+            "cat"
+        );
+
+        // Partial emission remaps the remaining groups. Verify the unique-value
+        // mode can then reuse an existing group and append a new one.
+        let third: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec!["dog", "bird"])),
+        ));
+        group_values.intern(&[third], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1]);
+
         let output = group_values.emit(EmitTo::All).unwrap();
         let dictionary = output[0].as_dictionary::<Int32Type>();
         assert_eq!(dictionary.len(), 2);
