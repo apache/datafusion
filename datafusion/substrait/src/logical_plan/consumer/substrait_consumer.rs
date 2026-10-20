@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::references::References;
 use super::{
     from_aggregate_rel, from_cast, from_cross_rel, from_exchange_rel, from_fetch_rel,
     from_field_reference, from_filter_rel, from_if_then, from_join_rel, from_literal,
@@ -47,7 +48,8 @@ use substrait::proto::{self, Type};
 use substrait::proto::{
     AggregateRel, ConsistentPartitionWindowRel, CrossRel, DynamicParameter, ExchangeRel,
     Expression, ExtensionLeafRel, ExtensionMultiRel, ExtensionSingleRel, FetchRel,
-    FilterRel, JoinRel, ProjectRel, ReadRel, Rel, SetRel, SortRel, r#type,
+    FilterRel, JoinRel, Plan, ProjectRel, ReadRel, ReferenceRel, Rel, SetRel, SortRel,
+    r#type,
 };
 
 #[async_trait]
@@ -213,6 +215,17 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     /// You can provide your own implementation if you wish to customize the conversion behaviour.
     async fn consume_rel(&self, rel: &Rel) -> datafusion::common::Result<LogicalPlan> {
         from_substrait_rel(self, rel).await
+    }
+
+    /// Resolve a tree in the enclosing Substrait plan. Custom consumers can
+    /// override this to customize reference resolution.
+    async fn consume_reference(
+        &self,
+        _rel: &ReferenceRel,
+    ) -> datafusion::common::Result<LogicalPlan> {
+        not_impl_err!(
+            "ReferenceRel requires a consumer with access to the enclosing plan"
+        )
     }
 
     async fn consume_read(
@@ -578,6 +591,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 ///
 /// Used as the consumer in [crate::logical_plan::consumer::from_substrait_plan]
 pub struct DefaultSubstraitConsumer<'a> {
+    pub(super) references: Option<References<'a>>,
     pub(super) extensions: &'a Extensions,
     pub(super) state: &'a SessionState,
     outer_schemas: RwLock<Vec<Arc<DFSchema>>>,
@@ -585,8 +599,22 @@ pub struct DefaultSubstraitConsumer<'a> {
 }
 
 impl<'a> DefaultSubstraitConsumer<'a> {
+    /// Create a consumer that can resolve `ReferenceRel` against `plan`.
+    /// References are inlined in the resulting logical plan. Use a separate
+    /// consumer for each concurrent conversion.
+    pub fn new_with_plan(
+        extensions: &'a Extensions,
+        state: &'a SessionState,
+        plan: &'a Plan,
+    ) -> Self {
+        let mut consumer = Self::new(extensions, state);
+        consumer.references = Some(References::new(plan));
+        consumer
+    }
+
     pub fn new(extensions: &'a Extensions, state: &'a SessionState) -> Self {
         DefaultSubstraitConsumer {
+            references: None,
             extensions,
             state,
             outer_schemas: RwLock::new(Vec::new()),
@@ -597,6 +625,18 @@ impl<'a> DefaultSubstraitConsumer<'a> {
 
 #[async_trait]
 impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
+    async fn consume_reference(
+        &self,
+        rel: &ReferenceRel,
+    ) -> datafusion::common::Result<LogicalPlan> {
+        let Some(references) = &self.references else {
+            return substrait_err!(
+                "ReferenceRel requires DefaultSubstraitConsumer::new_with_plan"
+            );
+        };
+        references.consume(self, rel).await
+    }
+
     async fn resolve_table_ref(
         &self,
         table_ref: &TableReference,

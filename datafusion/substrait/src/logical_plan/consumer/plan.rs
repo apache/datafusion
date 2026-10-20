@@ -18,13 +18,18 @@
 use super::utils::{make_renamed_schema, rename_expressions};
 use super::{DefaultSubstraitConsumer, SubstraitConsumer};
 use crate::extensions::Extensions;
-use datafusion::common::{not_impl_err, plan_err};
+use datafusion::common::{not_impl_err, plan_datafusion_err, plan_err};
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{Aggregate, LogicalPlan, Projection, col};
 use std::sync::Arc;
 use substrait::proto::{Plan, plan_rel};
 
-/// Convert Substrait Plan to DataFusion LogicalPlan
+/// Convert a Substrait plan to a DataFusion logical plan.
+///
+/// Supports one output root and additional relation trees referenced through
+/// `ReferenceRel`. Each reference is inlined independently; referenced trees are
+/// not materialized or cached. A single bare relation is also accepted.
+/// Referenced trees containing outer references are not supported.
 pub async fn from_substrait_plan(
     state: &SessionState,
     plan: &Plan,
@@ -35,90 +40,103 @@ pub async fn from_substrait_plan(
         return not_impl_err!("Type variation extensions are not supported");
     }
 
-    let consumer = DefaultSubstraitConsumer::new(&extensions, state);
+    let consumer = DefaultSubstraitConsumer::new_with_plan(&extensions, state, plan);
     from_substrait_plan_with_consumer(&consumer, plan).await
 }
 
-/// Convert Substrait Plan to DataFusion LogicalPlan using the given consumer
+/// Convert Substrait Plan to DataFusion LogicalPlan using the given consumer.
+///
+/// The consumer must resolve references against this plan. For the default
+/// consumer, construct it with [`DefaultSubstraitConsumer::new_with_plan`].
+/// Custom consumers can implement [`SubstraitConsumer::consume_reference`].
 pub async fn from_substrait_plan_with_consumer(
     consumer: &impl SubstraitConsumer,
     plan: &Plan,
 ) -> datafusion::common::Result<LogicalPlan> {
-    match plan.relations.len() {
-        1 => {
-            match plan.relations[0].rel_type.as_ref() {
-                Some(rt) => match rt {
-                    plan_rel::RelType::Rel(rel) => Ok(consumer.consume_rel(rel).await?),
-                    plan_rel::RelType::Root(root) => {
-                        let plan =
-                            consumer.consume_rel(root.input.as_ref().unwrap()).await?;
-                        if root.names.is_empty() {
-                            // Backwards compatibility for plans missing names
-                            return Ok(plan);
-                        }
-                        let renamed_schema =
-                            make_renamed_schema(plan.schema(), &root.names)?;
-                        if renamed_schema
-                            .has_equivalent_names_and_types(plan.schema())
-                            .is_ok()
-                        {
-                            // Nothing to do if the schema is already equivalent
-                            return Ok(plan);
-                        }
-                        match plan {
-                            // If the last node of the plan produces expressions, bake the renames into those expressions.
-                            // This isn't necessary for correctness, but helps with roundtrip tests.
-                            LogicalPlan::Projection(p) => {
-                                Ok(LogicalPlan::Projection(Projection::try_new(
-                                    rename_expressions(
-                                        p.expr,
-                                        p.input.schema(),
-                                        renamed_schema.fields(),
-                                    )?,
-                                    p.input,
-                                )?))
-                            }
-                            LogicalPlan::Aggregate(a) => {
-                                let (group_fields, expr_fields) =
-                                    renamed_schema.fields().split_at(a.group_expr.len());
-                                let new_group_exprs = rename_expressions(
-                                    a.group_expr,
-                                    a.input.schema(),
-                                    group_fields,
-                                )?;
-                                let new_aggr_exprs = rename_expressions(
-                                    a.aggr_expr,
-                                    a.input.schema(),
-                                    expr_fields,
-                                )?;
-                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(
-                                    a.input,
-                                    new_group_exprs,
-                                    new_aggr_exprs,
-                                )?))
-                            }
-                            // There are probably more plans where we could bake things in, can add them later as needed.
-                            // Otherwise, add a new Project to handle the renaming.
-                            _ => Ok(LogicalPlan::Projection(Projection::try_new(
-                                rename_expressions(
-                                    plan.schema()
-                                        .columns()
-                                        .iter()
-                                        .map(|c| col(c.to_owned())),
-                                    plan.schema(),
-                                    renamed_schema.fields(),
-                                )?,
-                                Arc::new(plan),
-                            )?)),
-                        }
-                    }
-                },
-                None => plan_err!("Cannot parse plan relation: None"),
-            }
+    // Keep accepting a single bare relation for backwards compatibility. Multiple
+    // trees need an explicit, unique output root; other trees are reference targets.
+    let output = if plan.relations.len() == 1 {
+        &plan.relations[0]
+    } else {
+        let mut roots = plan.relations.iter().filter(|relation| {
+            matches!(relation.rel_type, Some(plan_rel::RelType::Root(_)))
+        });
+        let Some(root) = roots.next() else {
+            return plan_err!("Substrait plan must have exactly one output root");
+        };
+        if roots.next().is_some() {
+            return not_impl_err!(
+                "Substrait plans with multiple output roots are not supported"
+            );
         }
-        _ => not_impl_err!(
-            "Substrait plan with more than 1 relation trees not supported. Number of relation trees: {:?}",
-            plan.relations.len()
-        ),
+        root
+    };
+    match output.rel_type.as_ref() {
+        Some(rt) => match rt {
+            plan_rel::RelType::Rel(rel) => Ok(consumer.consume_rel(rel).await?),
+            plan_rel::RelType::Root(root) => {
+                let plan = consumer
+                    .consume_rel(root.input.as_ref().ok_or_else(|| {
+                        plan_datafusion_err!("Substrait root is missing its input")
+                    })?)
+                    .await?;
+                if root.names.is_empty() {
+                    // Backwards compatibility for plans missing names
+                    return Ok(plan);
+                }
+                let renamed_schema = make_renamed_schema(plan.schema(), &root.names)?;
+                if renamed_schema
+                    .has_equivalent_names_and_types(plan.schema())
+                    .is_ok()
+                {
+                    // Nothing to do if the schema is already equivalent
+                    return Ok(plan);
+                }
+                match plan {
+                    // If the last node of the plan produces expressions, bake the renames into those expressions.
+                    // This isn't necessary for correctness, but helps with roundtrip tests.
+                    LogicalPlan::Projection(p) => {
+                        Ok(LogicalPlan::Projection(Projection::try_new(
+                            rename_expressions(
+                                p.expr,
+                                p.input.schema(),
+                                renamed_schema.fields(),
+                            )?,
+                            p.input,
+                        )?))
+                    }
+                    LogicalPlan::Aggregate(a) => {
+                        let (group_fields, expr_fields) =
+                            renamed_schema.fields().split_at(a.group_expr.len());
+                        let new_group_exprs = rename_expressions(
+                            a.group_expr,
+                            a.input.schema(),
+                            group_fields,
+                        )?;
+                        let new_aggr_exprs = rename_expressions(
+                            a.aggr_expr,
+                            a.input.schema(),
+                            expr_fields,
+                        )?;
+                        Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                            a.input,
+                            new_group_exprs,
+                            new_aggr_exprs,
+                        )?))
+                    }
+                    // There are probably more plans where we could bake things in, can add them later as needed.
+                    // Otherwise, add a new Project to handle the renaming.
+                    _ => Ok(LogicalPlan::Projection(Projection::try_new(
+                        rename_expressions(
+                            plan.schema().columns().iter().map(|c| col(c.to_owned())),
+                            plan.schema(),
+                            renamed_schema.fields(),
+                        )?,
+                        Arc::new(plan),
+                    )?)),
+                }
+            }
+        },
+        None => plan_err!("Cannot parse plan relation: None"),
     }
 }

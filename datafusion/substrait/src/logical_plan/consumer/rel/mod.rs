@@ -56,6 +56,7 @@ pub async fn from_substrait_rel(
 ) -> datafusion::common::Result<LogicalPlan> {
     let plan: datafusion::common::Result<LogicalPlan> = match &relation.rel_type {
         Some(rel_type) => match rel_type {
+            RelType::Reference(rel) => consumer.consume_reference(rel).await,
             RelType::Read(rel) => consumer.consume_read(rel).await,
             RelType::Filter(rel) => consumer.consume_filter(rel).await,
             RelType::Fetch(rel) => consumer.consume_fetch(rel).await,

@@ -17,6 +17,7 @@
 
 mod expr;
 mod plan;
+mod references;
 mod rel;
 mod substrait_consumer;
 mod types;

@@ -21,6 +21,7 @@ mod consumer_integration;
 mod emit_kind_tests;
 mod function_test;
 mod logical_plans;
+mod reference_rel;
 mod roundtrip_logical_plan;
 #[cfg(feature = "physical")]
 mod roundtrip_physical_plan;
