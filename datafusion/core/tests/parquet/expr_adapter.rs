@@ -18,9 +18,9 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, FixedSizeListArray, Int32Array, Int64Array,
-    LargeListArray, ListArray, MapArray, RecordBatch, StringArray, StructArray,
-    record_batch,
+    Array, ArrayRef, AsArray, BinaryArray, BooleanArray, FixedSizeListArray, Int32Array,
+    Int64Array, LargeListArray, ListArray, MapArray, RecordBatch, StringArray,
+    StructArray, record_batch,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::concat_batches;
@@ -34,11 +34,14 @@ use datafusion::datasource::listing::{
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::DataFusionError;
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{assert_contains, exec_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{self, Column};
+use datafusion_expr::{ColumnarValue, Volatility, create_udf};
+use datafusion_physical_expr::expressions::{self, CastExpr, Column};
+use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
     PhysicalExprAdapterFactory,
@@ -1577,6 +1580,217 @@ async fn test_physical_expr_adapter_factory_reuse_across_tables() {
         "| 10 |",
         "| 20 |",
         "| 30 |",
+        "+----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+}
+
+/// Register a table `t` with a `Utf8` column `b` over a file that stores `b`
+/// as unannotated `BINARY`, after disabling
+/// `datafusion.execution.parquet.coerce_binary_to_string` for the session.
+async fn register_binary_as_utf8_table(
+    values: &[&[u8]],
+    expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
+) -> SessionContext {
+    let ctx = test_context();
+    ctx.sql("SET datafusion.execution.parquet.coerce_binary_to_string = false")
+        .await
+        .unwrap();
+
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let batch = RecordBatch::try_from_iter([(
+        "b",
+        Arc::new(BinaryArray::from(values.to_vec())) as ArrayRef,
+    )])
+    .unwrap();
+    write_parquet(batch, Arc::clone(&store), "binary.parquet").await;
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    ctx.register_object_store(store_url.as_ref(), store);
+
+    let table_schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Utf8, true)]));
+    let listing_table_config =
+        ListingTableConfig::new(ListingTableUrl::parse("memory:///").unwrap())
+            .infer_options(&ctx.state())
+            .await
+            .unwrap()
+            .with_schema(table_schema)
+            .with_expr_adapter_factory(expr_adapter_factory);
+    let table = ListingTable::try_new(listing_table_config).unwrap();
+    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx
+}
+
+/// With `coerce_binary_to_string` disabled in the session configuration, the
+/// default adapter casts binary file columns to the table's string type, in
+/// both the projection and the pushed down filter, and rejects invalid UTF-8.
+#[tokio::test]
+async fn test_binary_to_string_cast_by_default_adapter() {
+    let ctx = register_binary_as_utf8_table(
+        &[b"a", b"bc"],
+        Arc::new(DefaultPhysicalExprAdapterFactory),
+    )
+    .await;
+
+    let batches = ctx
+        .sql("SELECT b FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    #[rustfmt::skip]
+    let expected = [
+        "+----+",
+        "| b  |",
+        "+----+",
+        "| a  |",
+        "| bc |",
+        "+----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    let batches = ctx
+        .sql("SELECT b FROM t WHERE b = 'bc'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    #[rustfmt::skip]
+    let expected = [
+        "+----+",
+        "| b  |",
+        "+----+",
+        "| bc |",
+        "+----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    let ctx = register_binary_as_utf8_table(
+        &[b"a", b"b\xff"],
+        Arc::new(DefaultPhysicalExprAdapterFactory),
+    )
+    .await;
+    let err = ctx
+        .sql("SELECT b FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap_err();
+    assert_contains!(err.to_string(), "Encountered non UTF-8 data");
+}
+
+/// Replaces the default adapter's cast from a binary file column to `Utf8`
+/// with a conversion that turns invalid UTF-8 into U+FFFD, as Spark does.
+#[derive(Debug)]
+struct LossyUtf8AdapterFactory;
+
+impl PhysicalExprAdapterFactory for LossyUtf8AdapterFactory {
+    fn create(
+        &self,
+        logical_file_schema: SchemaRef,
+        physical_file_schema: SchemaRef,
+    ) -> Result<Arc<dyn PhysicalExprAdapter>> {
+        Ok(Arc::new(LossyUtf8Adapter {
+            inner: DefaultPhysicalExprAdapter::new(
+                logical_file_schema,
+                Arc::clone(&physical_file_schema),
+            ),
+            physical_file_schema,
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct LossyUtf8Adapter {
+    inner: DefaultPhysicalExprAdapter,
+    physical_file_schema: SchemaRef,
+}
+
+impl PhysicalExprAdapter for LossyUtf8Adapter {
+    fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+        self.inner
+            .rewrite(expr)?
+            .transform(|expr| {
+                if let Some(cast) = expr.downcast_ref::<CastExpr>()
+                    && cast.cast_type() == &DataType::Utf8
+                    && cast.expr().data_type(&self.physical_file_schema)?
+                        == DataType::Binary
+                {
+                    let lossy_utf8 = create_udf(
+                        "lossy_utf8",
+                        vec![DataType::Binary],
+                        DataType::Utf8,
+                        Volatility::Immutable,
+                        Arc::new(|args: &[ColumnarValue]| {
+                            let [ColumnarValue::Array(array)] = args else {
+                                return exec_err!("lossy_utf8 expects one array");
+                            };
+                            let strings: StringArray = array
+                                .as_binary::<i32>()
+                                .iter()
+                                .map(|value| value.map(String::from_utf8_lossy))
+                                .collect();
+                            Ok(ColumnarValue::Array(Arc::new(strings)))
+                        }),
+                    );
+                    return Ok(Transformed::yes(Arc::new(ScalarFunctionExpr::new(
+                        "lossy_utf8",
+                        Arc::new(lossy_utf8),
+                        vec![Arc::clone(cast.expr())],
+                        Arc::clone(cast.target_field()),
+                        Arc::new(ConfigOptions::default()),
+                    ))));
+                }
+                Ok(Transformed::no(expr))
+            })
+            .data()
+    }
+}
+
+/// With `coerce_binary_to_string` disabled in the session configuration, a
+/// custom adapter can convert binary file columns its own way, in both the
+/// projection and the pushed down filter.
+#[tokio::test]
+async fn test_binary_to_string_converted_by_custom_adapter() {
+    let ctx = register_binary_as_utf8_table(
+        &[b"a", b"b\xff"],
+        Arc::new(LossyUtf8AdapterFactory),
+    )
+    .await;
+
+    let batches = ctx
+        .sql("SELECT b FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    #[rustfmt::skip]
+    let expected = [
+        "+----+",
+        "| b  |",
+        "+----+",
+        "| a  |",
+        "| b\u{FFFD} |",
+        "+----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    let batches = ctx
+        .sql("SELECT b FROM t WHERE b = 'b\u{FFFD}'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    #[rustfmt::skip]
+    let expected = [
+        "+----+",
+        "| b  |",
+        "+----+",
+        "| b\u{FFFD} |",
         "+----+",
     ];
     assert_batches_eq!(expected, &batches);
