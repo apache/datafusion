@@ -532,7 +532,7 @@ impl NthValueEvaluator {
     fn valid_index_with_nulls(&self, valid: &BooleanBuffer) -> Option<usize> {
         match self.state.kind {
             NthValueKind::First => valid.set_indices().next(),
-            NthValueKind::Last => last_set_bit(valid),
+            NthValueKind::Last => nth_set_bit_from_end(valid, 1),
             NthValueKind::Nth => {
                 match self.n.cmp(&0) {
                     Ordering::Greater => {
@@ -540,14 +540,7 @@ impl NthValueEvaluator {
                         let index = (self.n as usize) - 1;
                         valid.set_indices().nth(index)
                     }
-                    Ordering::Less => {
-                        let reverse_index = (-self.n) as usize;
-                        let valid_indices_len = valid.count_set_bits();
-                        if reverse_index > valid_indices_len {
-                            return None;
-                        }
-                        valid.set_indices().nth(valid_indices_len - reverse_index)
-                    }
+                    Ordering::Less => nth_set_bit_from_end(valid, (-self.n) as usize),
                     Ordering::Equal => None,
                 }
             }
@@ -555,21 +548,30 @@ impl NthValueEvaluator {
     }
 }
 
-/// Returns the index of the last set bit in `bits`, or `None` if no bit is set.
+/// Returns the index of the `n`th set bit from the end of `bits`, where `n = 1` is the last
+/// set bit, or `None` if fewer than `n` bits are set.
 ///
 /// The bits are read a 64-bit word at a time from the end, so the cost grows with the distance
-/// from the end to the last set bit rather than with the length of `bits`. Enumerating the set
-/// bits from the start instead is quadratic for a frame that grows with every row.
-fn last_set_bit(bits: &BooleanBuffer) -> Option<usize> {
+/// from the end to that bit rather than with the length of `bits`. Enumerating the set bits
+/// from the start instead is quadratic for a frame that grows with every row.
+fn nth_set_bit_from_end(bits: &BooleanBuffer, n: usize) -> Option<usize> {
+    debug_assert!(n > 0, "n is 1-based");
     let chunk = UnalignedBitChunk::new(bits.values(), bits.offset(), bits.len());
     // The words hold `lead_padding` unset bits before `bits` and `trailing_padding` after it.
     let mut word_start = chunk.lead_padding() + bits.len() + chunk.trailing_padding();
-    for word in chunk.iter().rev() {
+    let mut remaining = n;
+    for mut word in chunk.iter().rev() {
         word_start -= 64;
-        if word != 0 {
-            let bit = 63 - word.leading_zeros() as usize;
-            return Some(word_start + bit - chunk.lead_padding());
+        let ones = word.count_ones() as usize;
+        if ones < remaining {
+            remaining -= ones;
+            continue;
         }
+        // Clear the `remaining - 1` highest set bits, leaving the one we want on top
+        for _ in 1..remaining {
+            word ^= 1 << word.ilog2();
+        }
+        return Some(word_start + word.ilog2() as usize - chunk.lead_padding());
     }
     None
 }
@@ -731,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn last_set_bit_matches_a_scan_from_the_end() {
+    fn nth_set_bit_from_end_matches_a_scan_from_the_end() {
         // The slices cover every bit offset within a word, byte-aligned and unaligned starts,
         // and lengths from empty to several words, which are the cases `UnalignedBitChunk`
         // splits into a prefix, aligned words and a suffix.
@@ -752,12 +754,15 @@ mod tests {
             for offset in 0..70 {
                 for len in 0..=200 {
                     let slice = bits.slice(offset, len);
-                    let expected = (0..len).rev().find(|&i| slice.value(i));
-                    assert_eq!(
-                        last_set_bit(&slice),
-                        expected,
-                        "offset {offset}, len {len}"
-                    );
+                    for n in [1, 2, 3, 63, 64, 65, 130] {
+                        let expected =
+                            (0..len).rev().filter(|&i| slice.value(i)).nth(n - 1);
+                        assert_eq!(
+                            nth_set_bit_from_end(&slice, n),
+                            expected,
+                            "offset {offset}, len {len}, n {n}"
+                        );
+                    }
                 }
             }
         }
