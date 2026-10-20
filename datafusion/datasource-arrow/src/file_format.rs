@@ -58,6 +58,7 @@ use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 use futures::StreamExt;
@@ -179,6 +180,7 @@ impl FileFormat for ArrowFormat {
         &self,
         _state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        _object_store_url: &ObjectStoreUrl,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = Vec::with_capacity(objects.len());
@@ -217,6 +219,7 @@ impl FileFormat for ArrowFormat {
         &self,
         _state: &dyn Session,
         _store: &Arc<dyn ObjectStore>,
+        _object_store_url: &ObjectStoreUrl,
         table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
@@ -719,6 +722,7 @@ mod tests {
                     .infer_schema(
                         &state,
                         &(store.clone() as Arc<dyn ObjectStore>),
+                        &ObjectStoreUrl::parse("memory://test")?,
                         std::slice::from_ref(&object_meta),
                     )
                     .await?;
@@ -758,6 +762,7 @@ mod tests {
                 .infer_schema(
                     &state,
                     &(store.clone() as Arc<dyn ObjectStore>),
+                    &ObjectStoreUrl::parse("memory://test")?,
                     std::slice::from_ref(&object_meta),
                 )
                 .await;

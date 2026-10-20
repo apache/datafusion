@@ -194,12 +194,17 @@ mod tests {
             ForceViews::No => false,
         };
         let format = ParquetFormat::default().with_force_view_types(force_views);
-        let schema = format.infer_schema(&ctx, &store, &meta).await?;
+        let schema = format
+            .infer_schema(&ctx, &store, &ObjectStoreUrl::local_filesystem(), &meta)
+            .await?;
 
         let file_metadata_cache =
             ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let stats = DFParquetMetadata::new(&store, &meta[0])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_file_metadata_cache(
+                Some(Arc::clone(&file_metadata_cache)),
+                ObjectStoreUrl::local_filesystem(),
+            )
             .fetch_statistics(&schema)
             .await?;
 
@@ -210,7 +215,10 @@ mod tests {
         assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
         let stats = DFParquetMetadata::new(&store, &meta[1])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_file_metadata_cache(
+                Some(Arc::clone(&file_metadata_cache)),
+                ObjectStoreUrl::local_filesystem(),
+            )
             .fetch_statistics(&schema)
             .await?;
 
@@ -257,7 +265,9 @@ mod tests {
         let session = SessionContext::new();
         let ctx = session.state();
         let format = ParquetFormat::default();
-        let schema = format.infer_schema(&ctx, &store, &meta).await?;
+        let schema = format
+            .infer_schema(&ctx, &store, &ObjectStoreUrl::local_filesystem(), &meta)
+            .await?;
 
         let order: Vec<_> = ["a", "b", "c", "d"]
             .into_iter()
@@ -387,8 +397,10 @@ mod tests {
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 2);
 
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta.with_file_metadata_cache(
+            Some(Arc::clone(&file_metadata_cache)),
+            ObjectStoreUrl::local_filesystem(),
+        );
 
         // Increases by 3 because cache has no entries yet
         df_meta.fetch_metadata().await?;
@@ -399,7 +411,8 @@ mod tests {
         assert_eq!(store.request_count(), 5);
 
         // Increase by 2  because `get_file_metadata_cache()` is None
-        let df_meta = df_meta.with_file_metadata_cache(None);
+        let df_meta =
+            df_meta.with_file_metadata_cache(None, ObjectStoreUrl::local_filesystem());
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 7);
 
@@ -411,15 +424,31 @@ mod tests {
             .with_metadata_size_hint(Some(9))
             .with_force_view_types(force_views);
         // Increase by 3, partial cache being used.
-        let _schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        let _schema = format
+            .infer_schema(
+                &ctx,
+                &store.upcast(),
+                &ObjectStoreUrl::local_filesystem(),
+                &meta,
+            )
+            .await?;
         assert_eq!(store.request_count(), 10);
         // No increase, full cache being used.
-        let schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        let schema = format
+            .infer_schema(
+                &ctx,
+                &store.upcast(),
+                &ObjectStoreUrl::local_filesystem(),
+                &meta,
+            )
+            .await?;
         assert_eq!(store.request_count(), 10);
 
         // No increase, cache being used
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta.with_file_metadata_cache(
+            Some(Arc::clone(&file_metadata_cache)),
+            ObjectStoreUrl::local_filesystem(),
+        );
         let stats = df_meta.fetch_statistics(&schema).await?;
         assert_eq!(store.request_count(), 10);
 
@@ -446,8 +475,10 @@ mod tests {
         let ctx = session.state();
         let file_metadata_cache =
             ctx.runtime_env().cache_manager.get_file_metadata_cache();
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta.with_file_metadata_cache(
+            Some(Arc::clone(&file_metadata_cache)),
+            ObjectStoreUrl::local_filesystem(),
+        );
         // Increases by 1 because cache has no entries yet and new session context
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 2);
@@ -457,7 +488,8 @@ mod tests {
         assert_eq!(store.request_count(), 2);
 
         // Increase by 1  because `get_file_metadata_cache` is None
-        let df_meta = df_meta.with_file_metadata_cache(None);
+        let df_meta =
+            df_meta.with_file_metadata_cache(None, ObjectStoreUrl::local_filesystem());
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 3);
 
@@ -465,14 +497,30 @@ mod tests {
             .with_metadata_size_hint(Some(size_hint))
             .with_force_view_types(force_views);
         // Increase by 1, partial cache being used.
-        let _schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        let _schema = format
+            .infer_schema(
+                &ctx,
+                &store.upcast(),
+                &ObjectStoreUrl::local_filesystem(),
+                &meta,
+            )
+            .await?;
         assert_eq!(store.request_count(), 4);
         // No increase, full cache being used.
-        let schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        let schema = format
+            .infer_schema(
+                &ctx,
+                &store.upcast(),
+                &ObjectStoreUrl::local_filesystem(),
+                &meta,
+            )
+            .await?;
         assert_eq!(store.request_count(), 4);
         // No increase, cache being used
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta.with_file_metadata_cache(
+            Some(Arc::clone(&file_metadata_cache)),
+            ObjectStoreUrl::local_filesystem(),
+        );
         let stats = df_meta.fetch_statistics(&schema).await?;
         assert_eq!(store.request_count(), 4);
 
@@ -495,8 +543,10 @@ mod tests {
         assert_eq!(store.request_count(), 1);
 
         // No increase because cache has an entry
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta.with_file_metadata_cache(
+            Some(Arc::clone(&file_metadata_cache)),
+            ObjectStoreUrl::local_filesystem(),
+        );
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 1);
 
@@ -544,17 +594,34 @@ mod tests {
         let state = SessionContext::new().state();
         // Make metadata size hint None to keep original behavior
         let format = ParquetFormat::default().with_metadata_size_hint(None);
-        let _schema = format.infer_schema(&state, &store.upcast(), &files).await?;
+        let _schema = format
+            .infer_schema(
+                &state,
+                &store.upcast(),
+                &ObjectStoreUrl::local_filesystem(),
+                &files,
+            )
+            .await?;
         assert_eq!(store.request_count(), 3);
         // No increase, cache being used.
-        let schema = format.infer_schema(&state, &store.upcast(), &files).await?;
+        let schema = format
+            .infer_schema(
+                &state,
+                &store.upcast(),
+                &ObjectStoreUrl::local_filesystem(),
+                &files,
+            )
+            .await?;
         assert_eq!(store.request_count(), 3);
 
         // No increase in request count because cache is not empty
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
         let stats = DFParquetMetadata::new(store.as_ref(), &files[0])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_file_metadata_cache(
+                Some(Arc::clone(&file_metadata_cache)),
+                ObjectStoreUrl::local_filesystem(),
+            )
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
@@ -620,7 +687,14 @@ mod tests {
         let format = ParquetFormat::default()
             .with_force_view_types(force_views)
             .with_metadata_size_hint(None);
-        let schema = format.infer_schema(&state, &store.upcast(), &files).await?;
+        let schema = format
+            .infer_schema(
+                &state,
+                &store.upcast(),
+                &ObjectStoreUrl::local_filesystem(),
+                &files,
+            )
+            .await?;
         assert_eq!(store.request_count(), 6);
 
         let null_i64 = ScalarValue::Int64(None);
@@ -634,7 +708,10 @@ mod tests {
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
         let stats = DFParquetMetadata::new(store.as_ref(), &files[0])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_file_metadata_cache(
+                Some(Arc::clone(&file_metadata_cache)),
+                ObjectStoreUrl::local_filesystem(),
+            )
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(store.request_count(), 6);
@@ -663,7 +740,10 @@ mod tests {
 
         // No increase in request count because cache is not empty
         let stats = DFParquetMetadata::new(store.as_ref(), &files[1])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_file_metadata_cache(
+                Some(Arc::clone(&file_metadata_cache)),
+                ObjectStoreUrl::local_filesystem(),
+            )
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(store.request_count(), 6);
@@ -1836,7 +1916,7 @@ mod tests {
 
         let ctx = SessionContext::new().state();
         let error = ParquetFormat::default()
-            .infer_schema(&ctx, &store, &meta)
+            .infer_schema(&ctx, &store, &ObjectStoreUrl::local_filesystem(), &meta)
             .await
             .expect_err("duplicate field names must not infer a schema")
             .to_string();

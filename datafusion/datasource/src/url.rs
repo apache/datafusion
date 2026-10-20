@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use datafusion_common::{DataFusionError, Result, TableReference};
 use datafusion_execution::cache::cache_manager::CachedFileList;
-use datafusion_execution::cache::cache_manager::TableScopedPath;
+use datafusion_execution::cache::cache_manager::{StoreScopedPath, TableScopedPath};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
 
@@ -267,6 +267,7 @@ impl ListingTableUrl {
             list_with_cache(
                 ctx,
                 store,
+                &self.object_store(),
                 self.table_ref.as_ref(),
                 &self.prefix,
                 prefix.as_ref(),
@@ -283,6 +284,7 @@ impl ListingTableUrl {
                     list_with_cache(
                         ctx,
                         store,
+                        &self.object_store(),
                         self.table_ref.as_ref(),
                         &self.prefix,
                         prefix.as_ref(),
@@ -364,6 +366,8 @@ impl ListingTableUrl {
 /// # Arguments
 /// * `ctx` - The session context
 /// * `store` - The object store to list from
+/// * `object_store_url` - The registered store URL used to scope cache entries
+/// * `table_ref` - Optional table reference used for table-level cache invalidation
 /// * `table_base_path` - The table's base path (the stable cache key)
 /// * `prefix` - Optional prefix relative to table base for filtering results
 ///
@@ -373,6 +377,7 @@ impl ListingTableUrl {
 async fn list_with_cache<'b>(
     ctx: &'b dyn Session,
     store: &'b dyn ObjectStore,
+    object_store_url: &ObjectStoreUrl,
     table_ref: Option<&TableReference>,
     table_base_path: &Path,
     prefix: Option<&Path>,
@@ -397,11 +402,17 @@ async fn list_with_cache<'b>(
 
             let table_scoped_base_path = TableScopedPath {
                 table: table_ref.cloned(),
-                path: table_base_path.clone(),
+                store_path: StoreScopedPath::new(
+                    object_store_url.clone(),
+                    table_base_path.clone(),
+                ),
             };
             let table_scoped_list_path = TableScopedPath {
                 table: table_ref.cloned(),
-                path: full_prefix.clone(),
+                store_path: StoreScopedPath::new(
+                    object_store_url.clone(),
+                    full_prefix.clone(),
+                ),
             };
 
             let vec = if let Some(cached) = cache.get(&table_scoped_base_path) {
@@ -854,7 +865,10 @@ mod tests {
         create_file(&store, "/table/year=2024/month=12/data5.parquet").await;
 
         // Session WITHOUT cache
-        let session_no_cache = MockSession::new();
+        let runtime_no_cache = RuntimeEnvBuilder::new()
+            .with_object_list_cache_limit(0)
+            .build_arc()?;
+        let session_no_cache = MockSession::with_runtime_env(runtime_no_cache);
 
         // Session WITH cache - use RuntimeEnvBuilder with cache limit (no TTL needed for this test)
         let runtime_with_cache = RuntimeEnvBuilder::new()
@@ -862,33 +876,43 @@ mod tests {
             .build_arc()?;
         let session_with_cache = MockSession::with_runtime_env(runtime_with_cache);
 
-        // Test cases: (url, prefix, description)
+        // Test cases: (url, prefix, description, expected file count)
         let test_cases = vec![
-            ("/table/", None, "full table listing"),
+            ("mem://bucket/table/", None, "full table listing", 5),
             (
-                "/table/",
+                "mem://bucket/table/",
                 Some(Path::from("year=2023")),
                 "single partition filter",
+                2,
             ),
             (
-                "/table/",
+                "mem://bucket/table/",
                 Some(Path::from("year=2024")),
                 "different partition filter",
+                3,
             ),
             (
-                "/table/",
+                "mem://bucket/table/",
                 Some(Path::from("year=2024/month=06")),
                 "nested partition filter",
+                1,
             ),
             (
-                "/table/",
+                "mem://bucket/table/",
                 Some(Path::from("year=2025")),
                 "non-existent partition",
+                0,
             ),
         ];
 
-        for (url_str, prefix, description) in test_cases {
+        for (url_str, prefix, description, expected_count) in test_cases {
             let url = ListingTableUrl::parse(url_str)?;
+            session_with_cache
+                .runtime_env
+                .cache_manager
+                .get_list_files_cache()
+                .unwrap()
+                .clear();
 
             // Get results WITHOUT cache (sorted for comparison)
             let mut results_no_cache: Vec<String> = url
@@ -900,6 +924,7 @@ mod tests {
                 .map(|m| m.location.to_string())
                 .collect();
             results_no_cache.sort();
+            assert_eq!(results_no_cache.len(), expected_count, "{description}");
 
             // Get results WITH cache (first call - cache miss, sorted for comparison)
             let mut results_with_cache_miss: Vec<String> = url
@@ -943,6 +968,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_listing_cache_separates_object_stores() -> Result<()> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        let first = MockObjectStore::new();
+        let second = MockObjectStore::new();
+        create_file(&first, "table/first.parquet").await;
+        create_file(&second, "table/second.parquet").await;
+        let runtime = RuntimeEnvBuilder::new()
+            .with_object_list_cache_limit(1024 * 1024)
+            .build_arc()?;
+        let session = MockSession::with_runtime_env(runtime);
+
+        // Reuse both listings to verify that each store has its own cache entry.
+        for _ in 0..2 {
+            for (bucket, store, expected) in [
+                ("first", &first, "table/first.parquet"),
+                ("second", &second, "table/second.parquet"),
+            ] {
+                let url = ListingTableUrl::parse(format!("s3://{bucket}/table/"))?;
+                let files = url
+                    .list_prefixed_files(&session, store, None, "parquet")
+                    .await?
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                assert_eq!(files.len(), 1);
+                assert_eq!(files[0].location.as_ref(), expected);
+            }
+        }
+        assert_eq!(first.list_prefixes(), vec![Some(Path::from("table"))]);
+        assert_eq!(second.list_prefixes(), vec![Some(Path::from("table"))]);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_cache_miss_with_prefix_lists_prefixed_path() -> Result<()> {
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
@@ -955,7 +1014,7 @@ mod tests {
             .with_object_list_cache_limit(1024 * 1024)
             .build_arc()?;
         let session = MockSession::with_runtime_env(runtime);
-        let url = ListingTableUrl::parse("/table/")?;
+        let url = ListingTableUrl::parse("mem://bucket/table/")?;
         let prefix = Path::from("year=2024/month=06");
 
         let results: Vec<String> = url
@@ -1009,7 +1068,7 @@ mod tests {
             .options_mut()
             .execution
             .listing_table_ignore_subdirectory = false;
-        let url = ListingTableUrl::parse("/sales/")?;
+        let url = ListingTableUrl::parse("mem://bucket/sales/")?;
 
         let q1_results: Vec<String> = url
             .list_prefixed_files(
@@ -1086,7 +1145,7 @@ mod tests {
             .build_arc()?;
         let session = MockSession::with_runtime_env(runtime);
 
-        let url = ListingTableUrl::parse("/sales/")?;
+        let url = ListingTableUrl::parse("mem://bucket/sales/")?;
 
         // First: query full table (populates cache)
         let full_results: Vec<String> = url

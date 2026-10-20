@@ -33,6 +33,7 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     GetExt, Result, SchemaError, Statistics, internal_err, not_impl_err, schema_err,
 };
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
@@ -117,10 +118,13 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     /// be analysed up to a given number of records or files (as specified in the
     /// format config) then give the estimated common schema. This might fail if
     /// the files have schemas that cannot be merged.
+    ///
+    /// `object_store_url` identifies `store` and scopes any cached file metadata.
     async fn infer_schema(
         &self,
         state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef>;
 
@@ -130,11 +134,14 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     /// `table_schema` is the (combined) schema of the overall table
     /// and may be a superset of the schema contained in this file.
     ///
+    /// `object_store_url` identifies `store` and scopes any cached file metadata.
+    ///
     /// TODO: should the file source return statistics for only columns referred to in the table schema?
     async fn infer_stats(
         &self,
         state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics>;
@@ -148,10 +155,13 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     /// and may be a superset of the schema contained in this file.
     ///
     /// The default implementation returns `Ok(None)`.
+    ///
+    /// `object_store_url` identifies `store` and scopes any cached file metadata.
     async fn infer_ordering(
         &self,
         _state: &dyn Session,
         _store: &Arc<dyn ObjectStore>,
+        _object_store_url: &ObjectStoreUrl,
         _table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Option<LexOrdering>> {
@@ -166,18 +176,27 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     ///
     /// The default implementation calls both methods separately. File formats
     /// that can extract both from a single read should override this method.
+    ///
+    /// `object_store_url` identifies `store` and scopes any cached file metadata.
     async fn infer_stats_and_ordering(
         &self,
         state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<FileMeta> {
         let statistics = self
-            .infer_stats(state, store, Arc::clone(&table_schema), object)
+            .infer_stats(
+                state,
+                store,
+                object_store_url,
+                Arc::clone(&table_schema),
+                object,
+            )
             .await?;
         let ordering = self
-            .infer_ordering(state, store, table_schema, object)
+            .infer_ordering(state, store, object_store_url, table_schema, object)
             .await?;
         Ok(FileMeta {
             statistics,

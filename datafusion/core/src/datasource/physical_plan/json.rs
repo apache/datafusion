@@ -90,7 +90,7 @@ mod tests {
             .object_meta;
         let schema = JsonFormat::default()
             .with_file_compression_type(file_compression_type.to_owned())
-            .infer_schema(state, &store, std::slice::from_ref(&meta))
+            .infer_schema(state, &store, &store_url, std::slice::from_ref(&meta))
             .await
             .unwrap();
 

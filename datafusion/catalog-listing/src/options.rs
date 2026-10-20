@@ -300,7 +300,10 @@ impl ListingOptions {
             .filter(|object_meta| object_meta.size > 0)
             .collect();
 
-        let schema = self.format.infer_schema(state, &store, &files).await?;
+        let schema = self
+            .format
+            .infer_schema(state, &store, &table_path.object_store(), &files)
+            .await?;
 
         Ok(schema)
     }

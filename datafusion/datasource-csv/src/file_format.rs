@@ -49,6 +49,7 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::BatchSerializer;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -377,6 +378,7 @@ impl FileFormat for CsvFormat {
         &self,
         state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        _object_store_url: &ObjectStoreUrl,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
@@ -424,6 +426,7 @@ impl FileFormat for CsvFormat {
         &self,
         _state: &dyn Session,
         _store: &Arc<dyn ObjectStore>,
+        _object_store_url: &ObjectStoreUrl,
         table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
