@@ -505,12 +505,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 if !is_distinct {
                     self.can_pull_up = self.can_pull_up && self.can_pull_over_aggregation;
                 }
-                // A scalar aggregate below returns one row for every outer row,
-                // but once pulled up it returns no row for the outer rows whose
-                // correlated filter matches nothing. This aggregate would then
-                // run over an empty input instead of that one row, and the count
-                // bug handling only covers the aggregate the join reads.
-                // See https://github.com/apache/datafusion/issues/26508.
+                // A pulled up scalar aggregate below gives no row for unmatched
+                // outer rows, so this aggregate would see an empty input.
+                // See https://github.com/apache/datafusion/issues/26508
                 if self.pulled_up_scalar_agg {
                     self.can_pull_up = false;
                 }
