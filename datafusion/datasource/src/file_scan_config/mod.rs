@@ -3333,6 +3333,20 @@ mod tests {
         file
     }
 
+    /// The files of each group, with whether each file reads only a range
+    fn group_files(config: &FileScanConfig) -> Vec<Vec<(&str, bool)>> {
+        config
+            .file_groups
+            .iter()
+            .map(|group| {
+                group
+                    .iter()
+                    .map(|f| (f.object_meta.location.as_ref(), f.range.is_some()))
+                    .collect()
+            })
+            .collect()
+    }
+
     fn group_sizes(config: &FileScanConfig) -> Vec<u64> {
         config
             .file_groups
@@ -3389,6 +3403,43 @@ mod tests {
         assert_eq!(config.validated_output_ordering().len(), 1);
 
         assert!(DataSource::repartitioned(&config, 4, 0, ordering)?.is_none());
+        Ok(())
+    }
+
+    /// If moving the group boundaries would put overlapping files in one
+    /// group, the ordered split is used instead: it keeps multi-file groups
+    /// and only splits single-file groups.
+    #[test]
+    fn repartition_falls_back_to_ordered_split_when_rebalancing_breaks_order()
+    -> Result<()> {
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![
+                sized_file_with_stats("f1", 8000, 0.0, 9.0),
+                sized_file_with_stats("f2", 8000, 10.0, 19.0),
+            ]),
+            FileGroup::new(vec![sized_file_with_stats("f3", 1000, 5.0, 15.0)]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(config.validated_output_ordering().len(), 1);
+
+        let repartitioned = DataSource::repartitioned(&config, 4, 0, ordering)?
+            .expect("the single-file group should be split");
+        let repartitioned = repartitioned
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig");
+        assert_eq!(
+            group_files(repartitioned),
+            vec![
+                vec![("f1", false), ("f2", false)],
+                vec![("f3", true)],
+                vec![("f3", true)],
+                vec![("f3", true)],
+            ]
+        );
+        assert_eq!(
+            repartitioned.validated_output_ordering(),
+            config.validated_output_ordering()
+        );
         Ok(())
     }
 
