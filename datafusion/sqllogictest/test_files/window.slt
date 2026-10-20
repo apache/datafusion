@@ -3481,6 +3481,157 @@ SELECT
   ORDER BY C3
   LIMIT 5
 
+# A window that references a named window inherits its PARTITION BY and ORDER BY
+statement ok
+CREATE TABLE named_window_prices(ticker VARCHAR, ts INT, price DOUBLE) AS VALUES
+  ('BTC', 1, 100.0), ('BTC', 2, 105.0), ('BTC', 3, 102.0),
+  ('DOGE', 1, 0.1), ('DOGE', 2, 0.2), ('DOGE', 3, 0.15);
+
+# Adding a frame to a named window keeps its PARTITION BY and ORDER BY
+query TIRRR
+SELECT ticker, ts, price,
+  MAX(price) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS named_plus_frame,
+  MAX(price) OVER (PARTITION BY ticker ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS inline
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ticker, ts
+----
+BTC 1 100 100 100
+BTC 2 105 105 105
+BTC 3 102 105 105
+DOGE 1 0.1 0.1 0.1
+DOGE 2 0.2 0.2 0.2
+DOGE 3 0.15 0.2 0.2
+
+# Adding an ORDER BY to a named window that only partitions
+query TII
+SELECT ticker, ts,
+  ROW_NUMBER() OVER (w ORDER BY ts DESC) AS rn
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker)
+ORDER BY ticker, ts
+----
+BTC 1 3
+BTC 2 2
+BTC 3 1
+DOGE 1 3
+DOGE 2 2
+DOGE 3 1
+
+# A window definition can reference an earlier one
+query TIR
+SELECT ticker, ts,
+  SUM(price) OVER w2 AS running
+FROM named_window_prices
+WINDOW w1 AS (PARTITION BY ticker ORDER BY ts),
+  w2 AS (w1 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+ORDER BY ticker, ts
+----
+BTC 1 100
+BTC 2 205
+BTC 3 307
+DOGE 1 0.1
+DOGE 2 0.3
+DOGE 3 0.45
+
+# Referencing a named window inside parentheses without adding anything
+query TII
+SELECT ticker, ts, ROW_NUMBER() OVER (w) AS rn
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ticker, ts
+----
+BTC 1 1
+BTC 2 2
+BTC 3 3
+DOGE 1 1
+DOGE 2 2
+DOGE 3 3
+
+statement error DataFusion error: Error during planning: The window w is not defined!
+SELECT MAX(price) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM named_window_prices
+
+statement error DataFusion error: Error during planning: Cannot override PARTITION BY clause of window w
+SELECT MAX(price) OVER (w PARTITION BY ts)
+FROM named_window_prices
+WINDOW w AS (ORDER BY ts)
+
+statement error DataFusion error: Error during planning: Cannot override ORDER BY clause of window w
+SELECT MAX(price) OVER (w ORDER BY price)
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+
+statement error DataFusion error: Error during planning: Cannot copy window w because it has a frame clause
+SELECT MAX(price) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker ORDER BY ts ROWS UNBOUNDED PRECEDING)
+
+# A window definition cannot reference a later one
+statement error DataFusion error: Error during planning: The window w2 is not defined!
+SELECT SUM(price) OVER w1
+FROM named_window_prices
+WINDOW w1 AS (w2 ROWS UNBOUNDED PRECEDING),
+  w2 AS (PARTITION BY ticker ORDER BY ts)
+
+# Named windows are resolved in QUALIFY
+query TIR
+SELECT ticker, ts, price
+FROM named_window_prices
+QUALIFY MAX(price) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) = price
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ticker, ts
+----
+BTC 1 100
+BTC 2 105
+DOGE 1 0.1
+DOGE 2 0.2
+
+query TI
+SELECT ticker, ts
+FROM named_window_prices
+QUALIFY ROW_NUMBER() OVER w = 1
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ticker
+----
+BTC 1
+DOGE 1
+
+# Named windows are resolved in ORDER BY
+query TI
+SELECT ticker, ts
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ROW_NUMBER() OVER (w ROWS UNBOUNDED PRECEDING) DESC, ticker
+----
+BTC 3
+DOGE 3
+BTC 2
+DOGE 2
+BTC 1
+DOGE 1
+
+# A subquery resolves window names against its own WINDOW clause
+query I
+SELECT (SELECT MAX(rn) FROM (
+  SELECT ROW_NUMBER() OVER (w ROWS UNBOUNDED PRECEDING) AS rn
+  FROM named_window_prices
+  WINDOW w AS (PARTITION BY ticker ORDER BY ts)))
+FROM named_window_prices
+WINDOW w AS (ORDER BY ts)
+LIMIT 1
+----
+3
+
+statement error DataFusion error: Error during planning: The window w is not defined!
+SELECT (SELECT MAX(rn) FROM (
+  SELECT ROW_NUMBER() OVER w AS rn FROM named_window_prices))
+FROM named_window_prices
+WINDOW w AS (ORDER BY ts)
+
+statement ok
+DROP TABLE named_window_prices;
+
 # Create a source where there is multiple orderings.
 statement ok
 CREATE EXTERNAL TABLE multiple_ordered_table (
