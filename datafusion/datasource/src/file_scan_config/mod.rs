@@ -3311,7 +3311,7 @@ mod tests {
 
     fn ordered_scan_with_groups(file_groups: Vec<FileGroup>) -> FileScanConfig {
         let schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
         FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
@@ -3403,6 +3403,42 @@ mod tests {
         assert_eq!(config.validated_output_ordering().len(), 1);
 
         assert!(DataSource::repartitioned(&config, 4, 0, ordering)?.is_none());
+        Ok(())
+    }
+
+    /// With `NULLS FIRST`, a file with NULLs can only be the first file of a
+    /// group, so a size-balanced split that puts it after another file is not
+    /// used.
+    #[test]
+    fn repartition_keeps_ordered_groups_when_rebalancing_misplaces_nulls() -> Result<()> {
+        let mut with_nulls = sized_file_with_stats("f2", 1000, 10.0, 19.0);
+        Arc::make_mut(with_nulls.statistics.as_mut().unwrap()).column_statistics[0]
+            .null_count = Precision::Exact(1);
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![sized_file_with_stats("f1", 8000, 0.0, 9.0)]),
+            FileGroup::new(vec![with_nulls]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(config.validated_output_ordering().len(), 1);
+
+        let repartitioned = DataSource::repartitioned(&config, 4, 0, ordering)?
+            .expect("the large file should be split");
+        let repartitioned = repartitioned
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig");
+        assert_eq!(
+            group_files(repartitioned),
+            vec![
+                vec![("f1", true)],
+                vec![("f2", true)],
+                vec![("f1", true)],
+                vec![("f1", true)],
+            ]
+        );
+        assert_eq!(
+            repartitioned.validated_output_ordering(),
+            config.validated_output_ordering()
+        );
         Ok(())
     }
 
