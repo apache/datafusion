@@ -238,12 +238,15 @@ config_namespace! {
         /// The default schema name - this impacts what SQL queries use if not specified
         pub default_schema: String, default = "public".to_string()
 
-        /// The system schema name - when set a global system and `information_schema` catalog will be available
-        pub system_catalog: Option<String>, default = None
-
         /// Should DataFusion provide access to `information_schema`
         /// virtual tables for displaying schema information
         pub information_schema: bool, default = false
+
+        /// The system schema name - when set together with `information_schema`, the
+        /// `information_schema` for each catalog will only describe objects contained in the
+        /// catalog itself. The global, cross-catalog `information_schema` is available under
+        /// the virtual catalog named by this option.
+        pub system_catalog: Option<String>, default = None
 
         /// Location scanned to load tables for `default` schema
         pub location: Option<String>, default = None
