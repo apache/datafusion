@@ -24,7 +24,11 @@ use async_trait::async_trait;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
-use datafusion_common::config::{EncryptionFactoryOptions, TableParquetOptions};
+use datafusion_common::config::{
+    ColumnDecryptionProperties, ColumnEncryptionProperties,
+    ConfigFileDecryptionProperties, ConfigFileEncryptionProperties,
+    EncryptionFactoryOptions, TableParquetOptions,
+};
 use datafusion_common::{DataFusionError, assert_batches_sorted_eq, exec_datafusion_err};
 use datafusion_datasource_parquet::ParquetFormat;
 use datafusion_execution::parquet_encryption::EncryptionFactory;
@@ -130,6 +134,115 @@ async fn round_trip_encryption() {
         .fold(0, |acc, x| acc + x.num_rows());
 
     assert_eq!(num_rows_written, num_rows_read);
+}
+
+#[tokio::test]
+async fn encrypted_parquet_round_trip_with_redacted_config_debug() {
+    // Distinct synthetic 128-bit keys ensure the column key is needed in addition
+    // to the footer key. Neither key should appear in configuration diagnostics.
+    let footer_key = "00112233445566778899aabbccddeeff";
+    let column_key = "ffeeddccbbaa99887766554433221100";
+    let encryption = ConfigFileEncryptionProperties {
+        footer_key_as_hex: footer_key.to_string(),
+        column_encryption_properties: HashMap::from([(
+            "value".to_string(),
+            ColumnEncryptionProperties {
+                column_key_as_hex: column_key.to_string(),
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    let decryption = ConfigFileDecryptionProperties {
+        footer_key_as_hex: footer_key.to_string(),
+        column_decryption_properties: HashMap::from([(
+            "value".to_string(),
+            ColumnDecryptionProperties {
+                column_key_as_hex: column_key.to_string(),
+            },
+        )]),
+        ..Default::default()
+    };
+    let mut options = TableParquetOptions::default();
+    options.crypto.file_encryption = Some(encryption);
+    options.crypto.file_decryption = Some(decryption.clone());
+    let format = ParquetFormat::default().with_options(options.clone());
+    for diagnostic in [
+        format!("{options:?}"),
+        format!("{options:#?}"),
+        format!("{format:?}"),
+        format!("{format:#?}"),
+    ] {
+        assert!(!diagnostic.contains(footer_key), "{diagnostic}");
+        assert!(!diagnostic.contains(column_key), "{diagnostic}");
+    }
+
+    let ids: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(2), None]));
+    let values: ArrayRef =
+        Arc::new(StringArray::from(vec![Some("alpha"), None, Some("gamma")]));
+    let batch = RecordBatch::try_from_iter(vec![("id", ids), ("value", values)]).unwrap();
+    let ctx = SessionContext::new();
+    let df = ctx.read_batch(batch).unwrap();
+    let tempdir = TempDir::new().unwrap();
+    let path = tempdir.path().join("encrypted.parquet");
+    let path = path.to_str().unwrap();
+    df.write_parquet(
+        path,
+        DataFrameWriteOptions::new().with_single_file_output(true),
+        Some(options),
+    )
+    .await
+    .unwrap();
+
+    let read_ctx = SessionContext::new();
+    let batches = read_parquet_test_data(
+        path,
+        &read_ctx,
+        ParquetReadOptions::default().file_decryption_properties(decryption.clone()),
+    )
+    .await;
+    assert_batches_sorted_eq!(
+        [
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| 1  | alpha |",
+            "| 2  |       |",
+            "|    | gamma |",
+            "+----+-------+",
+        ],
+        &batches
+    );
+
+    // A readable footer must not make the encrypted column readable with an
+    // incorrect column key. Accept failure during either metadata or data reads.
+    let mut wrong_decryption = decryption;
+    wrong_decryption
+        .column_decryption_properties
+        .get_mut("value")
+        .unwrap()
+        .column_key_as_hex = "102132435465768798a9bacbdcedfe0f".to_string();
+    let wrong_key_result = async {
+        let df = SessionContext::new()
+            .read_parquet(
+                path,
+                ParquetReadOptions::default()
+                    .file_decryption_properties(wrong_decryption),
+            )
+            .await?;
+        df.collect().await
+    }
+    .await;
+    assert!(wrong_key_result.is_err());
+
+    let missing_key_result = async {
+        let df = SessionContext::new()
+            .read_parquet(path, ParquetReadOptions::default())
+            .await?;
+        df.collect().await
+    }
+    .await;
+    assert!(missing_key_result.is_err());
 }
 
 #[tokio::test]
