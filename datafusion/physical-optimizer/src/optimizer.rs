@@ -22,6 +22,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::adaptive_hash_join::AdaptiveHashJoin;
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::ensure_coop::EnsureCooperative;
@@ -288,6 +289,11 @@ impl PhysicalOptimizer {
             // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new_post_optimization()),
+            // The AdaptiveHashJoin rule lets partitioned hash joins pick their mode at
+            // runtime, once they have read their build side. It runs after dynamic
+            // filters are pushed down, and keeps both them and the plan's properties.
+            // Disabled by default, see `datafusion.optimizer.enable_adaptive_hash_join`.
+            Arc::new(AdaptiveHashJoin::new()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query

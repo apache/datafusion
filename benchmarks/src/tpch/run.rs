@@ -115,6 +115,11 @@ pub struct RunOpt {
     /// How many bytes to buffer on the probe side of hash joins.
     #[arg(long, default_value = "0")]
     hash_join_buffering_capacity: usize,
+
+    /// Let partitioned hash joins pick their mode at runtime, from the exact
+    /// size of their build side (`datafusion.optimizer.enable_adaptive_hash_join`)
+    #[arg(long)]
+    adaptive: bool,
 }
 
 impl RunOpt {
@@ -135,6 +140,9 @@ impl RunOpt {
             self.enable_piecewise_merge_join;
         config.options_mut().execution.hash_join_buffering_capacity =
             self.hash_join_buffering_capacity;
+        if self.adaptive {
+            config.options_mut().optimizer.enable_adaptive_hash_join = true;
+        }
         let rt = self.common.build_runtime()?;
         let ctx = SessionContext::new_with_config_rt(config, rt);
         benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
@@ -489,6 +497,7 @@ mod tests {
             enable_piecewise_merge_join: false,
             sorted: false,
             hash_join_buffering_capacity: 0,
+            adaptive: false,
         };
         opt.register_tables(&ctx).await?;
         let queries = crate::tpch::get_query_sql(query)?;
@@ -530,6 +539,7 @@ mod tests {
             enable_piecewise_merge_join: false,
             sorted: false,
             hash_join_buffering_capacity: 0,
+            adaptive: false,
         };
         opt.register_tables(&ctx).await?;
         let queries = crate::tpch::get_query_sql(query)?;

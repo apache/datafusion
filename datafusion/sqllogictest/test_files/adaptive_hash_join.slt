@@ -1,0 +1,110 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for datafusion.optimizer.enable_adaptive_hash_join, which lets hash
+# joins planned in `Partitioned` mode pick their mode at runtime from the exact
+# size of their build side
+
+# Never collect a build side into a single partition while planning
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+query I
+COPY (SELECT value AS k FROM generate_series(1, 100)) TO 'test_files/scratch/adaptive_hash_join/dim.parquet' STORED AS PARQUET;
+----
+100
+
+query I
+COPY (SELECT value % 200 AS k, value AS v FROM generate_series(1, 10000)) TO 'test_files/scratch/adaptive_hash_join/fact.parquet' STORED AS PARQUET;
+----
+10000
+
+statement ok
+CREATE EXTERNAL TABLE dim STORED AS PARQUET LOCATION 'test_files/scratch/adaptive_hash_join/dim.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE fact STORED AS PARQUET LOCATION 'test_files/scratch/adaptive_hash_join/fact.parquet';
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# Disabled by default
+query TT
+EXPLAIN SELECT count(*), sum(v) FROM dim JOIN fact ON dim.k = fact.k;
+----
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), sum(fact.v)@1 as sum(fact.v)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), sum(fact.v)]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), sum(fact.v)]
+05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(k@0, k@0)], projection=[v@2]
+06)----------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1, maintains_sort_order=true
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/adaptive_hash_join/dim.parquet]]}, projection=[k], output_ordering=[k@0 ASC NULLS LAST], file_type=parquet
+08)----------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1, maintains_sort_order=true
+09)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/adaptive_hash_join/fact.parquet]]}, projection=[k, v], output_ordering=[v@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+include ./adaptive_hash_join.slt.part
+
+statement ok
+set datafusion.optimizer.enable_adaptive_hash_join = true;
+
+# The join is wrapped, and picks its mode when it runs
+query TT
+EXPLAIN SELECT count(*), sum(v) FROM dim JOIN fact ON dim.k = fact.k;
+----
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), sum(fact.v)@1 as sum(fact.v)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), sum(fact.v)]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), sum(fact.v)]
+05)--------AdaptiveHashJoinExec: mode=pending, join_type=Inner, on=[(k@0, k@0)], max_build_rows=500
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/adaptive_hash_join/dim.parquet]]}, projection=[k], output_ordering=[k@0 ASC NULLS LAST], file_type=parquet
+07)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/adaptive_hash_join/fact.parquet]]}, projection=[k, v], output_ordering=[v@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+# The same results as without it
+include ./adaptive_hash_join.slt.part
+
+# Joins whose build side is over the threshold run partitioned, as planned
+statement ok
+set datafusion.optimizer.adaptive_hash_join_threshold_rows = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+include ./adaptive_hash_join.slt.part
+
+statement ok
+reset datafusion.optimizer.adaptive_hash_join_threshold_rows;
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold_rows;
+
+statement ok
+reset datafusion.optimizer.enable_adaptive_hash_join;
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold;
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+
+statement ok
+DROP TABLE dim;
+
+statement ok
+DROP TABLE fact;

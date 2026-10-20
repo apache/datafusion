@@ -1852,6 +1852,37 @@ config_namespace! {
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold_rows: usize, default = 1024 * 128
 
+        /// When set to true, hash joins planned in `Partitioned` mode choose their
+        /// mode at runtime instead, from the exact size of their build side.
+        ///
+        /// A hash join reads its whole build side before it probes anything, so
+        /// this adds no extra wait. Once the build side is read, the join runs in
+        /// `CollectLeft` mode, without repartitioning its probe side, if the build
+        /// side is within `adaptive_hash_join_threshold_rows`,
+        /// `adaptive_hash_join_threshold` and `adaptive_hash_join_max_probe_ratio`.
+        /// Otherwise it runs in `Partitioned` mode as planned. Joins that track
+        /// matched build-side rows (left, left semi, left anti, left mark and full
+        /// joins) use `hash_join_single_partition_threshold_rows` instead of
+        /// `adaptive_hash_join_threshold_rows`.
+        ///
+        /// Plans that use this cannot be serialized with `datafusion-proto`.
+        pub enable_adaptive_hash_join: bool, default = false
+
+        /// With `enable_adaptive_hash_join`, the maximum size in rows of a build
+        /// side that is collected into a single partition at runtime
+        pub adaptive_hash_join_threshold_rows: usize, default = 4 * 1024 * 1024
+
+        /// With `enable_adaptive_hash_join`, the maximum size in bytes of a build
+        /// side that is collected into a single partition at runtime
+        pub adaptive_hash_join_threshold: usize, default = 1024 * 1024 * 1024
+
+        /// With `enable_adaptive_hash_join`, the maximum size of a build side that
+        /// is collected into a single partition at runtime, as a fraction of the
+        /// estimated number of probe-side rows. A single hash table is built by
+        /// one thread, which only pays off when the probe side is much larger.
+        /// Set to 0 to disable this limit.
+        pub adaptive_hash_join_max_probe_ratio: f64, default = 0.05
+
         /// Maximum size in bytes for the build side of a hash join to be pushed down as an InList expression for dynamic filtering.
         /// Build sides larger than this will use hash table lookups instead.
         /// Set to 0 to always use hash table lookups.
