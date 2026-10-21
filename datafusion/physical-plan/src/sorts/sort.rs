@@ -850,17 +850,9 @@ impl ExternalSorter {
     /// Each run can hold one prefetched batch whose reservation is already released.
     fn with_lookahead(stream: SendableRecordBatchStream) -> SendableRecordBatchStream {
         let schema = stream.schema();
-        let batches = futures::stream::unfold(
-            (None, stream),
-            |(lookahead, mut stream)| async move {
-                let current = match lookahead {
-                    Some(batch) => batch,
-                    None => stream.next().await?,
-                };
-                let next = stream.next().await;
-                Some((current, (next, stream)))
-            },
-        );
+        // Buffer the current batch and one ahead to return borrowed spill workspace
+        // before the merge processes the current batch.
+        let batches = stream.map(std::future::ready).buffered(2);
         Box::pin(RecordBatchStreamAdapter::new(schema, batches))
     }
 
