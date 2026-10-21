@@ -174,7 +174,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     let scalar_to = ColumnarValue::Scalar(ScalarValue::from(child_array_size as i64 / 2));
 
     for input in [list_array, list_view_array] {
-        let input_type = input.data_type().to_string();
+        let input_type = match input.data_type() {
+            DataType::ListView(_) => "ListView -> List (coercion excluded)".to_string(),
+            _ => input.data_type().to_string(),
+        };
 
         array_slice_benchmark(
             &format!("slice: input {input_type}, array args, no stride"),

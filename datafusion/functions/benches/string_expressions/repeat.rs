@@ -220,6 +220,15 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.measurement_time(Duration::from_secs(10));
 
         let args = create_args::<i32>(size, 2, repeat_times, false);
+        // Verify once outside the timed loop that the failure is the expected
+        // overflow error, and not an unrelated error that also happens to fail.
+        let err = invoke_repeat_with_args(args.clone())
+            .expect_err("repeat should reject an overflowing output size")
+            .to_string();
+        assert!(
+            err.contains("string size overflow on repeat"),
+            "unexpected error: {err}"
+        );
         group.bench_function(
             format!("repeat_string overflow [size={size}, repeat_times={repeat_times}]"),
             |b| {
