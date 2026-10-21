@@ -4879,6 +4879,23 @@ FROM ignore_nulls_t);
 ----
 22499 0 22499 0
 
+# NTH_VALUE(v, -65) over a sliding frame whose valid rows span two bitmap words. Once full, the
+# frame holds exactly 65 valid rows in partition 0, more in partition 3 and fewer in partitions 1
+# and 2. The expected value is the valid row whose running count is 64 less than the current
+# row's, if the frame holds at least 65 valid rows.
+query III
+WITH r AS (SELECT p, v,
+  count(v) OVER (PARTITION BY p ORDER BY i) AS c,
+  count(v) OVER (PARTITION BY p ORDER BY i ROWS BETWEEN 129 PRECEDING AND CURRENT ROW) AS fc,
+  NTH_VALUE(v, -65) IGNORE NULLS
+    OVER (PARTITION BY p ORDER BY i ROWS BETWEEN 129 PRECEDING AND CURRENT ROW) AS nv
+FROM ignore_nulls_t)
+SELECT count(r.nv), sum(CASE WHEN r.fc = 65 THEN 1 ELSE 0 END),
+  sum(CASE WHEN r.nv IS DISTINCT FROM CASE WHEN r.fc >= 65 THEN e.v END THEN 1 ELSE 0 END)
+FROM r LEFT JOIN r e ON e.p = r.p AND e.v IS NOT NULL AND e.c = r.c - 64;
+----
+14807 7372 0
+
 query II
 SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END)
 FROM (SELECT
