@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    Array, AsArray, BooleanArray, BooleanBufferBuilder, GenericListArray, OffsetSizeTrait,
-};
+use arrow::array::{Array, AsArray, BooleanArray, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::DataType;
+use datafusion_common::utils::rows_have_nulls;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -114,13 +113,8 @@ fn compute_row_has_nulls(haystack: &dyn Array) -> Result<BooleanBuffer> {
             let list = haystack.as_fixed_size_list();
             let buf = match list.values().nulls() {
                 Some(nulls) => {
-                    let validity = nulls.inner();
                     let vl = list.value_length() as usize;
-                    let mut builder = BooleanBufferBuilder::new(list.len());
-                    for i in 0..list.len() {
-                        builder.append(validity.slice(i * vl, vl).count_set_bits() < vl);
-                    }
-                    builder.finish()
+                    rows_have_nulls(nulls, 0, (0..list.len()).map(|row| (row + 1) * vl))
                 }
                 None => BooleanBuffer::new_unset(list.len()),
             };
@@ -136,15 +130,12 @@ fn generic_list_row_has_nulls<O: OffsetSizeTrait>(
 ) -> Result<BooleanBuffer> {
     let buf = match list.values().nulls() {
         Some(nulls) => {
-            let validity = nulls.inner();
             let offsets = list.offsets();
-            let mut builder = BooleanBufferBuilder::new(list.len());
-            for i in 0..list.len() {
-                let s = offsets[i].as_usize();
-                let len = offsets[i + 1].as_usize() - s;
-                builder.append(validity.slice(s, len).count_set_bits() < len);
-            }
-            builder.finish()
+            rows_have_nulls(
+                nulls,
+                offsets[0].as_usize(),
+                offsets[1..].iter().map(|end| end.as_usize()),
+            )
         }
         None => BooleanBuffer::new_unset(list.len()),
     };
@@ -159,5 +150,36 @@ fn mask_with_list_nulls(
     match list_nulls {
         Some(n) => &buf & n.inner(),
         None => buf,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{ArrayRef, FixedSizeListArray, Int32Array, ListArray};
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::Field;
+
+    #[test]
+    fn row_has_nulls_on_sliced_lists() -> Result<()> {
+        // Every 7th element and every 6th list row are NULL.
+        let values = Arc::new(Int32Array::from_iter(
+            (0..300).map(|i| (i % 7 != 3).then_some(i)),
+        ));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::from_lengths((0..100).map(|row| row % 5)),
+            Arc::clone(&values) as ArrayRef,
+            Some(NullBuffer::from_iter((0..100).map(|row| row % 6 != 0))),
+        );
+        let fixed = FixedSizeListArray::new(field, 3, values, None);
+        for array in [Arc::new(list) as ArrayRef, Arc::new(fixed)] {
+            // The first visible element is past the first 64-bit word.
+            let full = compute_row_has_nulls(array.as_ref())?;
+            let sliced = compute_row_has_nulls(array.slice(37, 50).as_ref())?;
+            assert_eq!(sliced, full.slice(37, 50), "{}", array.data_type());
+        }
+        Ok(())
     }
 }

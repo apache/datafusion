@@ -25,7 +25,9 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::utils::{ListCoercion, offset_span, offset_span_len};
+use datafusion_common::utils::{
+    ListCoercion, SetBitCounter, offset_span, offset_span_len,
+};
 use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
@@ -574,6 +576,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
     let needle = scalar_needle.to_array_of_size(1)?;
     let remove_mask = arrow_ord::cmp::not_distinct(&values_slice, &Scalar::new(needle))?;
     let remove_bits = remove_mask.values();
+    let mut matches = SetBitCounter::new(remove_bits.bit_chunks().iter_padded());
 
     for (row_index, offset_window) in list_offsets.windows(2).enumerate() {
         if nulls.as_ref().is_some_and(|nulls| nulls.is_null(row_index)) {
@@ -585,8 +588,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         let end = offset_window[1].to_usize().unwrap() - first_offset;
         let row_len = end - start;
 
-        let row_remove_bits = remove_bits.slice(start, row_len);
-        let num_to_remove = row_remove_bits.count_set_bits();
+        let num_to_remove = matches.count_range(start, end);
 
         if num_to_remove == 0 {
             mutable.try_extend(0, start, end)?;
@@ -595,6 +597,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         }
 
         let removals_to_apply = max_removals.min(num_to_remove as i64) as usize;
+        let row_remove_bits = remove_bits.slice(start, row_len);
 
         // Iterate only over the removal positions via set_indices. This is
         // efficient when the number of removals is small relative to the row
@@ -1157,6 +1160,17 @@ mod tests {
             let element: ArrayRef =
                 Arc::new(arrow::array::Float64Array::from(vec![3.0; input.len()]));
             super::array_remove_internal(input, &element, &vec![Some(1); input.len()])
+        })
+    }
+
+    #[test]
+    fn test_sliced_capacity_scalar_needle() -> datafusion_common::Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            super::array_remove_with_scalar_args(
+                input,
+                &ScalarValue::Float64(Some(4.0)),
+                1,
+            )
         })
     }
 }

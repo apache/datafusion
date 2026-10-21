@@ -38,7 +38,7 @@ use arrow::array::{
     MutableArrayData, PrimitiveArray, layout, make_array,
 };
 use arrow::array::{LargeListViewArray, ListViewArray};
-use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow::buffer::{BooleanBuffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
 use arrow::compute::{SortColumn, SortOptions, nullif, partition};
@@ -1266,6 +1266,94 @@ pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usi
     (start, offsets.last().as_usize() - start)
 }
 
+/// Counts the set bits that precede a sequence of non-decreasing positions in a
+/// bitmap, reading each 64-bit word of the bitmap once.
+///
+/// This suits a single pass over the rows of a list, where each call costs a
+/// mask and a popcount when the position is in the current word. `words` yields
+/// the bitmap's 64-bit words, starting with its first bit, such as
+/// [`BooleanBuffer::bit_chunks`] with [`BitChunks::iter_padded`].
+///
+/// [`BooleanBuffer::bit_chunks`]: arrow::buffer::BooleanBuffer::bit_chunks
+/// [`BitChunks::iter_padded`]: arrow::util::bit_chunk_iterator::BitChunks::iter_padded
+///
+/// ```
+/// # use arrow::buffer::BooleanBuffer;
+/// # use datafusion_common::utils::SetBitCounter;
+/// let bits = BooleanBuffer::from(vec![true, false, true, true, false]);
+/// let mut counter = SetBitCounter::new(bits.bit_chunks().iter_padded());
+/// assert_eq!(counter.count_before(1), 1);
+/// assert_eq!(counter.count_range(1, 5), 2);
+/// ```
+pub struct SetBitCounter<I> {
+    /// The bitmap's remaining words, with the final word padded with zeros.
+    words: I,
+    /// The word containing the most recent position.
+    word: u64,
+    /// Position of the first bit of `word`.
+    word_start: usize,
+    /// Set bits before `word_start`.
+    count_before_word: usize,
+}
+
+impl<I: Iterator<Item = u64>> SetBitCounter<I> {
+    pub fn new(mut words: I) -> Self {
+        let word = words.next().unwrap_or(0);
+        Self {
+            words,
+            word,
+            word_start: 0,
+            count_before_word: 0,
+        }
+    }
+
+    /// Returns the number of set bits before `end`. `end` must be no less than
+    /// in the previous call, and no greater than the bitmap's length.
+    #[inline]
+    pub fn count_before(&mut self, end: usize) -> usize {
+        debug_assert!(end >= self.word_start);
+        while end - self.word_start >= 64 {
+            self.count_before_word += self.word.count_ones() as usize;
+            self.word = self.words.next().unwrap_or(0);
+            self.word_start += 64;
+        }
+        let mask = (1u64 << (end - self.word_start)) - 1;
+        self.count_before_word + (self.word & mask).count_ones() as usize
+    }
+
+    /// Returns the number of set bits in `start..end`. `start` must be no less
+    /// than the position in the previous call.
+    #[inline]
+    pub fn count_range(&mut self, start: usize, end: usize) -> usize {
+        let before = self.count_before(start);
+        self.count_before(end) - before
+    }
+}
+
+/// Returns a bitmap whose bit `i` is set if row `i` of a list contains a NULL
+/// element, given the elements' validity `nulls`. The rows are consecutive: the
+/// first starts at element `start`, and each ends at the next value of `ends`,
+/// such as the offsets of a list after its first.
+pub fn rows_have_nulls(
+    nulls: &NullBuffer,
+    start: usize,
+    mut ends: impl ExactSizeIterator<Item = usize>,
+) -> BooleanBuffer {
+    // Count from `start`, which can be far into `nulls` when the list is sliced.
+    let visible = nulls.inner().slice(start, nulls.len() - start);
+    let mut valid = SetBitCounter::new(visible.bit_chunks().iter_padded());
+    let mut row_start = start;
+    let mut valid_before_row = 0;
+    // `collect_bool` visits the rows in order, as the counter requires.
+    BooleanBuffer::collect_bool(ends.len(), |_| {
+        let row_end = ends.next().unwrap_or(row_start);
+        let valid_through_row = valid.count_before(row_end - start);
+        let has_null = valid_through_row - valid_before_row < row_end - row_start;
+        (row_start, valid_before_row) = (row_end, valid_through_row);
+        has_null
+    })
+}
+
 /// Returns the inner values of a list, or an error otherwise
 /// For [`ListArray`] and [`LargeListArray`], if it's sliced, it returns a
 /// sliced array too. Therefore, too reconstruct a list using it,
@@ -1620,6 +1708,51 @@ mod tests {
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
+
+    #[test]
+    fn rows_have_nulls_matches_per_row_null_counts() {
+        // Rows of 0 to 6 elements where every 7th element is NULL, read from
+        // element 24 on, partway through the first 64-bit word.
+        let nulls = NullBuffer::from_iter((0..400).map(|i| i % 7 != 3));
+        let offsets = OffsetBuffer::<i32>::from_lengths((0..90).map(|row| row % 7));
+        let offsets = offsets.slice(10, 70);
+        let start = offsets[0] as usize;
+        assert_eq!(start, 24);
+        let has_nulls =
+            rows_have_nulls(&nulls, start, offsets[1..].iter().map(|&end| end as usize));
+        let expected = offsets
+            .windows(2)
+            .map(|w| {
+                nulls
+                    .slice(w[0] as usize, (w[1] - w[0]) as usize)
+                    .null_count()
+                    != 0
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(has_nulls.iter().collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn set_bit_counter_matches_per_position_counts() {
+        // A sliced bitmap whose length is a whole number of 64-bit words.
+        let bits =
+            BooleanBuffer::collect_bool(200, |i| i % 3 != 0 && i % 7 != 0).slice(5, 192);
+        let mut counter = SetBitCounter::new(bits.bit_chunks().iter_padded());
+        let mut expected = 0;
+        for end in 0..=bits.len() {
+            assert_eq!(counter.count_before(end), expected, "end {end}");
+            if end < bits.len() {
+                expected += usize::from(bits.value(end));
+            }
+        }
+
+        // Ranges that skip some positions and span several words.
+        let mut counter = SetBitCounter::new(bits.bit_chunks().iter_padded());
+        for (start, end) in [(0, 0), (3, 10), (10, 70), (100, 100), (130, 192)] {
+            let expected = (start..end).filter(|&i| bits.value(i)).count();
+            assert_eq!(counter.count_range(start, end), expected, "{start}..{end}");
+        }
+    }
 
     #[test]
     fn test_list_scalar_cast_preserves_target_element_metadata() -> Result<()> {

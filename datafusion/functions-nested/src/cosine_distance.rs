@@ -17,8 +17,11 @@
 
 //! [`ScalarUDFImpl`] definitions for cosine_distance function.
 
-use crate::utils::{make_scalar_function, needs_norm_scale, norm_scale};
+use crate::utils::{
+    make_scalar_function, needs_norm_scale, norm_scale, rows_with_null_elements,
+};
 use arrow::array::{Array, ArrayRef, Float64Array, OffsetSizeTrait};
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::{
     DataType,
     DataType::{FixedSizeList, LargeList, List, Null},
@@ -167,6 +170,9 @@ fn general_cosine_distance<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
     let offsets1 = list_array1.value_offsets();
     let offsets2 = list_array2.value_offsets();
 
+    let null_rows1 = rows_with_null_elements(list_array1);
+    let null_rows2 = rows_with_null_elements(list_array2);
+
     let mut builder = Float64Array::builder(list_array1.len());
     for row in 0..list_array1.len() {
         if list_array1.is_null(row) || list_array2.is_null(row) {
@@ -187,15 +193,15 @@ fn general_cosine_distance<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
             );
         }
 
-        let slice1 = values1.slice(start1, len1);
-        let slice2 = values2.slice(start2, len2);
-        if slice1.null_count() != 0 || slice2.null_count() != 0 {
+        let has_null =
+            |rows: &Option<BooleanBuffer>| rows.as_ref().is_some_and(|r| r.value(row));
+        if has_null(&null_rows1) || has_null(&null_rows2) {
             builder.append_null();
             continue;
         }
 
-        let vals1 = slice1.values();
-        let vals2 = slice2.values();
+        let vals1 = &values1.values()[start1..end1];
+        let vals2 = &values2.values()[start2..end2];
 
         let (mut dot, mut sq1, mut sq2) = dot_and_squares(vals1, vals2, 1.0, 1.0);
         // Cosine distance does not change when either vector is multiplied by a
@@ -254,4 +260,16 @@ fn dot_and_squares(
         sq2 += b * b;
     }
     (dot, sq1, sq2)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    #[test]
+    fn test_sliced_list() -> datafusion_common::Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            super::cosine_distance_inner(&[Arc::clone(input), Arc::clone(input)])
+        })
+    }
 }

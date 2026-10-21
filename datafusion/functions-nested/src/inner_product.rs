@@ -17,8 +17,9 @@
 
 //! [`ScalarUDFImpl`] definitions for inner_product function.
 
-use crate::utils::make_scalar_function;
+use crate::utils::{make_scalar_function, rows_with_null_elements};
 use arrow::array::{Array, ArrayRef, Float64Array, OffsetSizeTrait};
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::{
     DataType,
     DataType::{FixedSizeList, LargeList, List, Null},
@@ -173,6 +174,9 @@ fn general_inner_product<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Arra
     let offsets1 = list_array1.value_offsets();
     let offsets2 = list_array2.value_offsets();
 
+    let null_rows1 = rows_with_null_elements(list_array1);
+    let null_rows2 = rows_with_null_elements(list_array2);
+
     let mut builder = Float64Array::builder(list_array1.len());
     for row in 0..list_array1.len() {
         if list_array1.is_null(row) || list_array2.is_null(row) {
@@ -193,15 +197,15 @@ fn general_inner_product<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Arra
             );
         }
 
-        let slice1 = values1.slice(start1, len1);
-        let slice2 = values2.slice(start2, len2);
-        if slice1.null_count() != 0 || slice2.null_count() != 0 {
+        let has_null =
+            |rows: &Option<BooleanBuffer>| rows.as_ref().is_some_and(|r| r.value(row));
+        if has_null(&null_rows1) || has_null(&null_rows2) {
             builder.append_null();
             continue;
         }
 
-        let vals1 = slice1.values();
-        let vals2 = slice2.values();
+        let vals1 = &values1.values()[start1..end1];
+        let vals2 = &values2.values()[start2..end2];
 
         let mut dot = 0.0;
         for i in 0..len1 {
@@ -211,4 +215,16 @@ fn general_inner_product<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Arra
     }
 
     Ok(Arc::new(builder.finish()) as ArrayRef)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    #[test]
+    fn test_sliced_list() -> datafusion_common::Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            super::inner_product_inner(&[Arc::clone(input), Arc::clone(input)])
+        })
+    }
 }

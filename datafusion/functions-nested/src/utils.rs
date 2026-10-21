@@ -30,7 +30,9 @@ use datafusion_common::cast::{
     as_fixed_size_list_array, as_float64_array, as_generic_list_array,
     as_large_list_array, as_large_list_view_array, as_list_array, as_list_view_array,
 };
-use datafusion_common::utils::{offset_span, offset_span_len};
+use datafusion_common::utils::{
+    SetBitCounter, offset_span, offset_span_len, rows_have_nulls,
+};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
 use datafusion_expr::ColumnarValue;
@@ -79,34 +81,51 @@ pub(crate) fn prepare_list_filter<O: OffsetSizeTrait>(
         let mut kept_count = 0;
         // Set bits stored under NULL rows, which the result does not keep.
         let mut hidden_count = 0;
+        // The valid rows so far end at element `covered`, with `set_before_covered`
+        // set bits before it. Elements between there and the next valid row
+        // belong to NULL rows, which are handled together when that valid row
+        // is reached, or after the last row.
+        let mut covered = 0;
+        let mut set_before_covered = 0;
         // NULL list rows are usually empty, so reuse `keep` until a NULL row
         // stores elements. Copy the bits of the preceding rows when that first
         // happens.
         let mut keep_mask: Option<BooleanBufferBuilder> = None;
-        for (row, window) in list_offsets.windows(2).enumerate() {
-            let start = window[0].as_usize() - first_offset;
-            let end = window[1].as_usize() - first_offset;
-            let len = end - start;
-            let bit_start = keep.offset() + start;
-            if list.is_valid(row) {
-                kept_count = set_bits.count_before(end) - hidden_count;
-                if let Some(keep_mask) = &mut keep_mask {
-                    keep_mask
-                        .append_packed_range(bit_start..bit_start + len, keep.values());
-                }
-            } else if len != 0 {
-                let set_before_row = set_bits.count_before(start);
-                hidden_count += set_bits.count_before(end) - set_before_row;
+        let clear_null_rows =
+            |keep_mask: &mut Option<BooleanBufferBuilder>, start: usize, end: usize| {
                 keep_mask
                     .get_or_insert_with(|| {
                         let mut builder = BooleanBufferBuilder::new(keep.len());
-                        builder
-                            .append_packed_range(keep.offset()..bit_start, keep.values());
+                        builder.append_packed_range(
+                            keep.offset()..keep.offset() + start,
+                            keep.values(),
+                        );
                         builder
                     })
-                    .append_n(len, false);
+                    .append_n(end - start, false);
+            };
+        for (row, window) in list_offsets.windows(2).enumerate() {
+            if list.is_valid(row) {
+                let start = window[0].as_usize() - first_offset;
+                let end = window[1].as_usize() - first_offset;
+                if start != covered {
+                    hidden_count += set_bits.count_before(start) - set_before_covered;
+                    clear_null_rows(&mut keep_mask, covered, start);
+                }
+                set_before_covered = set_bits.count_before(end);
+                kept_count = set_before_covered - hidden_count;
+                if let Some(keep_mask) = &mut keep_mask {
+                    keep_mask.append_packed_range(
+                        keep.offset() + start..keep.offset() + end,
+                        keep.values(),
+                    );
+                }
+                covered = end;
             }
             offsets.push(O::usize_as(kept_count));
+        }
+        if covered != span_len {
+            clear_null_rows(&mut keep_mask, covered, span_len);
         }
         keep_mask
             .map(BooleanBufferBuilder::build)
@@ -118,45 +137,6 @@ pub(crate) fn prepare_list_filter<O: OffsetSizeTrait>(
     // element span, which fits in `O`, so converting it to `O` cannot overflow.
     let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
     (offsets, keep_mask)
-}
-
-/// Counts the set bits that precede a sequence of non-decreasing positions in a
-/// bitmap, reading each 64-bit word of the bitmap once.
-struct SetBitCounter<I> {
-    /// The bitmap's remaining words, with the final word padded with zeros.
-    words: I,
-    /// The word containing the most recent position.
-    word: u64,
-    /// Position of the first bit of `word`.
-    word_start: usize,
-    /// Set bits before `word_start`.
-    count_before_word: usize,
-}
-
-impl<I: Iterator<Item = u64>> SetBitCounter<I> {
-    fn new(mut words: I) -> Self {
-        let word = words.next().unwrap_or(0);
-        Self {
-            words,
-            word,
-            word_start: 0,
-            count_before_word: 0,
-        }
-    }
-
-    /// Returns the number of set bits before `end`. `end` must be no less than
-    /// in the previous call, and no greater than the bitmap's length.
-    #[inline]
-    fn count_before(&mut self, end: usize) -> usize {
-        debug_assert!(end >= self.word_start);
-        while end - self.word_start >= 64 {
-            self.count_before_word += self.word.count_ones() as usize;
-            self.word = self.words.next().unwrap_or(0);
-            self.word_start += 64;
-        }
-        let mask = (1u64 << (end - self.word_start)) - 1;
-        self.count_before_word + (self.word & mask).count_ones() as usize
-    }
 }
 
 /// Computes the return type of a function that produces a list with the same
@@ -631,6 +611,20 @@ pub(crate) fn needs_norm_scale(sum_of_squares: f64, len: usize) -> bool {
     !(min_unscaled..f64::INFINITY).contains(&sum_of_squares)
 }
 
+/// Returns a bitmap whose bit `i` is set if row `i` of `list` contains a NULL
+/// element, or `None` if the elements have no validity bitmap.
+pub(crate) fn rows_with_null_elements<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+) -> Option<BooleanBuffer> {
+    let nulls = list.values().nulls()?;
+    let offsets = list.offsets();
+    Some(rows_have_nulls(
+        nulls,
+        offsets[0].as_usize(),
+        offsets[1..].iter().map(|end| end.as_usize()),
+    ))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -758,21 +752,6 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
-    fn set_bit_counter_matches_per_position_counts() {
-        // A sliced bitmap whose length is a whole number of 64-bit words.
-        let bits =
-            BooleanBuffer::collect_bool(200, |i| i % 3 != 0 && i % 7 != 0).slice(5, 192);
-        let mut counter = SetBitCounter::new(bits.bit_chunks().iter_padded());
-        let mut expected = 0;
-        for end in 0..=bits.len() {
-            assert_eq!(counter.count_before(end), expected, "end {end}");
-            if end < bits.len() {
-                expected += usize::from(bits.value(end));
-            }
-        }
-    }
-
     /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
     #[test]
     fn test_align_array_dimensions() {
@@ -874,7 +853,9 @@ pub(crate) mod tests {
     pub(crate) fn check_sliced_list_behavior(
         run: impl Fn(&ArrayRef) -> Result<ArrayRef>,
     ) -> Result<()> {
-        let padding = 8192;
+        // Not a multiple of 64, so the visible elements start partway through a
+        // 64-bit word of the child's validity bitmap.
+        let padding = 8195;
         let visible = vec![Some(3.0), None, Some(4.0), Some(9.0), Some(9.0)];
         let values = Float64Array::from_iter(
             std::iter::repeat_n(Some(1.0), padding)
