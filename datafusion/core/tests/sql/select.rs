@@ -388,6 +388,79 @@ async fn test_query_parameters_with_metadata() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_limit_offset_parameters_named() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx
+        .sql(
+            "SELECT value FROM (VALUES (10), (20), (30)) AS t(value) \
+             ORDER BY value LIMIT $rows OFFSET $skip",
+        )
+        .await?;
+    assert_eq!(
+        df.logical_plan().get_parameter_types()?,
+        HashMap::from([
+            ("$rows".to_string(), Some(DataType::Int64)),
+            ("$skip".to_string(), Some(DataType::Int64)),
+        ])
+    );
+    let results = df
+        .with_param_values(vec![
+            ("rows", ScalarValue::Int64(Some(1))),
+            ("skip", ScalarValue::Int64(Some(1))),
+        ])?
+        .collect()
+        .await?;
+    datafusion::assert_batches_eq!(
+        [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 20    |",
+            "+-------+"
+        ],
+        &results
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_limit_offset_parameters_keep_field_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+    let metadata = HashMap::from([("some_key".to_string(), "some_value".to_string())]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("value", DataType::Int32, false).with_metadata(metadata.clone()),
+    ]));
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 1]))])?,
+    )?;
+
+    for clause in ["LIMIT", "OFFSET"] {
+        let sql = format!("SELECT $1 AS value FROM t WHERE value = $1 {clause} $1");
+        let df = ctx.sql(&sql).await?;
+        let results = df
+            .with_param_values(ParamValues::List(vec![ScalarAndMetadata::new(
+                ScalarValue::Int32(Some(1)),
+                Some(metadata.clone().into()),
+            )]))?
+            .collect()
+            .await?;
+        datafusion::assert_batches_eq!(
+            [
+                "+-------+",
+                "| value |",
+                "+-------+",
+                "| 1     |",
+                "+-------+"
+            ],
+            &results
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_version_function() {
     let expected_version = format!(
         "Apache DataFusion {}, {} on {}",

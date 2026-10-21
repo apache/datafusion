@@ -399,6 +399,8 @@ where
         }
         Some(flags_array) => {
             let flags_array_iter = ArrayIter::new(flags_array);
+            // Reused across rows to build the pattern cache key
+            let mut pattern_buf = String::new();
 
             let result_iter = string_array_iter
                 .zip(pattern_array_iter)
@@ -412,26 +414,27 @@ where
                             // format flags into rust pattern
                             let replace_all = flags.contains('g');
                             let flags = flags.replace('g', "");
-                            let pattern = if flags.is_empty() {
-                                pattern.to_string()
-                            } else {
-                                format!("(?{flags}){pattern}")
-                            };
+                            pattern_buf.clear();
+                            if !flags.is_empty() {
+                                pattern_buf.push_str("(?");
+                                pattern_buf.push_str(&flags);
+                                pattern_buf.push(')');
+                            }
+                            pattern_buf.push_str(pattern);
+                            let pattern = pattern_buf.as_str();
 
                             // if patterns hashmap already has regexp then use else create and return
-                            let re = match patterns.get(&pattern) {
+                            let re = match patterns.get(pattern) {
                                 Some(re) => Ok(re),
-                                None => match compile_regex(
-                                    "regexp_replace",
-                                    pattern.as_str(),
-                                    None,
-                                ) {
-                                    Ok(re) => {
-                                        patterns.insert(pattern.clone(), re);
-                                        Ok(patterns.get(&pattern).unwrap())
+                                None => {
+                                    match compile_regex("regexp_replace", pattern, None) {
+                                        Ok(re) => {
+                                            patterns.insert(pattern.to_string(), re);
+                                            Ok(patterns.get(pattern).unwrap())
+                                        }
+                                        Err(err) => Err(err),
                                     }
-                                    Err(err) => Err(err),
-                                },
+                                }
                             };
 
                             Some(re.map(|re| {

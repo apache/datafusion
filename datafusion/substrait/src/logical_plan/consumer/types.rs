@@ -374,7 +374,7 @@ fn from_substrait_struct_type(
     dfs_names: &[String],
     name_idx: &mut usize,
 ) -> datafusion::common::Result<Fields> {
-    let mut fields = vec![];
+    let mut fields = Vec::with_capacity(s.types.len());
     for (i, f) in s.types.iter().enumerate() {
         let name = next_struct_field_name(i, dfs_names, name_idx)?;
         let field = substrait_type_to_field(consumer, f, dfs_names, name_idx)?

@@ -65,6 +65,7 @@ mod join_filter;
 /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
 #[doc(hidden)]
 pub mod join_hash_map;
+pub mod key_range_bitmap;
 
 use array_map::ArrayMap;
 use utils::JoinHashMapType;
@@ -78,6 +79,13 @@ use utils::JoinHashMapType;
 /// contains rows.
 ///
 /// [`NullEquality::NullEqualsNothing`]: datafusion_common::NullEquality::NullEqualsNothing
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub enum Map {
     HashMap(Box<dyn JoinHashMapType>),
     ArrayMap(ArrayMap),
@@ -97,8 +105,6 @@ impl Map {
         self.num_of_distinct_key() == 0
     }
 }
-
-pub(crate) type MapOffset = (usize, Option<u64>);
 
 #[cfg(test)]
 pub mod test_utils;

@@ -824,14 +824,14 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let (val_arr, orderings, is_sets) = self.take_state(emit_to)?;
-        let mut result = Vec::with_capacity(self.orderings.len() + 2);
+        let mut result = Vec::with_capacity(self.ordering_req.len() + 2);
 
         result.push(val_arr);
 
         let ordering_cols = {
             let mut ordering_cols = Vec::with_capacity(self.ordering_req.len());
             for _ in 0..self.ordering_req.len() {
-                ordering_cols.push(Vec::with_capacity(self.orderings.len()));
+                ordering_cols.push(Vec::with_capacity(orderings.len()));
             }
             for row in orderings.into_iter() {
                 debug_assert_eq!(row.len(), self.ordering_req.len());
@@ -900,17 +900,12 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
+        let filter = opt_filter
+            .cloned()
+            .unwrap_or_else(|| BooleanArray::from(vec![true; values[0].len()]));
         let mut result = values.to_vec();
-        match opt_filter {
-            Some(f) => {
-                result.push(Arc::new(f.clone()));
-                Ok(result)
-            }
-            None => {
-                result.push(Arc::new(BooleanArray::from(vec![true; values[0].len()])));
-                Ok(result)
-            }
-        }
+        result.push(Arc::new(filter));
+        Ok(result)
     }
 }
 
@@ -1096,7 +1091,8 @@ impl FirstValueAccumulator {
 
 impl Accumulator for FirstValueAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut result = vec![self.first.clone()];
+        let mut result = Vec::with_capacity(self.orderings.len() + 2);
+        result.push(self.first.clone());
         result.extend(self.orderings.iter().cloned());
         result.push(ScalarValue::from(self.is_set));
         Ok(result)
@@ -1489,8 +1485,9 @@ impl LastValueAccumulator {
 
 impl Accumulator for LastValueAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut result = vec![self.last.clone()];
-        result.extend(self.orderings.clone());
+        let mut result = Vec::with_capacity(self.orderings.len() + 2);
+        result.push(self.last.clone());
+        result.extend(self.orderings.iter().cloned());
         result.push(ScalarValue::from(self.is_set));
         Ok(result)
     }
