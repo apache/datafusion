@@ -48,10 +48,7 @@ impl<'a> ShortenInListSimplifier<'a> {
                 | DataType::Float32
                 | DataType::Float64
                 | DataType::FixedSizeBinary(1 | 2 | 4 | 8 | 16)
-        ) && list.iter().all(|expr| {
-            expr.as_literal()
-                .is_some_and(|value| value.data_type() == data_type)
-        })
+        ) && list.iter().all(|expr| expr.as_literal().is_some())
     }
 }
 

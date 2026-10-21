@@ -5172,11 +5172,12 @@ mod tests {
     }
 
     #[test]
-    fn simplify_short_inlist_mismatched_literals() {
-        // c3 is Int64; these Int32 literals have not been coerced.
-        let expr = in_list(col("c3"), vec![lit(1_i32), lit(2_i32)], false);
-        let expected = col("c3").eq(lit(1_i32)).or(col("c3").eq(lit(2_i32)));
-        assert_eq!(simplify(expr), expected);
+    fn simplify_short_inlist_coerced_literals() {
+        for negated in [false, true] {
+            let expr = in_list(col("c3"), vec![lit(1_i32), lit(2_i32)], negated);
+            let expected = in_list(col("c3"), vec![lit(1_i64), lit(2_i64)], negated);
+            assert_eq!(simplify(coerce(expr)), expected);
+        }
     }
 
     #[test]
