@@ -411,18 +411,11 @@ struct FirstLastGroupsAccumulator<S: ValueState> {
     // and the pre-ordered fast path:
     // extreme_of_each_group_buf.0[group_idx] -> idx_in_val
     // only valid if extreme_of_each_group_buf.1[group_idx] == true
+    // Kept all-false between batches. Each path clears the bits it set.
     extreme_of_each_group_buf: (Vec<usize>, BooleanBufferBuilder),
-    // Set by `get_filtered_extreme_of_each_group` (merge_batch /
-    // convert_to_state), which clears the scoreboard at its start but leaves
-    // its winners' bits set on return. `update_batch_pre_ordered` keeps the
-    // scoreboard all-false between its own batches, but the two can
-    // interleave on one instance (the aggregation stream calls merge_batch on
-    // the same accumulators when replaying spilled state), so the fast path
-    // does one full reset when this is set.
-    extreme_buf_dirty: bool,
-    // Batch-local list of groups touched by `update_batch_pre_ordered`,
-    // reused across batches. It lets winner collection and the scoreboard
-    // reset run in O(groups touched by the batch) instead of
+    // Batch-local list of groups touched by the current batch, reused across
+    // batches. It lets winner collection and the scoreboard reset run in
+    // O(groups touched by the batch) instead of
     // O(total_num_groups): with 1M allocated groups and 64 touched per
     // batch, a full-scoreboard sweep per batch dominates the runtime.
     touched_groups_buf: Vec<usize>,
@@ -472,7 +465,6 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             is_sets: BooleanBufferBuilder::new(0),
             size_of_orderings: 0,
             extreme_of_each_group_buf: (Vec::new(), BooleanBufferBuilder::new(0)),
-            extreme_buf_dirty: false,
             touched_groups_buf: Vec::new(),
             pick_first_in_group,
             is_input_pre_ordered,
@@ -535,6 +527,10 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
 
         self.extreme_of_each_group_buf.0.resize(new_size, 0);
         self.extreme_of_each_group_buf.1.resize(new_size);
+        debug_assert_eq!(
+            self.extreme_of_each_group_buf.1.len(),
+            self.extreme_of_each_group_buf.0.len()
+        );
     }
 
     fn update_state(
@@ -591,11 +587,9 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         vals: &ArrayRef,
         is_set_arr: Option<&BooleanArray>,
     ) -> Result<Vec<(usize, usize)>> {
-        // Set all values in extreme_of_each_group_buf.1 to false.
-        self.extreme_of_each_group_buf.1.truncate(0);
-        self.extreme_of_each_group_buf
-            .1
-            .append_n(self.is_sets.len(), false);
+        // The scoreboard is all-false between batches, so the groups this batch
+        // touches are the ones in `touched_groups_buf`.
+        debug_assert!(self.touched_groups_buf.is_empty());
 
         // No need to call `clear` since `self.extreme_of_each_group_buf.0[group_idx]`
         // is only valid when `self.extreme_of_each_group_buf.1[group_idx] == true`.
@@ -635,10 +629,11 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
                 continue;
             }
 
-            let is_valid = self.extreme_of_each_group_buf.1.get_bit(group_idx);
+            let touched_this_batch = self.extreme_of_each_group_buf.1.get_bit(group_idx);
 
-            if !is_valid {
+            if !touched_this_batch {
                 self.extreme_of_each_group_buf.1.set_bit(group_idx, true);
+                self.touched_groups_buf.push(group_idx);
                 self.extreme_of_each_group_buf.0[group_idx] = idx_in_val;
             } else {
                 let ordering = comparator
@@ -652,19 +647,22 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             }
         }
 
-        // Winners' bits stay set on return; tell the pre-ordered fast path
-        // that the scoreboard needs a reset before it can trust its all-false
-        // invariant again.
-        self.extreme_buf_dirty = true;
+        // The winners are the groups this batch touched, in the order they were
+        // first touched. The callers only do per-group work.
+        let touched = std::mem::take(&mut self.touched_groups_buf);
+        let mut winners = Vec::with_capacity(touched.len());
+        for &group_idx in &touched {
+            winners.push((group_idx, self.extreme_of_each_group_buf.0[group_idx]));
+        }
 
-        Ok(self
-            .extreme_of_each_group_buf
-            .0
-            .iter()
-            .enumerate()
-            .filter(|(group_idx, _)| self.extreme_of_each_group_buf.1.get_bit(*group_idx))
-            .map(|(group_idx, idx_in_val)| (group_idx, *idx_in_val))
-            .collect::<Vec<_>>())
+        // Restore the all-false invariant by clearing only the touched bits.
+        for &group_idx in &touched {
+            self.extreme_of_each_group_buf.1.set_bit(group_idx, false);
+        }
+        self.touched_groups_buf = touched;
+        self.touched_groups_buf.clear();
+
+        Ok(winners)
     }
 
     /// Comparison-free `update_batch` for pre-ordered input.
@@ -708,15 +706,6 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         // `total_num_groups` -- with 1M allocated groups and 64 touched, a
         // full sweep turns a ~13us batch into ~400us and erases the win.
         debug_assert!(self.touched_groups_buf.is_empty());
-        if self.extreme_buf_dirty {
-            // A merge (spill replay) ran on this instance and left its
-            // winners' bits set; restore the all-false invariant once.
-            self.extreme_of_each_group_buf.1.truncate(0);
-            self.extreme_of_each_group_buf
-                .1
-                .append_n(self.is_sets.len(), false);
-            self.extreme_buf_dirty = false;
-        }
 
         for (idx_in_val, &group_idx) in group_indices.iter().enumerate() {
             // A row passes the FILTER clause only when the predicate is
@@ -750,6 +739,11 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         // Take the buffer to appease the borrow checker; `update_state`
         // needs `&mut self`.
         let touched = std::mem::take(&mut self.touched_groups_buf);
+        // Restore the all-false invariant by clearing only the touched bits.
+        // Do this before the loop below, which can fail.
+        for &group_idx in &touched {
+            self.extreme_of_each_group_buf.1.set_bit(group_idx, false);
+        }
         for &group_idx in &touched {
             let idx = self.extreme_of_each_group_buf.0[group_idx];
             extract_row_at_idx_to_buf(
@@ -758,10 +752,6 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
                 &mut ordering_buf,
             )?;
             self.update_state(group_idx, &ordering_buf, vals, idx)?;
-        }
-        // Restore the all-false invariant by clearing only the touched bits.
-        for &group_idx in &touched {
-            self.extreme_of_each_group_buf.1.set_bit(group_idx, false);
         }
         self.touched_groups_buf = touched;
         self.touched_groups_buf.clear();
@@ -894,6 +884,7 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
             + self.size_of_orderings
             + self.extreme_of_each_group_buf.0.capacity() * size_of::<usize>()
             + self.extreme_of_each_group_buf.1.capacity() / 8
+            + self.touched_groups_buf.capacity() * size_of::<usize>()
     }
     fn convert_to_state(
         &self,
@@ -2951,10 +2942,10 @@ mod tests {
     }
 
     /// The aggregation stream calls `merge_batch` on the same accumulators
-    /// when replaying spilled state, and the tournament helper leaves its
-    /// winners' scoreboard bits set. A later pre-ordered `update_batch` must
-    /// not mistake those for "touched in this batch", or a merged group's
-    /// newer row is dropped from the winner list.
+    /// when replaying spilled state, so the tournament path and the pre-ordered
+    /// fast path can interleave on one accumulator. A later pre-ordered
+    /// `update_batch` must not treat a merged group as touched in this batch,
+    /// or the merged group's newer row is dropped from the winner list.
     #[test]
     fn pre_ordered_update_after_merge_interleave() -> Result<()> {
         let merged_state = {
@@ -2970,6 +2961,97 @@ mod tests {
         acc.update_batch(&vo_batch(&[Some(500)], &[5], &[1]), &[0], None, 1)?;
         let out = acc.evaluate(EmitTo::All)?;
         assert_eq!(int64_values(&out), vec![Some(500)]);
+        Ok(())
+    }
+
+    /// The winners of a batch are exactly the groups that batch touched, and
+    /// no other group is reported.
+    #[test]
+    fn winners_are_the_groups_the_batch_touched() -> Result<()> {
+        // The total number of groups, and the groups the batches touch.
+        let cases = [
+            (1usize, vec![0usize]),
+            (63, vec![0, 62]),
+            (64, vec![0, 63]),
+            (65, vec![0, 63, 64]),
+            (127, vec![0, 63, 64, 126]),
+            (128, vec![0, 63, 64, 127]),
+            (129, vec![0, 63, 64, 127, 128]),
+            (100_000, vec![0, 63, 64, 99_999]),
+        ];
+        // FIRST_VALUE keeps the smallest ordering value, LAST_VALUE the largest.
+        for (pick_first, expected) in [(false, 2), (true, 1)] {
+            for (total, groups) in &cases {
+                let total = *total;
+                let mut acc = grouped_acc(pick_first, false, false, false)?;
+                let ones: Vec<i64> = groups.iter().map(|_| 1).collect();
+                let values: Vec<Option<i64>> = groups.iter().map(|_| Some(1)).collect();
+                acc.update_batch(&vo_batch(&values, &ones, &ones), groups, None, total)?;
+                // A second batch with a larger ordering value wins for
+                // LAST_VALUE and loses for FIRST_VALUE.
+                let twos: Vec<i64> = groups.iter().map(|_| 2).collect();
+                let values: Vec<Option<i64>> = groups.iter().map(|_| Some(2)).collect();
+                acc.update_batch(&vo_batch(&values, &twos, &twos), groups, None, total)?;
+
+                let out = acc.evaluate(EmitTo::All)?;
+                let vals = int64_values(&out);
+                assert_eq!(vals.len(), total);
+                for &group in groups {
+                    assert_eq!(vals[group], Some(expected), "group {group} of {total}");
+                }
+                // No group outside the touched ones was reported.
+                let found = vals.iter().filter(|v| v.is_some()).count();
+                assert_eq!(found, groups.len(), "total {total}");
+            }
+        }
+        Ok(())
+    }
+
+    /// The tournament path leaves the scoreboard all-false after a batch. It
+    /// records the groups it touched and clears exactly those bits again, so
+    /// the next batch starts clean.
+    #[test]
+    fn scoreboard_is_cleared_between_batches() -> Result<()> {
+        // LAST_VALUE with an ascending ordering keeps the row with the largest
+        // ordering value.
+        let mut acc = grouped_acc(false, false, false, false)?;
+
+        // The first batch gives group 0 a row with ordering 100.
+        acc.update_batch(&vo_batch(&[Some(10)], &[100], &[0]), &[0], None, 2)?;
+
+        // The scoreboard must be all-false again, or the next batch would
+        // mistake these groups for groups it has already seen.
+        assert_eq!(
+            acc.extreme_of_each_group_buf.1.len(),
+            acc.extreme_of_each_group_buf.0.len()
+        );
+        assert_eq!(acc.is_sets.len(), acc.extreme_of_each_group_buf.0.len());
+        for i in 0..acc.extreme_of_each_group_buf.0.len() {
+            assert!(
+                !acc.extreme_of_each_group_buf.1.get_bit(i),
+                "scoreboard bit {i} must be false after a batch"
+            );
+        }
+        assert!(acc.touched_groups_buf.is_empty());
+
+        // The second batch gives group 0 a row with a larger ordering, at
+        // index 1; index 0 belongs to group 1. Had the scoreboard not been
+        // cleared, group 0 would still look touched, so it would never be
+        // pushed onto the touched list and its newer row would never reach
+        // the state.
+        acc.update_batch(
+            &vo_batch(&[Some(99), Some(42)], &[200, 400], &[0, 0]),
+            &[1, 0],
+            None,
+            2,
+        )?;
+
+        let out = acc.evaluate(EmitTo::All)?;
+        let vals = int64_values(&out);
+        // Group 0 takes the larger ordering (400) from the second batch.
+        assert_eq!(vals[0], Some(42));
+        // Group 1 only appears in the second batch.
+        assert_eq!(vals[1], Some(99));
         Ok(())
     }
 }
