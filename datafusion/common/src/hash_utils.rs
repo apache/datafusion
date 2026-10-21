@@ -350,27 +350,14 @@ where
     N: HashValue + Copy,
     S: HashState,
 {
-    debug_assert_eq!(values.len(), hashes.len());
     const LANES: usize = 16;
-    let len = values.len();
-    let aligned_end = len & !(LANES - 1);
-    let mut row = 0;
-    while row < aligned_end {
-        unsafe {
-            let new_hashes: [u64; LANES] = std::array::from_fn(|lane| {
-                values.get_unchecked(row + lane).hash_one(state)
-            });
-            for (lane, new_hash) in new_hashes.iter().copied().enumerate() {
-                *hashes.get_unchecked_mut(row + lane) = new_hash;
-            }
-        }
-        row += LANES;
+    let (value_chunks, value_tail) = values.as_chunks::<LANES>();
+    let (hash_chunks, hash_tail) = hashes.as_chunks_mut::<LANES>();
+    for (h, v) in hash_chunks.iter_mut().zip(value_chunks) {
+        *h = v.map(|value| value.hash_one(state));
     }
-    while row < len {
-        unsafe {
-            *hashes.get_unchecked_mut(row) = values.get_unchecked(row).hash_one(state);
-        }
-        row += 1;
+    for (h, v) in hash_tail.iter_mut().zip(value_tail) {
+        *h = v.hash_one(state);
     }
 }
 
@@ -384,35 +371,19 @@ where
     N: HashValue + Copy,
     S: HashState,
 {
-    debug_assert_eq!(values.len(), hashes.len());
     const LANES: usize = 8;
-    let len = values.len();
-    let aligned_end = len & !(LANES - 1);
-    let mut row = 0;
-    while row < aligned_end {
-        unsafe {
-            let new_hashes: [u64; LANES] = std::array::from_fn(|lane| {
-                let value = *values.get_unchecked(row + lane);
-                let prev_hash = *hashes.get_unchecked(row + lane);
-                let mut hasher = state.seeded_state(prev_hash).build_hasher();
-                value.hash_write(&mut hasher);
-                hasher.finish()
-            });
-            for (lane, new_hash) in new_hashes.iter().copied().enumerate() {
-                *hashes.get_unchecked_mut(row + lane) = new_hash;
-            }
-        }
-        row += LANES;
+    let rehash_one = |prev_hash: u64, value: N| {
+        let mut hasher = state.seeded_state(prev_hash).build_hasher();
+        value.hash_write(&mut hasher);
+        hasher.finish()
+    };
+    let (value_chunks, value_tail) = values.as_chunks::<LANES>();
+    let (hash_chunks, hash_tail) = hashes.as_chunks_mut::<LANES>();
+    for (h, v) in hash_chunks.iter_mut().zip(value_chunks) {
+        *h = std::array::from_fn(|lane| rehash_one(h[lane], v[lane]));
     }
-    while row < len {
-        unsafe {
-            let value = *values.get_unchecked(row);
-            let prev_hash = *hashes.get_unchecked(row);
-            let mut hasher = state.seeded_state(prev_hash).build_hasher();
-            value.hash_write(&mut hasher);
-            *hashes.get_unchecked_mut(row) = hasher.finish();
-        }
-        row += 1;
+    for (h, &v) in hash_tail.iter_mut().zip(value_tail) {
+        *h = rehash_one(*h, v);
     }
 }
 
