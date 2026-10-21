@@ -114,10 +114,14 @@ statement ok
 DROP TABLE products_dict;
 
 statement ok
+set datafusion.execution.parquet.enable_rle_to_dictionary = false;
+
+statement ok
 set datafusion.execution.parquet.rle_to_dictionary_max_distinct_values = 2;
 
-# With an NDV cap set, files without NDV statistics are not promoted because
-# DataFusion cannot prove the dictionary cardinality is within the cap.
+# Setting the NDV cap enables dictionary reads without setting the boolean flag.
+# Files without NDV statistics are still not promoted because DataFusion cannot
+# prove the dictionary cardinality is within the cap.
 statement ok
 CREATE EXTERNAL TABLE products_threshold_no_ndv
 STORED AS PARQUET

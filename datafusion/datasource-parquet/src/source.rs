@@ -645,7 +645,12 @@ impl FileSource for ParquetSource {
             enable_rle_to_dictionary: self
                 .table_parquet_options
                 .global
-                .enable_rle_to_dictionary,
+                .enable_rle_to_dictionary
+                || self
+                    .table_parquet_options
+                    .global
+                    .rle_to_dictionary_max_distinct_values
+                    .is_some(),
             row_group_range_assignment: self
                 .table_parquet_options
                 .global

@@ -1434,14 +1434,15 @@ config_namespace! {
         /// This applies only when DataFusion infers the table schema. Tables with
         /// a user-supplied schema are not promoted because the Parquet footer is
         /// not read at DDL time, so dictionary pages cannot be detected per column.
+        /// Setting `rle_to_dictionary_max_distinct_values` also enables this behavior.
         /// See <https://github.com/apache/datafusion/issues/24112>
         pub enable_rle_to_dictionary: bool, default = false
 
         /// (reading) If set, only infer dictionary reads for top-level
         /// string and binary Parquet columns whose row-group NDV statistics
         /// prove their distinct-value count is at most this value.
-        /// This option only applies when `enable_rle_to_dictionary` is true.
-        /// Files without NDV statistics are not promoted when this is set.
+        /// Setting this option also enables dictionary reads. Files without NDV
+        /// statistics are not promoted when this is set.
         pub rle_to_dictionary_max_distinct_values: Option<usize>, default = None
 
         /// (reading) Which byte range of a split file reads each row group.
