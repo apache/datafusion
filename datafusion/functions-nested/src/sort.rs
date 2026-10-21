@@ -339,16 +339,17 @@ fn sort_rows_with_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
             continue;
         }
 
-        // Compact valid values to the start of the row's output region,
-        // counting them on the way, and sort them there.
+        // Compact valid values to the start of the row's output region and
+        // count them. The loop writes every value to the next slot but
+        // advances only past valid values, so it doesn't branch on each
+        // validity bit; that branch would be hard to predict when NULLs are
+        // scattered through the row.
         let validity_bits =
             BitIterator::new(src_nulls.validity(), src_nulls.offset() + start, row_len);
         let mut write_pos = out_start;
         for (&value, is_valid) in src_values[start..end].iter().zip(validity_bits) {
-            if is_valid {
-                out_values[write_pos] = value;
-                write_pos += 1;
-            }
+            out_values[write_pos] = value;
+            write_pos += is_valid as usize;
         }
         let valid_count = write_pos - out_start;
         let null_count = row_len - valid_count;
@@ -356,11 +357,10 @@ fn sort_rows_with_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
         sort_row(&mut out_values[out_start..write_pos], descending);
 
         // Build validity bits. With nulls_first, move the sorted values after
-        // the NULLs and reset the slots the NULLs now occupy.
+        // the NULLs.
         if nulls_first {
             if null_count > 0 {
                 out_values.copy_within(out_start..write_pos, out_start + null_count);
-                out_values[out_start..out_start + null_count].fill(N::default());
             }
             validity.append_n(null_count, false);
             validity.append_n(valid_count, true);
