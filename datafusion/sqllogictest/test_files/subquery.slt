@@ -3594,6 +3594,40 @@ SELECT win_outer.k, (SELECT b.x FROM (SELECT 1 AS x FROM (SELECT count(*) AS c F
 2 1
 5 1
 
+# An aggregate without `GROUP BY` returns a row for an outer row without a match.
+# A window above it keeps the subquery correlated, whatever node sits between
+# them. The right answer for each scalar case is `(1, 1), (2, 1), (5, 1)`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT count(*) OVER () FROM (SELECT DISTINCT a.c FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS b) AS m FROM win_outer ORDER BY win_outer.k;
+
+# A Filter that cannot be evaluated on an empty input.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT count(*) OVER () FROM (SELECT a.c FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a WHERE random() >= 0) AS b) AS m FROM win_outer ORDER BY win_outer.k;
+
+# The same for EXISTS, NOT EXISTS and IN, which do not track count bug handling.
+# The right answers are `1, 2, 5`, no rows, and `1, 2, 5`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT count(*) OVER () FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) ORDER BY win_outer.k;
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT win_outer.k FROM win_outer WHERE NOT EXISTS (SELECT count(*) OVER () FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) ORDER BY win_outer.k;
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+SELECT win_outer.k FROM win_outer WHERE 1 IN (SELECT count(*) OVER () FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) ORDER BY win_outer.k;
+
+# And for LATERAL.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support undecorrelated Subquery
+SELECT win_outer.k, s.n FROM win_outer, LATERAL (SELECT count(*) OVER () AS n FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS s ORDER BY win_outer.k;
+
+# An aggregate with `GROUP BY` returns no row for an outer row without a match,
+# so the window above it is partitioned.
+query II
+SELECT win_outer.k, (SELECT max(w.n) FROM (SELECT count(*) OVER () AS n FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k GROUP BY win_inner.y) AS a) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 1
+2 1
+5 NULL
+
 # LEFT JOIN LATERAL keeps the outer rows without a match.
 query III
 SELECT win_outer.k, s.id, s.rn FROM win_outer LEFT JOIN LATERAL (SELECT win_inner.id, row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k) AS s ON true ORDER BY win_outer.k;

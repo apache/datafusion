@@ -676,10 +676,10 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 {
                     // `inner.y = outer.k` keeps the rows of one `y` value for
                     // each outer row, so partitioning by `y` as well gives each
-                    // window function the same rows. A window over an
-                    // aggregate with count bug handling stops the pull up in
-                    // `pass_through_pulled_up_cols`.
-                    if self.can_extend_partition_by {
+                    // window function the same rows. An aggregate without
+                    // `GROUP BY` below returns a row for an outer row without
+                    // a match, which the pulled up filter would drop.
+                    if self.can_extend_partition_by && !self.pulled_up_scalar_agg {
                         let extended =
                             partition_window_by(window, &local_correlated_cols)?;
                         return self.pass_through_pulled_up_cols(extended);
