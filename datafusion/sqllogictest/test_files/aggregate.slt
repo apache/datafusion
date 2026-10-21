@@ -432,6 +432,31 @@ GROUP BY g
 3 NULL
 4 NULL
 
+# With two different arguments there is no single field to group by, so
+# DISTINCT reaches the accumulator, which does not implement it.
+statement error DataFusion error: This feature is not implemented: CORR\(DISTINCT\) aggregations are not available
+SELECT corr(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
+statement error DataFusion error: This feature is not implemented: CORR\(DISTINCT\) aggregations are not available
+SELECT g, corr(DISTINCT x, y) FROM (VALUES (1, 1.0, 1.0), (1, 1.0, 1.0), (1, 2.0, 3.0)) t(g, x, y) GROUP BY g
+
+statement error DataFusion error: This feature is not implemented: COVAR_SAMP\(DISTINCT\) aggregations are not available
+SELECT covar_samp(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
+statement error DataFusion error: This feature is not implemented: COVAR_POP\(DISTINCT\) aggregations are not available
+SELECT covar_pop(x, y), covar_pop(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
+statement error DataFusion error: This feature is not implemented: REGR_COUNT\(DISTINCT\) aggregations are not available
+SELECT regr_count(x, y), regr_count(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
+# Window functions build the accumulator through `create_sliding_accumulator`,
+# which must reject DISTINCT too.
+statement error DataFusion error: This feature is not implemented: CORR\(DISTINCT\) aggregations are not available
+SELECT corr(DISTINCT x, y) OVER () FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
+statement error DataFusion error: This feature is not implemented: REGR_SLOPE\(DISTINCT\) aggregations are not available
+SELECT regr_slope(DISTINCT x, y) OVER () FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
 # all_nulls_query_correlation
 query R
 with data as (
