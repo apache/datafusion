@@ -19,6 +19,7 @@
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::expr::InList;
 use datafusion_expr::{EmptyRelation, Expr, Filter, LogicalPlan, Operator};
 use std::sync::Arc;
 
@@ -113,7 +114,51 @@ fn simplify_filter_predicate(expr: Expr) -> SimplifiedFilterPredicate {
         Expr::BinaryExpr(binary) if binary.op == Operator::Or => {
             simplify_filter_or(*binary.left, *binary.right)
         }
+        Expr::InList(in_list) if in_list.list.iter().any(is_null_literal) => {
+            simplify_filter_in_list(in_list)
+        }
         expr => simplified(FilterPredicate::Expression(expr), false),
+    }
+}
+
+fn is_null_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::Literal(scalar, _) if scalar.is_null())
+}
+
+/// Simplifies an `IN` list that contains `NULL` literals under filter semantics.
+///
+/// `x IN (a, NULL)` is `TRUE` exactly when `x` matches `a`: a `NULL` member can
+/// only turn `FALSE` into `NULL`, and `NULL` rejects a row just like `FALSE`.
+/// The `NULL` members can therefore be dropped, and a list of nothing but
+/// `NULL`s rejects every row.
+///
+/// `x NOT IN (a, NULL)` is `FALSE` when `x` matches `a` and `NULL` otherwise, so
+/// it is never `TRUE` and rejects every row.
+///
+/// This is only sound under filter semantics; the same rewrite in a general
+/// expression context would change `SELECT 3 IN (1, NULL)` from `NULL` to `FALSE`.
+fn simplify_filter_in_list(in_list: InList) -> SimplifiedFilterPredicate {
+    if in_list.negated {
+        return simplified(FilterPredicate::RejectsAll(Expr::InList(in_list)), true);
+    }
+
+    let InList {
+        expr,
+        list,
+        negated,
+    } = in_list;
+    let list: Vec<Expr> = list.into_iter().filter(|e| !is_null_literal(e)).collect();
+
+    if list.is_empty() {
+        simplified(
+            FilterPredicate::RejectsAll(Expr::Literal(ScalarValue::Boolean(None), None)),
+            true,
+        )
+    } else {
+        simplified(
+            FilterPredicate::Expression(Expr::InList(InList::new(expr, list, negated))),
+            true,
+        )
     }
 }
 
@@ -493,6 +538,87 @@ mod tests {
         assert_optimized_plan_equal!(plan, @r"
         Projection: test.a
           EmptyRelation: rows=0
+        ")
+    }
+
+    #[test]
+    fn filter_in_list_with_null_drops_null() -> Result<()> {
+        // SELECT a FROM test WHERE a IN (1, 2, NULL)
+        // A NULL member can only turn FALSE into NULL, and NULL rejects a row
+        // just like FALSE, so the filter keeps exactly the rows that a IN (1, 2) keeps.
+        let filter_expr = col("a").in_list(
+            vec![
+                lit(1u32),
+                lit(2u32),
+                Expr::Literal(ScalarValue::UInt32(None), None),
+            ],
+            false,
+        );
+
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(filter_expr)?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: test.a IN ([UInt32(1), UInt32(2)])
+          TableScan: test
+        ")
+    }
+
+    #[test]
+    fn filter_in_list_of_only_nulls_rejects_all() -> Result<()> {
+        // SELECT a FROM test WHERE a IN (NULL) is NULL for every row.
+        let filter_expr =
+            col("a").in_list(vec![Expr::Literal(ScalarValue::UInt32(None), None)], false);
+
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(filter_expr)?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
+    }
+
+    #[test]
+    fn filter_not_in_list_with_null_rejects_all() -> Result<()> {
+        // SELECT a FROM test WHERE a NOT IN (1, NULL) is FALSE when a = 1 and
+        // NULL otherwise, so it is never TRUE.
+        let filter_expr = col("a").in_list(
+            vec![lit(1u32), Expr::Literal(ScalarValue::UInt32(None), None)],
+            true,
+        );
+
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(filter_expr)?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
+    }
+
+    #[test]
+    fn filter_in_list_without_null_is_untouched() -> Result<()> {
+        let filter_expr = col("a").in_list(vec![lit(1u32), lit(2u32)], false);
+
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(filter_expr)?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: test.a IN ([UInt32(1), UInt32(2)])
+          TableScan: test
+        ")
+    }
+
+    #[test]
+    fn filter_not_in_list_without_null_is_untouched() -> Result<()> {
+        let filter_expr = col("a").in_list(vec![lit(1u32), lit(2u32)], true);
+
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(filter_expr)?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: test.a NOT IN ([UInt32(1), UInt32(2)])
+          TableScan: test
         ")
     }
 }
