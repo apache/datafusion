@@ -2075,6 +2075,7 @@ dependencies = [
  "futures",
  "object_store",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
 ]
