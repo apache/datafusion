@@ -70,15 +70,7 @@ impl OptimizerRule for EliminateGroupByConstant {
                 // ungrouped aggregate, which changes query semantics (grouped
                 // aggregates produce an empty result set on an empty input,
                 // whereas ungrouped aggregates return a single row).
-                // A grouping set adds output fields that do not map one to one
-                // to `group_expr`, so the rule also leaves it unchanged.
-                if redundant_count == 0
-                    || redundant_count == aggregate.group_expr.len()
-                    || aggregate
-                        .group_expr
-                        .iter()
-                        .any(|expr| matches!(expr, Expr::GroupingSet(_)))
-                {
+                if redundant_count == 0 || redundant_count == aggregate.group_expr.len() {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
