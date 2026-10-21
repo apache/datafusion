@@ -3203,10 +3203,10 @@ mod tests {
     use super::*;
     use crate::metrics::MetricValue;
     use arrow::array::{
-        AsArray, BooleanArray, Float64Array, Int32Array, StringArray,
+        AsArray, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray,
         StringDictionaryBuilder,
     };
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema, UInt64Type};
+    use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, Schema, UInt64Type};
     use arrow_schema::SortOptions;
     use datafusion_common::{assert_batches_eq, exec_datafusion_err};
     use datafusion_execution::memory_pool::GreedyMemoryPool;
@@ -3938,6 +3938,181 @@ mod tests {
         .await
         .expect("the final shared TopK emitter should mark the dynamic filter complete");
 
+        Ok(())
+    }
+
+    /// Schema for the `UNION ALL` fixture: `c0` is constant within each
+    /// partition but differs between partitions, and `c1` orders the rows.
+    fn make_c0_c1_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::Int64, false),
+            Field::new("c1", DataType::Int64, false),
+        ]))
+    }
+
+    fn make_c0_c1_batch(schema: SchemaRef, rows: &[(i64, i64)]) -> Result<RecordBatch> {
+        let c0: ArrayRef =
+            Arc::new(Int64Array::from_iter_values(rows.iter().map(|row| row.0)));
+        let c1: ArrayRef =
+            Arc::new(Int64Array::from_iter_values(rows.iter().map(|row| row.1)));
+        Ok(RecordBatch::try_new(schema, vec![c0, c1])?)
+    }
+
+    fn c0_c1_sort_exprs(
+        schema: &SchemaRef,
+    ) -> Result<(PhysicalSortExpr, PhysicalSortExpr)> {
+        Ok((
+            PhysicalSortExpr {
+                expr: col("c0", schema.as_ref())?,
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("c1", schema.as_ref())?,
+                options: SortOptions::default(),
+            },
+        ))
+    }
+
+    fn make_c0_c1_topk(
+        partition_id: usize,
+        schema: SchemaRef,
+        common_sort_prefix: Vec<PhysicalSortExpr>,
+        expr: LexOrdering,
+        filter: Arc<RwLock<TopKDynamicFilters>>,
+    ) -> Result<TopK> {
+        TopK::try_new(
+            partition_id,
+            schema,
+            common_sort_prefix,
+            expr,
+            2,
+            8192,
+            Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+            filter,
+        )
+    }
+
+    /// Inserts the `c0 = 5` and `c0 = 1` partitions into two TopKs that share
+    /// `filter`, in the requested order, then returns the top 2 rows after
+    /// merging the partition outputs on the full `[c0, c1]` key (what the
+    /// `SortPreservingMergeExec` above the TopK does).
+    async fn merged_c0_c1_top2(
+        schema: &SchemaRef,
+        topk_ordering: LexOrdering,
+        common_sort_prefix: Vec<PhysicalSortExpr>,
+        five_first: bool,
+    ) -> Result<Vec<(i64, i64)>> {
+        let filter = make_shared_topk_filter(2);
+        let mut five = make_c0_c1_topk(
+            0,
+            Arc::clone(schema),
+            common_sort_prefix.clone(),
+            topk_ordering.clone(),
+            Arc::clone(&filter),
+        )?;
+        let mut one = make_c0_c1_topk(
+            1,
+            Arc::clone(schema),
+            common_sort_prefix,
+            topk_ordering,
+            filter,
+        )?;
+
+        let five_batch = make_c0_c1_batch(Arc::clone(schema), &[(5, 0), (5, 1)])?;
+        let one_batch = make_c0_c1_batch(Arc::clone(schema), &[(1, 0), (1, 1)])?;
+        if five_first {
+            five.insert_batch(five_batch)?;
+            one.insert_batch(one_batch)?;
+        } else {
+            one.insert_batch(one_batch)?;
+            five.insert_batch(five_batch)?;
+        }
+
+        collect_c0_c1_top2([five, one]).await
+    }
+
+    async fn collect_c0_c1_top2(topks: [TopK; 2]) -> Result<Vec<(i64, i64)>> {
+        let mut rows = Vec::new();
+        for topk in topks {
+            let batches: Vec<RecordBatch> = topk.emit()?.try_collect().await?;
+            for batch in batches {
+                let c0 = batch.column(0).as_primitive::<Int64Type>();
+                let c1 = batch.column(1).as_primitive::<Int64Type>();
+                rows.extend((0..batch.num_rows()).map(|i| (c0.value(i), c1.value(i))));
+            }
+        }
+        // `SortPreservingMergeExec` merges on the full `[c0, c1]` key. With
+        // four rows, sorting and truncating is equivalent.
+        rows.sort_unstable();
+        rows.truncate(2);
+        Ok(rows)
+    }
+
+    /// The shared TopK threshold is comparable across partitions only when the
+    /// sort key covers the constant that differs between them. With `[c0, c1]`
+    /// as the TopK key and `[c0]` as the input sort prefix, both feeding orders
+    /// keep both rows of the `c0 = 1` partition that the top 2 needs.
+    #[tokio::test]
+    async fn test_shared_filter_keeps_heterogeneous_constant_in_key() -> Result<()> {
+        let schema = make_c0_c1_schema();
+        let (sort_c0, sort_c1) = c0_c1_sort_exprs(&schema)?;
+
+        for five_first in [true, false] {
+            let rows = merged_c0_c1_top2(
+                &schema,
+                LexOrdering::from([sort_c0.clone(), sort_c1.clone()]),
+                vec![sort_c0.clone()],
+                five_first,
+            )
+            .await?;
+            assert_eq!(rows, vec![(1, 0), (1, 1)], "five_first={five_first}");
+        }
+
+        Ok(())
+    }
+
+    /// A better partition must keep reading until it has enough rows, while a
+    /// worse partition can stop once the shared prefix threshold passes it.
+    #[tokio::test]
+    async fn test_shared_filter_heterogeneous_prefix_across_batches() -> Result<()> {
+        let schema = make_c0_c1_schema();
+        let (sort_c0, sort_c1) = c0_c1_sort_exprs(&schema)?;
+        let ordering = LexOrdering::from([sort_c0.clone(), sort_c1]);
+        let filter = make_shared_topk_filter(2);
+        let mut five = make_c0_c1_topk(
+            0,
+            Arc::clone(&schema),
+            vec![sort_c0.clone()],
+            ordering.clone(),
+            Arc::clone(&filter),
+        )?;
+        let mut one = make_c0_c1_topk(
+            1,
+            Arc::clone(&schema),
+            vec![sort_c0],
+            ordering,
+            Arc::clone(&filter),
+        )?;
+
+        five.insert_batch(make_c0_c1_batch(Arc::clone(&schema), &[(5, 0), (5, 1)])?)?;
+        assert!(filter.read().shared_threshold.is_some());
+        assert!(!five.finished);
+
+        one.insert_batch(make_c0_c1_batch(Arc::clone(&schema), &[(1, 0)])?)?;
+        assert!(!one.finished);
+        assert_eq!(one.heap.inner.len(), 1);
+
+        // The first batch must not stop this partition before its second row.
+        one.insert_batch(make_c0_c1_batch(Arc::clone(&schema), &[(1, 1)])?)?;
+        assert!(!one.finished);
+        assert_eq!(one.heap.inner.len(), 2);
+
+        // The better partition now has k rows, so the worse one may stop.
+        five.insert_batch(make_c0_c1_batch(schema, &[(5, 2)])?)?;
+        assert!(five.finished);
+        assert_eq!(five.metrics.row_replacements.value(), 2);
+        assert_eq!(collect_c0_c1_top2([five, one]).await?, vec![(1, 0), (1, 1)]);
         Ok(())
     }
 
