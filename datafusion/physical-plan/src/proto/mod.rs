@@ -81,7 +81,7 @@ use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_physical_expr::PhysicalExpr;
 pub use datafusion_physical_expr::proto::{
     ExtensionExprFromProto, decode_physical_expr, extension_expr_node,
-    physical_expr_names, register_physical_expr,
+    physical_expr_names,
 };
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
 pub use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
@@ -98,9 +98,7 @@ pub use datafusion_proto_models::ProtoDecoderRegistry;
 // Not public API: see `decode_execution_plan`.
 #[doc(hidden)]
 pub use registry::decode_execution_plan;
-pub use registry::{
-    ExtensionPlanFromProto, execution_plan_names, register_execution_plan,
-};
+pub use registry::{ExtensionPlanFromProto, execution_plan_names};
 
 /// Internal dispatch trait backing [`ExecutionPlanEncodeCtx`].
 ///

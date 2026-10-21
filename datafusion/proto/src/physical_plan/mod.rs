@@ -1563,7 +1563,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     ///
     /// Expressions can instead name themselves on the wire and be decoded by a
     /// per-type decoder registered on the session — see
-    /// [`ExtensionExprFromProto`] and [`register_physical_expr`]. That path
+    /// [`ExtensionExprFromProto`] and [`ExtensionExprFromProto::register`]. That path
     /// resolves by name rather than by codec registration order, so two crates
     /// claiming the same name collide at registration. This method stays the
     /// fallback for everything unnamed or unregistered.
@@ -1581,7 +1581,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     ///
     /// [`parse_physical_expr`]: crate::physical_plan::from_proto::parse_physical_expr
     /// [`ExtensionExprFromProto`]: datafusion_physical_plan::proto::ExtensionExprFromProto
-    /// [`register_physical_expr`]: datafusion_physical_plan::proto::register_physical_expr
+    /// [`ExtensionExprFromProto::register`]: datafusion_physical_plan::proto::ExtensionExprFromProto::register
     fn try_decode_expr(
         &self,
         _buf: &[u8],
