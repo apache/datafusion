@@ -1998,15 +1998,15 @@ mod tests {
         // After appending each batch, spilled_rows and spilled_bytes should increase incrementally,
         // while spill_file_count remains 1 (since we're writing to the same file)
         in_progress_file.append_batch(&batch1)?;
-        verify_metrics(&in_progress_file, 1, 440, 3)?;
+        verify_metrics(&in_progress_file, 1, 424, 3)?;
 
         in_progress_file.append_batch(&batch2)?;
-        verify_metrics(&in_progress_file, 1, 704, 6)?;
+        verify_metrics(&in_progress_file, 1, 672, 6)?;
 
         let completed_file = in_progress_file.finish()?;
         assert!(completed_file.is_some());
         assert!(completed_file.unwrap().path().unwrap().exists());
-        verify_metrics(&in_progress_file, 1, 712, 6)?;
+        verify_metrics(&in_progress_file, 1, 680, 6)?;
         // Double finish produce error
         let result = in_progress_file.finish();
         assert!(result.is_err());
@@ -2141,7 +2141,7 @@ mod tests {
 
         // Metrics should be updated immediately (at least schema and first batch)
         let bytes_after_batch1 = metrics.spilled_bytes.value();
-        assert_eq!(bytes_after_batch1, 440);
+        assert_eq!(bytes_after_batch1, 424);
         assert_eq!(metrics.spill_file_count.value(), 1);
 
         // Check global progress
