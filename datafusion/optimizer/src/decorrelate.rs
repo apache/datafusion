@@ -36,8 +36,9 @@ use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator, SkipType, expr, lit,
+    Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, Extension,
+    FetchType, LogicalPlan, LogicalPlanBuilder, MaterializedCte, Operator, SkipType,
+    UserDefinedLogicalNodeCore, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -91,6 +92,14 @@ pub struct PullUpCorrelatedExpr {
     /// The list is cleared when the pull up passes a node that can put a NULL
     /// back into such a column: an outer join, a union or a grouping set.
     pub correlated_filters: Vec<Expr>,
+    /// Columns each node on the path from the subquery's root to the node
+    /// [`Self::f_down`]/[`Self::f_up`] is currently visiting reads in its own
+    /// expressions: one entry per node on that path, pushed in `f_down` and
+    /// popped in `f_up`. When `f_up` visits an `Aggregate`, this holds every
+    /// node strictly above it - its own entry is popped first - so a
+    /// grouping set that omits a correlated column can tell whether
+    /// something above it reads the column the pull up would fill in.
+    column_refs_above: Vec<BTreeSet<Column>>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -113,6 +122,7 @@ impl PullUpCorrelatedExpr {
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
+            column_refs_above: Vec::new(),
         }
     }
 
@@ -135,13 +145,21 @@ impl PullUpCorrelatedExpr {
         self.exists_sub_query = exists_sub_query;
         self
     }
+}
 
-    /// Mark the plan as one whose correlated expressions cannot be pulled up
-    /// and stop descending into it
-    fn unsupported(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        self.can_pull_up = false;
-        Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
-    }
+/// The outcome of trying to fold the pull up's columns into a grouping set
+/// `Aggregate`. See [`PullUpCorrelatedExpr::grouping_sets_pull_up_outcome`].
+#[derive(Debug, PartialEq, Eq)]
+enum GroupingSetsPullUp {
+    /// Every set already groups by the columns; the aggregate's `group_expr`
+    /// stays as it is.
+    NoColumnsToAdd,
+    /// Some set leaves a required column out, but extending every set with it
+    /// changes nothing the rest of the query can observe.
+    SafeToExtend,
+    /// Some set leaves a required column out, and extending every set with it
+    /// would change what the query returns.
+    Unsafe,
 }
 
 /// Used to indicate the unmatched rows from the inner(subquery) table after the left out Join
@@ -159,6 +177,18 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // Tracks the columns this node's own expressions read, so a
+        // descendant `Aggregate` can later tell what reads above it. Popped
+        // by the matching `f_up` call for this same node.
+        let mut column_refs = BTreeSet::new();
+        for expr in plan.expressions() {
+            column_refs.extend(expr.column_refs().into_iter().cloned());
+        }
+        self.column_refs_above.push(column_refs);
+
+        // This match is exhaustive on purpose. A correlated filter moves above
+        // a node only when the node is known to keep the result the same. Add
+        // each new `LogicalPlan` variant to one of the groups below.
         match plan {
             LogicalPlan::Filter(_) => Ok(Transformed::no(plan)),
             // Subquery nodes are scope boundaries for correlation. A nested
@@ -167,6 +197,38 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::Subquery(_) => {
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
             }
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<MaterializedCte>() =>
+            {
+                let cte = node.as_any().downcast_ref::<MaterializedCte>().unwrap();
+                if !cte.cte.all_out_ref_exprs().is_empty() {
+                    // A correlated body would have to run once per outer row.
+                    return Ok(
+                        self.stop_pull_up(LogicalPlan::Extension(Extension { node }))
+                    );
+                }
+                // Only the continuation can hold correlated expressions. Rewrite
+                // it alone, so that the body shared by every scan keeps its schema.
+                let continuation = cte.continuation.clone().rewrite(self)?;
+                if !continuation.transformed {
+                    return Ok(Transformed::new(
+                        LogicalPlan::Extension(Extension { node }),
+                        false,
+                        TreeNodeRecursion::Jump,
+                    ));
+                }
+                let cte = cte.with_exprs_and_inputs(
+                    vec![],
+                    vec![cte.cte.clone(), continuation.data],
+                )?;
+                Ok(Transformed::new(
+                    LogicalPlan::Extension(Extension {
+                        node: Arc::new(cte),
+                    }),
+                    true,
+                    TreeNodeRecursion::Jump,
+                ))
+            }
             // A correlated filter can only move above a join from a side whose
             // rows the join preserves. Below the side an outer join fills with
             // NULLs, the filter decides which rows are unmatched, so pulling it
@@ -174,24 +236,49 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             // join does not output cannot give its columns to a pulled up
             // filter either.
             LogicalPlan::Join(ref join) if !correlated_inputs_are_preserved(join) => {
-                // the unsupported case
-                self.can_pull_up = false;
-                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                Ok(self.stop_pull_up(plan))
             }
+            // An ASOF join keeps each left row once, so a filter on the left
+            // side can move above it. A filter on the right side selects the
+            // rows the join can match, so it must stay below the join.
+            LogicalPlan::AsOfJoin(ref join) if holds_outer_reference(&join.right) => {
+                Ok(self.stop_pull_up(plan))
+            }
+            // An Unnest replaces the column it unnests with the values of that
+            // column, so a filter on it means something else above the
+            // Unnest. The output column loses its qualifier, so compare names.
+            // The SQL planner unnests a new `__unnest_placeholder` column and
+            // passes the original column through, so this only stops plans
+            // built with `unnest_column` and similar.
+            LogicalPlan::Unnest(ref unnest)
+                if correlated_filter_columns(&unnest.input).iter().any(|col| {
+                    unnest
+                        .exec_columns
+                        .iter()
+                        .any(|exec_col| exec_col.name == col.name)
+                }) =>
+            {
+                Ok(self.stop_pull_up(plan))
+            }
+            // A correlated filter cannot move out of one input of a Union, and
+            // `f_up` does not add its columns to a Sort or an Extension, so no
+            // correlated filter may be below these nodes.
             LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
-                let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
-                if plan_hold_outer {
-                    self.unsupported(plan)
+                if holds_outer_reference(&plan) {
+                    Ok(self.stop_pull_up(plan))
                 } else {
                     Ok(Transformed::no(plan))
                 }
             }
+            // For EXISTS only emptiness matters, so `f_down` removes or
+            // replaces a Limit over a correlated filter where it can. Any other
+            // Limit keeps the correlated filters below it.
             LogicalPlan::Limit(ref limit) => {
-                if plan.all_out_ref_exprs().is_empty() {
+                if !holds_outer_reference(&plan) {
                     return Ok(Transformed::no(plan));
                 }
                 if !self.exists_sub_query {
-                    return self.unsupported(plan);
+                    return Ok(self.stop_pull_up(plan));
                 }
                 // Only emptiness matters for EXISTS, so remove a limit that
                 // cannot make its input empty and replace one that always does
@@ -208,23 +295,85 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 match (limit.get_skip_type()?, fetch) {
                     (SkipType::Literal(0), FetchType::Literal(_)) => {
                         // The rewriter does not call `f_down` on the returned
-                        // node, so do it here
+                        // node, so do it here. This call pushes its own
+                        // entry onto `column_refs_above`; pop the one this
+                        // call pushed for the `Limit` itself first; only one
+                        // `f_up` call reaches this tree position once `Limit`
+                        // is gone, so only one entry must remain pushed.
+                        self.column_refs_above.pop();
                         let mut t = self.f_down((*limit.input).clone())?;
                         t.transformed = true;
                         Ok(t)
                     }
-                    _ => self.unsupported(plan),
+                    _ => Ok(self.stop_pull_up(plan)),
                 }
             }
-            _ if plan.contains_outer_reference() => {
-                // the unsupported cases, the plan expressions contain out reference columns(like window expressions)
-                self.unsupported(plan)
+            // A correlated filter below these nodes can move above them. The
+            // node itself must not hold an outer reference, because only a
+            // Filter gives its outer references to the join.
+            // - `f_up` adds the columns the pulled up filter needs to a
+            //   Projection or an Aggregate, and checks that the filter can move
+            //   above an Aggregate.
+            // - A `DISTINCT` shares the exemption of an Aggregate without
+            //   aggregate functions: its output takes the columns the node
+            //   below it adds, so they become part of its keys. This is only
+            //   right when the pulled up filter fixes those columns for each
+            //   outer row. A non-equality filter can return duplicates, see
+            //   https://github.com/apache/datafusion/issues/25808.
+            // - A Window keeps or drops whole partitions when the filter reads
+            //   only its `PARTITION BY` columns. `f_up` checks this.
+            // - An Unnest maps each input row to its own output rows, so a
+            //   filter on a column it passes through keeps the same rows.
+            //   The arm above checks that the filter does not read an unnested
+            //   column.
+            LogicalPlan::Projection(_)
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::Distinct(Distinct::All(_))
+            | LogicalPlan::Window(_)
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_)
+            | LogicalPlan::Repartition(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::TableScan(_)
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Values(_) => {
+                if plan.contains_outer_reference() {
+                    // the unsupported cases, the plan expressions contain out
+                    // reference columns
+                    Ok(self.stop_pull_up(plan))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
             }
-            _ => Ok(Transformed::no(plan)),
+            // A correlated filter below these nodes cannot move above them:
+            // - `DISTINCT ON` keeps the first row of each group, so the filter
+            //   changes which row is first.
+            // - A RecursiveQuery repeats its recursive term.
+            // - The other nodes are not queries and are not in a subquery.
+            LogicalPlan::Distinct(Distinct::On(_))
+            | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::Copy(_)
+            | LogicalPlan::DescribeTable(_) => {
+                if holds_outer_reference(&plan) {
+                    Ok(self.stop_pull_up(plan))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
+            }
         }
     }
 
     fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // Pop this node's own entry, pushed by the matching `f_down` call, so
+        // `column_refs_above` holds only the nodes strictly above `plan`.
+        self.column_refs_above.pop();
+
         // A node that null-extends or regroups rows can put a NULL back into
         // a column that a correlated filter below it rejected, so the filters
         // recorded so far no longer bound what the subquery returns.
@@ -363,42 +512,54 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &mut local_correlated_cols,
                 );
 
-                // A grouping set cannot take the columns the pull up adds.
-                // `LogicalPlanBuilder::aggregate` cross joins a plain group
-                // expression with the sets that are already there, so `ROLLUP(i.k)`,
-                // which is `GROUPING SETS ((i.k), ())`, becomes
-                // `GROUPING SETS ((i.k), (i.k, i.k))`. The empty set is gone, and
-                // with it the grand total row the subquery returns for every outer
-                // row, including the rows whose correlated filter matches nothing.
-                // The join that replaces the filter cannot bring those rows back,
-                // so the subquery stays correlated unless every set already groups
-                // by each column the pull up would add.
+                // A grouping set that omits a column the pull up adds either
+                // keeps its sets as they are (every set already groups by the
+                // column), or gains the column in every set, `ROLLUP(i.k)`
+                // (`GROUPING SETS ((i.k), ())`) becoming
+                // `GROUPING SETS ((i.k), (i.k, i.k))`. The latter loses the
+                // empty set, and with it the grand total row the subquery
+                // returns for every outer row, including the rows whose
+                // correlated filter matches nothing, so it is only safe when
+                // no set is empty and nothing reads the column the fill
+                // changes from `NULL` to the correlated value.
                 let mut missing_exprs = if aggregate
                     .group_expr
                     .iter()
                     .any(|expr| matches!(expr, Expr::GroupingSet(_)))
                 {
-                    if self.grouping_sets_cover_pull_up_cols(
-                        &aggregate.group_expr,
-                        &local_correlated_cols,
-                    ) {
-                        // Every set already groups by them, so the sets stay as
-                        // they are. Adding the columns again would repeat them
-                        // inside every set.
-                        aggregate.group_expr.to_vec()
-                    } else {
-                        self.can_pull_up = false;
-                        // The rewrite still runs, the same way the
-                        // `can_pull_over_aggregation` case above does. The callers
-                        // read `can_pull_up` only after the whole rewrite has
-                        // finished, and the nodes above this one still expect the
-                        // pulled up columns in its output, so leaving them out here
-                        // would fail the rewrite with a schema error instead. They
-                        // drop this plan and keep the correlated subquery.
-                        self.collect_missing_exprs(
-                            &aggregate.group_expr,
-                            &local_correlated_cols,
-                        )?
+                    match self
+                        .grouping_sets_pull_up_outcome(aggregate, &local_correlated_cols)
+                    {
+                        GroupingSetsPullUp::NoColumnsToAdd => {
+                            // Every set already groups by them, so the sets stay as
+                            // they are. Adding the columns again would repeat them
+                            // inside every set.
+                            aggregate.group_expr.to_vec()
+                        }
+                        GroupingSetsPullUp::SafeToExtend => {
+                            // No set is empty and nothing reads the columns the
+                            // fill changes from `NULL` to the correlated value,
+                            // so extending every set is invisible to the rest of
+                            // the query.
+                            self.collect_missing_exprs(
+                                &aggregate.group_expr,
+                                &local_correlated_cols,
+                            )?
+                        }
+                        GroupingSetsPullUp::Unsafe => {
+                            self.can_pull_up = false;
+                            // The rewrite still runs, the same way the
+                            // `can_pull_over_aggregation` case above does. The callers
+                            // read `can_pull_up` only after the whole rewrite has
+                            // finished, and the nodes above this one still expect the
+                            // pulled up columns in its output, so leaving them out here
+                            // would fail the rewrite with a schema error instead. They
+                            // drop this plan and keep the correlated subquery.
+                            self.collect_missing_exprs(
+                                &aggregate.group_expr,
+                                &local_correlated_cols,
+                            )?
+                        }
                     }
                 } else {
                     // add missing columns to Aggregation's group expressions
@@ -486,32 +647,98 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
                 Ok(Transformed::no(plan))
             }
+            LogicalPlan::Window(window) => {
+                let mut local_correlated_cols = BTreeSet::new();
+                collect_local_correlated_cols(
+                    &plan,
+                    &self.correlated_subquery_cols_map,
+                    &mut local_correlated_cols,
+                );
+                // A filter that reads only `PARTITION BY` columns keeps or drops
+                // whole partitions, so each window function sees the same rows
+                // above it or below it. A filter on any other column changes the
+                // rows of a partition.
+                if !local_correlated_cols.is_empty()
+                    && !window
+                        .window_expr
+                        .iter()
+                        .all(|expr| partitions_by_all(expr, &local_correlated_cols))
+                {
+                    self.can_pull_up = false;
+                }
+                self.pass_through_pulled_up_cols(plan)
+            }
+            // `f_down` checked that the pulled up filters do not read an
+            // unnested column.
+            LogicalPlan::Unnest(_) => self.pass_through_pulled_up_cols(plan),
             _ => Ok(Transformed::no(plan)),
         }
     }
 }
 
 impl PullUpCorrelatedExpr {
-    /// Whether the pull up can add its columns to `group_expr` without changing
-    /// what the aggregate returns.
+    /// Keeps the correlated expressions below `plan` where they are. The caller
+    /// then keeps the subquery correlated.
+    fn stop_pull_up(&mut self, plan: LogicalPlan) -> Transformed<LogicalPlan> {
+        self.can_pull_up = false;
+        Transformed::new(plan, false, TreeNodeRecursion::Jump)
+    }
+
+    /// Rebuilds a node whose output holds every column of its input, so that
+    /// it outputs the columns the pull up added below it.
     ///
-    /// `true` when `group_expr` holds no grouping set, and when every set of every
-    /// grouping set it holds already groups by each column
-    /// [`Self::collect_missing_exprs`] would add. In the second case the pull up
-    /// adds nothing and the aggregate keeps the sets it has.
+    /// The count bug handling of a Projection or a Filter above reads the
+    /// values an aggregate below gives on an empty input. Those values do not
+    /// hold once a Window or an Unnest runs over the aggregate, so the pull up
+    /// stops in that case.
+    fn pass_through_pulled_up_cols(
+        &mut self,
+        plan: LogicalPlan,
+    ) -> Result<Transformed<LogicalPlan>> {
+        if plan
+            .inputs()
+            .iter()
+            .any(|input| self.collected_count_expr_map.contains_key(*input))
+        {
+            self.can_pull_up = false;
+        }
+        Ok(Transformed::yes(plan.recompute_schema()?))
+    }
+
+    /// Whether the pull up can add its columns to a grouping set `Aggregate`,
+    /// and whether it needs to.
     ///
-    /// `ROLLUP` and `CUBE` always contain the empty set, which yields a row for
-    /// outer rows the correlated filter matches nothing for, so they are only safe
-    /// when there is nothing to add.
+    /// [`GroupingSetsPullUp::NoColumnsToAdd`] when every set of every grouping
+    /// set already groups by each column [`Self::collect_missing_exprs`]
+    /// would add: the pull up adds nothing and the aggregate keeps the sets
+    /// it has.
     ///
-    /// A non-empty set that leaves a column out fills it with NULL. Adding the
-    /// column would give it a value instead, which a `HAVING` or a projection
-    /// above the aggregate can read, so such a set is rejected as well.
-    fn grouping_sets_cover_pull_up_cols(
+    /// Otherwise some set leaves a required column out, which fills that
+    /// column with `NULL` in the set's rows. Adding the column to every set
+    /// (`LogicalPlanBuilder::aggregate` cross joins a plain group expression
+    /// with the sets that are already there) gives it a value instead. This
+    /// is only invisible to the rest of the query when:
+    ///  - no set is empty. `ROLLUP(i.k)`, `GROUPING SETS ((i.k), ())`, always
+    ///    holds one, and turns into `GROUPING SETS ((i.k), (i.k, i.k))`,
+    ///    losing the empty set and the grand total row it yields for every
+    ///    outer row, including the rows the correlated filter matches
+    ///    nothing for. The join that replaces the filter cannot bring that
+    ///    row back.
+    ///  - the aggregate does not compute `GROUPING`/`GROUPING_ID`, which
+    ///    reads whether a row's set groups by a column.
+    ///  - nothing above the aggregate reads the column, which
+    ///    `column_refs_above` tracks as `f_down`/`f_up` push and pop a node's
+    ///    own columns while they walk down to and back up from it.
+    ///
+    /// When one of these fails, [`GroupingSetsPullUp::Unsafe`] is returned:
+    /// the columns are still added, so the schema the nodes above expect
+    /// stays correct, but the caller must give up on decorrelating.
+    fn grouping_sets_pull_up_outcome(
         &self,
-        group_expr: &[Expr],
+        aggregate: &Aggregate,
         correlated_subquery_cols: &BTreeSet<Column>,
-    ) -> bool {
+    ) -> GroupingSetsPullUp {
+        let group_expr = &aggregate.group_expr;
         let grouping_sets = group_expr
             .iter()
             .filter_map(|expr| match expr {
@@ -520,7 +747,7 @@ impl PullUpCorrelatedExpr {
             })
             .collect::<Vec<_>>();
         if grouping_sets.is_empty() {
-            return true;
+            return GroupingSetsPullUp::NoColumnsToAdd;
         }
 
         // The same columns `collect_missing_exprs` appends: the correlated columns
@@ -536,18 +763,40 @@ impl PullUpCorrelatedExpr {
                 .any(|expr| matches!(expr, Expr::Column(c) if c == *col))
         });
         if required_cols.is_empty() {
-            return true;
+            return GroupingSetsPullUp::NoColumnsToAdd;
         }
 
-        grouping_sets.iter().all(|grouping_set| match grouping_set {
-            GroupingSet::Rollup(_) | GroupingSet::Cube(_) => false,
-            GroupingSet::GroupingSets(sets) => sets.iter().all(|set| {
-                required_cols.iter().all(|col| {
-                    set.iter()
-                        .any(|expr| matches!(expr, Expr::Column(c) if c == *col))
-                })
-            }),
-        })
+        let already_covered =
+            grouping_sets.iter().all(|grouping_set| match grouping_set {
+                GroupingSet::Rollup(_) | GroupingSet::Cube(_) => false,
+                GroupingSet::GroupingSets(sets) => sets.iter().all(|set| {
+                    required_cols.iter().all(|col| {
+                        set.iter()
+                            .any(|expr| matches!(expr, Expr::Column(c) if c == *col))
+                    })
+                }),
+            });
+        if already_covered {
+            return GroupingSetsPullUp::NoColumnsToAdd;
+        }
+
+        let has_empty_set = grouping_sets.iter().any(|grouping_set| match grouping_set {
+            GroupingSet::Rollup(_) | GroupingSet::Cube(_) => true,
+            GroupingSet::GroupingSets(sets) => sets.iter().any(|set| set.is_empty()),
+        });
+        // `GROUPING`/`GROUPING_ID` are resolved to bit tests on `__grouping_id`
+        // above the aggregate by `ResolveGroupingFunction` before this rule
+        // runs, so `aggregate.aggr_expr` never holds a `GROUPING` call by the
+        // time this is reached; adding a column shifts those bits instead.
+        let unsafe_read = self.column_refs_above.iter().flatten().any(|col| {
+            col.name == Aggregate::INTERNAL_GROUPING_ID || required_cols.contains(col)
+        });
+
+        if has_empty_set || unsafe_read {
+            GroupingSetsPullUp::Unsafe
+        } else {
+            GroupingSetsPullUp::SafeToExtend
+        }
     }
 
     fn collect_missing_exprs(
@@ -555,7 +804,8 @@ impl PullUpCorrelatedExpr {
         exprs: &[Expr],
         correlated_subquery_cols: &BTreeSet<Column>,
     ) -> Result<Vec<Expr>> {
-        let mut missing_exprs = vec![];
+        let mut missing_exprs =
+            Vec::with_capacity(exprs.len() + correlated_subquery_cols.len());
         for expr in exprs {
             if !missing_exprs.contains(expr) {
                 missing_exprs.push(expr.clone())
@@ -634,6 +884,47 @@ fn holds_outer_reference(plan: &LogicalPlan) -> bool {
     found
 }
 
+/// The columns that the correlated conjuncts of the Filters in `plan` read,
+/// in the scope being decorrelated. Like [`holds_outer_reference`], this does
+/// not descend into a [`LogicalPlan::Subquery`].
+fn correlated_filter_columns(plan: &LogicalPlan) -> Vec<Column> {
+    let mut cols = vec![];
+    plan.apply(|node| {
+        Ok(match node {
+            LogicalPlan::Subquery(_) => TreeNodeRecursion::Jump,
+            LogicalPlan::Filter(filter) => {
+                for expr in split_conjunction(&filter.predicate) {
+                    if expr.contains_outer() {
+                        cols.extend(expr.column_refs().into_iter().cloned());
+                    }
+                }
+                TreeNodeRecursion::Continue
+            }
+            _ => TreeNodeRecursion::Continue,
+        })
+    })
+    .expect("apply closure is infallible");
+    cols
+}
+
+/// Whether the window function `expr` lists each of `cols` as a plain
+/// `PARTITION BY` column.
+fn partitions_by_all(expr: &Expr, cols: &BTreeSet<Column>) -> bool {
+    let mut expr = expr;
+    while let Expr::Alias(Alias { expr: inner, .. }) = expr {
+        expr = inner;
+    }
+    let Expr::WindowFunction(window_fun) = expr else {
+        return false;
+    };
+    let partition_by = &window_fun.params.partition_by;
+    cols.iter().all(|col| {
+        partition_by
+            .iter()
+            .any(|expr| matches!(expr, Expr::Column(c) if c == col))
+    })
+}
+
 fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     if let Expr::BinaryExpr(BinaryExpr {
         left,
@@ -668,7 +959,7 @@ fn collect_local_correlated_cols(
 ) {
     for child in plan.inputs() {
         if let Some(cols) = all_cols_map.get(child) {
-            local_cols.extend(cols.clone());
+            local_cols.extend(cols.iter().cloned());
         }
         // SubqueryAlias is treated as the leaf node
         if !matches!(child, LogicalPlan::SubqueryAlias(_)) {
@@ -717,6 +1008,10 @@ fn agg_exprs_evaluation_result_on_empty_batch(
     schema: &DFSchemaRef,
     expr_result_map_for_count_bug: &mut ExprResultMap,
 ) -> Result<()> {
+    let info = SimplifyContext::builder()
+        .with_schema(Arc::clone(schema))
+        .build();
+    let simplifier = ExprSimplifier::new(info);
     for e in agg_expr.iter() {
         let result_expr = e
             .clone()
@@ -733,10 +1028,6 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         let result_expr = result_expr.unalias();
-        let info = SimplifyContext::builder()
-            .with_schema(Arc::clone(schema))
-            .build();
-        let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         expr_result_map_for_count_bug.insert(e.schema_name().to_string(), result_expr);
     }

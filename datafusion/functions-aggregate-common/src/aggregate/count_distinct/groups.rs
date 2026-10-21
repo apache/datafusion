@@ -152,7 +152,10 @@ where
             self.seen = HashSet::default();
             self.counts = Vec::new();
         } else {
-            let mut remaining = HashSet::default();
+            let mut remaining = HashSet::with_capacity_and_hasher(
+                self.seen.len().saturating_sub(total as usize),
+                RandomState::default(),
+            );
             for (group_idx, value) in self.seen.drain() {
                 if group_idx < num_emitted {
                     let pos = cursors[group_idx] as usize;

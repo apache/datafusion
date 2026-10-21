@@ -3422,9 +3422,9 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r"
-    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
       SortPreservingMergeExec: [id@0 ASC NULLS LAST]
-        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -3440,9 +3440,9 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r"
-    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
       SortPreservingMergeExec: [id@0 ASC NULLS LAST]
-        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -4479,6 +4479,210 @@ async fn unnest_dict_encoded_columns() -> Result<()> {
     | fixed_string    | z       |
     +-----------------+---------+
     "
+    );
+    Ok(())
+}
+
+#[rstest]
+#[case::list(DataType::List)]
+#[case::large_list(DataType::LargeList)]
+#[case::fixed_size_list(|field| DataType::FixedSizeList(field, 2))]
+#[case::list_view(DataType::ListView)]
+#[case::large_list_view(DataType::LargeListView)]
+#[tokio::test]
+async fn unnest_list_item_metadata(
+    #[case] list_type: fn(Arc<Field>) -> DataType,
+) -> Result<()> {
+    use arrow::array::BinaryArray;
+    use arrow::buffer::OffsetBuffer;
+    use arrow::compute::cast;
+    use datafusion_common::RecursionUnnestOption;
+
+    let item = Arc::new(Field::new("wkb", DataType::Binary, false).with_metadata(
+        HashMap::from([
+            ("ARROW:extension:name".into(), "geoarrow.wkb".into()),
+            (
+                "ARROW:extension:metadata".into(),
+                r#"{"crs":"EPSG:4326"}"#.into(),
+            ),
+            ("custom".into(), "item".into()),
+        ]),
+    ));
+    let values: ArrayRef =
+        Arc::new(BinaryArray::from_iter_values([b"a", b"b", b"c", b"d"]));
+    let lists = ListArray::new(
+        Arc::clone(&item),
+        OffsetBuffer::new(vec![0, 2, 4].into()),
+        Arc::clone(&values),
+        None,
+    );
+    let lists = cast(&lists, &list_type(Arc::clone(&item)))?;
+    let nested_item = Arc::new(
+        Field::new("lists", lists.data_type().clone(), false)
+            .with_metadata(HashMap::from([("custom".into(), "nested item".into())])),
+    );
+    let nested = ListArray::new(
+        Arc::clone(&nested_item),
+        OffsetBuffer::new(vec![0, 2].into()),
+        Arc::clone(&lists),
+        None,
+    );
+    let nested = cast(&nested, &list_type(Arc::clone(&nested_item)))?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("input", nested.data_type().clone(), false)
+            .with_metadata(HashMap::from([("custom".into(), "container".into())])),
+    ]));
+    let ctx = SessionContext::new();
+    let batch = RecordBatch::try_new(schema, vec![nested])?;
+    ctx.register_batch("t", batch.clone())?;
+    let df = ctx.read_batch(batch)?;
+
+    // Each recursion depth must use that element's metadata, rather than the
+    // outer list's metadata. Renaming the result must retain it as well.
+    for (depth, field, expected_values) in
+        [(1, &nested_item, &lists), (2, &item, &values)]
+    {
+        let options = UnnestOptions::new().with_recursions(RecursionUnnestOption {
+            input_column: "input".into(),
+            output_column: "expanded".into(),
+            depth,
+        });
+        let unnested = df
+            .clone()
+            .unnest_columns_with_options(&["input"], options)?
+            .select(vec![col("expanded").alias("output")])?;
+        let expected_field = field
+            .as_ref()
+            .clone()
+            .with_name("output")
+            .with_nullable(true);
+        let sql = if depth == 1 {
+            "SELECT unnest(input) AS output FROM t"
+        } else {
+            "SELECT unnest(unnest(input)) AS output FROM t"
+        };
+        for unnested in [unnested, ctx.sql(sql).await?] {
+            assert_eq!(unnested.schema().field(0).as_ref(), &expected_field);
+            let batches = unnested.collect().await?;
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].schema().field(0), &expected_field);
+            assert_eq!(batches[0].column(0), expected_values);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_list_item_metadata_in_udf() -> Result<()> {
+    use arrow::buffer::OffsetBuffer;
+    use datafusion_expr::{
+        ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    };
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct RequireItemMetadata(Signature);
+
+    impl ScalarUDFImpl for RequireItemMetadata {
+        fn name(&self) -> &str {
+            "require_item_metadata"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.0
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            Ok(arg_types[0].clone())
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
+            let field = &args.arg_fields[0];
+            if field.metadata().get("custom").map(String::as_str) != Some("item") {
+                return datafusion_common::plan_err!("Missing item metadata");
+            }
+            Ok(Arc::clone(field))
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(args.args[0].clone())
+        }
+    }
+
+    let item = Arc::new(
+        Field::new("item", DataType::Int32, false)
+            .with_metadata(HashMap::from([("custom".into(), "item".into())])),
+    );
+    let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    let list = ListArray::new(
+        Arc::clone(&item),
+        OffsetBuffer::new(vec![0, 2].into()),
+        Arc::clone(&values),
+        None,
+    );
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "input",
+        list.data_type().clone(),
+        false,
+    )]));
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", RecordBatch::try_new(schema, vec![Arc::new(list)])?)?;
+    ctx.register_udf(ScalarUDF::from(RequireItemMetadata(Signature::any(
+        1,
+        Volatility::Immutable,
+    ))));
+    let expected_field = item
+        .as_ref()
+        .clone()
+        .with_name("output")
+        .with_nullable(true);
+
+    // A UDF can inspect argument metadata before SQL rewrites UNNEST into a plan.
+    for sql in [
+        "SELECT require_item_metadata(unnest(input)) AS output FROM t",
+        "SELECT require_item_metadata(output) AS output \
+         FROM (SELECT unnest(input) AS output FROM t)",
+    ] {
+        let df = ctx.sql(sql).await?;
+        assert_eq!(df.schema().field(0).as_ref(), &expected_field);
+        let batches = df.collect().await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].schema().field(0), &expected_field);
+        assert_eq!(batches[0].column(0), &values);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_list_item_metadata_with_nulls() -> Result<()> {
+    let item = Arc::new(
+        Field::new("item", DataType::Int32, false)
+            .with_metadata(HashMap::from([("custom".into(), "item".into())])),
+    );
+    let mut builder = ListBuilder::new(Int32Builder::new()).with_field(Arc::clone(&item));
+    builder.values().append_slice(&[1, 2]);
+    builder.append(true);
+    builder.append(true); // Empty list
+    builder.append(false); // NULL list
+    let list = builder.finish();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "input",
+        list.data_type().clone(),
+        true,
+    )]));
+    let ctx = SessionContext::new();
+    let options = UnnestOptions::new()
+        .with_null_handling(datafusion_common::NullHandling::PreserveAndExpandEmpty);
+    let df = ctx
+        .read_batch(RecordBatch::try_new(schema, vec![Arc::new(list)])?)?
+        .unnest_columns_with_options(&["input"], options)?;
+    let expected_field = item.as_ref().clone().with_name("input").with_nullable(true);
+    assert_eq!(df.schema().field(0).as_ref(), &expected_field);
+    let batches = df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].schema().field(0), &expected_field);
+    assert_eq!(
+        batches[0].column(0).as_ref(),
+        &Int32Array::from(vec![Some(1), Some(2), None, None]) as &dyn Array
     );
     Ok(())
 }

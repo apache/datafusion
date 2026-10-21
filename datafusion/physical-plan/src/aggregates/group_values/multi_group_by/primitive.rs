@@ -33,6 +33,7 @@ use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::GroupSelection;
 use std::iter;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// An implementation of [`GroupColumn`] for primitive values
@@ -259,7 +260,9 @@ where
     }
 
     fn size(&self) -> usize {
-        self.group_values.allocated_size() + self.nulls.allocated_size()
+        size_of::<Self>()
+            + self.group_values.allocated_size()
+            + self.nulls.allocated_size()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
