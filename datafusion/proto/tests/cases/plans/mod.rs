@@ -34,6 +34,7 @@ use datafusion_proto::physical_plan::{
 use std::sync::Arc;
 
 mod aggregates;
+mod data_source_registry;
 mod dispatch;
 mod dynamic_filters;
 mod expr_registry;

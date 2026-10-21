@@ -290,6 +290,10 @@ pub trait DataSource: Any + Send + Sync + Debug {
     /// Serialize this data source to a full [`PhysicalPlanNode`] (a
     /// `DataSourceExec` wrapping this source), if it knows how.
     ///
+    /// Custom sources can implement [`ExtensionDataSourceFromProto`](crate::proto::ExtensionDataSourceFromProto)
+    /// and use [`extension_data_source_node`](crate::proto::extension_data_source_node)
+    /// to encode the `DataSourceExec` wrapper and decode through the session registry.
+    ///
     /// This is the `DataSource` analog of
     /// [`ExecutionPlan::try_to_proto`].
     /// [`DataSourceExec::try_to_proto`](crate::source::DataSourceExec) delegates
