@@ -515,7 +515,9 @@ mod tests {
     };
     use datafusion_functions_aggregate::correlation::corr_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
-    use datafusion_functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};
+    use datafusion_functions_aggregate::expr_fn::{
+        avg, count, count_distinct, max, min, sum,
+    };
     use datafusion_functions_aggregate::min_max::max_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
 
@@ -631,7 +633,16 @@ mod tests {
             Field::new("b", DataType::Int8, false),
             Field::new("c", DataType::UInt32, false),
         ]);
-        table_scan(Some("test"), &schema, None)?.build()
+        table_scan(Some("test"), &schema, None).unwrap().build()
+    }
+
+    fn test_table_scan_uint8_b() -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::UInt8, false),
+            Field::new("c", DataType::UInt32, false),
+        ]);
+        table_scan(Some("test"), &schema, None).unwrap().build()
     }
 
     /// An [`OptimizerConfig`] that resolves functions the way a session does.
@@ -869,11 +880,13 @@ mod tests {
 
     #[test]
     fn single_distinct_and_groupby_without_fast_accumulator() -> Result<()> {
-        let table_scan = test_table_scan_utf8_b()?;
+        let table_scan = test_table_scan_utf8_b().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
-            .build()?;
+            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         // `count(DISTINCT <string>)` lacks a specialized fast grouped accumulator:
         // rewrites into two-phase GROUP BY to avoid GroupsAccumulatorAdapter.
@@ -1044,14 +1057,16 @@ mod tests {
 
     #[test]
     fn distinct_over_a_function_with_no_opinion_rewrites_by_default() -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("a")],
                 vec![silent_distinct(col("b")), count(col("c"))],
-            )?
-            .build()?;
+            )
+            .unwrap()
+            .build()
+            .unwrap();
 
         // User-defined / no-opinion aggregate lacks a fast grouped accumulator:
         // by default it rewrites into two-phase GROUP BY to avoid GroupsAccumulatorAdapter (1.4-20x faster)
@@ -1068,14 +1083,16 @@ mod tests {
 
     #[test]
     fn distinct_over_a_function_with_no_opinion_prefer_memory_skips() -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("a")],
                 vec![silent_distinct(col("b")), count(col("c"))],
-            )?
-            .build()?;
+            )
+            .unwrap()
+            .build()
+            .unwrap();
 
         let ctx = RegistryOptimizerContext::with_prefer_memory(true);
         assert_optimized_plan_equal_with_context!(
@@ -1090,14 +1107,16 @@ mod tests {
 
     #[test]
     fn distinct_sum_and_count_rewrites_by_default() -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("a")],
                 vec![sum_distinct(col("b")), count(col("c"))],
-            )?
-            .build()?;
+            )
+            .unwrap()
+            .build()
+            .unwrap();
 
         // `sum(DISTINCT)` lacks a fast grouped accumulator:
         // by default it rewrites into two-phase GROUP BY to avoid GroupsAccumulatorAdapter (1.4-20x faster)
@@ -1114,14 +1133,16 @@ mod tests {
 
     #[test]
     fn distinct_sum_and_count_prefer_memory_skips() -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("a")],
                 vec![sum_distinct(col("b")), count(col("c"))],
-            )?
-            .build()?;
+            )
+            .unwrap()
+            .build()
+            .unwrap();
 
         let ctx = RegistryOptimizerContext::with_prefer_memory(true);
         assert_optimized_plan_equal_with_context!(
@@ -1139,8 +1160,10 @@ mod tests {
         let table_scan = test_table_scan_utf8_b().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a") + lit(1)], vec![count_distinct(col("b"))])?
-            .build()?;
+            .aggregate(vec![col("a") + lit(1)], vec![count_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         // Should work
         assert_optimized_plan_equal!(
@@ -1191,11 +1214,16 @@ mod tests {
             Field::new("b", DataType::UInt16, false),
             Field::new("c", DataType::UInt32, false),
         ]);
-        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan = table_scan(Some("test"), &schema, None)
+            .unwrap()
+            .build()
+            .unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
-            .build()?;
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let ctx = RegistryOptimizerContext::with_options(false, 4);
         assert_optimized_plan_equal_with_context!(
@@ -1216,11 +1244,16 @@ mod tests {
             Field::new("b", DataType::Int16, false),
             Field::new("c", DataType::UInt32, false),
         ]);
-        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan = table_scan(Some("test"), &schema, None)
+            .unwrap()
+            .build()
+            .unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
-            .build()?;
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let ctx = RegistryOptimizerContext::with_options(false, 4);
         assert_optimized_plan_equal_with_context!(
@@ -1233,22 +1266,41 @@ mod tests {
         )
     }
 
+    /// Ensures the `UInt8` branch of the small-int guard is hit.
+    #[test]
+    fn no_groupby_uint8_small_int_skips() -> Result<()> {
+        let table_scan = test_table_scan_uint8_b().unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let ctx = RegistryOptimizerContext::with_options(false, 4);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.b)]] [count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt8, c:UInt32]
+        "
+        )
+    }
+
     /// Verifies the `is_count_distinct_small_int` check works correctly when
     /// the function is NOT count (not from the `count_rollup` registry).
     /// `sum(DISTINCT int8)` without GROUP BY on multi-partitions must still
     /// rewrite because it is not the small-int cardinality exception.
     #[test]
     fn no_groupby_non_count_small_int_still_rewrites() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::UInt32, false),
-            Field::new("b", DataType::Int8, false),
-            Field::new("c", DataType::UInt32, false),
-        ]);
-        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan = test_table_scan_int8_b().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![sum_distinct(col("b"))])?
-            .build()?;
+            .aggregate(Vec::<Expr>::new(), vec![sum_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         // sum(DISTINCT int8) is not the small-int cardinality exception:
         // it must rewrite on multi-partition to enable parallel deduplication.
@@ -1271,14 +1323,16 @@ mod tests {
     #[test]
     fn single_distinct_and_groupby_with_min_companion_and_fast_accumulator_skips()
     -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("a")],
                 vec![count_distinct(col("b")), min(col("c"))],
-            )?
-            .build()?;
+            )
+            .unwrap()
+            .build()
+            .unwrap();
 
         // count(DISTINCT UInt32) has a fast grouped accumulator: skip rewrite.
         assert_optimized_plan_equal!(
@@ -1290,21 +1344,45 @@ mod tests {
         )
     }
 
+    /// Verifies `avg` as companion aggregate skips rewrite because `avg`
+    /// cannot be rolled up in the two-phase GROUP BY (not count, sum, min, max).
+    /// This directly exercises the companion aggregate fallback `else { return Ok(false); }`.
+    #[test]
+    fn single_distinct_and_groupby_with_avg_companion_skips() -> Result<()> {
+        let table_scan = test_table_scan().unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![count_distinct(col("b")), avg(col("c"))],
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), avg(test.c)]] [a:UInt32, count(DISTINCT test.b):Int64, avg(test.c):Float64;N]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
     /// With GROUP BY + `prefer_memory = true`, if the distinct aggregate has a
     /// fast grouped accumulator, it still skips (the fast-accumulator branch
     /// takes priority and `prefer_memory` never even needs to be checked).
     #[test]
     fn prefer_memory_true_with_fast_accumulator_skips_not_prefer_memory_branch()
     -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
-            .build()?;
+            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
 
-        // Even with prefer_memory=false, the fast accumulator branch takes precedence.
-        // This test primarily exists to confirm the fast-accumulator guard is
-        // evaluated before the prefer_memory fallback so Codecov sees both paths.
         let ctx = RegistryOptimizerContext::with_options(false, 4);
         assert_optimized_plan_equal_with_context!(
             ctx,
@@ -1318,11 +1396,13 @@ mod tests {
 
     #[test]
     fn no_groupby_multi_partition_rewrites() -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
-            .build()?;
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let ctx = RegistryOptimizerContext::with_options(false, 4);
         assert_optimized_plan_equal_with_context!(
@@ -1339,11 +1419,13 @@ mod tests {
 
     #[test]
     fn no_groupby_single_partition_skips() -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
-            .build()?;
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let ctx = RegistryOptimizerContext::with_options(false, 1);
         assert_optimized_plan_equal_with_context!(
@@ -1358,11 +1440,13 @@ mod tests {
 
     #[test]
     fn no_groupby_small_int_skips() -> Result<()> {
-        let table_scan = test_table_scan_int8_b()?;
+        let table_scan = test_table_scan_int8_b().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
-            .build()?;
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let ctx = RegistryOptimizerContext::with_options(false, 4);
         assert_optimized_plan_equal_with_context!(
@@ -1708,11 +1792,13 @@ mod tests {
     #[test]
     fn single_distinct_aggregation_prefer_memory_default_rewrites_lone_distinct()
     -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![sum_distinct(col("b"))])?
-            .build()?;
+            .aggregate(vec![col("a")], vec![sum_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let ctx = RegistryOptimizerContext::with_prefer_memory(false);
         assert_optimized_plan_equal_with_context!(
@@ -1730,11 +1816,13 @@ mod tests {
     #[test]
     fn single_distinct_aggregation_prefer_memory_true_skips_rewrite_for_groups_accumulator()
     -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![sum_distinct(col("b"))])?
-            .build()?;
+            .aggregate(vec![col("a")], vec![sum_distinct(col("b"))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let ctx = RegistryOptimizerContext::with_prefer_memory(true);
         assert_optimized_plan_equal_with_context!(
@@ -1750,7 +1838,7 @@ mod tests {
     #[test]
     fn single_distinct_aggregation_prefer_memory_true_still_rewrites_unsupported()
     -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan().unwrap();
 
         let aggr_expr = Expr::AggregateFunction(AggregateFunction::new_udf(
             datafusion_functions_aggregate::approx_median::approx_median_udaf(),
@@ -1762,8 +1850,10 @@ mod tests {
         ));
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![aggr_expr])?
-            .build()?;
+            .aggregate(vec![col("a")], vec![aggr_expr])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let ctx = RegistryOptimizerContext::with_prefer_memory(true);
         assert_optimized_plan_equal_with_context!(
