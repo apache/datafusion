@@ -63,6 +63,56 @@ SELECT DISTINCT arrow_typeof(substr(c1, 1, 3)) FROM test_substr;
 ----
 Dictionary(Int32, Utf8)
 
+# Runtime scalars that are not literals must agree with the planned return type.
+query TT
+SELECT substr(c1, (SELECT 2)), arrow_typeof(substr(c1, (SELECT 2)))
+FROM test_substr
+WHERE c1 = 'foo';
+----
+oo Dictionary(Int32, Utf8)
+
+# Scalar dictionary input must use the same dictionary-aware dispatch as arrays.
+query TT
+SELECT
+  substr(arrow_cast('hello', 'Dictionary(Int32, Utf8)'), 1, 3),
+  arrow_typeof(substr(arrow_cast('hello', 'Dictionary(Int32, Utf8)'), 1, 3));
+----
+hel Dictionary(Int32, Utf8)
+
+statement ok
+create table test_substr_arguments (
+  c VARCHAR NOT NULL,
+  start_pos BIGINT,
+  length BIGINT
+);
+
+statement ok
+insert into test_substr_arguments values
+  ('hello', 1, 2),
+  ('world', NULL, 3),
+  ('arrow', 2, NULL);
+
+# Nullable per-row arguments propagate nulls without changing dictionary encoding.
+query TTT
+SELECT
+  substr(c, start_pos),
+  substr(arrow_cast(c, 'Dictionary(Int32, Utf8)'), start_pos),
+  substr(arrow_cast(c, 'Dictionary(Int32, Utf8)'), 1, length)
+FROM test_substr_arguments
+ORDER BY c;
+----
+rrow rrow NULL
+hello hello he
+NULL NULL wor
+
+query TT
+SELECT DISTINCT
+  arrow_typeof(substr(arrow_cast(c, 'Dictionary(Int32, Utf8)'), start_pos)),
+  arrow_typeof(substr(arrow_cast(c, 'Dictionary(Int32, Utf8)'), 1, length))
+FROM test_substr_arguments;
+----
+Dictionary(Int32, Utf8) Dictionary(Int32, Utf8)
+
 #
 # Clean up
 #
@@ -74,3 +124,6 @@ drop table test_substr_base;
 
 statement ok
 drop table test_datetime_base;
+
+statement ok
+drop table test_substr_arguments;

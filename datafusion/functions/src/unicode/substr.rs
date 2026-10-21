@@ -24,16 +24,16 @@ use arrow::array::{
     StringArrayType, StringViewArray,
 };
 use arrow::buffer::{NullBuffer, ScalarBuffer};
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::compute::kernels::cast::cast;
+use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{
     NativeType, logical_int32, logical_int64, logical_string,
 };
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, EncodingPreservation, ReturnFieldArgs,
-    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass,
-    Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -117,21 +117,6 @@ impl ScalarUDFImpl for SubstrFunc {
         Ok(arg_types[0].clone())
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // Per-row start/length materializes the dict, so the output type is the
-        // value type; scalar tail keeps the dict wrapper.
-        let input = &args.arg_fields[0];
-        let output_type = match input.data_type() {
-            DataType::Dictionary(_, value_type)
-                if !args.scalar_arguments.iter().skip(1).all(Option::is_some) =>
-            {
-                value_type.as_ref().clone()
-            }
-            other => other.clone(),
-        };
-        Ok(Field::new(self.name(), output_type, input.is_nullable()).into())
-    }
-
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if let ColumnarValue::Array(array) = &args.args[0]
             && matches!(array.data_type(), DataType::Dictionary(_, _))
@@ -150,18 +135,7 @@ impl ScalarUDFImpl for SubstrFunc {
             return Ok(ColumnarValue::Array(dict.with_values(new_values)));
         }
 
-        // Per-row start/length: materialize the dict so substr can run row-wise.
-        let args = if let ColumnarValue::Array(array) = &args.args[0]
-            && let DataType::Dictionary(_, value_type) = array.data_type()
-        {
-            let flat = arrow::compute::kernels::cast::cast(array, value_type.as_ref())?;
-            let mut new_args = args.args.clone();
-            new_args[0] = ColumnarValue::Array(flat);
-            new_args
-        } else {
-            args.args
-        };
-        make_scalar_function(substr, vec![])(&args)
+        make_scalar_function(substr, vec![])(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -187,6 +161,11 @@ fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
             string_view_substr(string_array, &args[1..])
+        }
+        DataType::Dictionary(_, value_type) => {
+            let mut flat_args = args.to_vec();
+            flat_args[0] = cast(&args[0], value_type)?;
+            Ok(cast(&substr(&flat_args)?, args[0].data_type())?)
         }
         other => exec_err!(
             "Unsupported data type {other:?} for function substr,\
