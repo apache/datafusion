@@ -3575,3 +3575,23 @@ DROP TABLE unnest_outer;
 
 statement ok
 DROP TABLE unnest_inner;
+
+# A set comparison in a projection without an alias must not change the projection's
+# output field name. `RewriteSetComparison` replaces `x > ALL (…)` with a `CASE` whose
+# display name differs from the field name, and rebuilding the projection from the
+# expression names failed the optimizer's "schema is invariant" check with an internal
+# error instead of returning the answer.
+query B
+select 2 > all (select v from (values (1), (0)) t(v));
+----
+true
+
+query BI
+select 2 > all (select v from (values (1), (0)) t(v)), 9 as k;
+----
+true 9
+
+query B
+select 2 > all (select v from (values (1), (0)) t(v)) as aliased;
+----
+true

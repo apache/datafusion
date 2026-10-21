@@ -56,6 +56,19 @@ impl DecorrelatePredicateSubquery {
     }
 }
 
+/// The name a projection rebuilt from `expr` gives that expression's field.
+///
+/// `Expr::schema_name` is not that name for a column reference: it keeps the
+/// qualifier (`t.k`), while the field is named after the bare column (`k`) and
+/// stores the qualifier separately.
+fn projected_field_name(expr: &Expr) -> String {
+    match expr {
+        Expr::Alias(alias) => alias.name.clone(),
+        Expr::Column(column) => column.name.clone(),
+        other => other.schema_name().to_string(),
+    }
+}
+
 impl OptimizerRule for DecorrelatePredicateSubquery {
     fn rewrite(
         &self,
@@ -74,10 +87,23 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             }
 
             let original_projection = projection.clone();
+            // The projection's own schema is the authority for its output field names.
+            // Earlier rules rewrite expressions with `map_expressions`, which keeps the
+            // schema but can leave an expression whose display name no longer matches its
+            // field name (`RewriteSetComparison` turns `x > ALL (…)` into a `CASE` and does
+            // exactly that). Taking the name from the expression instead would rebuild the
+            // projection under a different name and fail the "schema is invariant under
+            // optimization" check.
+            let field_names = projection
+                .schema
+                .fields()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect::<Vec<_>>();
             let mut cur_input = Arc::unwrap_or_clone(projection.input);
             let mut rewritten_exprs = Vec::with_capacity(projection.expr.len());
-            for expr in projection.expr {
-                let original_name = expr.schema_name().to_string();
+            for (index, expr) in projection.expr.into_iter().enumerate() {
+                let original_name = &field_names[index];
                 let (new_input, mut rewritten_expr) =
                     rewrite_inner_subqueries(cur_input, expr, config, true, true)?;
                 if has_subquery(&rewritten_expr) {
@@ -87,8 +113,8 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 }
                 cur_input = new_input;
 
-                if rewritten_expr.schema_name().to_string() != original_name {
-                    rewritten_expr = rewritten_expr.alias(original_name);
+                if projected_field_name(&rewritten_expr) != *original_name {
+                    rewritten_expr = rewritten_expr.alias(original_name.as_str());
                 }
                 rewritten_exprs.push(rewritten_expr);
             }
