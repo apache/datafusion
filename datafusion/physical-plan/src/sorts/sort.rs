@@ -1308,7 +1308,8 @@ pub fn sort_batch_chunked(
 /// On multithreaded Tokio runtimes, large inputs are sorted in batches on
 /// separate tasks before merging. All partitions share a task limit capped by
 /// both the worker count of the runtime that first performs this sorting and
-/// the estimated available CPU parallelism. The plan returned by
+/// the estimated available CPU parallelism. Clones and concurrent executions
+/// of the same plan share this limit. The plan returned by
 /// [`ExecutionPlan::reset_state`] starts with a fresh limit.
 /// Inputs sorted in a single pass, current-thread runtimes, execution outside
 /// Tokio, and TopK sorting continue sorting inline.
