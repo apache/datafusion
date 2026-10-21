@@ -72,6 +72,25 @@ pub fn plan_walk() -> Result<()> {
     );
     println!("Without Filter nodes:\n{}", rewritten.data.display_indent());
 
+    // Consecutive Filters are removed bottom-up: f_up sees the outer Filter
+    // after its inner Filter has already been replaced with the TableScan.
+    let plan = table_scan(Some("employee"), &schema, None)?
+        .filter(col("salary").gt(lit(1000)))?
+        .filter(col("salary").lt(lit(2000)))?
+        .build()?;
+    assert_eq!(
+        plan.display_indent().to_string(),
+        "Filter: employee.salary < Int32(2000)\n  Filter: employee.salary > Int32(1000)\n    TableScan: employee"
+    );
+    let mut rewriter = RemoveFilters::default();
+    let rewritten = plan.rewrite(&mut rewriter)?;
+    assert!(rewritten.transformed);
+    assert_eq!(rewriter.removed, 2);
+    assert_eq!(
+        rewritten.data.display_indent().to_string(),
+        "TableScan: employee"
+    );
+
     // A subquery in an expression is not an ordinary plan input, so apply
     // and rewrite do not traverse it. Use their *_with_subqueries variants.
     // Include a scan filter to illustrate predicates that have been pushed down
