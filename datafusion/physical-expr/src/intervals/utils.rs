@@ -65,6 +65,16 @@ fn check_support_with(
     is_type_supported: fn(&DataType) -> bool,
 ) -> bool {
     if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>() {
+        // Arithmetic is only analyzed over the types `check_support` accepts:
+        // decimal arithmetic changes the precision and scale of its result, and
+        // propagating constraints back to its operands would not restore their
+        // types.
+        let is_type_supported: fn(&DataType) -> bool =
+            if binary_expr.op().is_numerical_operators() {
+                is_datatype_supported
+            } else {
+                is_type_supported
+            };
         is_operator_supported(binary_expr.op())
             && check_support_with(binary_expr.left(), schema, is_type_supported)
             && check_support_with(binary_expr.right(), schema, is_type_supported)
@@ -253,6 +263,37 @@ mod tests {
             assert!(check_statistics_support(&expr, &schema));
             // Decimal support is limited to statistics estimation for now:
             assert!(!check_support(&expr, &schema));
+
+            // Decimal arithmetic is not analyzed, since it changes the precision
+            // and scale of its operands:
+            let literal = ScalarValue::try_from(&data_type).unwrap();
+            for op in [Operator::Plus, Operator::Minus, Operator::Multiply] {
+                let arithmetic = Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    op,
+                    Arc::new(Literal::new(literal.clone())),
+                )) as Arc<dyn PhysicalExpr>;
+                let expr = Arc::new(BinaryExpr::new(
+                    arithmetic,
+                    Operator::Gt,
+                    Arc::new(Literal::new(literal.clone())),
+                )) as Arc<dyn PhysicalExpr>;
+                assert!(!check_statistics_support(&expr, &schema), "{op}");
+            }
         }
+
+        // Arithmetic over other supported types is unaffected:
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Plus,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+            )),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(check_statistics_support(&expr, &schema));
+        assert!(check_support(&expr, &schema));
     }
 }

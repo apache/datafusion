@@ -982,35 +982,67 @@ mod tests {
 
     #[test]
     fn test_decimal_widening_constraint_boundaries() -> Result<()> {
-        // Every Decimal128(3, 2) value near zero, widened to Decimal128(5, 3):
-        let values: Vec<i128> = (-20..=20).collect();
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("x", Decimal128(3, 2), false)]));
-        let expr = CastExpr::new(col("x", &schema)?, Decimal128(5, 3), None);
-        let input = Interval::make_unbounded(&Decimal128(3, 2))?;
-        // Output bounds at every Decimal128(5, 3) value in range, including ones
-        // between two inputs, so casting back rounds in both directions:
-        let bounds: Vec<i128> = (-210..=210).collect();
-        for (i, lower) in bounds.iter().enumerate() {
-            for upper in &bounds[i..] {
-                let output = Interval::try_new(
-                    ScalarValue::Decimal128(Some(*lower), 5, 3),
-                    ScalarValue::Decimal128(Some(*upper), 5, 3),
-                )?;
-                let propagated = expr.propagate_constraints(&output, &[&input])?.unwrap();
-                assert_eq!(propagated.len(), 1);
-                for value in &values {
-                    let widened = ScalarValue::Decimal128(Some(value * 10), 5, 3);
-                    if output.contains_value(widened)? {
-                        assert!(
-                            propagated[0].contains_value(ScalarValue::Decimal128(
-                                Some(*value),
-                                3,
-                                2
-                            ))?,
-                            "input={value}, output={output}, propagated={:?}",
-                            propagated[0]
-                        );
+        fn decimal(data_type: &DataType, value: i128) -> ScalarValue {
+            match data_type {
+                Decimal32(p, s) => ScalarValue::Decimal32(Some(value as i32), *p, *s),
+                Decimal64(p, s) => ScalarValue::Decimal64(Some(value as i64), *p, *s),
+                Decimal128(p, s) => ScalarValue::Decimal128(Some(value), *p, *s),
+                Decimal256(p, s) => {
+                    ScalarValue::Decimal256(Some(i256::from_i128(value)), *p, *s)
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        // (source, target, scale factor, extreme unscaled source value)
+        for (source, target, factor, extreme) in [
+            (Decimal128(3, 2), Decimal128(5, 3), 10, 999),
+            // Cross-width widening:
+            (Decimal32(4, 2), Decimal128(10, 4), 100, 9999),
+            (Decimal64(5, 1), Decimal256(10, 3), 100, 99999),
+            // Negative scale:
+            (Decimal128(3, -1), Decimal128(5, 0), 10, 999),
+        ] {
+            // Source values near zero and near the extremes of the precision:
+            let values: Vec<i128> = (-5..=5)
+                .chain(extreme - 5..=extreme)
+                .chain(-extreme..=-extreme + 5)
+                .collect();
+            // Output bounds at, between, and just past the widened values,
+            // including past the source's extremes, so casting back rounds in
+            // both directions and overflows:
+            let mut bounds: Vec<i128> = values
+                .iter()
+                .flat_map(|v| {
+                    let w = v * factor;
+                    [w - factor, w - 1, w, w + 1, w + factor / 2, w + factor]
+                })
+                .collect();
+            bounds.sort_unstable();
+            bounds.dedup();
+
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("x", source.clone(), false)]));
+            let expr = CastExpr::new(col("x", &schema)?, target.clone(), None);
+            let input = Interval::make_unbounded(&source)?;
+            for (i, lower) in bounds.iter().enumerate() {
+                for upper in &bounds[i..] {
+                    let output = Interval::try_new(
+                        decimal(&target, *lower),
+                        decimal(&target, *upper),
+                    )?;
+                    let propagated =
+                        expr.propagate_constraints(&output, &[&input])?.unwrap();
+                    assert_eq!(propagated.len(), 1);
+                    for value in &values {
+                        if output.contains_value(decimal(&target, value * factor))? {
+                            assert!(
+                                propagated[0].contains_value(decimal(&source, *value))?,
+                                "{source} -> {target}: input={value}, output={output}, \
+                                 propagated={:?}",
+                                propagated[0]
+                            );
+                        }
                     }
                 }
             }

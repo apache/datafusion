@@ -1,0 +1,104 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for filter selectivity estimates on decimal columns, using min/max
+# statistics from a parquet file.
+#
+# l_discount cycles through 0.00..0.10 and l_quantity through 1.00..50.00. Since
+# lcm(11, 50) = 550, each (l_discount, l_quantity) pair appears exactly twice
+# in the 1100 rows.
+
+query I
+COPY (
+  SELECT
+    CAST((value % 11) / 100.0 AS DECIMAL(15, 2)) AS l_discount,
+    CAST(1 + value % 50 AS DECIMAL(15, 2)) AS l_quantity
+  FROM range(1100)
+)
+TO 'test_files/scratch/filter_statistics_decimal/lineitem.parquet'
+STORED AS PARQUET;
+----
+1100
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.explain.show_statistics = true;
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE EXTERNAL TABLE lineitem
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/lineitem.parquet';
+
+# TPC-H Q6-style decimal ranges with fractional literals: the estimate uses
+# 3 of 11 discount values and 2300 of 4901 quantity values (1.00..23.99).
+query TT
+EXPLAIN SELECT l_discount FROM lineitem
+WHERE l_discount >= 0.05 AND l_discount <= 0.07 AND l_quantity < 24;
+----
+physical_plan
+01)FilterExec: l_discount@0 >= 0.05 AND l_discount@0 <= 0.07 AND l_quantity@1 < 24.00, projection=[l_discount@0], statistics=[Rows=Inexact(141), Bytes=Inexact(4506), [(Col[0]: Min=Inexact(Decimal128(0.05,15,2)) Max=Inexact(Decimal128(0.07,15,2)) Null=Exact(0) ScanBytes=Inexact(2253))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/lineitem.parquet]]}, projection=[l_discount, l_quantity], file_type=parquet, predicate=l_discount@0 >= 0.05 AND l_discount@0 <= 0.07 AND l_quantity@1 < 24.00, pruning_predicate=l_discount_null_count@1 != row_count@2 AND l_discount_max@0 >= 0.05 AND l_discount_null_count@1 != row_count@2 AND l_discount_min@3 <= 0.07 AND l_quantity_null_count@5 != row_count@2 AND l_quantity_min@4 < 24.00, required_guarantees=[], statistics=[Rows=Inexact(1100), Bytes=Inexact(35200), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(17600)),(Col[1]: Min=Inexact(Decimal128(1.00,15,2)) Max=Inexact(Decimal128(50.00,15,2)) Null=Inexact(0) ScanBytes=Inexact(17600))]]
+
+query I
+SELECT count(*) FROM lineitem
+WHERE l_discount >= 0.05 AND l_discount <= 0.07 AND l_quantity < 24;
+----
+138
+
+# A literal with more digits than the column's scale is compared through a
+# cast to a wider decimal; the column is still narrowed to [0.06, 0.10].
+query TT
+EXPLAIN SELECT l_discount FROM lineitem WHERE l_discount >= 0.055;
+----
+physical_plan
+01)FilterExec: CAST(l_discount@0 AS Decimal128(30, 15)) >= 0.055000000000000, statistics=[Rows=Inexact(500), Bytes=Inexact(8000), [(Col[0]: Min=Inexact(Decimal128(0.06,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(8000))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/lineitem.parquet]]}, projection=[l_discount], file_type=parquet, predicate=CAST(l_discount@0 AS Decimal128(30, 15)) >= 0.055000000000000, pruning_predicate=l_discount_null_count@1 != row_count@2 AND CAST(l_discount_max@0 AS Decimal128(30, 15);N) >= 0.055000000000000, required_guarantees=[], statistics=[Rows=Inexact(1100), Bytes=Inexact(17600), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(17600))]]
+
+query I
+SELECT count(*) FROM lineitem WHERE l_discount >= 0.055;
+----
+500
+
+# Decimal arithmetic is not analyzed and uses the default selectivity.
+query TT
+EXPLAIN SELECT l_discount FROM lineitem WHERE l_discount * 2 > 0.1;
+----
+physical_plan
+01)FilterExec: l_discount@0 * 2 > 0.10, statistics=[Rows=Inexact(220), Bytes=Inexact(3520), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(3520))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/lineitem.parquet]]}, projection=[l_discount], file_type=parquet, predicate=l_discount@0 * 2 > 0.10, statistics=[Rows=Inexact(1100), Bytes=Inexact(17600), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(17600))]]
+
+query I
+SELECT count(*) FROM lineitem WHERE l_discount * 2 > 0.1;
+----
+500
+
+statement ok
+DROP TABLE lineitem;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
+
+statement ok
+RESET datafusion.explain.show_statistics;

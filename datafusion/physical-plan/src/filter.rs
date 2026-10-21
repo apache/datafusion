@@ -2100,6 +2100,81 @@ mod tests {
         Ok(())
     }
 
+    /// Arithmetic changes the precision and scale of decimal results, so it must
+    /// not narrow decimal columns: these predicates fall back to the default
+    /// selectivity and keep the input bounds in the column's own type.
+    #[tokio::test]
+    async fn test_filter_statistics_decimal_arithmetic_expr() -> Result<()> {
+        // Table:
+        //      a: Decimal128(15, 2), min=1.00, max=10.00
+        let decimal = |v: i128| ScalarValue::Decimal128(Some(v), 15, 2);
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::Decimal128(15, 2), false)]);
+        let input_stats = Statistics {
+            num_rows: Precision::Inexact(1000),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                min_value: Precision::Inexact(decimal(100)),
+                max_value: Precision::Inexact(decimal(1000)),
+                ..Default::default()
+            }],
+        };
+
+        // a * 2.00 > 5.0000 and a - 2.00 > 5.00
+        for (op, rhs) in [
+            (Operator::Multiply, 50_000_i128), // 5.0000 at the product's scale 4
+            (Operator::Minus, 500_i128),       // 5.00 at the difference's scale 2
+        ] {
+            let arithmetic =
+                Arc::new(BinaryExpr::new(col("a", &schema)?, op, lit(decimal(200))))
+                    as Arc<dyn PhysicalExpr>;
+            let DataType::Decimal128(precision, scale) = arithmetic.data_type(&schema)?
+            else {
+                unreachable!()
+            };
+            let predicate = Arc::new(BinaryExpr::new(
+                arithmetic,
+                Operator::Gt,
+                lit(ScalarValue::Decimal128(Some(rhs), precision, scale)),
+            ));
+            let input =
+                Arc::new(StatisticsExec::new(input_stats.clone(), schema.clone()));
+            let filter: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(predicate, input)?);
+
+            let statistics = StatisticsContext::new()
+                .compute(filter.as_ref(), &StatisticsArgs::new())?;
+            assert_eq!(statistics.num_rows, Precision::Inexact(200), "{op}");
+            let column = &statistics.column_statistics[0];
+            assert_eq!(column.min_value, Precision::Inexact(decimal(100)), "{op}");
+            assert_eq!(column.max_value, Precision::Inexact(decimal(1000)), "{op}");
+            for bound in [&column.min_value, &column.max_value] {
+                let value = bound.get_value().unwrap();
+                assert_eq!(value.data_type(), DataType::Decimal128(15, 2), "{op}");
+            }
+        }
+
+        // Negation keeps the decimal type, so -a >= -5.00 still narrows `a` to
+        // [1.00, 5.00]: 401 of the 901 representable values in [1.00, 10.00],
+        // rounded up.
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(NegativeExpr::new(col("a", &schema)?)),
+            Operator::GtEq,
+            lit(decimal(-500)),
+        ));
+        let input = Arc::new(StatisticsExec::new(input_stats, schema.clone()));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics =
+            StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
+        assert_eq!(statistics.num_rows, Precision::Inexact(446));
+        let column = &statistics.column_statistics[0];
+        assert_eq!(column.min_value, Precision::Inexact(decimal(100)));
+        assert_eq!(column.max_value, Precision::Inexact(decimal(500)));
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_filter_statistics_decimal_mixed_scale_expr() -> Result<()> {
         // Table:
