@@ -6009,7 +6009,6 @@ mod test {
         batches
     }
 
-    // Proves the opener passes a promoted binary Dictionary schema to arrow-rs.
     #[tokio::test]
     async fn test_rle_binary_column_promotion() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
@@ -6049,6 +6048,33 @@ mod test {
         assert_eq!(
             batches[0].schema().field(0).data_type(),
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary))
+        );
+
+        let dict_utf8_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&dict_utf8_schema))
+            .with_enable_rle_to_dictionary(true)
+            .build();
+        let batches = collect_batches(
+            &morselizer,
+            PartitionedFile::new("binary.parquet".to_string(), bin_size as u64),
+        )
+        .await;
+        assert_eq!(batches[0].schema(), dict_utf8_schema);
+        let dictionary = batches[0].column(0).as_dictionary::<Int32Type>();
+        assert_eq!(dictionary.keys().values(), &[0, 1, 0]);
+        assert_eq!(
+            dictionary
+                .values()
+                .as_string::<i32>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("a"), Some("b")]
         );
     }
 }
