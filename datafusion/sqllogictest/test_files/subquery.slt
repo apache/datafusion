@@ -3627,3 +3627,89 @@ DROP TABLE unnest_outer;
 
 statement ok
 DROP TABLE unnest_inner;
+
+# Correlated subqueries that reference an outer column whose type is only
+# decided by type coercion (a `CASE` with `INT` and `BIGINT` branches, or a
+# `UNION ALL` of `INT` and `BIGINT` columns): the comparison in the subquery
+# must be coerced to the outer column's final type.
+# https://github.com/apache/datafusion/issues/26285
+statement ok
+CREATE TABLE coerce_outer_t(id INT, c1 INT) AS VALUES (1, 0), (100000, 0), (3, 5);
+
+statement ok
+CREATE TABLE coerce_outer_a(k INT) AS VALUES (1), (100000);
+
+statement ok
+CREATE TABLE coerce_outer_b(k BIGINT) AS VALUES (3);
+
+statement ok
+CREATE TABLE coerce_outer_u(c0 INT) AS VALUES (1), (100000);
+
+query I rowsort
+SELECT s.k FROM (SELECT CASE WHEN c1 = 0 THEN id ELSE 3 END AS k FROM coerce_outer_t) s
+WHERE EXISTS (SELECT 1 FROM coerce_outer_u u WHERE u.c0 = s.k);
+----
+1
+100000
+
+query I rowsort
+SELECT s.k FROM (SELECT k FROM coerce_outer_a UNION ALL SELECT k FROM coerce_outer_b) s
+WHERE EXISTS (SELECT 1 FROM coerce_outer_u u WHERE u.c0 = s.k);
+----
+1
+100000
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# The join compares `u.c0` cast to the outer column's type
+query TT
+EXPLAIN SELECT s.k FROM (SELECT k FROM coerce_outer_a UNION ALL SELECT k FROM coerce_outer_b) s
+WHERE EXISTS (SELECT 1 FROM coerce_outer_u u WHERE u.c0 = s.k);
+----
+logical_plan
+01)LeftSemi Join: s.k = CAST(__correlated_sq_1.c0 AS Int64)
+02)--SubqueryAlias: s
+03)----Union
+04)------Projection: CAST(coerce_outer_a.k AS Int64) AS k
+05)--------TableScan: coerce_outer_a projection=[k]
+06)------TableScan: coerce_outer_b projection=[k]
+07)--SubqueryAlias: __correlated_sq_1
+08)----SubqueryAlias: u
+09)------TableScan: coerce_outer_u projection=[c0]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+query I rowsort
+SELECT s.k FROM (SELECT k FROM coerce_outer_a UNION ALL SELECT k FROM coerce_outer_b) s
+WHERE NOT EXISTS (SELECT 1 FROM coerce_outer_u u WHERE u.c0 = s.k);
+----
+3
+
+query I rowsort
+SELECT s.k FROM (SELECT k FROM coerce_outer_a UNION ALL SELECT k FROM coerce_outer_b) s
+WHERE s.k IN (SELECT c0 FROM coerce_outer_u u WHERE u.c0 = s.k);
+----
+1
+100000
+
+query II rowsort
+SELECT s.k, (SELECT count(*) FROM coerce_outer_u u WHERE u.c0 = s.k) AS c
+FROM (SELECT CASE WHEN c1 = 0 THEN id ELSE 3 END AS k FROM coerce_outer_t) s;
+----
+1 1
+100000 1
+3 0
+
+statement ok
+DROP TABLE coerce_outer_t;
+
+statement ok
+DROP TABLE coerce_outer_a;
+
+statement ok
+DROP TABLE coerce_outer_b;
+
+statement ok
+DROP TABLE coerce_outer_u;

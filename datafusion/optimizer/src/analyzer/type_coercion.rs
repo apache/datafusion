@@ -120,7 +120,10 @@ impl AnalyzerRule for TypeCoercion {
             .data;
 
         // recurse
-        let transformed_plan = coerce_plan_and_subqueries(plan, config)?;
+        let transformed_plan = coerce_plan_and_subqueries(
+            plan,
+            config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
+        )?;
 
         // finish
         coerce_output(transformed_plan, config)
@@ -130,7 +133,7 @@ impl AnalyzerRule for TypeCoercion {
 /// Coerce each node of `plan` and of its subqueries, from the leaves up.
 fn coerce_plan_and_subqueries(
     plan: LogicalPlan,
-    config: &ConfigOptions,
+    session_time_zone: Option<&str>,
 ) -> Result<LogicalPlan> {
     static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
 
@@ -148,13 +151,14 @@ fn coerce_plan_and_subqueries(
             // Coercion can change the types of the body, for example the type
             // of a `NULL` column of a `UNION`. Coerce the body first, and give
             // its new schema to the scans before the continuation is coerced.
-            let body = coerce_plan_and_subqueries(cte.cte, config)?;
+            let body = coerce_plan_and_subqueries(cte.cte, session_time_zone)?;
             let continuation = with_materialized_cte_scan_schema(
                 cte.continuation,
                 cte.id,
                 body.schema(),
             )?;
-            let continuation = coerce_plan_and_subqueries(continuation, config)?;
+            let continuation =
+                coerce_plan_and_subqueries(continuation, session_time_zone)?;
             Ok(Transformed::new(
                 LogicalPlan::Extension(Extension {
                     node: Arc::new(MaterializedCte {
@@ -168,13 +172,7 @@ fn coerce_plan_and_subqueries(
                 TreeNodeRecursion::Jump,
             ))
         },
-        |plan| {
-            analyze_internal(
-                &EMPTY_SCHEMA,
-                plan,
-                config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
-            )
-        },
+        |plan| analyze_internal(&EMPTY_SCHEMA, plan, session_time_zone),
     )
     .map(|t| t.data)
 }
@@ -326,6 +324,65 @@ impl<'a> TypeCoercionRewriter<'a> {
     ) -> Self {
         self.session_time_zone = session_time_zone;
         self
+    }
+
+    /// Coerce a subquery whose outer plan has been coerced into `self.schema`.
+    ///
+    /// The subquery was coerced before its outer plan, against the types its
+    /// outer reference columns had when the plan was built. Coercing the outer
+    /// plan can change those types, for example for a `CASE` with `INT` and
+    /// `BIGINT` branches or a `UNION` of `INT` and `BIGINT` columns. In that
+    /// case the outer references take the new types and the subquery is
+    /// coerced again, so that its comparisons with them are coerced too.
+    fn coerce_subquery(&self, subquery: Subquery) -> Result<Subquery> {
+        let Subquery {
+            subquery,
+            outer_ref_columns,
+            spans,
+        } = subquery;
+        let retyped = Arc::unwrap_or_clone(subquery).transform_down(|plan| {
+            plan.map_expressions(|expr| self.retype_outer_references(expr))
+        })?;
+        let plan = if retyped.transformed {
+            coerce_plan_and_subqueries(retyped.data, self.session_time_zone)?
+        } else {
+            retyped.data
+        };
+        let plan = analyze_internal(self.schema, plan, self.session_time_zone)?.data;
+        let outer_ref_columns = outer_ref_columns
+            .into_iter()
+            .map(|expr| self.retype_outer_references(expr).map(|t| t.data))
+            .collect::<Result<_>>()?;
+        Ok(Subquery {
+            subquery: Arc::new(plan),
+            outer_ref_columns,
+            spans,
+        })
+    }
+
+    /// Give each outer reference column in `expr` the type of the column it
+    /// references in `self.schema`.
+    fn retype_outer_references(&self, expr: Expr) -> Result<Transformed<Expr>> {
+        expr.transform(|expr| match expr {
+            Expr::OuterReferenceColumn(field, column) => {
+                match self.schema.qualified_field_from_column(&column) {
+                    Ok((_, outer_field))
+                        if outer_field.data_type() != field.data_type() =>
+                    {
+                        let field = field
+                            .as_ref()
+                            .clone()
+                            .with_data_type(outer_field.data_type().clone());
+                        Ok(Transformed::yes(Expr::OuterReferenceColumn(
+                            Arc::new(field),
+                            column,
+                        )))
+                    }
+                    _ => Ok(Transformed::no(Expr::OuterReferenceColumn(field, column))),
+                }
+            }
+            expr => Ok(Transformed::no(expr)),
+        })
     }
 
     /// Coerce the [`LogicalPlan`].
@@ -728,36 +785,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             Expr::Unnest(_) => not_impl_err!(
                 "Unnest should be rewritten to LogicalPlan::Unnest before type coercion"
             ),
-            Expr::ScalarSubquery(Subquery {
-                subquery,
-                outer_ref_columns,
-                spans,
-            }) => {
-                let new_plan = analyze_internal(
-                    self.schema,
-                    Arc::unwrap_or_clone(subquery),
-                    self.session_time_zone,
-                )?
-                .data;
-                Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
-                    subquery: Arc::new(new_plan),
-                    outer_ref_columns,
-                    spans,
-                })))
-            }
+            Expr::ScalarSubquery(subquery) => Ok(Transformed::yes(Expr::ScalarSubquery(
+                self.coerce_subquery(subquery)?,
+            ))),
             Expr::Exists(Exists { subquery, negated }) => {
-                let new_plan = analyze_internal(
-                    self.schema,
-                    Arc::unwrap_or_clone(subquery.subquery),
-                    self.session_time_zone,
-                )?
-                .data;
                 Ok(Transformed::yes(Expr::Exists(Exists {
-                    subquery: Subquery {
-                        subquery: Arc::new(new_plan),
-                        outer_ref_columns: subquery.outer_ref_columns,
-                        spans: subquery.spans,
-                    },
+                    subquery: self.coerce_subquery(subquery)?,
                     negated,
                 })))
             }
@@ -766,17 +799,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 subquery,
                 negated,
             }) => {
-                let new_plan = analyze_internal(
-                    self.schema,
-                    Arc::unwrap_or_clone(subquery.subquery),
-                    self.session_time_zone,
-                )?
-                .data;
-                let new_subquery = Subquery {
-                    subquery: Arc::new(new_plan),
-                    outer_ref_columns: subquery.outer_ref_columns,
-                    spans: subquery.spans,
-                };
+                let new_subquery = self.coerce_subquery(subquery)?;
                 let is_tuple =
                     in_subquery_tuple_values(&expr, &new_subquery.subquery)?.is_some();
                 match *expr {
@@ -822,14 +845,9 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 op,
                 quantifier,
             }) => {
-                let new_plan = analyze_internal(
-                    self.schema,
-                    Arc::unwrap_or_clone(subquery.subquery),
-                    self.session_time_zone,
-                )?
-                .data;
+                let new_subquery = self.coerce_subquery(subquery)?;
                 let expr_type = expr.get_type(self.schema)?;
-                let subquery_type = new_plan.schema().field(0).data_type();
+                let subquery_type = new_subquery.subquery.schema().field(0).data_type();
                 if (expr_type.is_numeric() && subquery_type.is_string())
                     || (subquery_type.is_numeric() && expr_type.is_string())
                 {
@@ -845,11 +863,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 .ok_or(plan_datafusion_err!(
                     "expr type {expr_type} can't cast to {subquery_type} in SetComparison"
                 ))?;
-                let new_subquery = Subquery {
-                    subquery: Arc::new(new_plan),
-                    outer_ref_columns: subquery.outer_ref_columns,
-                    spans: subquery.spans,
-                };
                 Ok(Transformed::yes(Expr::SetComparison(SetComparison::new(
                     Box::new(expr.cast_to(&common_type, self.schema)?),
                     cast_subquery(new_subquery, &common_type)?,
