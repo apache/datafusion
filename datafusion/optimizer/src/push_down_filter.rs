@@ -62,8 +62,9 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, EmptyRelation, Expr, Filter, Operator, Projection,
-    TableProviderFilterPushDown, and, or,
+    BinaryExpr, Distinct, EmptyRelation, Expr, Extension, Filter, MaterializedCte,
+    Operator, Projection, TableProviderFilterPushDown, UserDefinedLogicalNodeCore, and,
+    or,
 };
 
 use crate::extract_leaf_expressions::is_pure_extraction_projection;
@@ -1174,10 +1175,14 @@ impl OptimizerRule for PushDownFilter {
                 // multiple window functions, each with potentially different partition keys.
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
+                // Arrow buffer memory accounting does not affect expression hashing.
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                 fn extract_partition_keys(func: &WindowFunction) -> HashSet<&Expr> {
                     func.params.partition_by.iter().collect()
                 }
 
+                // Arrow buffer memory accounting does not affect expression hashing.
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                 let potential_partition_keys = window
                     .window_expr
                     .iter()
@@ -1397,6 +1402,23 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     LogicalPlan::TableScan(scan),
                 )))
+            }
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<MaterializedCte>() =>
+            {
+                // The output is the output of the continuation, so the filter
+                // moves onto the continuation. The body is shared by every scan
+                // of the CTE and is never filtered for one of them.
+                let cte = node.as_any().downcast_ref::<MaterializedCte>().unwrap();
+                let continuation = LogicalPlan::Filter(Filter::new(
+                    filter.predicate,
+                    Arc::new(cte.continuation.clone()),
+                ));
+                let cte = cte
+                    .with_exprs_and_inputs(vec![], vec![cte.cte.clone(), continuation])?;
+                Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(cte),
+                })))
             }
             LogicalPlan::Extension(extension_plan) => {
                 // This check prevents the Filter from being removed when the extension node has no children,
@@ -1660,6 +1682,7 @@ fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
 ///
 /// A predicate containing a subquery is never pushed: what the subquery reads is
 /// not visible from the expression tree.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Arrow buffer memory accounting does not affect expression hashing.
 fn reads_only_partition_keys(
     expr: &Expr,
     partition_keys: &HashSet<&Expr>,
