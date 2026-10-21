@@ -34,9 +34,9 @@ pub use builder::{
 };
 pub use ddl::{
     CreateCatalog, CreateCatalogSchema, CreateExternalCatalog, CreateExternalTable,
-    CreateFunction, CreateFunctionBody, CreateIndex, CreateMemoryTable, CreateView,
-    DdlStatement, DropCatalog, DropCatalogSchema, DropFunction, DropTable, DropView,
-    OperateFunctionArg,
+    CreateFunction, CreateFunctionBody, CreateIndex, CreateMemoryTable, CreateSecret,
+    CreateView, DdlStatement, DropCatalog, DropCatalogSchema, DropFunction, DropSecret,
+    DropTable, DropView, OperateFunctionArg,
 };
 pub use dml::{
     DmlStatement, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,

@@ -87,6 +87,87 @@ DROP CATALOG my_catalog;
 DROP CATALOG IF EXISTS nonexistent_catalog;
 ```
 
+## CREATE SECRET
+
+Registers a named collection of string options in the session's secrets store.
+Applications can also register secrets programmatically through
+`SessionContext::secrets_store()`, and replace the default in-memory store with
+`SessionStateBuilder::with_secrets_store()`.
+
+```sql
+CREATE [ OR REPLACE ] SECRET [ IF NOT EXISTS ] <secret_name>
+(<option_name> <value>, ...)
+```
+
+```sql
+CREATE SECRET warehouse_credentials (
+    TYPE s3,
+    KEY_ID 'example-key-id',
+    SECRET 'example-secret-value'
+);
+```
+
+Option values are single-quoted strings or unquoted words. Option names and secret
+names follow SQL identifier normalization: by default, unquoted names become lowercase;
+double-quoted names preserve their case. The programmatic store API uses exact,
+case-sensitive names.
+
+`TYPE`, `KEY_ID`, and `SECRET` are ordinary option names. DataFusion does not
+interpret them, automatically configure object stores, or select credentials by
+URL. Each catalog or table provider defines the fields it accepts and how a
+connection refers to a stored name. For example, a provider can accept
+`OPTIONS ('connection.secret' 'warehouse_credentials')`, resolve that name through the
+session's store, and establish a connection without putting credential values in
+the connection's options. This requires a provider implementing that convention;
+it is not a built-in option for every format.
+
+Creating an existing name returns an error. `IF NOT EXISTS` leaves the existing
+value unchanged, while `OR REPLACE` replaces it. These two clauses cannot be used
+together. New sessions have independent stores by default; cloned session states
+and states rebuilt from an existing state share its store unless it is replaced.
+
+The [named secrets example] demonstrates two table provider connections sharing
+one secret, including credentials supplied outside SQL.
+
+### Secret storage and output boundaries
+
+The default store keeps plaintext strings in process memory. It provides no
+persistence, encryption, access control, or memory zeroization. Access to the
+session and its store allows access to secret values, so applications must
+control that access. Replacing or dropping a name does not revoke connections or
+secret snapshots that providers already hold.
+
+Secret option values are redacted when formatting DataFusion secret statements
+and logical plans. This does not remove values from the original SQL string,
+client history, or application logs outside DataFusion. Applications that must
+keep credentials out of SQL should inject them through the programmatic API and
+use only named references in connection options. Provider implementations must
+also avoid exposing credentials in their own errors, diagnostics, or query data.
+Secret names and references remain visible identifiers; do not put credentials
+in those names.
+
+## DROP SECRET
+
+Removes a named secret from the session's store.
+
+```sql
+DROP SECRET [ IF EXISTS ] <secret_name>
+```
+
+```sql
+DROP SECRET warehouse_credentials;
+DROP SECRET IF EXISTS absent_credentials;
+```
+
+Without `IF EXISTS`, dropping a missing name returns an error. Removing the stored
+name prevents future lookups; it does not erase snapshots or close connections
+that already used the secret.
+
+`CREATE SECRET` and `DROP SECRET` are DDL statements and are rejected by
+`SQLOptions::with_allow_ddl(false)` without changing the store.
+
+[named secrets example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/data_io/secrets.rs
+
 ## CREATE SCHEMA
 
 Create schema under specified catalog, or the default DataFusion catalog if not specified.

@@ -4101,3 +4101,38 @@ async fn roundtrip_range_partitioning_desc_nulls_last() -> Result<()> {
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }
+
+#[test]
+fn create_secret_serialization_rejects_values() {
+    use datafusion_common::secret::Secret;
+    use datafusion_expr::{CreateSecret, DdlStatement, DropSecret};
+    use std::collections::BTreeMap;
+
+    let canary = "canary-never-serialize-91283";
+    let plan = LogicalPlan::Ddl(DdlStatement::CreateSecret(CreateSecret {
+        name: "credential".to_owned(),
+        secret: Secret::new(BTreeMap::from([("token".to_owned(), canary.to_owned())])),
+        or_replace: false,
+        if_not_exists: false,
+        schema: Arc::new(DFSchema::empty()),
+    }));
+    let error = logical_plan_to_bytes(&plan).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("secret values must remain local")
+    );
+    assert!(!error.to_string().contains(canary));
+    assert!(!format!("{error:?}").contains(canary));
+    let drop = LogicalPlan::Ddl(DdlStatement::DropSecret(DropSecret {
+        name: "credential".to_owned(),
+        if_exists: false,
+        schema: Arc::new(DFSchema::empty()),
+    }));
+    assert!(
+        logical_plan_to_bytes(&drop)
+            .unwrap_err()
+            .to_string()
+            .contains("DropSecret")
+    );
+}

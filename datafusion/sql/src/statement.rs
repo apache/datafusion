@@ -236,6 +236,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let plan = match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s)?,
             DFStatement::CreateExternalCatalog(s) => self.external_catalog_to_plan(s)?,
+            DFStatement::CreateSecret(s) => LogicalPlan::Ddl(DdlStatement::CreateSecret(
+                datafusion_expr::CreateSecret {
+                    name: self.ident_normalizer.normalize(s.name),
+                    secret: s.secret,
+                    or_replace: s.or_replace,
+                    if_not_exists: s.if_not_exists,
+                    schema: Arc::new(DFSchema::empty()),
+                },
+            )),
+            DFStatement::DropSecret(s) => {
+                LogicalPlan::Ddl(DdlStatement::DropSecret(datafusion_expr::DropSecret {
+                    name: self.ident_normalizer.normalize(s.name),
+                    if_exists: s.if_exists,
+                    schema: Arc::new(DFSchema::empty()),
+                }))
+            }
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s)?,
             DFStatement::CopyTo(s) => self.copy_to_plan(s)?,
             DFStatement::Explain(ExplainStatement { options, statement }) => {
@@ -1641,6 +1657,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         schema: DFSchemaRef::new(DFSchema::empty()),
                     },
                 )))
+            }
+            Statement::CreateSecret { .. } => {
+                not_impl_err!(
+                    "Native CREATE SECRET AST is not supported; parse session-local secret statements with DFParser (values redacted)"
+                )
+            }
+            stmt if crate::parser::contains_secret_definition(&stmt) => {
+                not_impl_err!(
+                    "Nested native CREATE SECRET statements are not supported (values redacted)"
+                )
             }
             stmt => {
                 not_impl_err!("Unsupported SQL statement: {stmt}")

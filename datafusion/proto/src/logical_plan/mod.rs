@@ -2317,6 +2317,12 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropCatalogSchema",
             )),
+            LogicalPlan::Ddl(DdlStatement::CreateSecret(_)) => Err(proto_error(
+                "CREATE SECRET serialization is not supported: secret values must remain local to the session",
+            )),
+            LogicalPlan::Ddl(DdlStatement::DropSecret(_)) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for DropSecret",
+            )),
             LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateExternalCatalog",
             )),

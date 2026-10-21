@@ -67,6 +67,85 @@ mod cases;
 mod common;
 
 #[test]
+fn create_secret_plan_redacts_and_normalizes() -> Result<()> {
+    let sql = "CREATE SECRET MySecret (TOKEN 'canary-plan-secret-9821', TYPE s3)";
+    let plan = logical_plan(sql)?;
+    let LogicalPlan::Ddl(DdlStatement::CreateSecret(create)) = &plan else {
+        panic!("expected CREATE SECRET")
+    };
+    assert_eq!(create.name, "mysecret");
+    assert_eq!(create.secret.get("token"), Some("canary-plan-secret-9821"));
+    assert!(create.schema.fields().is_empty());
+    for output in [
+        format!("{plan:?}"),
+        format!("{plan:#?}"),
+        plan.display_indent().to_string(),
+        plan.display_indent_schema().to_string(),
+        plan.display().to_string(),
+    ] {
+        assert!(!output.contains("canary-plan-secret-9821"));
+    }
+    assert_eq!(plan.display().to_string(), "CreateSecret: \"mysecret\"");
+    #[cfg(feature = "unparser")]
+    {
+        let dialect = datafusion_sql::unparser::dialect::DefaultDialect {};
+        let error = datafusion_sql::unparser::Unparser::new(&dialect)
+            .plan_to_sql(&plan)
+            .unwrap_err();
+        assert!(!error.to_string().contains("canary-plan-secret-9821"));
+    }
+    let quoted = logical_plan("CREATE SECRET \"MixedCase\" (TOKEN 'value')")?;
+    let LogicalPlan::Ddl(DdlStatement::CreateSecret(create)) = quoted else {
+        panic!("expected CREATE SECRET")
+    };
+    assert_eq!(create.name, "MixedCase");
+    let drop = logical_plan("DROP SECRET IF EXISTS MySecret")?;
+    let LogicalPlan::Ddl(DdlStatement::DropSecret(drop)) = drop else {
+        panic!("expected DROP SECRET")
+    };
+    assert_eq!(drop.name, "mysecret");
+    assert!(drop.if_exists);
+    Ok(())
+}
+
+#[test]
+fn explain_secret_plan_does_not_execute_or_disclose() -> Result<()> {
+    let plan = logical_plan("EXPLAIN CREATE SECRET s (TOKEN 'canary-explain-3812')")?;
+    let LogicalPlan::Explain(explain) = &plan else {
+        panic!("expected EXPLAIN")
+    };
+    assert!(matches!(
+        explain.plan.as_ref(),
+        LogicalPlan::Ddl(DdlStatement::CreateSecret(_))
+    ));
+    for output in [
+        format!("{plan:?}"),
+        plan.display_indent().to_string(),
+        format!("{:?}", explain.stringified_plans),
+    ] {
+        assert!(!output.contains("canary-explain-3812"));
+    }
+    Ok(())
+}
+
+#[test]
+fn raw_create_secret_ast_planning_error_redacts_values() -> Result<()> {
+    let canary = "canary-raw-ast-8921";
+    let sql = format!("CREATE SECRET s (TYPE s3, TOKEN '{canary}')");
+    let statement = Parser::parse_sql(&GenericDialect {}, &sql)?.remove(0);
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let error = SqlToRel::new(&context)
+        .sql_statement_to_plan(statement)
+        .unwrap_err();
+    assert!(error.to_string().contains("Native CREATE SECRET AST"));
+    assert!(!error.to_string().contains(canary));
+    assert!(!format!("{error:?}").contains(canary));
+    Ok(())
+}
+
+#[test]
 fn parse_decimals_1() {
     let sql = "SELECT 1";
     let options = parse_decimals_parser_options();
