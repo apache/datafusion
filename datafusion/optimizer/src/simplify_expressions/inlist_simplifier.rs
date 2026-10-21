@@ -34,8 +34,13 @@ impl<'a> ShortenInListSimplifier<'a> {
         Self { schema }
     }
 
-    /// The paired `in_list_rewrite` benchmark favors membership for these
-    /// representations.
+    /// Benchmarks in `in_list_rewrite` favor evaluating short literal lists as
+    /// membership expressions over OR/AND chains for these types on batches with
+    /// a mix of matches and misses, or no matches. Integer chains can still be
+    /// faster when every row matches the first value, allowing the remaining
+    /// comparisons to short circuit.
+    ///
+    /// See [PR #25187](https://github.com/apache/datafusion/pull/25187) for measurements.
     fn should_retain_short_inlist(&self, expr: &Expr, list: &[Expr]) -> bool {
         let Ok(data_type) = expr.get_type(self.schema) else {
             return false;

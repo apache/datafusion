@@ -121,6 +121,8 @@ pub struct ExprSimplifier {
 ///
 /// The final decision also accounts for the measured performance of the column
 /// representation and whether the list values are literals.
+/// See [PR #25187](https://github.com/apache/datafusion/pull/25187) for the
+/// benchmark evidence.
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
 pub const DEFAULT_MAX_SIMPLIFIER_CYCLES: u32 = 3;
 
