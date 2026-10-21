@@ -42,7 +42,7 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::placement::ExpressionPlacement;
 use indexmap::{IndexMap, IndexSet};
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -143,36 +143,37 @@ impl CaseBody {
                 .expect("Closure cannot fail")
         });
 
-        // Determine the set of columns that are used in all the expressions of the case body.
-        // Use an ordered set so lambda variables continue to be positioned after columns
-        let mut used_column_indices = BTreeSet::<usize>::new();
-        let mut precompute_candidates = IndexSet::<Arc<dyn PhysicalExpr>>::new();
-        let mut supports_projection = true;
-        let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
-            expr.apply(|expr| {
-                if can_precompute && is_precomputable(expr) {
-                    precompute_candidates.insert(Arc::clone(expr));
-                    return Ok(TreeNodeRecursion::Jump);
-                }
-                if let Some(column) = expr.downcast_ref::<Column>() {
-                    used_column_indices.insert(column.index());
-                } else if let Some(lambda_variable) =
-                    expr.downcast_ref::<LambdaVariable>()
-                {
-                    used_column_indices.insert(lambda_variable.index());
-                } else if expr.downcast_ref::<Literal>().is_none()
-                    && expr.downcast_ref::<ScalarFunctionExpr>().is_none()
-                    && expr.children().is_empty()
-                {
-                    // Unknown leaves may read input columns without exposing a Column child.
-                    supports_projection = false;
-                }
-                Ok(TreeNodeRecursion::Continue)
+        // Unknown leaves may read input columns without exposing a Column child.
+        // This is checked over all the nodes, independently of precomputation.
+        let supports_projection = !self.exprs().any(|e| {
+            e.exists(|e| {
+                Ok(e.children().is_empty()
+                    && !e.is::<Column>()
+                    && !e.is::<LambdaVariable>()
+                    && !e.is::<Literal>()
+                    && !e.is::<ScalarFunctionExpr>())
             })
-            .expect("Closure cannot fail");
-        };
+            .expect("Closure cannot fail")
+        });
 
-        self.exprs().for_each(&mut collect_column_indices);
+        // Find the candidates for precomputation and the columns used outside of them.
+        let mut direct_column_indices = HashSet::<usize>::new();
+        let mut precompute_candidates = IndexSet::<Arc<dyn PhysicalExpr>>::new();
+        if can_precompute {
+            self.exprs().for_each(|expr| {
+                expr.apply(|expr| {
+                    if is_precomputable(expr) {
+                        precompute_candidates.insert(Arc::clone(expr));
+                        return Ok(TreeNodeRecursion::Jump);
+                    }
+                    if let Some(column) = expr.downcast_ref::<Column>() {
+                        direct_column_indices.insert(column.index());
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })
+                .expect("Closure cannot fail");
+            });
+        }
 
         // Precomputing only pays off when it spares filtering a column that is not
         // otherwise used. Candidates referring only to used columns are evaluated in place.
@@ -181,17 +182,25 @@ impl CaseBody {
             .filter(|expr| {
                 collect_columns(expr)
                     .iter()
-                    .any(|column| !used_column_indices.contains(&column.index()))
+                    .any(|column| !direct_column_indices.contains(&column.index()))
             })
             .collect::<IndexSet<_>>();
-        // Collect the columns of the candidates that are evaluated in place.
+
+        // Determine the set of columns that are used by the expressions of the case body
+        // outside of the precomputed expressions.
+        // Use an ordered set so lambda variables continue to be positioned after columns
+        let mut used_column_indices = BTreeSet::<usize>::new();
         self.exprs().for_each(|expr| {
             expr.apply(|expr| {
-                if precomputed.contains(expr) {
+                if !precomputed.is_empty() && precomputed.contains(expr) {
                     return Ok(TreeNodeRecursion::Jump);
                 }
                 if let Some(column) = expr.downcast_ref::<Column>() {
                     used_column_indices.insert(column.index());
+                } else if let Some(lambda_variable) =
+                    expr.downcast_ref::<LambdaVariable>()
+                {
+                    used_column_indices.insert(lambda_variable.index());
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
@@ -2337,6 +2346,45 @@ mod tests {
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_int32_array(&result)?;
         let expected = Int32Array::from(vec![Some(100), Some(10), Some(300), Some(10)]);
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_custom_column_and_struct_fields() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+        let s_b = get_field_expr(Arc::clone(&s), "b", &schema)?;
+
+        // CASE WHEN s['a'] = 1 THEN x WHEN s['a'] > 1 THEN s['b'] END,
+        // with `x` read by a leaf that is opaque to projection
+        let expr = CaseExpr::try_new(
+            None,
+            vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(1i32), &schema)?,
+                    Arc::new(CustomColumn::new("x", 0)),
+                ),
+                (
+                    binary(Arc::clone(&s_a), Operator::Gt, lit(1i32), &schema)?,
+                    Arc::clone(&s_b),
+                ),
+            ],
+            None,
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                assert!(!projected.supports_projection);
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected = Int32Array::from(vec![Some(100), Some(20), None, Some(40)]);
         assert_eq!(&expected, result);
         Ok(())
     }
