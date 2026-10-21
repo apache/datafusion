@@ -3629,6 +3629,30 @@ SELECT (SELECT MAX(rn) FROM (
 FROM named_window_prices
 WINDOW w AS (ORDER BY ts)
 
+# A named window in HAVING is rejected like an inline one
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING
+SELECT ticker, price FROM named_window_prices GROUP BY ticker, price
+HAVING MAX(price) OVER (PARTITION BY ticker) > 1
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING
+SELECT ticker, price FROM named_window_prices GROUP BY ticker, price
+HAVING MAX(price) OVER w > 1
+WINDOW w AS (PARTITION BY ticker)
+
+statement error DataFusion error: Error during planning: The window no_such_window is not defined!
+SELECT ticker, price FROM named_window_prices GROUP BY ticker, price
+HAVING MAX(price) OVER no_such_window > 1
+
+# A named window in WHERE is rejected like an inline one
+statement error
+SELECT ticker FROM named_window_prices
+WHERE MAX(price) OVER (PARTITION BY ticker) > 1
+
+statement error
+SELECT ticker FROM named_window_prices
+WHERE MAX(price) OVER w > 1
+WINDOW w AS (PARTITION BY ticker)
+
 statement ok
 DROP TABLE named_window_prices;
 

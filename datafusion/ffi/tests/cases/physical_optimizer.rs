@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "integration-tests")]
 mod tests {
     use std::sync::Arc;
 

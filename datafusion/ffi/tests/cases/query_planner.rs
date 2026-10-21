@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod utils;
-
-#[cfg(feature = "integration-tests")]
 mod tests {
     use std::sync::{Arc, OnceLock, Weak};
 

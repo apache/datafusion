@@ -28,7 +28,7 @@ use arrow::{
 };
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
+    Result, ScalarValue, downcast_value, internal_err, not_impl_err, plan_datafusion_err,
     plan_err,
 };
 use datafusion_expr::DistinctHandling;
@@ -43,9 +43,12 @@ use datafusion_functions_aggregate_common::tdigest::{DEFAULT_MAX_SIZE, TDigest};
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-use crate::utils::{get_scalar_value, validate_percentile_expr};
+use crate::utils::{PercentileParam, get_scalar_value};
 
 create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
+
+// state field index for the percentile argument
+pub const STATE_PERCENTILE_IDX: usize = 6;
 
 /// Computes the approximate percentile continuous of a set of numbers
 pub fn approx_percentile_cont(
@@ -172,20 +175,17 @@ impl ApproxPercentileCont {
         &self,
         args: &AccumulatorArgs,
     ) -> Result<ApproxPercentileAccumulator> {
-        let percentile =
-            validate_percentile_expr(&args.exprs[1], "APPROX_PERCENTILE_CONT")?;
-
         let is_descending = args
             .order_bys
             .first()
             .map(|sort_expr| sort_expr.options.descending)
             .unwrap_or(false);
 
-        let percentile = if is_descending {
-            1.0 - percentile
-        } else {
-            percentile
-        };
+        let percentile = PercentileParam::try_new(
+            &args.exprs[1],
+            "APPROX_PERCENTILE_CONT",
+            is_descending,
+        )?;
 
         let tdigest_max_size = if args.exprs.len() == 3 {
             Some(validate_input_max_size_expr(&args.exprs[2])?)
@@ -219,9 +219,8 @@ impl ApproxPercentileCont {
 
 fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
     let scalar_value = get_scalar_value(expr).map_err(|_e| {
-        DataFusionError::Plan(
+        plan_datafusion_err!(
             "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal"
-                .to_string(),
         )
     })?;
 
@@ -280,6 +279,11 @@ impl AggregateUDFImpl for ApproxPercentileCont {
                 Field::new_list_field(DataType::Float64, true),
                 false,
             ),
+            Field::new(
+                format_state_name(args.name, "percentile"),
+                DataType::Float64,
+                true,
+            ),
         ]
         .into_iter()
         .map(Arc::new)
@@ -337,12 +341,12 @@ impl AggregateUDFImpl for ApproxPercentileCont {
 #[derive(Debug)]
 pub struct ApproxPercentileAccumulator {
     digest: TDigest,
-    percentile: f64,
+    percentile: PercentileParam,
     return_type: DataType,
 }
 
 impl ApproxPercentileAccumulator {
-    pub fn new(percentile: f64, return_type: DataType) -> Self {
+    pub fn new(percentile: PercentileParam, return_type: DataType) -> Self {
         Self {
             digest: TDigest::new(DEFAULT_MAX_SIZE),
             percentile,
@@ -350,8 +354,8 @@ impl ApproxPercentileAccumulator {
         }
     }
 
-    pub fn new_with_max_size(
-        percentile: f64,
+    pub(crate) fn new_with_max_size(
+        percentile: PercentileParam,
         return_type: DataType,
         max_size: usize,
     ) -> Self {
@@ -360,6 +364,15 @@ impl ApproxPercentileAccumulator {
             percentile,
             return_type,
         }
+    }
+
+    /// Callers must only invoke this when a percentile argument actually
+    /// exists in the current batch.
+    pub(crate) fn resolve_percentile(
+        &mut self,
+        percentile_array: &ArrayRef,
+    ) -> Result<()> {
+        self.percentile.resolve(percentile_array)
     }
 
     // pub(crate) for approx_percentile_cont_with_weight
@@ -405,10 +418,17 @@ impl ApproxPercentileAccumulator {
 
 impl Accumulator for ApproxPercentileAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(self.digest.to_scalar_state().into_iter().collect())
+        let mut state: Vec<ScalarValue> =
+            self.digest.to_scalar_state().into_iter().collect();
+        state.push(ScalarValue::Float64(self.percentile.get().ok()));
+        Ok(state)
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.len() > 1 {
+            self.resolve_percentile(&values[1])?;
+        }
+
         // Remove any nulls before computing the percentile
         let mut values = Arc::clone(&values[0]);
         if values.null_count() > 0 {
@@ -424,7 +444,9 @@ impl Accumulator for ApproxPercentileAccumulator {
         if self.digest.count() == 0.0 {
             return ScalarValue::try_from(self.return_type.clone());
         }
-        let q = self.digest.estimate_quantile(self.percentile);
+        let q = self
+            .digest
+            .estimate_quantile(self.percentile.effective_percentile()?);
 
         // These acceptable return types MUST match the validation in
         // ApproxPercentile::create_accumulator.
@@ -441,9 +463,14 @@ impl Accumulator for ApproxPercentileAccumulator {
             return Ok(());
         }
 
-        let states = (0..states[0].len())
+        if let Some(percentile_array) = states.get(STATE_PERCENTILE_IDX) {
+            self.percentile.resolve(percentile_array)?;
+        }
+
+        let tdigest_states = &states[..STATE_PERCENTILE_IDX];
+        let states = (0..tdigest_states[0].len())
             .map(|index| {
-                states
+                tdigest_states
                     .iter()
                     .map(|array| ScalarValue::try_from_array(array, index))
                     .collect::<Result<Vec<_>>>()
@@ -470,6 +497,19 @@ mod tests {
     use datafusion_functions_aggregate_common::tdigest::TDigest;
 
     use crate::approx_percentile_cont::ApproxPercentileAccumulator;
+    use crate::utils::{PercentileParam, PercentileParamState};
+
+    fn make_accumulator() -> ApproxPercentileAccumulator {
+        ApproxPercentileAccumulator::new_with_max_size(
+            PercentileParam {
+                aggregate_fn_name: "APPROX_PERCENTILE_CONT".to_string(),
+                state: PercentileParamState::Resolved(0.5),
+                is_desc: false,
+            },
+            DataType::Float64,
+            100,
+        )
+    }
 
     #[test]
     fn test_combine_approx_percentile_accumulator() {
@@ -486,8 +526,7 @@ mod tests {
         let t1 = TDigest::merge_digests(&digests);
         let t2 = TDigest::merge_digests(&digests);
 
-        let mut accumulator =
-            ApproxPercentileAccumulator::new_with_max_size(0.5, DataType::Float64, 100);
+        let mut accumulator = make_accumulator();
 
         accumulator.merge_digests(&[t1]);
         assert_eq!(accumulator.digest.count(), 50_000.0);
