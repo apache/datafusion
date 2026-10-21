@@ -2489,7 +2489,6 @@ mod tests {
 
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
-    use crate::collect;
     use crate::empty::EmptyExec;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
@@ -2499,6 +2498,7 @@ mod tests {
     use crate::test::TestMemoryExec;
     use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
     use crate::test::{assert_is_pending, make_partition};
+    use crate::{collect, collect_partitioned};
 
     use arrow::array::*;
     use arrow::compute::SortOptions;
@@ -2607,15 +2607,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn sort_execution_initializes_and_resets_concurrency() -> Result<()> {
-        let batch = RecordBatch::try_from_iter([(
-            "a",
-            Arc::new(Int32Array::from(vec![2, 1])) as ArrayRef,
-        )])?;
-        let input = TestMemoryExec::try_new_exec(
-            &[vec![batch.clone(); 2], vec![batch.clone(); 2]],
-            batch.schema(),
-            None,
+        let batch = record_batch!(
+            ("a", Int32, [2, 1, 2, 1]),
+            ("payload", Utf8, ["b", "a", "d", "c"])
         )?;
+        // Distinct payloads make equal-key ordering across runs observable.
+        let runs = vec![batch.slice(0, 2), batch.slice(2, 2)];
+        let input =
+            TestMemoryExec::try_new_exec(&[runs.clone(), runs], batch.schema(), None)?;
         let sort = SortExec::new(
             [PhysicalSortExpr::new_default(col("a", &batch.schema())?)].into(),
             input,
@@ -2626,7 +2625,16 @@ mod tests {
         ));
 
         // Execution must initialize the cell owned by the plan, not a private sorter cell.
-        collect(Arc::new(sort.clone()), Arc::clone(&context)).await?;
+        let output =
+            collect_partitioned(Arc::new(sort.clone()), Arc::clone(&context)).await?;
+        let expected = record_batch!(
+            ("a", Int32, [1, 1, 2, 2]),
+            ("payload", Utf8, ["a", "c", "b", "d"])
+        )?;
+        assert_eq!(output.len(), 2);
+        for partition in output {
+            assert_eq!(concat_batches(&batch.schema(), &partition)?, expected);
+        }
         assert!(sort.sort_concurrency.get().is_some());
         let reset = Arc::new(sort.clone()).reset_state()?;
         assert!(
