@@ -204,6 +204,8 @@ fn evaluate_bench(
     });
 }
 
+/// `num_groups` groups are allocated for the accumulator, and each batch
+/// touches every group.
 #[expect(clippy::needless_pass_by_value)]
 fn update_bench(
     c: &mut Criterion,
@@ -259,6 +261,159 @@ fn update_bench(
                 }
             },
             BatchSize::SmallInput,
+        )
+    });
+}
+
+/// A group-by with many allocated groups, replaying one batch of rows that
+/// touches only a few of them.
+///
+/// The accumulator allocates one slot per group, so the per-batch work scales
+/// with the number of allocated groups rather than with the number of rows the
+/// batch carries. Replaying the same batch leaves the accumulator holding that
+/// batch's extreme for every group after the first iteration, so only the
+/// first iteration writes state. This mostly measures the per-batch bookkeeping
+/// and the row comparison.
+#[expect(clippy::needless_pass_by_value)]
+fn update_bench_many_groups(
+    c: &mut Criterion,
+    is_first: bool,
+    name: &str,
+    values: ArrayRef,
+    ord: ArrayRef,
+    num_groups: usize,
+    groups_touched: usize,
+) {
+    let n = values.len();
+    let group_indices: Vec<usize> = (0..n).map(|i| i % groups_touched).collect();
+    let value_type = values.data_type().clone();
+
+    // Initialize with worst-case ordering so update_batch forces rows comparison for all groups.
+    let worst_ord: ArrayRef = Arc::new(Int64Array::from(vec![
+        if is_first {
+            i64::MAX
+        } else {
+            i64::MIN
+        };
+        n
+    ]));
+
+    c.bench_function(name, |b| {
+        // `iter_batched_ref` so that dropping the accumulator, which owns one
+        // `Vec<ScalarValue>` per group, is not part of the timed region.
+        b.iter_batched_ref(
+            || {
+                let mut accumulator =
+                    prepare_typed_groups_accumulator(is_first, value_type.clone());
+                accumulator
+                    .update_batch(
+                        &[Arc::clone(&values), Arc::clone(&worst_ord)],
+                        &group_indices,
+                        None, // no filter: ensure all groups are initialised
+                        num_groups,
+                    )
+                    .unwrap();
+                accumulator
+            },
+            |accumulator| {
+                for _ in 0..100 {
+                    #[expect(clippy::unit_arg)]
+                    black_box(
+                        accumulator
+                            .update_batch(
+                                &[Arc::clone(&values), Arc::clone(&ord)],
+                                &group_indices,
+                                None,
+                                num_groups,
+                            )
+                            .unwrap(),
+                    );
+                }
+            },
+            // One accumulator at a time: a million-group accumulator is
+            // ~100 MiB.
+            BatchSize::PerIteration,
+        )
+    });
+}
+
+/// The same shape as `update_bench_many_groups`, but walking through distinct
+/// batches. Batch `b` owns the groups
+/// `[b * groups_touched, (b + 1) * groups_touched)`, so no two batches touch
+/// the same group and the accumulator writes the state of every winner, the
+/// same work a query does when each batch brings new rows.
+#[expect(clippy::needless_pass_by_value)]
+#[expect(clippy::too_many_arguments)]
+fn update_bench_many_groups_distinct_batches(
+    c: &mut Criterion,
+    is_first: bool,
+    name: &str,
+    values: ArrayRef,
+    ord: ArrayRef,
+    num_groups: usize,
+    groups_touched: usize,
+    batches: usize,
+) {
+    let n = values.len();
+    assert_eq!(n % batches, 0);
+    let rows_per_batch = n / batches;
+    let group_indices: Vec<usize> = (0..n)
+        .map(|i| (i % groups_touched) + (i / rows_per_batch) * groups_touched)
+        .collect();
+    let value_type = values.data_type().clone();
+
+    // Initialize with worst-case ordering so update_batch forces rows comparison for all groups.
+    let worst_ord: ArrayRef = Arc::new(Int64Array::from(vec![
+        if is_first {
+            i64::MAX
+        } else {
+            i64::MIN
+        };
+        n
+    ]));
+
+    c.bench_function(name, |b| {
+        // `iter_batched_ref`, see `update_bench_many_groups`.
+        b.iter_batched_ref(
+            || {
+                let mut accumulator =
+                    prepare_typed_groups_accumulator(is_first, value_type.clone());
+                // Allocate the groups outside the timed region: resizing to
+                // a million groups costs more than the batches below.
+                accumulator
+                    .update_batch(
+                        &[
+                            values.slice(0, rows_per_batch),
+                            worst_ord.slice(0, rows_per_batch),
+                        ],
+                        &group_indices[..rows_per_batch],
+                        None,
+                        num_groups,
+                    )
+                    .unwrap();
+                accumulator
+            },
+            |accumulator| {
+                for batch in 1..batches {
+                    let start = batch * rows_per_batch;
+                    #[expect(clippy::unit_arg)]
+                    black_box(
+                        accumulator
+                            .update_batch(
+                                &[
+                                    values.slice(start, rows_per_batch),
+                                    ord.slice(start, rows_per_batch),
+                                ],
+                                &group_indices[start..start + rows_per_batch],
+                                None,
+                                num_groups,
+                            )
+                            .unwrap(),
+                    );
+                }
+            },
+            // One accumulator at a time, see `update_bench_many_groups`.
+            BatchSize::PerIteration,
         )
     });
 }
@@ -771,6 +926,85 @@ fn first_last_benchmark(c: &mut Criterion) {
                     values.clone(),
                 );
             }
+        }
+    }
+
+    // A group-by with many allocated groups and few groups touched per batch.
+    // The per-batch work of the accumulator then scales with the number of
+    // allocated groups rather than with the number of rows the batch carries.
+    {
+        const N: usize = 8192;
+        const NUM_GROUPS: usize = 1_000_000;
+        const BATCHES: usize = 100;
+        for is_first in [true, false] {
+            let fn_name = if is_first {
+                "first_value"
+            } else {
+                "last_value"
+            };
+            for groups_touched in [64usize, N] {
+                let values =
+                    Arc::new(create_primitive_array::<Int64Type>(N, 0.0)) as ArrayRef;
+                let ord =
+                    Arc::new(create_primitive_array::<Int64Type>(N, 0.0)) as ArrayRef;
+                update_bench_many_groups(
+                    c,
+                    is_first,
+                    &format!(
+                        "{fn_name} update_bench_many_groups groups={NUM_GROUPS}, touched={groups_touched}"
+                    ),
+                    values.clone(),
+                    ord.clone(),
+                    NUM_GROUPS,
+                    groups_touched,
+                );
+
+                // The same shape, but with distinct batches, so that the
+                // accumulator also writes the state of every winner.
+                let values =
+                    Arc::new(create_primitive_array::<Int64Type>(N * BATCHES, 0.0))
+                        as ArrayRef;
+                let ord = Arc::new(create_primitive_array::<Int64Type>(N * BATCHES, 0.0))
+                    as ArrayRef;
+                update_bench_many_groups_distinct_batches(
+                    c,
+                    is_first,
+                    &format!(
+                        "{fn_name} update_bench_many_groups_distinct_batches groups={NUM_GROUPS}, touched={groups_touched}"
+                    ),
+                    values,
+                    ord,
+                    NUM_GROUPS,
+                    groups_touched,
+                    BATCHES,
+                );
+            }
+        }
+    }
+
+    // The dense counterpart: every batch touches every group, so the per-batch
+    // work grows with the number of groups here too.
+    {
+        const N: usize = 100_000;
+        const NUM_GROUPS: usize = 100_000;
+        for is_first in [true, false] {
+            let fn_name = if is_first {
+                "first_value"
+            } else {
+                "last_value"
+            };
+            let values =
+                Arc::new(create_primitive_array::<Int64Type>(N, 0.0)) as ArrayRef;
+            let ord = Arc::new(create_primitive_array::<Int64Type>(N, 0.0)) as ArrayRef;
+            update_bench_many_groups(
+                c,
+                is_first,
+                &format!("{fn_name} update_bench_many_groups_dense groups={NUM_GROUPS}"),
+                values,
+                ord,
+                NUM_GROUPS,
+                NUM_GROUPS,
+            );
         }
     }
 }
