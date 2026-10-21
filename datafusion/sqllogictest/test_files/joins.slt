@@ -4841,10 +4841,8 @@ logical_plan
 04)----Projection: Int64(1)
 05)------EmptyRelation: rows=1
 physical_plan
-01)CrossJoinExec
+01)ProjectionExec: expr=[j1_string@0 as j1_string, j1_id@1 as j1_id, 1 as Int64(1)]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--ProjectionExec: expr=[1 as Int64(1)]
-04)----PlaceholderRowExec
 
 statement count 0
 drop table j1;
