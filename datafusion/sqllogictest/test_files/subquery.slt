@@ -3694,6 +3694,20 @@ WHERE s.k IN (SELECT c0 FROM coerce_outer_u u WHERE u.c0 = s.k);
 1
 100000
 
+query I rowsort
+SELECT s.k FROM (SELECT k FROM coerce_outer_a UNION ALL SELECT k FROM coerce_outer_b) s
+WHERE EXISTS (SELECT u.c0 FROM coerce_outer_u u WHERE u.c0 = s.k GROUP BY u.c0 HAVING count(*) >= 1);
+----
+1
+100000
+
+query I rowsort
+SELECT s.k FROM (SELECT k FROM coerce_outer_a UNION ALL SELECT k FROM coerce_outer_b) s
+WHERE s.k >= (SELECT min(u.c0) FROM coerce_outer_u u WHERE u.c0 = s.k);
+----
+1
+100000
+
 query II rowsort
 SELECT s.k, (SELECT count(*) FROM coerce_outer_u u WHERE u.c0 = s.k) AS c
 FROM (SELECT CASE WHEN c1 = 0 THEN id ELSE 3 END AS k FROM coerce_outer_t) s;
