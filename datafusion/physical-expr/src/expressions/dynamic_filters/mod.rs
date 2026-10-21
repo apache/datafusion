@@ -352,6 +352,7 @@ impl DynamicFilterPhysicalExpr {
     /// The source's [`PhysicalExpr::expression_id`] must match this filter's.
     /// The original children must also match, but the filters may have different
     /// children remapped by [`PhysicalExpr::with_new_children`].
+    /// A compatible update is ignored if this filter is already complete.
     pub fn update_from(&self, source: &Self) -> Result<()> {
         if Arc::ptr_eq(&self.inner, &source.inner) {
             return Ok(());
@@ -373,10 +374,14 @@ impl DynamicFilterPhysicalExpr {
                 source_state.expression_id
             );
         }
+        // Consumers may have stopped tracking this filter after completion.
+        if current.is_complete {
+            return Ok(());
+        }
 
         current.generation += 1;
         current.expr = source_state.expr;
-        current.is_complete |= source_state.is_complete;
+        current.is_complete = source_state.is_complete;
         self.state_watch.send_replace(current.state());
         Ok(())
     }
@@ -1095,7 +1100,7 @@ mod test {
 
         let source = DynamicFilterPhysicalExpr::new(vec![], lit(true));
         let target = source.independent_copy_for_test();
-        let incomplete = source.independent_copy_for_test();
+        let stale = source.independent_copy_for_test();
         let mut subscription = target.subscribe();
         let mut context = Context::from_waker(Waker::noop());
         let mut completion = pin!(target.wait_complete());
@@ -1112,6 +1117,7 @@ mod test {
             target.update_from(&source)?;
 
             assert!(update.as_mut().poll(&mut context).is_ready());
+            assert_eq!(target.current()?.as_ref(), lit(false).as_ref());
             assert_eq!(target.is_complete(), complete);
             assert_eq!(
                 completion.as_mut().poll(&mut context),
@@ -1130,17 +1136,24 @@ mod test {
             );
         }
 
-        // Completion is monotonic in both the synchronous state and the
-        // notifications used by dynamic-filter trackers.
-        target.update_from(&incomplete)?;
-        assert!(target.is_complete());
-        assert_eq!(
-            subscription.observe(),
-            DynamicFilterChange {
-                changed: true,
-                complete: true,
-            },
-        );
+        // Late snapshots and duplicate delivery cannot change a completed filter
+        // or notify consumers that may have already stopped tracking it.
+        let before = target.current()?;
+        let generation = target.snapshot_generation();
+        let receiver = target.state_watch.subscribe();
+        let state = *receiver.borrow();
+        let completed_stale = stale.independent_copy_for_test();
+        completed_stale.mark_complete();
+
+        for late_source in [&stale, &completed_stale, &source] {
+            target.update_from(late_source)?;
+            assert!(target.is_complete());
+            assert!(Arc::ptr_eq(&target.current()?, &before));
+            assert!(Arc::ptr_eq(target.inner.read().expr(), &before));
+            assert_eq!(target.snapshot_generation(), generation);
+            assert_eq!(*receiver.borrow(), state);
+            assert!(!receiver.has_changed().unwrap());
+        }
         Ok(())
     }
 
