@@ -69,7 +69,6 @@ members = [
     "datafusion/doc",
     "xtask",
 ]
-exclude = ["dev/depcheck"]
 resolver = "2"
 
 [workspace.package]
