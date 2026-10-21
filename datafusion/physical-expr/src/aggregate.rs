@@ -52,7 +52,9 @@ use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
 };
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion_expr::{AggregateUDF, Expr, ReversedUDAF, SetMonotonicity};
+use datafusion_expr::{
+    AggregateUDF, DistinctHandling, Expr, ReversedUDAF, SetMonotonicity,
+};
 use datafusion_expr_common::accumulator::{Accumulator, AggregateMetrics};
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
@@ -310,6 +312,11 @@ impl AggregateExprBuilder {
 
         let human_display =
             AggregateHumanDisplay::try_new(human_display, human_display_alias, &name)?;
+
+        // Reject DISTINCT for functions that declare they don't support it
+        if is_distinct && fun.distinct_handling() == DistinctHandling::Unsupported {
+            return not_impl_err!("{} does not support DISTINCT", fun.name());
+        }
 
         let arg_fields = args
             .iter()
