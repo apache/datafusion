@@ -972,6 +972,14 @@ mod test {
             LiteralGuarantee::analyze(&make_expr(Arc::clone(&strings), None, true))
                 .is_empty()
         );
+        assert!(
+            LiteralGuarantee::analyze(&make_expr(
+                Arc::clone(&strings),
+                Some(vec![false, false, false].into()),
+                false
+            ))
+            .is_empty()
+        );
         assert_eq!(
             LiteralGuarantee::analyze(&make_expr(
                 strings,
