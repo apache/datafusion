@@ -355,11 +355,12 @@ struct JoinBuildData {
     /// `build_side_has_null` were computed from the original keys in
     /// `collect_left_input`.
     values: Vec<ArrayRef>,
-    /// Logical nulls of the scalar key for uncorrelated null-aware `LeftMark`.
+    /// Logical nulls of the scalar key for uncorrelated null-aware `LeftMark`
+    /// and `LeftAnti`.
     ///
     /// Computed once while collecting the build side because dictionary
     /// logical-null discovery can scan nested dictionary values.
-    left_mark_build_key_nulls: Option<NullBuffer>,
+    null_aware_build_key_nulls: Option<NullBuffer>,
     /// Bounds computed from the build side; absent for an empty partition.
     bounds: Option<PartitionBounds>,
     /// IN-list values or a hash-table reference used for filter pushdown.
@@ -436,8 +437,8 @@ impl JoinLeftData {
         &self.build.values
     }
 
-    pub(super) fn left_mark_build_key_nulls(&self) -> Option<&NullBuffer> {
-        self.build.left_mark_build_key_nulls.as_ref()
+    pub(super) fn null_aware_build_key_nulls(&self) -> Option<&NullBuffer> {
+        self.build.null_aware_build_key_nulls.as_ref()
     }
 
     /// returns a reference to the visited indices bitmap
@@ -3621,12 +3622,17 @@ fn build_in_memory(
         && !left_values.is_empty()
         && left_values[0].logical_null_count() > 0;
 
-    let left_mark_build_key_nulls = if matches!(
+    let null_aware_build_key_nulls = if matches!(
         null_aware,
-        Some(NullAwareMode::LeftMark {
-            correlated: false,
-            ..
-        })
+        Some(
+            NullAwareMode::LeftMark {
+                correlated: false,
+                ..
+            } | NullAwareMode::LeftAnti {
+                correlated: false,
+                ..
+            }
+        )
     ) {
         left_values[0]
             .logical_nulls()
@@ -3634,7 +3640,7 @@ fn build_in_memory(
     } else {
         None
     };
-    if let Some(nulls) = &left_mark_build_key_nulls {
+    if let Some(nulls) = &null_aware_build_key_nulls {
         // `logical_nulls` reuses an array's physical null buffer when it can.
         // Only charge newly materialized buffers, such as dictionary logical
         // nulls, because the build batch's buffers were reserved above.
@@ -3666,7 +3672,7 @@ fn build_in_memory(
             map,
             batch,
             values: normalized_values,
-            left_mark_build_key_nulls,
+            null_aware_build_key_nulls,
             bounds,
             membership,
             reservation,
@@ -10475,6 +10481,73 @@ mod tests {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
             ++
             ++
+            ");
+        }
+        Ok(())
+    }
+
+    /// The build side counterpart of
+    /// [`test_null_aware_left_anti_probe_logical_null`]: `NULL NOT IN (5, 6)`
+    /// is UNKNOWN, so the build row whose key points at a NULL dictionary
+    /// value is dropped.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_anti_build_logical_null(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        let left = build_table_dict_key(
+            "c1",
+            vec![Some(1), None, Some(2)],
+            vec![0, 1, 2],
+            "dummy",
+            vec![Some(10), Some(0), Some(20)],
+        );
+        let left_key = left
+            .execute(0, Arc::clone(&task_ctx))?
+            .next()
+            .await
+            .unwrap()?;
+        assert_eq!(left_key.column(0).null_count(), 0);
+        assert_eq!(left_key.column(0).logical_null_count(), 1);
+
+        let right = build_table_dict_key(
+            "c2",
+            vec![Some(5), Some(6)],
+            vec![0, 1],
+            "dummy",
+            vec![Some(50), Some(60)],
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-------+
+            | c1 | dummy |
+            +----+-------+
+            | 1  | 10    |
+            | 2  | 20    |
+            +----+-------+
             ");
         }
         Ok(())

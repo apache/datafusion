@@ -1379,12 +1379,15 @@ fn null_aware_left_anti_final_indices(
     if !probe_summary.non_empty {
         return (left_side, right_side);
     }
-    // null_aware validation ensures a single join key
-    let build_key_column = &left_data.values()[0];
+    // Logical nulls, so that a dictionary key pointing at a NULL value counts
+    // as a NULL build key. Computed once with the build side.
+    let Some(build_key_nulls) = left_data.null_aware_build_key_nulls() else {
+        return (left_side, right_side);
+    };
     let left_side = UInt64Array::from_iter_values(left_side.iter().filter_map(|idx| {
         let idx =
             idx.expect("LeftAnti final indices should always contain build-side rows");
-        (!build_key_column.is_null(idx as usize)).then_some(idx)
+        (!build_key_nulls.is_null(idx as usize)).then_some(idx)
     }));
     let right_side = UInt32Array::new_null(left_side.len());
     (left_side, right_side)
@@ -1406,7 +1409,7 @@ fn null_aware_left_mark_column(
     let build_key_nulls = if correlated {
         None
     } else {
-        left_data.left_mark_build_key_nulls()
+        left_data.null_aware_build_key_nulls()
     };
     build_null_aware_left_mark_column(
         left_side,
