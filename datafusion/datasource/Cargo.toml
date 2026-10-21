@@ -39,6 +39,7 @@ default = ["compression"]
 # consumers that never serialize plans pay nothing. Mirrors the `proto` feature
 # on `datafusion-physical-plan`.
 proto = [
+    "dep:prost",
     "dep:datafusion-proto-models",
     "datafusion-physical-plan/proto",
 ]
@@ -75,6 +76,7 @@ log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = { workspace = true }
+prost = { workspace = true, optional = true }
 rand = { workspace = true }
 tempfile = { workspace = true, optional = true }
 tokio = { workspace = true }

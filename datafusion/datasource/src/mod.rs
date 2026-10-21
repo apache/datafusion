@@ -44,7 +44,7 @@ pub mod projection;
 /// Protobuf conversions for [`FileRange`], [`PartitionedFile`] and
 /// [`FileGroup`], gated on the `proto` feature.
 #[cfg(feature = "proto")]
-mod proto;
+pub mod proto;
 pub mod schema_adapter;
 pub mod sink;
 pub mod source;
