@@ -105,6 +105,9 @@ pub struct JsonOpener {
     /// When `true` (default), expects newline-delimited JSON (NDJSON).
     /// When `false`, expects JSON array format `[{...}, {...}]`.
     newline_delimited: bool,
+    /// When `true`, a JSON number or boolean read into a string column is kept as its text.
+    /// When `false` (default), it is an error.
+    coerce_primitive: bool,
 }
 
 impl JsonOpener {
@@ -122,7 +125,17 @@ impl JsonOpener {
             file_compression_type,
             object_store,
             newline_delimited,
+            coerce_primitive: false,
         }
+    }
+
+    /// Set whether a JSON number or boolean read into a string column is kept as its text.
+    ///
+    /// When `false` (default), it is an error. See
+    /// [`ReaderBuilder::with_coerce_primitive`].
+    pub fn with_coerce_primitive(mut self, coerce_primitive: bool) -> Self {
+        self.coerce_primitive = coerce_primitive;
+        self
     }
 }
 
@@ -136,6 +149,9 @@ pub struct JsonSource {
     /// When `true` (default), expects newline-delimited JSON (NDJSON).
     /// When `false`, expects JSON array format `[{...}, {...}]`.
     newline_delimited: bool,
+    /// When `true`, a JSON number or boolean read into a string column is kept as its text.
+    /// When `false` (default), it is an error.
+    coerce_primitive: bool,
 }
 
 impl JsonSource {
@@ -148,7 +164,22 @@ impl JsonSource {
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
             newline_delimited: true,
+            coerce_primitive: false,
         }
+    }
+
+    /// Set whether a JSON number or boolean read into a string column is kept as its text.
+    ///
+    /// For example, `{"a": false}` read with `a: Utf8` gives `"false"`. When `false`
+    /// (default), it is an error. See [`ReaderBuilder::with_coerce_primitive`].
+    pub fn with_coerce_primitive(mut self, coerce_primitive: bool) -> Self {
+        self.coerce_primitive = coerce_primitive;
+        self
+    }
+
+    /// Returns whether a JSON number or boolean read into a string column is kept as its text.
+    pub fn coerce_primitive(&self) -> bool {
+        self.coerce_primitive
     }
 
     /// Set whether to read as newline-delimited JSON.
@@ -192,6 +223,7 @@ impl FileSource for JsonSource {
             file_compression_type: base_config.file_compression_type,
             object_store,
             newline_delimited: self.newline_delimited,
+            coerce_primitive: self.coerce_primitive,
         }) as Arc<dyn FileOpener>;
 
         // Wrap with ProjectionOpener
@@ -270,6 +302,7 @@ impl FileSource for JsonSource {
             // Serialized in `base` and reapplied on decode.
             projection: _,
             newline_delimited,
+            coerce_primitive,
         } = self;
 
         let node = protobuf::JsonScanExecNode {
@@ -279,6 +312,7 @@ impl FileSource for JsonSource {
             } else {
                 Some(false)
             },
+            coerce_primitive: coerce_primitive.then_some(true),
         };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::JsonScan(node)),
@@ -290,7 +324,8 @@ impl FileSource for JsonSource {
 impl JsonSource {
     /// Reconstructs a `DataSourceExec` from a protobuf `JsonScan`.
     ///
-    /// Payloads without a mode default to newline-delimited JSON.
+    /// Payloads without a mode default to newline-delimited JSON, and payloads without
+    /// `coerce_primitive` default to `false`.
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
@@ -312,6 +347,7 @@ impl JsonSource {
         let protobuf::JsonScanExecNode {
             base_conf,
             newline_delimited,
+            coerce_primitive,
         } = scan;
 
         let base_conf = base_conf.as_ref().ok_or_else(|| {
@@ -323,7 +359,8 @@ impl JsonSource {
         let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
         let source = Arc::new(
             JsonSource::new(table_schema)
-                .with_newline_delimited(newline_delimited.unwrap_or(true)),
+                .with_newline_delimited(newline_delimited.unwrap_or(true))
+                .with_coerce_primitive(coerce_primitive.unwrap_or(false)),
         );
 
         let conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
@@ -349,6 +386,7 @@ impl FileOpener for JsonOpener {
         let batch_size = self.batch_size;
         let file_compression_type = self.file_compression_type.to_owned();
         let newline_delimited = self.newline_delimited;
+        let coerce_primitive = self.coerce_primitive;
 
         // JSON array format requires reading the complete file
         if !newline_delimited && partitioned_file.range.is_some() {
@@ -390,6 +428,7 @@ impl FileOpener for JsonOpener {
 
                 let decoder = ReaderBuilder::new(schema)
                     .with_batch_size(batch_size)
+                    .with_coerce_primitive(coerce_primitive)
                     .build_decoder()?;
                 let input = file_compression_type
                     .convert_stream(aligned_stream.boxed())?
@@ -415,6 +454,7 @@ impl FileOpener for JsonOpener {
                         let reader = BufReader::new(bytes);
                         let arrow_reader = ReaderBuilder::new(schema)
                             .with_batch_size(batch_size)
+                            .with_coerce_primitive(coerce_primitive)
                             .build(reader)?;
 
                         Ok(futures::stream::iter(arrow_reader)
@@ -428,6 +468,7 @@ impl FileOpener for JsonOpener {
                         );
                         let arrow_reader = ReaderBuilder::new(schema)
                             .with_batch_size(batch_size)
+                            .with_coerce_primitive(coerce_primitive)
                             .build(ndjson_reader)?;
 
                         Ok(futures::stream::iter(arrow_reader)
@@ -441,6 +482,7 @@ impl FileOpener for JsonOpener {
                         let s = s.map_err(DataFusionError::from);
                         let decoder = ReaderBuilder::new(schema)
                             .with_batch_size(batch_size)
+                            .with_coerce_primitive(coerce_primitive)
                             .build_decoder()?;
                         let input =
                             file_compression_type.convert_stream(s.boxed())?.fuse();
@@ -517,6 +559,7 @@ impl FileOpener for JsonOpener {
 
                             match ReaderBuilder::new(schema)
                                 .with_batch_size(batch_size)
+                                .with_coerce_primitive(coerce_primitive)
                                 .build(&mut ndjson_reader)
                             {
                                 Ok(arrow_reader) => {
@@ -615,11 +658,12 @@ pub async fn plan_to_json(
 mod tests {
     use super::*;
     use crate::test_utils::{CHUNK_SIZES, make_chunked_store};
-    use arrow::array::{Int64Array, StringArray};
+    use arrow::array::{AsArray, Int64Array, StringArray};
     use arrow::compute;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use bytes::Bytes;
+    use datafusion_common::assert_contains;
     use datafusion_datasource::FileRange;
     use object_store::memory::InMemory;
     use object_store::path::Path;
@@ -829,6 +873,71 @@ mod tests {
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 2);
 
+        Ok(())
+    }
+
+    /// Reads the `name` column of `file` with `coerce_primitive` set to `coerce`.
+    async fn read_names(
+        store: &Arc<dyn ObjectStore>,
+        file: PartitionedFile,
+        newline_delimited: bool,
+        coerce: bool,
+    ) -> Result<Vec<String>> {
+        let opener = JsonOpener::new(
+            1024,
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            Arc::clone(store),
+            newline_delimited,
+        )
+        .with_coerce_primitive(coerce);
+        let batches: Vec<RecordBatch> = opener.open(file)?.await?.try_collect().await?;
+        Ok(batches
+            .iter()
+            .flat_map(|batch| batch.column(1).as_string::<i32>().iter().flatten())
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// With `coerce_primitive`, a JSON number or boolean in a string column is kept as its
+    /// text; without it, reading fails. Covers each read path: a byte range, a local file,
+    /// and a stream, for both newline-delimited JSON and JSON arrays.
+    #[tokio::test]
+    async fn test_coerce_primitive() -> Result<()> {
+        let ndjson = "{\"id\": 1, \"name\": false}\n{\"id\": 2, \"name\": 3.5}\n";
+        let array = r#"[{"id": 1, "name": false}, {"id": 2, "name": 3.5}]"#;
+        let ndjson_file = PartitionedFile::new("a.ndjson", ndjson.len() as u64);
+        let array_file = PartitionedFile::new("a.json", array.len() as u64);
+        // Only newline-delimited JSON can be read by byte range.
+        let range_file = ndjson_file.clone().with_range(0, ndjson.len() as i64);
+
+        let dir = tempfile::tempdir()?;
+        // `InMemory` returns a stream payload and `LocalFileSystem` a file payload.
+        let stores: [Arc<dyn ObjectStore>; 2] = [
+            Arc::new(InMemory::new()),
+            Arc::new(object_store::local::LocalFileSystem::new_with_prefix(
+                dir.path(),
+            )?),
+        ];
+        for store in &stores {
+            for (file, data) in [(&ndjson_file, ndjson), (&array_file, array)] {
+                let payload = PutPayload::from_static(data.as_bytes());
+                store.put(&file.object_meta.location, payload).await?;
+            }
+            for (case, file, newline_delimited) in [
+                ("ndjson", &ndjson_file, true),
+                ("array", &array_file, false),
+                ("range", &range_file, true),
+            ] {
+                let read =
+                    |coerce| read_names(store, file.clone(), newline_delimited, coerce);
+                assert_eq!(read(true).await?, ["false", "3.5"], "{case} via {store}");
+                assert_contains!(
+                    read(false).await.unwrap_err().to_string(),
+                    "expected string got false"
+                );
+            }
+        }
         Ok(())
     }
 

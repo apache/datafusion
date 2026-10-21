@@ -2169,6 +2169,9 @@ pub struct JsonScanExecNode {
     /// Absent means newline-delimited JSON for compatibility with older payloads.
     #[prost(bool, optional, tag = "2")]
     pub newline_delimited: ::core::option::Option<bool>,
+    /// Absent means false: a JSON number or boolean in a string column is an error.
+    #[prost(bool, optional, tag = "3")]
+    pub coerce_primitive: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroScanExecNode {
