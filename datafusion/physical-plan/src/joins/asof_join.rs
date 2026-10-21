@@ -138,6 +138,15 @@ impl AsOfMatchExpr {
     }
 }
 
+/// Execution strategy for an ASOF join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsOfJoinMode {
+    /// Collect the right input once and share it across left partitions.
+    Broadcast,
+    /// Stream corresponding input partitions aligned by equality keys.
+    Partitioned,
+}
+
 /// A broadcast sort-merge ASOF join that emits one row for every left row.
 #[derive(Debug)]
 pub struct AsOfJoinExec {
