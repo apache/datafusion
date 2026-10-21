@@ -154,6 +154,8 @@ pub struct AsOfJoinExec {
     right: Arc<dyn ExecutionPlan>,
     on: JoinOn,
     match_condition: AsOfMatchExpr,
+    /// Execution strategy used by join.
+    mode: AsOfJoinMode,
     /// Unprojected left-join schema used to interpret `projection`.
     join_schema: SchemaRef,
     /// Information of index and left/right placement of columns.
@@ -249,6 +251,7 @@ impl AsOfJoinExec {
             right,
             on,
             match_condition,
+            mode: AsOfJoinMode::Broadcast,
             join_schema,
             column_indices,
             projection,
@@ -258,6 +261,11 @@ impl AsOfJoinExec {
             right_fut: Default::default(),
             cache,
         })
+    }
+
+    /// Returns the execution strategy used by this join.
+    pub fn mode(&self) -> AsOfJoinMode {
+        self.mode
     }
 
     /// Returns this join emitting only the columns in `projection`, in that order.
@@ -391,10 +399,28 @@ impl ExecutionPlan for AsOfJoinExec {
         // `UnspecifiedDistribution` imposes no layout requirement; because this
         // operator uses the default `benefits_from_input_partitioning`, the
         // optimizer may still add round-robin repartitioning when it is useful.
-        InputDistributionRequirements::new(vec![
-            Distribution::UnspecifiedDistribution,
-            Distribution::SinglePartition,
-        ])
+        match self.mode {
+            AsOfJoinMode::Broadcast => {
+                InputDistributionRequirements::new(vec![
+                    Distribution::UnspecifiedDistribution,
+                    Distribution::SinglePartition,
+                ])
+            }
+            AsOfJoinMode::Partitioned => {
+                let (left_keys, right_keys) = self
+                    .on
+                    .iter()
+                    .map(|(left, right)| {
+                        (Arc::clone(left), Arc::clone(right))
+                    })
+                    .unzip();
+
+                InputDistributionRequirements::co_partitioned(vec![
+                    Distribution::KeyPartitioned(left_keys),
+                    Distribution::KeyPartitioned(right_keys),
+                ])
+            }
+        }
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -449,6 +475,7 @@ impl ExecutionPlan for AsOfJoinExec {
                 right,
                 on: self.on.clone(),
                 match_condition: self.match_condition.clone(),
+                mode: self.mode,
                 join_schema: Arc::clone(&self.join_schema),
                 column_indices: self.column_indices.clone(),
                 projection: self.projection.clone(),
@@ -538,7 +565,7 @@ impl ExecutionPlan for AsOfJoinExec {
                 column_indices,
                 batch_size,
                 metrics,
-                right_input,
+                Some(right_input),
             );
             Ok::<SendableRecordBatchStream, datafusion_common::DataFusionError>(Box::pin(
                 stream,
@@ -1085,7 +1112,7 @@ struct AsOfJoinStream {
     /// Independent cursor over the shared, ordered right input.
     right: InputCursor,
     /// Retains the shared right batches and their memory reservation.
-    _right_input: Arc<BroadcastRightInput>,
+    _right_input: Option<Arc<BroadcastRightInput>>,
     /// Validated ordered match operator.
     op: Operator,
     /// Projected output columns and their input sides.
@@ -1123,7 +1150,7 @@ impl AsOfJoinStream {
         column_indices: Vec<ColumnIndex>,
         batch_size: usize,
         metrics: AsOfJoinMetrics,
-        right_input: Arc<BroadcastRightInput>,
+        right_input: Option<Arc<BroadcastRightInput>>,
     ) -> Self {
         let group_sort_options = vec![
             SortOptions {

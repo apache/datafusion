@@ -21,7 +21,7 @@ use core::fmt;
 use std::fmt::{Display, Formatter};
 
 use arrow::array::BooleanBufferBuilder;
-pub use asof_join::{AsOfJoinExec, AsOfMatchExpr};
+pub use asof_join::{AsOfJoinExec, AsOfJoinMode, AsOfMatchExpr};
 pub use cross_join::CrossJoinExec;
 use datafusion_physical_expr::PhysicalExprRef;
 /// # Public Only for Internal Use:
