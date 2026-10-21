@@ -107,33 +107,26 @@ pub(crate) fn label_output_columns(
     }
     // Alias the expressions of a top projection in place, instead of adding a
     // projection on top that every optimizer pass then has to merge
-    if let LogicalPlan::Projection(Projection { expr, input, .. }) = plan {
-        let exprs = expr
-            .into_iter()
-            .zip(schema.iter())
-            .zip(labels)
-            .map(|((expr, (qualifier, field)), label)| match label {
-                Some(label) => with_label(expr, qualifier, field.name(), &label),
-                None => expr,
-            })
-            .collect();
-        return Ok(LogicalPlan::Projection(Projection::try_new(exprs, input)?));
-    }
-    let exprs = schema
-        .iter()
+    let (exprs, input) = match plan {
+        LogicalPlan::Projection(Projection { expr, input, .. }) => (expr, input),
+        plan => {
+            let columns = schema
+                .iter()
+                .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
+                .collect();
+            (columns, Arc::new(plan))
+        }
+    };
+    let exprs = exprs
+        .into_iter()
+        .zip(schema.iter())
         .zip(labels)
-        .map(|((qualifier, field), label)| {
-            let column = Expr::Column(Column::from((qualifier, field)));
-            match label {
-                Some(label) => with_label(column, qualifier, field.name(), &label),
-                None => column,
-            }
+        .map(|((expr, (qualifier, field)), label)| match label {
+            Some(label) => with_label(expr, qualifier, field.name(), &label),
+            None => expr,
         })
         .collect();
-    Ok(LogicalPlan::Projection(Projection::try_new(
-        exprs,
-        Arc::new(plan),
-    )?))
+    Ok(LogicalPlan::Projection(Projection::try_new(exprs, input)?))
 }
 
 /// Returns `expr`, which produces the output column `qualifier.name`, aliased
@@ -312,6 +305,36 @@ fn is_count_star_window_alias(column: &Column, alias: &str) -> bool {
         && alias == column.name.replacen(PLANNED, "count(*)", 1)
 }
 
+/// Like [`resolve_expr`] for a list of expressions. Returns `None` when any
+/// of them can't be traced.
+fn resolve_all(exprs: &[Expr], input: &LogicalPlan) -> Result<Option<Vec<Expr>>> {
+    exprs
+        .iter()
+        .map(|e| resolve_expr(e, input))
+        .collect::<Result<Option<Vec<_>>>>()
+}
+
+/// Like [`resolve_all`] for sort expressions.
+fn resolve_sorts(
+    sorts: &[SortExpr],
+    input: &LogicalPlan,
+) -> Result<Option<Vec<SortExpr>>> {
+    sorts
+        .iter()
+        .map(|sort| Ok(resolve_expr(&sort.expr, input)?.map(|expr| sort.with_expr(expr))))
+        .collect::<Result<Option<Vec<_>>>>()
+}
+
+/// Returns the `name([DISTINCT ]args)` start of an aggregate or window
+/// function label.
+fn call_label(name: &str, distinct: bool, args: &[Expr]) -> String {
+    format!(
+        "{name}({}{})",
+        if distinct { "DISTINCT " } else { "" },
+        ExprListDisplay::comma_separated(args)
+    )
+}
+
 /// Like [`resolve_expr`] for an expression of an `Aggregate` node. An
 /// aggregate function is rendered as `name(args)` followed by its
 /// `DISTINCT`, null treatment, `FILTER` and `ORDER BY` parts. An ordered-set
@@ -329,39 +352,26 @@ fn resolve_aggregate_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Exp
         null_treatment,
     } = params;
 
-    let Some(args) = args
-        .iter()
-        .map(|e| resolve_expr(e, input))
-        .collect::<Result<Option<Vec<_>>>>()?
-    else {
+    let Some(args) = resolve_all(args, input)? else {
         return Ok(None);
     };
-    let mut resolved_order_by = Vec::with_capacity(order_by.len());
-    for sort in order_by {
-        let Some(expr) = resolve_expr(&sort.expr, input)? else {
-            return Ok(None);
-        };
-        resolved_order_by.push(sort.with_expr(expr));
-    }
-    let order_by = resolved_order_by;
-    let filter = match filter {
-        Some(filter) => match resolve_expr(filter, input)? {
-            Some(filter) => Some(filter),
-            None => return Ok(None),
-        },
-        None => None,
+    let Some(order_by) = resolve_sorts(order_by, input)? else {
+        return Ok(None);
+    };
+    let filter = match filter
+        .as_deref()
+        .map(|f| resolve_expr(f, input))
+        .transpose()?
+    {
+        Some(None) => return Ok(None),
+        resolved => resolved.flatten(),
     };
 
     let within_group = func.supports_within_group_clause() && !order_by.is_empty();
     // The planner puts the ordering expression of a WITHIN GROUP clause first
     // in the args, but the query only has the direct args there
     let args = if within_group { &args[1..] } else { &args[..] };
-    let mut label = format!(
-        "{}({}{})",
-        func.name(),
-        if *distinct { "DISTINCT " } else { "" },
-        ExprListDisplay::comma_separated(args)
-    );
+    let mut label = call_label(func.name(), *distinct, args);
     if within_group {
         write!(
             label,
@@ -402,45 +412,32 @@ fn resolve_window_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Expr>>
 
     let frame_is_default =
         is_default_frame(window_frame, order_by, window_planning_schema(input));
-    let resolve_all = |exprs: &[Expr]| -> Result<Option<Vec<Expr>>> {
-        exprs
-            .iter()
-            .map(|e| resolve_expr(e, input))
-            .collect::<Result<Option<Vec<_>>>>()
-    };
-    let Some(args) = resolve_all(args)? else {
+    let Some(args) = resolve_all(args, input)? else {
         return Ok(None);
     };
-    let Some(partition_by) = resolve_all(partition_by)? else {
+    let Some(partition_by) = resolve_all(partition_by, input)? else {
         return Ok(None);
     };
-    let mut resolved_order_by = Vec::with_capacity(order_by.len());
-    for sort in order_by {
-        // The planner adds a constant sort key to a RANGE frame without
-        // ORDER BY, and a constant key doesn't change the result
-        if matches!(sort.expr, Expr::Literal(..)) {
-            continue;
-        }
-        let Some(expr) = resolve_expr(&sort.expr, input)? else {
-            return Ok(None);
-        };
-        resolved_order_by.push(sort.with_expr(expr));
-    }
-    let order_by = resolved_order_by;
-    let filter = match filter {
-        Some(filter) => match resolve_expr(filter, input)? {
-            Some(filter) => Some(filter),
-            None => return Ok(None),
-        },
-        None => None,
+    // The planner adds a constant sort key to a RANGE frame without
+    // ORDER BY, and a constant key doesn't change the result
+    let sort_keys: Vec<SortExpr> = order_by
+        .iter()
+        .filter(|sort| !matches!(sort.expr, Expr::Literal(..)))
+        .cloned()
+        .collect();
+    let Some(order_by) = resolve_sorts(&sort_keys, input)? else {
+        return Ok(None);
+    };
+    let filter = match filter
+        .as_deref()
+        .map(|f| resolve_expr(f, input))
+        .transpose()?
+    {
+        Some(None) => return Ok(None),
+        resolved => resolved.flatten(),
     };
 
-    let mut label = format!(
-        "{}({}{})",
-        fun.name(),
-        if *distinct { "DISTINCT " } else { "" },
-        ExprListDisplay::comma_separated(&args)
-    );
+    let mut label = call_label(fun.name(), *distinct, &args);
     if let Some(null_treatment) = null_treatment {
         write!(label, " {null_treatment}")?;
     }
