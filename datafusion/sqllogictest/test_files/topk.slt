@@ -511,8 +511,7 @@ ORDER BY c1, c0 LIMIT 2;
 5 0
 1 1
 
-# Control: a constant with the same value in every partition is still removed
-# from the TopK key
+# Control: a constant with the same value in every partition stays out of the TopK key
 query TT
 EXPLAIN SELECT 1 AS c0, id AS c1 FROM heterogeneous_const
 UNION ALL
