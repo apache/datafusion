@@ -89,6 +89,7 @@ create table test_substr_arguments (
 statement ok
 insert into test_substr_arguments values
   ('hello', 1, 2),
+  ('hello', 2, 1),
   ('world', NULL, 3),
   ('arrow', 2, NULL);
 
@@ -99,10 +100,11 @@ SELECT
   substr(arrow_cast(c, 'Dictionary(Int32, Utf8)'), start_pos),
   substr(arrow_cast(c, 'Dictionary(Int32, Utf8)'), 1, length)
 FROM test_substr_arguments
-ORDER BY c;
+ORDER BY c, start_pos;
 ----
 rrow rrow NULL
 hello hello he
+ello ello h
 NULL NULL wor
 
 query TT

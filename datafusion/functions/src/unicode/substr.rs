@@ -15,17 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::strings::sub_view;
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
-    StringArrayType, StringViewArray,
+    Array, ArrayRef, AsArray, DictionaryArray, GenericStringArray, Int64Array,
+    OffsetSizeTrait, PrimitiveBuilder, StringArrayType, StringViewArray, UInt64Array,
 };
 use arrow::buffer::{NullBuffer, ScalarBuffer};
-use arrow::compute::kernels::cast::cast;
-use arrow::datatypes::DataType;
+use arrow::compute::take;
+use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType};
+use arrow::downcast_dictionary_array;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{
     NativeType, logical_int32, logical_int64, logical_string,
@@ -162,16 +164,81 @@ fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string_view();
             string_view_substr(string_array, &args[1..])
         }
-        DataType::Dictionary(_, value_type) => {
-            let mut flat_args = args.to_vec();
-            flat_args[0] = cast(&args[0], value_type)?;
-            Ok(cast(&substr(&flat_args)?, args[0].data_type())?)
+        DataType::Dictionary(_, _) => {
+            let array = &args[0];
+            downcast_dictionary_array! {
+                array => dictionary_substr(array, &args[1..]),
+                _ => unreachable!("substr matched a dictionary array"),
+            }
         }
         other => exec_err!(
             "Unsupported data type {other:?} for function substr,\
             expected Utf8View, Utf8 or LargeUtf8."
         ),
     }
+}
+
+fn dictionary_substr<K: ArrowDictionaryKeyType>(
+    dictionary: &DictionaryArray<K>,
+    args: &[ArrayRef],
+) -> Result<ArrayRef> {
+    let start_array = as_int64_array(&args[0])?;
+    let count_array = args.get(1).map(|a| as_int64_array(a)).transpose()?;
+
+    let mut combinations = HashMap::new();
+    let mut value_indices = Vec::new();
+    let mut starts = Vec::new();
+    let mut counts = count_array.map(|_| Vec::new());
+    let mut keys = PrimitiveBuilder::<K>::with_capacity(dictionary.len());
+
+    for i in 0..dictionary.len() {
+        let Some(value_index) = dictionary.key(i) else {
+            keys.append_null();
+            continue;
+        };
+        if dictionary.values().is_null(value_index)
+            || start_array.is_null(i)
+            || count_array.is_some_and(|a| a.is_null(i))
+        {
+            keys.append_null();
+            continue;
+        }
+
+        let start = start_array.value(i);
+        let count = count_array.map(|a| a.value(i));
+        let combination = (value_index, start, count);
+        let next_key = combinations.len();
+        let key = *combinations.entry(combination).or_insert_with(|| {
+            value_indices.push(value_index as u64);
+            starts.push(start);
+            if let (Some(counts), Some(count)) = (&mut counts, count) {
+                counts.push(count);
+            }
+            next_key
+        });
+        let key = K::Native::from_usize(key).ok_or_else(|| {
+            datafusion_common::DataFusionError::Execution(format!(
+                "substr result has too many dictionary values for key type {}",
+                K::DATA_TYPE
+            ))
+        })?;
+        keys.append_value(key);
+    }
+
+    let values = take(
+        dictionary.values().as_ref(),
+        &UInt64Array::from(value_indices),
+        None,
+    )?;
+    let mut distinct_args = vec![values, Arc::new(Int64Array::from(starts)) as ArrayRef];
+    if let Some(counts) = counts {
+        distinct_args.push(Arc::new(Int64Array::from(counts)));
+    }
+    let values = substr(&distinct_args)?;
+    Ok(Arc::new(DictionaryArray::<K>::try_new(
+        keys.finish(),
+        values,
+    )?))
 }
 
 /// Convert the given `start` and `count` to valid byte indices within `input` string.
