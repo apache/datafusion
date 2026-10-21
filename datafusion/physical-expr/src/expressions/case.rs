@@ -19,8 +19,10 @@ mod literal_lookup_table;
 
 use super::{Column, Literal};
 use crate::expressions::{
-    BinaryExpr, CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
+    BinaryExpr, CastExpr, LambdaExpr, LambdaVariable, NegativeExpr, NotExpr, lit,
+    try_cast,
 };
+use crate::utils::collect_columns;
 use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
@@ -37,7 +39,8 @@ use datafusion_common::{
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::NullableInterval;
 use datafusion_expr_common::operator::Operator;
-use indexmap::IndexMap;
+use datafusion_expr_common::placement::ExpressionPlacement;
+use indexmap::{IndexMap, IndexSet};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::hash::Hash;
@@ -47,6 +50,7 @@ use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
 use arrow::compute::kernels::merge::{MergeIndex, merge, merge_n};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_physical_expr_common::datum::compare_with_eq;
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_expr_common::utils::scatter;
 use itertools::Itertools;
 use std::fmt::{Debug, Formatter};
@@ -132,12 +136,24 @@ struct CaseBody {
 impl CaseBody {
     /// Derives a [ProjectedCaseBody] from this [CaseBody].
     fn project(&self) -> Result<ProjectedCaseBody> {
+        // Lambda bodies are evaluated against batches of a different shape, so
+        // expressions are only precomputed when the body contains no lambdas.
+        let can_precompute = !self.exprs().any(|e| {
+            e.exists(|e| Ok(e.is::<LambdaExpr>() || e.is::<LambdaVariable>()))
+                .expect("Closure cannot fail")
+        });
+
         // Determine the set of columns that are used in all the expressions of the case body.
         // Use an ordered set so lambda variables continue to be positioned after columns
         let mut used_column_indices = BTreeSet::<usize>::new();
+        let mut precompute_candidates = IndexSet::<Arc<dyn PhysicalExpr>>::new();
         let mut supports_projection = true;
         let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
             expr.apply(|expr| {
+                if can_precompute && is_precomputable(expr) {
+                    precompute_candidates.insert(Arc::clone(expr));
+                    return Ok(TreeNodeRecursion::Jump);
+                }
                 if let Some(column) = expr.downcast_ref::<Column>() {
                     used_column_indices.insert(column.index());
                 } else if let Some(lambda_variable) =
@@ -156,16 +172,31 @@ impl CaseBody {
             .expect("Closure cannot fail");
         };
 
-        if let Some(e) = &self.expr {
-            collect_column_indices(e);
-        }
-        self.when_then_expr.iter().for_each(|(w, t)| {
-            collect_column_indices(w);
-            collect_column_indices(t);
+        self.exprs().for_each(&mut collect_column_indices);
+
+        // Precomputing only pays off when it spares filtering a column that is not
+        // otherwise used. Candidates referring only to used columns are evaluated in place.
+        let precomputed = precompute_candidates
+            .into_iter()
+            .filter(|expr| {
+                collect_columns(expr)
+                    .iter()
+                    .any(|column| !used_column_indices.contains(&column.index()))
+            })
+            .collect::<IndexSet<_>>();
+        // Collect the columns of the candidates that are evaluated in place.
+        self.exprs().for_each(|expr| {
+            expr.apply(|expr| {
+                if precomputed.contains(expr) {
+                    return Ok(TreeNodeRecursion::Jump);
+                }
+                if let Some(column) = expr.downcast_ref::<Column>() {
+                    used_column_indices.insert(column.index());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .expect("Closure cannot fail");
         });
-        if let Some(e) = &self.else_expr {
-            collect_column_indices(e);
-        }
 
         // Construct a mapping from the original column index to the projected column index.
         let column_index_map = used_column_indices
@@ -175,10 +206,25 @@ impl CaseBody {
             .collect::<IndexMap<usize, usize>>();
 
         // Construct the projected body by rewriting each expression from the original body
-        // using the column index mapping.
+        // using the column index mapping. Precomputed expressions are replaced with
+        // references to the columns appended after the projected ones.
         let project = |expr: &Arc<dyn PhysicalExpr>| -> Result<Arc<dyn PhysicalExpr>> {
             Arc::clone(expr)
                 .transform_down(|e| {
+                    if !precomputed.is_empty()
+                        && is_precomputable(&e)
+                        && let Some(k) = precomputed.get_index_of(&e)
+                    {
+                        let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(
+                            &e.to_string(),
+                            column_index_map.len() + k,
+                        ));
+                        return Ok(Transformed::new(
+                            column,
+                            true,
+                            TreeNodeRecursion::Jump,
+                        ));
+                    }
                     if let Some(column) = e.downcast_ref::<Column>() {
                         let original = column.index();
                         let projected = *column_index_map.get(&original).unwrap();
@@ -224,10 +270,46 @@ impl CaseBody {
 
         Ok(ProjectedCaseBody {
             projection,
+            precomputed: precomputed.into_iter().collect(),
             body: projected_body,
             supports_projection,
         })
     }
+
+    /// Iterates over all the top-level expressions of this case body.
+    fn exprs(&self) -> impl Iterator<Item = &Arc<dyn PhysicalExpr>> {
+        self.expr
+            .iter()
+            .chain(self.when_then_expr.iter().flat_map(|(w, t)| [w, t]))
+            .chain(self.else_expr.iter())
+    }
+}
+
+/// Returns true if `expr` is a cheap, non-volatile expression over columns and literals,
+/// such as a struct field access, that can be evaluated for the whole input batch ahead of
+/// the `CASE` branches.
+///
+/// Expressions with [`ExpressionPlacement::MoveTowardsLeafNodes`] placement may be pushed
+/// below filters by the optimizer, so evaluating them for rows a branch does not select is
+/// expected to be safe.
+fn is_precomputable(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    if expr.placement() != ExpressionPlacement::MoveTowardsLeafNodes || is_volatile(expr)
+    {
+        return false;
+    }
+    let mut has_column = false;
+    let mut only_supported_leaves = true;
+    expr.apply(|e| {
+        if e.is::<Column>() {
+            has_column = true;
+        } else if e.children().is_empty() && !e.is::<Literal>() {
+            only_supported_leaves = false;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("Closure cannot fail");
+    has_column && only_supported_leaves
 }
 
 /// A derived case body that can be used to evaluate a case expression after projecting
@@ -258,11 +340,20 @@ impl CaseBody {
 /// The projection vector and the rewritten expression (which only differs from the original in
 /// column reference indices) are held in a `ProjectedCaseBody`.
 ///
+/// Cheap expressions over columns that are not otherwise referenced, such as struct field
+/// accesses, are evaluated once for the whole batch and appended to the projected batch as
+/// extra columns. For `CASE WHEN S['a'] > 10 THEN S['b'] END`, filtering the two field arrays
+/// is much cheaper than filtering every child array of the struct `S`. These expressions are
+/// held in `precomputed`, and the rewritten body refers to their results as columns
+/// following the projected ones.
+///
 /// When `supports_projection` is false, evaluation uses the original body and full batch because
 /// the expression may depend on input columns that are not visible in its children.
 #[derive(Debug, Hash, PartialEq, Eq)]
 struct ProjectedCaseBody {
     projection: Vec<usize>,
+    /// Expressions over the input batch whose results are appended after the projected columns
+    precomputed: Vec<Arc<dyn PhysicalExpr>>,
     body: CaseBody,
     /// Whether `body` is safe to evaluate against a projected batch.
     ///
@@ -272,16 +363,43 @@ struct ProjectedCaseBody {
 }
 
 impl ProjectedCaseBody {
-    /// Returns a projection when evaluating the derived body can avoid unused input columns.
-    fn projection_for(&self, batch: &RecordBatch) -> Option<Vec<usize>> {
+    /// Returns the batch to evaluate the derived body against, when doing so can avoid
+    /// filtering unused input columns.
+    fn project_batch(&self, batch: &RecordBatch) -> Result<Option<RecordBatch>> {
+        if !self.supports_projection {
+            return Ok(None);
+        }
         let projection = self
             .projection
             .iter()
             .copied()
             .filter(|index| *index < batch.num_columns())
             .collect::<Vec<_>>();
-        (self.supports_projection && projection.len() < batch.num_columns())
-            .then_some(projection)
+        if self.precomputed.is_empty() {
+            return if projection.len() < batch.num_columns() {
+                Ok(Some(batch.project(&projection)?))
+            } else {
+                Ok(None)
+            };
+        }
+
+        let schema = batch.schema();
+        let mut fields = Vec::with_capacity(projection.len() + self.precomputed.len());
+        let mut columns = Vec::with_capacity(fields.capacity());
+        for index in projection {
+            fields.push(Arc::clone(&schema.fields()[index]));
+            columns.push(Arc::clone(batch.column(index)));
+        }
+        for expr in &self.precomputed {
+            fields.push(expr.return_field(&schema)?);
+            columns.push(expr.evaluate(batch)?.into_array(batch.num_rows())?);
+        }
+        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+        Ok(Some(RecordBatch::try_new_with_options(
+            Arc::new(Schema::new(fields)),
+            columns,
+            &options,
+        )?))
     }
 }
 
@@ -1081,8 +1199,7 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        if let Some(projection) = projected.projection_for(batch) {
-            let projected_batch = batch.project(&projection)?;
+        if let Some(projected_batch) = projected.project_batch(batch)? {
             projected
                 .body
                 .case_when_with_expr(&projected_batch, &return_type)
@@ -1104,8 +1221,7 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        if let Some(projection) = projected.projection_for(batch) {
-            let projected_batch = batch.project(&projection)?;
+        if let Some(projected_batch) = projected.project_batch(batch)? {
             projected
                 .body
                 .case_when_no_expr(&projected_batch, &return_type)
@@ -1222,10 +1338,9 @@ impl CaseExpr {
                     )?))
                 }
             }
-        } else if let Some(projection) = projected.projection_for(batch) {
+        } else if let Some(projected_batch) = projected.project_batch(batch)? {
             // The case expressions do not use all the columns of the input batch.
             // Project first to reduce time spent filtering.
-            let projected_batch = batch.project(&projection)?;
             projected.body.expr_or_expr(&projected_batch, when_value)
         } else {
             // All columns are used in the case expressions, so there is no need to project.
@@ -2070,6 +2185,198 @@ mod tests {
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         assert_eq!(result.len(), batch.num_rows());
+        Ok(())
+    }
+
+    /// A batch with columns `x: Int32` and `s: Struct<a: Int32, b: Int32, c: Utf8>`.
+    fn case_test_batch_with_struct() -> Result<RecordBatch> {
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)]))
+                    as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("b", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![10, 20, 30, 40])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Utf8, true)),
+                Arc::new(StringArray::from(vec!["p", "q", "r", "s"])) as ArrayRef,
+            ),
+        ]);
+        let schema = Schema::new(vec![
+            Field::new("x", DataType::Int32, true),
+            Field::new("s", struct_array.data_type().clone(), true),
+        ]);
+        Ok(RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Int32Array::from(vec![100, 200, 300, 400])),
+                Arc::new(struct_array),
+            ],
+        )?)
+    }
+
+    fn get_field_expr(
+        base: Arc<dyn PhysicalExpr>,
+        name: &str,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(ScalarFunctionExpr::try_new(
+            datafusion_functions::core::get_field(),
+            vec![base, lit(name)],
+            schema,
+            Arc::new(ConfigOptions::default()),
+        )?))
+    }
+
+    #[test]
+    fn case_without_expr_precomputes_struct_fields() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+        let s_b = get_field_expr(Arc::clone(&s), "b", &schema)?;
+
+        // CASE WHEN s['a'] = 1 THEN s['b'] WHEN s['a'] > 1 THEN x ELSE s['a'] END
+        let expr = CaseExpr::try_new(
+            None,
+            vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(1i32), &schema)?,
+                    Arc::clone(&s_b),
+                ),
+                (
+                    binary(Arc::clone(&s_a), Operator::Gt, lit(1i32), &schema)?,
+                    col("x", &schema)?,
+                ),
+            ],
+            Some(Arc::clone(&s_a)),
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![0]);
+                assert_eq!(projected.precomputed, vec![s_a, s_b]);
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected = Int32Array::from(vec![Some(10), Some(200), None, Some(400)]);
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_precomputes_struct_fields() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+        let s_c = get_field_expr(Arc::clone(&s), "c", &schema)?;
+
+        // CASE s['a'] WHEN 1 THEN s['c'] WHEN 4 THEN 'four' END
+        let expr = CaseExpr::try_new(
+            Some(Arc::clone(&s_a)),
+            vec![(lit(1i32), Arc::clone(&s_c)), (lit(4i32), lit("four"))],
+            None,
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::WithExpression(projected) => {
+                assert!(projected.supports_projection);
+                assert!(projected.projection.is_empty());
+                assert_eq!(projected.precomputed, vec![s_a, s_c]);
+            }
+            method => panic!("expected WithExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_string_array(&result);
+        let expected = StringArray::from(vec![Some("p"), None, None, Some("four")]);
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_expr_or_expr_precomputes_struct_fields() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+        let s_b = get_field_expr(Arc::clone(&s), "b", &schema)?;
+
+        // CASE WHEN s['a'] > 1 THEN s['b'] / s['a'] ELSE x END
+        let expr = CaseExpr::try_new(
+            None,
+            vec![(
+                binary(Arc::clone(&s_a), Operator::Gt, lit(1i32), &schema)?,
+                binary(
+                    Arc::clone(&s_b),
+                    Operator::Divide,
+                    Arc::clone(&s_a),
+                    &schema,
+                )?,
+            )],
+            Some(col("x", &schema)?),
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::ExpressionOrExpression(projected) => {
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![0]);
+                assert_eq!(projected.precomputed, vec![s_a, s_b]);
+            }
+            method => panic!("expected ExpressionOrExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected = Int32Array::from(vec![Some(100), Some(10), Some(300), Some(10)]);
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_does_not_precompute_fields_of_used_struct() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+
+        // CASE WHEN s['a'] = 1 THEN s WHEN s['a'] = 2 THEN NULL END
+        let expr = CaseExpr::try_new(
+            None,
+            vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(1i32), &schema)?,
+                    Arc::clone(&s),
+                ),
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(2i32), &schema)?,
+                    lit(ScalarValue::try_new_null(&s.data_type(&schema)?)?),
+                ),
+            ],
+            None,
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![1]);
+                assert!(projected.precomputed.is_empty());
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let b = as_int32_array(result.as_struct().column(1))?;
+        assert_eq!(b.value(0), 10);
+        assert_eq!(result.logical_nulls().unwrap().null_count(), 3);
         Ok(())
     }
 
