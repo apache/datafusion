@@ -80,7 +80,7 @@ use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
-use futures::{StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use log::{debug, trace};
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio::sync::Semaphore;
@@ -790,7 +790,7 @@ impl ExternalSorter {
         runs: Vec<RecordBatch>,
         concurrency: &SortConcurrency,
     ) -> Result<Vec<SendableRecordBatchStream>> {
-        let mut streams: Vec<_> = (0..runs.len()).map(|_| None).collect();
+        let run_count = runs.len();
         let (sizes, shared_input_size) = self.sort_run_sizes(&runs)?;
         let shared_input =
             shared_input_size.map(|size| Arc::new(self.reservation.split(size)));
@@ -809,8 +809,17 @@ impl ExternalSorter {
                 });
         // Ordered buffering would keep completed runs behind a slow earlier run,
         // filling the window and preventing new jobs from starting.
-        let mut jobs = futures::stream::iter(jobs)
+        let jobs = futures::stream::iter(jobs)
             .try_buffer_unordered(concurrency.per_partition_limit);
+        Self::collect_prepared_runs(run_count, jobs).await
+    }
+
+    /// Restore input order because the merge uses it to break equal-key ties.
+    async fn collect_prepared_runs(
+        run_count: usize,
+        mut jobs: impl Stream<Item = Result<(usize, SendableRecordBatchStream)>> + Unpin,
+    ) -> Result<Vec<SendableRecordBatchStream>> {
+        let mut streams: Vec<_> = (0..run_count).map(|_| None).collect();
         while let Some((index, stream)) = jobs.try_next().await? {
             streams[index] = Some(stream);
         }
@@ -2496,7 +2505,9 @@ mod tests {
     use crate::statistics::StatisticsContext;
     use crate::test;
     use crate::test::TestMemoryExec;
-    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
+    use crate::test::exec::{
+        BlockingExec, TestStream, assert_strong_count_converges_to_zero,
+    };
     use crate::test::{assert_is_pending, make_partition};
     use crate::{collect, collect_partitioned};
 
@@ -2603,6 +2614,34 @@ mod tests {
             .expect("preparation must propagate the sort error");
         assert!(error.to_string().contains("sort failed"), "{error}");
         assert_eq!(permits.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn sort_preparation_restores_run_order() -> Result<()> {
+        let runs = [
+            record_batch!(("a", Int32, [1]), ("payload", Utf8, ["first"]))?,
+            record_batch!(("a", Int32, [1]), ("payload", Utf8, ["second"]))?,
+        ];
+        // Completed runs arrive in reverse order; the merge needs their input order.
+        let jobs = runs
+            .iter()
+            .cloned()
+            .enumerate()
+            .rev()
+            .map(|(index, batch)| {
+                let stream = TestStream::new(vec![batch]);
+                Ok((index, Box::pin(stream) as SendableRecordBatchStream))
+            });
+        let streams = ExternalSorter::collect_prepared_runs(
+            runs.len(),
+            futures::stream::iter(jobs),
+        )
+        .await?;
+        assert_eq!(streams.len(), runs.len());
+        for (stream, expected) in streams.into_iter().zip(runs) {
+            assert_eq!(stream.try_collect::<Vec<_>>().await?, vec![expected]);
+        }
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
