@@ -1474,10 +1474,20 @@ impl AsOfJoinStream {
             if self.pending_left.len() >= self.batch_size {
                 return Poll::Ready(Some(self.flush()));
             }
-            if !ready!(
-                self.left
-                    .poll_ensure_row(cx, self.metrics.baseline.elapsed_compute())
-            )? {
+            let previous = (self.left.key_batch_id, self.left.batch.is_some());
+
+            let result = self.left.poll_ensure_row(
+                cx,
+                self.metrics.baseline.elapsed_compute(),
+            );
+
+            let current = (self.left.key_batch_id, self.left.batch.is_some());
+
+            if previous != current {
+                self.update_memory_reservation()?;
+            }
+
+            if !ready!(result)? {
                 if !self.pending_left.is_empty() {
                     return Poll::Ready(Some(self.flush()));
                 }
@@ -1498,10 +1508,20 @@ impl AsOfJoinStream {
             }
 
             loop {
-                if !ready!(
-                    self.right
-                        .poll_ensure_row(cx, self.metrics.baseline.elapsed_compute())
-                )? {
+                let previous = (self.right.key_batch_id, self.right.batch.is_some());
+
+                let result = self.right.poll_ensure_row(
+                    cx,
+                    self.metrics.baseline.elapsed_compute(),
+                );
+
+                let current = (self.right.key_batch_id, self.right.batch.is_some());
+
+                if previous != current {
+                    self.update_memory_reservation()?;
+                }
+
+                if !ready!(result)? {
                     break;
                 }
                 if self.right.group_has_null() {
@@ -1563,7 +1583,7 @@ impl AsOfJoinStream {
     /// Materializes pending row references while preserving both cursors and the
     /// current equality-group candidate for the next output batch.
     fn flush(&mut self) -> Result<RecordBatch> {
-        let _timer = self.metrics.baseline.elapsed_compute().timer();
+        let timer = self.metrics.baseline.elapsed_compute().timer();
         let row_count = self.pending_left.len();
         let mut arrays = Vec::with_capacity(self.schema.fields().len());
         let mut interleave_indices = Vec::new();
@@ -1589,6 +1609,9 @@ impl AsOfJoinStream {
             arrays,
             &options,
         )?;
+        drop(timer);
+        self.update_memory_reservation()?;
+
         (&batch).record_output(&self.metrics.baseline);
         Ok(batch)
     }
@@ -1860,6 +1883,121 @@ mod tests {
             ),
             Some(vec![0, 1, 2, 5]),
         )?))
+    }
+
+    /// Builds a join whose right input exceeds a budget of eight input batches.
+    fn memory_test_exec() -> Result<(AsOfJoinExec, usize)> {
+        let template = test_exec()?;
+        let left_schema = template.left.schema();
+        let right_schema = template.right.schema();
+
+        let left = TestMemoryExec::try_new_exec(
+            &[vec![make_batch(
+                &left_schema,
+                vec![Some("A")],
+                vec![Some(65_536)],
+                vec![1],
+            )?]],
+            left_schema,
+            None,
+        )?;
+
+        let mut right_batches = Vec::new();
+        for batch_index in 0_i64..64 {
+            let start = batch_index * 1024;
+            right_batches.push(make_batch(
+                &right_schema,
+                vec![Some("A"); 1024],
+                (start..start + 1024).map(Some).collect(),
+                (start..start + 1024)
+                    .map(|value| value as i32)
+                    .collect(),
+            )?);
+        }
+
+        let budget = RecordBatchMemoryCounter::new()
+            .count_batch(&right_batches[0])
+            * 8;
+        let mut counter = RecordBatchMemoryCounter::new();
+        for batch in &right_batches {
+            counter.count_batch(batch);
+        }
+        assert!(counter.memory_usage() > budget);
+
+        let right = TestMemoryExec::try_new_exec(
+            &[right_batches],
+            right_schema,
+            None,
+        )?;
+        let exec = AsOfJoinExec::try_new(
+            left,
+            right,
+            template.on.clone(),
+            template.match_condition.clone(),
+            Some(vec![0, 1, 2, 5]),
+        )?;
+
+        Ok((exec, budget))
+    }
+
+    #[tokio::test]
+    async fn partitioned_streams_right_input_larger_than_memory_budget() -> Result<()> {
+        for mode in [AsOfJoinMode::Broadcast, AsOfJoinMode::Partitioned] {
+            let (exec, budget) = memory_test_exec()?;
+            let exec = exec.with_mode(mode)?;
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(budget, 1.0)
+                .build_arc()?;
+            let context = Arc::new(TaskContext::default().with_runtime(runtime));
+            let result = collect(Arc::new(exec), context).await;
+
+            match mode {
+                AsOfJoinMode::Broadcast => {
+                    let error = result.expect_err(
+                        "broadcast collection should exceed the memory budget",
+                    );
+                    assert!(
+                        error.to_string().contains("Resources exhausted"),
+                        "{error}"
+                    );
+                }
+                AsOfJoinMode::Partitioned => {
+                    let batches = result?;
+                    assert_snapshot!(batches_to_sort_string(&batches), @r"
+                    +-----+-------+----+-------+
+                    | key | ts    | id | price |
+                    +-----+-------+----+-------+
+                    | A   | 65536 | 1  | 65535 |
+                    +-----+-------+----+-------+
+                    ");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partitioned_releases_memory_after_completion() -> Result<()> {
+        let (exec, budget) = memory_test_exec()?;
+        let exec = exec.with_mode(AsOfJoinMode::Partitioned)?;
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(budget, 1.0)
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let mut output = exec.execute(0, Arc::clone(&context))?;
+
+        let mut rows = 0;
+        while let Some(batch) = output.next().await {
+            rows += batch?.num_rows();
+        }
+
+        assert_eq!(rows, 1);
+        assert_eq!(context.memory_pool().reserved(), 0);
+        // Keep the outer stream alive until after checking the reservation.
+        drop(output);
+
+        Ok(())
     }
 
     #[tokio::test]
