@@ -77,13 +77,14 @@ pub fn plan_walk() -> Result<()> {
     // Include a scan filter to illustrate predicates that have been pushed down
     // into a table source. Here it is set explicitly rather than by an optimizer.
     let scan_predicate = col("eligible.salary").gt(lit(1000));
+    let subquery_predicate = col("eligible.salary").lt(lit(2000));
     let subquery = table_scan_with_filters(
         Some("eligible"),
         &schema,
         None,
         vec![scan_predicate.clone()],
     )?
-    .filter(col("salary").lt(lit(2000)))?
+    .filter(subquery_predicate.clone())?
     .project(vec![col("salary")])?
     .build()?;
     let plan = table_scan(Some("employee"), &schema, None)?
@@ -115,6 +116,17 @@ pub fn plan_walk() -> Result<()> {
     for predicate in &summary.filters {
         println!("Filter predicate: {predicate}");
     }
+
+    // Ordinary rewrite removes only the outer Filter. The subquery's Filter
+    // and pushed-down scan predicate remain because it does not visit subqueries.
+    let mut rewriter = RemoveFilters::default();
+    let rewritten = plan.clone().rewrite(&mut rewriter)?;
+    assert!(rewritten.transformed);
+    assert_eq!(rewriter.removed, 1);
+    let summary = summarize(&rewritten.data)?;
+    assert_eq!(summary.filters.len(), 2);
+    assert!(summary.filters.contains(&subquery_predicate));
+    assert!(summary.filters.contains(&scan_predicate));
 
     let mut rewriter = RemoveFilters::default();
     let rewritten = plan.rewrite_with_subqueries(&mut rewriter)?;
