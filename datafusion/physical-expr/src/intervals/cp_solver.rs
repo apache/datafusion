@@ -533,7 +533,7 @@ impl ExprIntervalGraph {
     /// Returns the set of node indices reachable from the root node via a
     /// simple depth-first search.
     fn connected_nodes(&self) -> HashSet<NodeIndex> {
-        let mut nodes = HashSet::new();
+        let mut nodes = HashSet::with_capacity(self.graph.node_count());
         let mut dfs = Dfs::new(&self.graph, self.root);
         while let Some(node) = dfs.next(&self.graph) {
             nodes.insert(node);
@@ -661,10 +661,12 @@ impl ExprIntervalGraph {
         }
 
         let mut bfs = Bfs::new(&self.graph, self.root);
+        let mut children = Vec::new();
 
         while let Some(node) = bfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
-            let mut children = neighbors.collect::<Vec<_>>();
+            children.clear();
+            children.extend(neighbors);
             // If the current expression is a leaf, its range is now final.
             // So, just continue with the propagation procedure:
             if children.is_empty() {
@@ -691,8 +693,8 @@ impl ExprIntervalGraph {
                 .expr
                 .propagate_constraints(node_interval, &children_intervals)?;
             if let Some(propagated_intervals) = propagated_intervals {
-                for (child, interval) in children.into_iter().zip(propagated_intervals) {
-                    self.graph[child].interval = interval;
+                for (child, interval) in children.iter().zip(propagated_intervals) {
+                    self.graph[*child].interval = interval;
                 }
             } else {
                 // The constraint is infeasible, report:

@@ -1395,7 +1395,6 @@ impl Display for RequestDetails {
                 if get_options.head {
                     write!(f, " head=true")?;
                 }
-                Ok(())
             }
             RequestDetails::GetRanges { path, ranges } => {
                 write!(f, "GET  (ranges) path={path}")?;
@@ -1408,30 +1407,27 @@ impl Display for RequestDetails {
                         write!(f, "{}", display_range(range))?;
                     }
                 }
-                Ok(())
             }
             RequestDetails::List { prefix } => {
                 write!(f, "LIST")?;
                 if let Some(prefix) = prefix {
                     write!(f, " prefix={prefix}")?;
                 }
-                Ok(())
             }
             RequestDetails::ListWithDelimiter { prefix } => {
                 write!(f, "LIST (with delimiter)")?;
                 if let Some(prefix) = prefix {
                     write!(f, " prefix={prefix}")?;
                 }
-                Ok(())
             }
             RequestDetails::ListWithOffset { prefix, offset } => {
                 write!(f, "LIST (with offset) offset={offset}")?;
                 if let Some(prefix) = prefix {
                     write!(f, " prefix={prefix}")?;
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 }
 

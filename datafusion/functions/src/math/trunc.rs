@@ -162,10 +162,6 @@ impl ScalarUDFImpl for TruncFunc {
             }
         };
 
-        // Whether an explicit precision argument was supplied. The array fast
-        // paths below must only apply to the two-argument form: single-argument
-        // `trunc(x)` uses a different zero handling (mapping `-0.0` to `0.0`)
-        // that must be preserved.
         let has_precision_arg = args.args.len() == 2;
 
         // Scalar fast path using tuple matching for (value, precision)
@@ -305,15 +301,11 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     match num.data_type() {
         Float64 => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => {
-                Ok(Arc::new(
-                    args[0]
-                        .as_primitive::<Float64Type>()
-                        .unary::<_, Float64Type>(|x: f64| {
-                            if x == 0_f64 { 0_f64 } else { x.trunc() }
-                        }),
-                ) as ArrayRef)
-            }
+            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
+                args[0]
+                    .as_primitive::<Float64Type>()
+                    .unary::<_, Float64Type>(|x: f64| x.trunc()),
+            ) as ArrayRef),
             ColumnarValue::Array(precision) => {
                 let num_array = num.as_primitive::<Float64Type>();
                 let precision_array = precision.as_primitive::<Int64Type>();
@@ -327,15 +319,11 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
             _ => exec_err!("trunc function requires a scalar or array for precision"),
         },
         Float32 => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => {
-                Ok(Arc::new(
-                    args[0]
-                        .as_primitive::<Float32Type>()
-                        .unary::<_, Float32Type>(|x: f32| {
-                            if x == 0_f32 { 0_f32 } else { x.trunc() }
-                        }),
-                ) as ArrayRef)
-            }
+            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
+                args[0]
+                    .as_primitive::<Float32Type>()
+                    .unary::<_, Float32Type>(|x: f32| x.trunc()),
+            ) as ArrayRef),
             ColumnarValue::Array(precision) => {
                 let num_array = num.as_primitive::<Float32Type>();
                 let precision_array = precision.as_primitive::<Int64Type>();
@@ -553,6 +541,25 @@ mod test {
         assert_eq!(floats.value(2), 123.0);
         assert_eq!(floats.value(3), 123.0);
         assert_eq!(floats.value(4), -321.0);
+    }
+
+    #[test]
+    fn test_truncate_float_zero_sign_one_arg() {
+        let args: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![-0.0, 0.0]))];
+        let result = trunc(&args).expect("failed to initialize function truncate");
+        let floats =
+            as_float64_array(&result).expect("failed to initialize function truncate");
+
+        assert!(floats.value(0).is_sign_negative());
+        assert!(floats.value(1).is_sign_positive());
+
+        let args: Vec<ArrayRef> = vec![Arc::new(Float32Array::from(vec![-0.0, 0.0]))];
+        let result = trunc(&args).expect("failed to initialize function truncate");
+        let floats =
+            as_float32_array(&result).expect("failed to initialize function truncate");
+
+        assert!(floats.value(0).is_sign_negative());
+        assert!(floats.value(1).is_sign_positive());
     }
 
     #[test]
