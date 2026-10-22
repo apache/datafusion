@@ -726,6 +726,24 @@ fn benchmark_struct_field_case_when(c: &mut Criterion, batch_size: usize) {
                 b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
             },
         );
+
+        group.bench_function(
+            format!("{batch_size} rows, {list_len} items: CASE WHEN s.a < 10 THEN s WHEN s.a < 20 THEN NULL ... ELSE s END"),
+            |b| {
+                let null_s = lit(ScalarValue::try_new_null(s.data_type(&schema).as_ref().unwrap()).unwrap());
+                let when_thens = (1..10)
+                    .map(|i| {
+                        (
+                            make_x_cmp_y(&s_a, Operator::Lt, i * 10),
+                            if i % 2 == 0 { Arc::clone(&null_s) } else { Arc::clone(&s) },
+                        )
+                    })
+                    .collect();
+                let expr = Arc::new(case(None, when_thens, Some(Arc::clone(&s))).unwrap());
+
+                b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+            },
+        );
     }
 
     group.finish();

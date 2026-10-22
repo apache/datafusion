@@ -26,6 +26,7 @@ use crate::utils::collect_columns;
 use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
+use arrow::compute::take;
 use arrow::compute::{
     FilterBuilder, FilterPredicate, is_not_null, not, nullif, prep_null_mask_filter,
 };
@@ -135,7 +136,11 @@ struct CaseBody {
 
 impl CaseBody {
     /// Derives a [ProjectedCaseBody] from this [CaseBody].
-    fn project(&self) -> Result<ProjectedCaseBody> {
+    ///
+    /// `filters_remainder` tells whether the evaluation method filters the remainder of
+    /// the batch branch by branch, so that the columns not read by the `WHEN` expressions
+    /// can be deferred. See [DeferredColumns].
+    fn project(&self, filters_remainder: bool) -> Result<ProjectedCaseBody> {
         // Lambda bodies are evaluated against batches of a different shape, so
         // expressions are only precomputed when the body contains no lambdas.
         let can_precompute = !self.exprs().any(|e| {
@@ -156,33 +161,58 @@ impl CaseBody {
             .expect("Closure cannot fail")
         });
 
-        // Find the candidates for precomputation and the columns used outside of them.
+        // Find the candidates for precomputation and the columns used outside of them,
+        // noting which of those occur in the `WHEN` expressions.
         let mut direct_column_indices = HashSet::<usize>::new();
+        let mut direct_when_column_indices = HashSet::<usize>::new();
         let mut precompute_candidates = IndexSet::<Arc<dyn PhysicalExpr>>::new();
+        let mut when_candidates = HashSet::<Arc<dyn PhysicalExpr>>::new();
         if can_precompute {
-            self.exprs().for_each(|expr| {
+            let mut collect_candidates = |expr: &Arc<dyn PhysicalExpr>, in_when: bool| {
                 expr.apply(|expr| {
                     if is_precomputable(expr) {
                         precompute_candidates.insert(Arc::clone(expr));
+                        if in_when {
+                            when_candidates.insert(Arc::clone(expr));
+                        }
                         return Ok(TreeNodeRecursion::Jump);
                     }
                     if let Some(column) = expr.downcast_ref::<Column>() {
                         direct_column_indices.insert(column.index());
+                        if in_when {
+                            direct_when_column_indices.insert(column.index());
+                        }
                     }
                     Ok(TreeNodeRecursion::Continue)
                 })
                 .expect("Closure cannot fail");
-            });
+            };
+            if let Some(e) = &self.expr {
+                collect_candidates(e, false);
+            }
+            for (w, t) in &self.when_then_expr {
+                collect_candidates(w, true);
+                collect_candidates(t, false);
+            }
+            if let Some(e) = &self.else_expr {
+                collect_candidates(e, false);
+            }
         }
 
         // Precomputing only pays off when it spares filtering a column that is not
         // otherwise used. Candidates referring only to used columns are evaluated in place.
+        // When the remainder is filtered branch by branch, a column that the `WHEN`
+        // expressions read only through candidates is spared filtering by precomputing
+        // them, as it is deferred to the branches that use it as a whole.
         let precomputed = precompute_candidates
             .into_iter()
             .filter(|expr| {
-                collect_columns(expr)
-                    .iter()
-                    .any(|column| !direct_column_indices.contains(&column.index()))
+                let in_when = filters_remainder && when_candidates.contains(expr);
+                collect_columns(expr).iter().any(|column| {
+                    !direct_column_indices.contains(&column.index())
+                        || (in_when
+                            && !direct_when_column_indices.contains(&column.index()))
+                })
             })
             .collect::<IndexSet<_>>();
 
@@ -277,9 +307,21 @@ impl CaseBody {
             .map(|(k, _)| *k)
             .collect::<Vec<_>>();
 
+        // Like precomputation, deferral relies on the projected body referring to the
+        // columns of the projected batch only through `Column` expressions.
+        let deferred = if filters_remainder && can_precompute && supports_projection {
+            DeferredColumns::try_new(
+                &projected_body,
+                projection.len() + precomputed.len(),
+            )
+        } else {
+            None
+        };
+
         Ok(ProjectedCaseBody {
             projection,
             precomputed: precomputed.into_iter().collect(),
+            deferred,
             body: projected_body,
             supports_projection,
         })
@@ -356,6 +398,9 @@ fn is_precomputable(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// held in `precomputed`, and the rewritten body refers to their results as columns
 /// following the projected ones.
 ///
+/// When the remainder of the batch is filtered branch by branch, the columns that the `WHEN`
+/// expressions do not read are not filtered along with it, see [DeferredColumns].
+///
 /// When `supports_projection` is false, evaluation uses the original body and full batch because
 /// the expression may depend on input columns that are not visible in its children.
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -363,6 +408,8 @@ struct ProjectedCaseBody {
     projection: Vec<usize>,
     /// Expressions over the input batch whose results are appended after the projected columns
     precomputed: Vec<Arc<dyn PhysicalExpr>>,
+    /// Columns of the projected batch that are gathered for the branches that read them
+    deferred: Option<DeferredColumns>,
     body: CaseBody,
     /// Whether `body` is safe to evaluate against a projected batch.
     ///
@@ -374,7 +421,10 @@ struct ProjectedCaseBody {
 impl ProjectedCaseBody {
     /// Returns the batch to evaluate the derived body against, when doing so can avoid
     /// filtering unused input columns.
-    fn project_batch(&self, batch: &RecordBatch) -> Result<Option<RecordBatch>> {
+    fn project_batch<'a>(
+        &self,
+        batch: &'a RecordBatch,
+    ) -> Result<Option<Cow<'a, RecordBatch>>> {
         if !self.supports_projection {
             return Ok(None);
         }
@@ -386,7 +436,11 @@ impl ProjectedCaseBody {
             .collect::<Vec<_>>();
         if self.precomputed.is_empty() {
             return if projection.len() < batch.num_columns() {
-                Ok(Some(batch.project(&projection)?))
+                Ok(Some(Cow::Owned(batch.project(&projection)?)))
+            } else if self.deferred.is_some() {
+                // All the columns are used and the body has no lambdas, so the projection
+                // is the identity and the derived body is the same as the original.
+                Ok(Some(Cow::Borrowed(batch)))
             } else {
                 Ok(None)
             };
@@ -404,11 +458,151 @@ impl ProjectedCaseBody {
             columns.push(expr.evaluate(batch)?.into_array(batch.num_rows())?);
         }
         let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-        Ok(Some(RecordBatch::try_new_with_options(
+        Ok(Some(Cow::Owned(RecordBatch::try_new_with_options(
             Arc::new(Schema::new(fields)),
             columns,
             &options,
-        )?))
+        )?)))
+    }
+}
+
+/// Columns of a batch evaluated by [CaseBody::case_when_no_expr] or
+/// [CaseBody::case_when_with_expr] that are not filtered along with the remainder of the
+/// batch at each branch, because no `WHEN` expression reads them.
+///
+/// Filtering the remainder copies the values of the remaining rows at each branch, which
+/// for a wide column, such as a struct with nested lists, can dominate the evaluation.
+/// Instead, the rows of a deferred column are gathered from the input batch for the
+/// branches whose `THEN` expression reads it, and for the `ELSE` expression, so each row is
+/// copied at most once. For example, in
+///
+/// ```sql
+/// CASE WHEN a = 1 THEN s WHEN a = 2 THEN NULL ELSE s END
+/// ```
+///
+/// only `a` is filtered at each branch, while the rows of `s` are taken for the first branch
+/// and for the `ELSE` expression.
+///
+/// In the batches the expressions are evaluated on, a deferred column that is not read
+/// stands as a zero-copy slice of matching length with unrelated values. This keeps the
+/// column indices of the body valid, but relies on every column being read through a
+/// [Column] expression, so deferral is only used when the body contains no lambdas or
+/// leaves that are opaque to projection.
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct DeferredColumns {
+    /// For each column of the batch, whether it is filtered along with the remainder
+    filtered: Vec<bool>,
+    /// The deferred columns read by each `THEN` expression
+    then_columns: Vec<Vec<usize>>,
+    /// The deferred columns read by the `ELSE` expression
+    else_columns: Vec<usize>,
+}
+
+impl DeferredColumns {
+    /// Determines the deferred columns of a batch with `num_columns` columns evaluated by
+    /// `body`, if there are any.
+    fn try_new(body: &CaseBody, num_columns: usize) -> Option<Self> {
+        let mut filtered = vec![false; num_columns];
+        for (w, _) in &body.when_then_expr {
+            for column in collect_columns(w) {
+                filtered[column.index()] = true;
+            }
+        }
+        if filtered.iter().all(|f| *f) {
+            return None;
+        }
+        let deferred_columns = |expr: &Arc<dyn PhysicalExpr>| {
+            collect_columns(expr)
+                .into_iter()
+                .map(|column| column.index())
+                .filter(|index| !filtered[*index])
+                .sorted()
+                .collect::<Vec<_>>()
+        };
+        let then_columns = body
+            .when_then_expr
+            .iter()
+            .map(|(_, t)| deferred_columns(t))
+            .collect();
+        let else_columns = body
+            .else_expr
+            .as_ref()
+            .map(deferred_columns)
+            .unwrap_or_default();
+        Some(Self {
+            filtered,
+            then_columns,
+            else_columns,
+        })
+    }
+}
+
+/// Filters the remainder of a batch with `filter`. The deferred columns, if any, are not
+/// filtered, but replaced with slices of the filtered length.
+fn filter_remainder(
+    batch: &RecordBatch,
+    filter: &FilterPredicate,
+    deferred: Option<&DeferredColumns>,
+) -> std::result::Result<RecordBatch, ArrowError> {
+    let Some(deferred) = deferred else {
+        return filter_record_batch(batch, filter);
+    };
+    let len = filter.count();
+    let columns = batch
+        .columns()
+        .iter()
+        .zip(&deferred.filtered)
+        .map(|(a, filtered)| {
+            if *filtered {
+                filter_array(a, filter)
+            } else {
+                Ok(a.slice(0, len))
+            }
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    // SAFETY: the columns have the same data types as those of the original batch, and all
+    // have the length `len`.
+    unsafe { Ok(RecordBatch::new_unchecked(batch.schema(), columns, len)) }
+}
+
+/// The deferred columns read by the `THEN` expression of branch `i`.
+fn then_columns(deferred: Option<&DeferredColumns>, i: usize) -> &[usize] {
+    deferred.map_or(&[], |d| d.then_columns[i].as_slice())
+}
+
+/// The deferred columns read by the `ELSE` expression.
+fn else_columns(deferred: Option<&DeferredColumns>) -> &[usize] {
+    deferred.map_or(&[], |d| d.else_columns.as_slice())
+}
+
+/// Fills in `columns` of `batch`, which are deferred, with the values at `rows` of the
+/// input batch.
+fn gather_deferred<'a>(
+    batch: Cow<'a, RecordBatch>,
+    input: &RecordBatch,
+    rows: &ArrayRef,
+    columns: &[usize],
+) -> Result<Cow<'a, RecordBatch>> {
+    if columns.is_empty() {
+        return Ok(batch);
+    }
+    let mut batch_columns = batch.columns().to_vec();
+    for &index in columns {
+        batch_columns[index] = if rows.len() == input.num_rows() {
+            // The rows are in ascending order, so these are all the rows of the input.
+            Arc::clone(input.column(index))
+        } else {
+            take(input.column(index), rows, None)?
+        };
+    }
+    // SAFETY: the gathered columns have the same data types as those they replace, and
+    // their length is the number of rows of `batch`.
+    unsafe {
+        Ok(Cow::Owned(RecordBatch::new_unchecked(
+            batch.schema(),
+            batch_columns,
+            rows.len(),
+        )))
     }
 }
 
@@ -844,7 +1038,7 @@ impl CaseExpr {
                 return Ok(EvalMethod::WithExprScalarLookupTable(mapping));
             }
 
-            return Ok(EvalMethod::WithExpression(body.project()?));
+            return Ok(EvalMethod::WithExpression(body.project(true)?));
         }
 
         Ok(
@@ -860,9 +1054,9 @@ impl CaseExpr {
             {
                 EvalMethod::ScalarOrScalar
             } else if body.when_then_expr.len() == 1 {
-                EvalMethod::ExpressionOrExpression(body.project()?)
+                EvalMethod::ExpressionOrExpression(body.project(false)?)
             } else {
-                EvalMethod::NoExpression(body.project()?)
+                EvalMethod::NoExpression(body.project(true)?)
             },
         )
     }
@@ -909,6 +1103,7 @@ impl CaseBody {
         &self,
         batch: &RecordBatch,
         return_type: &DataType,
+        deferred: Option<&DeferredColumns>,
     ) -> Result<ColumnarValue> {
         let mut result_builder = ResultBuilder::new(return_type, batch.num_rows());
 
@@ -951,8 +1146,14 @@ impl CaseBody {
                     // Filter out the null rows and evaluate the else expression for those
                     let nulls_filter = create_filter(&not(&base_not_nulls)?, true);
                     let nulls_batch =
-                        filter_record_batch(&remainder_batch, &nulls_filter)?;
+                        filter_remainder(&remainder_batch, &nulls_filter, deferred)?;
                     let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
+                    let nulls_batch = gather_deferred(
+                        Cow::Owned(nulls_batch),
+                        batch,
+                        &nulls_rows,
+                        else_columns(deferred),
+                    )?;
                     let nulls_value = expr.evaluate(&nulls_batch)?;
                     result_builder.add_branch_result(&nulls_rows, nulls_value)?;
                 }
@@ -965,8 +1166,11 @@ impl CaseBody {
 
             // Remove the null rows from the remainder batch
             let not_null_filter = create_filter(&base_not_nulls, true);
-            remainder_batch =
-                Cow::Owned(filter_record_batch(&remainder_batch, &not_null_filter)?);
+            remainder_batch = Cow::Owned(filter_remainder(
+                &remainder_batch,
+                &not_null_filter,
+                deferred,
+            )?);
             remainder_rows = filter_array(&remainder_rows, &not_null_filter)?;
             base_values = filter_array(&base_values, &not_null_filter)?;
         }
@@ -997,8 +1201,14 @@ impl CaseBody {
 
             // If the 'when' predicate matched all remaining rows, there is no need to filter
             if when_value.null_count() == 0 && !when_value.has_false() {
+                let then_batch = gather_deferred(
+                    Cow::Borrowed(&remainder_batch),
+                    batch,
+                    &remainder_rows,
+                    then_columns(deferred, i),
+                )?;
                 let then_expression = &self.when_then_expr[i].1;
-                let then_value = then_expression.evaluate(&remainder_batch)?;
+                let then_value = then_expression.evaluate(&then_batch)?;
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
                 return result_builder.finish();
             }
@@ -1009,8 +1219,14 @@ impl CaseBody {
             // Still no need to call `prep_null_mask_filter` since `create_filter` will already do
             // this unconditionally.
             let then_filter = create_filter(&when_value, true);
-            let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
+            let then_batch = filter_remainder(&remainder_batch, &then_filter, deferred)?;
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
+            let then_batch = gather_deferred(
+                Cow::Owned(then_batch),
+                batch,
+                &then_rows,
+                then_columns(deferred, i),
+            )?;
 
             let then_expression = &self.when_then_expr[i].1;
             let then_value = then_expression.evaluate(&then_batch)?;
@@ -1033,7 +1249,7 @@ impl CaseBody {
             }?;
             let next_filter = create_filter(&next_selection, true);
             remainder_batch =
-                Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
+                Cow::Owned(filter_remainder(&remainder_batch, &next_filter, deferred)?);
             remainder_rows = filter_array(&remainder_rows, &next_filter)?;
             base_values = filter_array(&base_values, &next_filter)?;
         }
@@ -1043,7 +1259,13 @@ impl CaseBody {
         if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
-            let else_value = expr.evaluate(&remainder_batch)?;
+            let else_batch = gather_deferred(
+                remainder_batch,
+                batch,
+                &remainder_rows,
+                else_columns(deferred),
+            )?;
+            let else_value = expr.evaluate(&else_batch)?;
             result_builder.add_branch_result(&remainder_rows, else_value)?;
         }
 
@@ -1055,6 +1277,7 @@ impl CaseBody {
         &self,
         batch: &RecordBatch,
         return_type: &DataType,
+        deferred: Option<&DeferredColumns>,
     ) -> Result<ColumnarValue> {
         let mut result_builder = ResultBuilder::new(return_type, batch.num_rows());
 
@@ -1084,8 +1307,14 @@ impl CaseBody {
 
             // If the 'when' predicate matched all remaining rows, there is no need to filter
             if when_value.null_count() == 0 && !when_value.has_false() {
+                let then_batch = gather_deferred(
+                    Cow::Borrowed(&remainder_batch),
+                    batch,
+                    &remainder_rows,
+                    then_columns(deferred, i),
+                )?;
                 let then_expression = &self.when_then_expr[i].1;
-                let then_value = then_expression.evaluate(&remainder_batch)?;
+                let then_value = then_expression.evaluate(&then_batch)?;
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
                 return result_builder.finish();
             }
@@ -1096,8 +1325,14 @@ impl CaseBody {
             // Still no need to call `prep_null_mask_filter` since `create_filter` will already do
             // this unconditionally.
             let then_filter = create_filter(when_value, true);
-            let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
+            let then_batch = filter_remainder(&remainder_batch, &then_filter, deferred)?;
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
+            let then_batch = gather_deferred(
+                Cow::Owned(then_batch),
+                batch,
+                &then_rows,
+                then_columns(deferred, i),
+            )?;
 
             let then_expression = &self.when_then_expr[i].1;
             let then_value = then_expression.evaluate(&then_batch)?;
@@ -1120,7 +1355,7 @@ impl CaseBody {
             }?;
             let next_filter = create_filter(&next_selection, true);
             remainder_batch =
-                Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
+                Cow::Owned(filter_remainder(&remainder_batch, &next_filter, deferred)?);
             remainder_rows = filter_array(&remainder_rows, &next_filter)?;
         }
 
@@ -1129,7 +1364,13 @@ impl CaseBody {
         if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
-            let else_value = expr.evaluate(&remainder_batch)?;
+            let else_batch = gather_deferred(
+                remainder_batch,
+                batch,
+                &remainder_rows,
+                else_columns(deferred),
+            )?;
+            let else_value = expr.evaluate(&else_batch)?;
             result_builder.add_branch_result(&remainder_rows, else_value)?;
         }
 
@@ -1209,11 +1450,13 @@ impl CaseExpr {
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
         if let Some(projected_batch) = projected.project_batch(batch)? {
-            projected
-                .body
-                .case_when_with_expr(&projected_batch, &return_type)
+            projected.body.case_when_with_expr(
+                &projected_batch,
+                &return_type,
+                projected.deferred.as_ref(),
+            )
         } else {
-            self.body.case_when_with_expr(batch, &return_type)
+            self.body.case_when_with_expr(batch, &return_type, None)
         }
     }
 
@@ -1231,11 +1474,13 @@ impl CaseExpr {
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
         if let Some(projected_batch) = projected.project_batch(batch)? {
-            projected
-                .body
-                .case_when_no_expr(&projected_batch, &return_type)
+            projected.body.case_when_no_expr(
+                &projected_batch,
+                &return_type,
+                projected.deferred.as_ref(),
+            )
         } else {
-            self.body.case_when_no_expr(batch, &return_type)
+            self.body.case_when_no_expr(batch, &return_type, None)
         }
     }
 
@@ -2390,13 +2635,13 @@ mod tests {
     }
 
     #[test]
-    fn case_does_not_precompute_fields_of_used_struct() -> Result<()> {
+    fn case_defers_struct_used_in_then() -> Result<()> {
         let batch = case_test_batch_with_struct()?;
         let schema = batch.schema();
         let s = col("s", &schema)?;
         let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
 
-        // CASE WHEN s['a'] = 1 THEN s WHEN s['a'] = 2 THEN NULL END
+        // CASE WHEN s['a'] = 1 THEN s WHEN s['a'] = 2 THEN NULL ELSE s END
         let expr = CaseExpr::try_new(
             None,
             vec![
@@ -2409,22 +2654,113 @@ mod tests {
                     lit(ScalarValue::try_new_null(&s.data_type(&schema)?)?),
                 ),
             ],
-            None,
+            Some(Arc::clone(&s)),
         )?;
 
         match &expr.eval_method {
             EvalMethod::NoExpression(projected) => {
                 assert!(projected.supports_projection);
                 assert_eq!(projected.projection, vec![1]);
-                assert!(projected.precomputed.is_empty());
+                assert_eq!(projected.precomputed, vec![s_a]);
+                assert_eq!(
+                    projected.deferred,
+                    Some(DeferredColumns {
+                        filtered: vec![false, true],
+                        then_columns: vec![vec![0], vec![]],
+                        else_columns: vec![0],
+                    })
+                );
             }
             method => panic!("expected NoExpression, got {method:?}"),
         }
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-        let b = as_int32_array(result.as_struct().column(1))?;
+        let result = result.as_struct();
+        let nulls = result.logical_nulls().unwrap();
+        assert_eq!(
+            nulls.iter().collect::<Vec<_>>(),
+            vec![true, false, true, true]
+        );
+        let b = as_int32_array(result.column(1))?;
         assert_eq!(b.value(0), 10);
-        assert_eq!(result.logical_nulls().unwrap().null_count(), 3);
+        assert_eq!(b.value(2), 30);
+        assert_eq!(b.value(3), 40);
+        let c = as_string_array(result.column(2));
+        assert_eq!(c.value(0), "p");
+        assert_eq!(c.value(2), "r");
+        assert_eq!(c.value(3), "s");
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_defers_columns() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+        let s_b = get_field_expr(Arc::clone(&s), "b", &schema)?;
+        let x = col("x", &schema)?;
+
+        // CASE s['a'] WHEN 1 THEN x WHEN 2 THEN s['b'] ELSE x + 1 END
+        let expr = CaseExpr::try_new(
+            Some(Arc::clone(&s_a)),
+            vec![(lit(1i32), Arc::clone(&x)), (lit(2i32), Arc::clone(&s_b))],
+            Some(binary(Arc::clone(&x), Operator::Plus, lit(1i32), &schema)?),
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::WithExpression(projected) => {
+                assert_eq!(projected.projection, vec![0]);
+                assert_eq!(projected.precomputed, vec![s_a, s_b]);
+                assert_eq!(
+                    projected.deferred,
+                    Some(DeferredColumns {
+                        filtered: vec![false, false, false],
+                        then_columns: vec![vec![0], vec![2]],
+                        else_columns: vec![0],
+                    })
+                );
+            }
+            method => panic!("expected WithExpression, got {method:?}"),
+        }
+
+        // The row with a null base value takes the `ELSE` branch up front
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected = Int32Array::from(vec![Some(100), Some(20), Some(301), Some(401)]);
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_expr_or_expr_does_not_precompute_fields_of_used_struct() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+
+        // CASE WHEN s['a'] = 1 THEN s ELSE s END
+        let expr = CaseExpr::try_new(
+            None,
+            vec![(
+                binary(Arc::clone(&s_a), Operator::Eq, lit(1i32), &schema)?,
+                Arc::clone(&s),
+            )],
+            Some(Arc::clone(&s)),
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::ExpressionOrExpression(projected) => {
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![1]);
+                assert!(projected.precomputed.is_empty());
+                assert!(projected.deferred.is_none());
+            }
+            method => panic!("expected ExpressionOrExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(&result, batch.column(1));
         Ok(())
     }
 

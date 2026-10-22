@@ -1069,5 +1069,23 @@ ORDER BY column1;
 4 NULL
 5 NULL
 
+# A struct used as a whole in several branches, and in the base expression
+query I??
+SELECT column1,
+       CASE WHEN column2['a'] = 0 THEN column2
+            WHEN column2['a'] = 2 THEN NULL
+            WHEN column2['a'] > 2 THEN named_struct('a', -1, 'b', 'big', 'l', [])
+            ELSE column2 END,
+       CASE column2['a'] WHEN 0 THEN column2['l'] WHEN 5 THEN [named_struct('x', column1)]
+            ELSE column2['l'] END
+FROM struct_case
+ORDER BY column1;
+----
+1 {a: 0, b: zero, l: [{x: 1}]} [{x: 1}]
+2 NULL [{x: 2}]
+3 {a: NULL, b: null, l: NULL} NULL
+4 {a: -1, b: big, l: []} [{x: 4}]
+5 NULL NULL
+
 statement ok
 DROP TABLE struct_case;
