@@ -66,7 +66,27 @@ impl From<&Partitioning> for FFI_Partitioning {
             }
             Partitioning::Range(range) => {
                 // Producer-side conversion should be infallible at ABI boundary
-                let encode_point = |split_point: &SplitPoint| {
+                let samples = range
+                    .samples()
+                    .iter()
+                    .map(|split_point| {
+                        split_point
+                            .values()
+                            .iter()
+                            .map(|value| {
+                                WrappedArray::try_from(value).expect(
+                                    "ScalarValue in RangePartitioning should convert to WrappedArray",
+                                )
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let ordering = range
+                    .ordering()
+                    .iter()
+                    .map(FFI_PhysicalSortExpr::from)
+                    .collect();
+                let encode_bound = |split_point: &SplitPoint| {
                     split_point
                         .values()
                         .iter()
@@ -77,18 +97,12 @@ impl From<&Partitioning> for FFI_Partitioning {
                         })
                         .collect::<SVec<_>>()
                 };
-                let samples = range.samples().iter().map(encode_point).collect();
-                let ordering = range
-                    .ordering()
-                    .iter()
-                    .map(FFI_PhysicalSortExpr::from)
-                    .collect();
                 Self::Range(FFI_RangePartitioning {
                     samples,
                     ordering,
                     partition_count: range.partition_count(),
-                    start_bound: range.start_bound().map(encode_point).into(),
-                    end_bound: range.end_bound().map(encode_point).into(),
+                    start_bound: range.start_bound().map(encode_bound).into(),
+                    end_bound: range.end_bound().map(encode_bound).into(),
                 })
             }
             Partitioning::UnknownPartitioning(size) => Self::UnknownPartitioning(*size),
@@ -109,17 +123,16 @@ impl TryFrom<FFI_Partitioning> for Partitioning {
                 Self::Hash(exprs, size)
             }
             FFI_Partitioning::Range(range) => {
-                let decode_point = |split_point: SVec<WrappedArray>| {
-                    split_point
-                        .into_iter()
-                        .map(ScalarValue::try_from)
-                        .collect::<Result<Vec<_>, _>>()
-                        .map(SplitPoint::new)
-                };
                 let samples = range
                     .samples
                     .into_iter()
-                    .map(decode_point)
+                    .map(|split_point| {
+                        split_point
+                            .into_iter()
+                            .map(ScalarValue::try_from)
+                            .collect::<Result<Vec<_>, _>>()
+                            .map(SplitPoint::new)
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let ordering =
@@ -131,6 +144,13 @@ impl TryFrom<FFI_Partitioning> for Partitioning {
                         )
                     })?;
 
+                let decode_bound = |split_point: SVec<WrappedArray>| {
+                    split_point
+                        .into_iter()
+                        .map(ScalarValue::try_from)
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(SplitPoint::new)
+                };
                 Self::Range(
                     RangePartitioning::try_new_with_samples(
                         ordering,
@@ -141,12 +161,12 @@ impl TryFrom<FFI_Partitioning> for Partitioning {
                         range
                             .start_bound
                             .into_option()
-                            .map(decode_point)
+                            .map(decode_bound)
                             .transpose()?,
                         range
                             .end_bound
                             .into_option()
-                            .map(decode_point)
+                            .map(decode_bound)
                             .transpose()?,
                     )?,
                 )
