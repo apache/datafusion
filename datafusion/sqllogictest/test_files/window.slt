@@ -3629,6 +3629,30 @@ SELECT (SELECT MAX(rn) FROM (
 FROM named_window_prices
 WINDOW w AS (ORDER BY ts)
 
+# A named window in HAVING is rejected like an inline one
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING
+SELECT ticker, price FROM named_window_prices GROUP BY ticker, price
+HAVING MAX(price) OVER (PARTITION BY ticker) > 1
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING
+SELECT ticker, price FROM named_window_prices GROUP BY ticker, price
+HAVING MAX(price) OVER w > 1
+WINDOW w AS (PARTITION BY ticker)
+
+statement error DataFusion error: Error during planning: The window no_such_window is not defined!
+SELECT ticker, price FROM named_window_prices GROUP BY ticker, price
+HAVING MAX(price) OVER no_such_window > 1
+
+# A named window in WHERE is rejected like an inline one
+statement error
+SELECT ticker FROM named_window_prices
+WHERE MAX(price) OVER (PARTITION BY ticker) > 1
+
+statement error
+SELECT ticker FROM named_window_prices
+WHERE MAX(price) OVER w > 1
+WINDOW w AS (PARTITION BY ticker)
+
 statement ok
 DROP TABLE named_window_prices;
 
@@ -4971,6 +4995,107 @@ NULL 1
 
 statement ok
 DROP TABLE t;
+
+# Test for ignore nulls in LAST_VALUE, FIRST_VALUE and NTH_VALUE over partitions that span many
+# batches, with runs of NULLs that cross several words of the validity bitmap. Partition 0
+# alternates NULLs, partition 1 has runs of 497 NULLs, partition 2 is all NULLs and partition 3
+# has none. `v` increases with `i` in every partition, so the last (first) non-NULL value of a
+# frame is also its maximum (minimum), which `max` (`min`) computes independently.
+statement ok
+set datafusion.execution.batch_size = 100;
+
+statement ok
+CREATE TABLE ignore_nulls_t AS
+SELECT i % 4 AS p, i,
+  CASE i % 4
+    WHEN 0 THEN CASE WHEN (i / 4) % 2 = 0 THEN i END
+    WHEN 1 THEN CASE WHEN (i / 4) % 500 < 3 THEN i END
+    WHEN 3 THEN i
+  END AS v
+FROM (SELECT value AS i FROM generate_series(1, 30000));
+
+query IIII
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END),
+  count(fv), sum(CASE WHEN fv IS DISTINCT FROM mn THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(v) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS lv,
+  max(v) OVER (PARTITION BY p ORDER BY i) AS mx,
+  FIRST_VALUE(v) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS fv,
+  min(v) OVER (PARTITION BY p ORDER BY i) AS mn
+FROM ignore_nulls_t);
+----
+22499 0 22499 0
+
+query IIII
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END),
+  count(fv), sum(CASE WHEN fv IS DISTINCT FROM mn THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(v) IGNORE NULLS OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS lv,
+  max(v) OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS mx,
+  FIRST_VALUE(v) IGNORE NULLS OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS fv,
+  min(v) OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS mn
+FROM ignore_nulls_t);
+----
+22499 0 22499 0
+
+query IIII
+SELECT count(n1), sum(CASE WHEN n1 IS DISTINCT FROM mn THEN 1 ELSE 0 END),
+  count(nl), sum(CASE WHEN nl IS DISTINCT FROM mx THEN 1 ELSE 0 END)
+FROM (SELECT
+  NTH_VALUE(v, 1) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS n1,
+  min(v) OVER (PARTITION BY p ORDER BY i) AS mn,
+  NTH_VALUE(v, -1) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS nl,
+  max(v) OVER (PARTITION BY p ORDER BY i) AS mx
+FROM ignore_nulls_t);
+----
+22499 0 22499 0
+
+# NTH_VALUE(v, -65) over a sliding frame whose valid rows span two bitmap words. Once full, the
+# frame holds exactly 65 valid rows in partition 0, more in partition 3 and fewer in partitions 1
+# and 2. The expected value is the valid row whose running count is 64 less than the current
+# row's, if the frame holds at least 65 valid rows.
+query III
+WITH r AS (SELECT p, v,
+  count(v) OVER (PARTITION BY p ORDER BY i) AS c,
+  count(v) OVER (PARTITION BY p ORDER BY i ROWS BETWEEN 129 PRECEDING AND CURRENT ROW) AS fc,
+  NTH_VALUE(v, -65) IGNORE NULLS
+    OVER (PARTITION BY p ORDER BY i ROWS BETWEEN 129 PRECEDING AND CURRENT ROW) AS nv
+FROM ignore_nulls_t)
+SELECT count(r.nv), sum(CASE WHEN r.fc = 65 THEN 1 ELSE 0 END),
+  sum(CASE WHEN r.nv IS DISTINCT FROM CASE WHEN r.fc >= 65 THEN e.v END THEN 1 ELSE 0 END)
+FROM r LEFT JOIN r e ON e.p = r.p AND e.v IS NOT NULL AND e.c = r.c - 64;
+----
+14807 7372 0
+
+query II
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(v) IGNORE NULLS OVER (PARTITION BY p ORDER BY i
+    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS lv,
+  max(v) OVER (PARTITION BY p ORDER BY i
+    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS mx
+FROM ignore_nulls_t);
+----
+22500 0
+
+# With peers in a RANGE frame, the last non-NULL value comes from the last peer group that has
+# one. All non-NULL values of a peer group are equal here, so it is still the frame's maximum.
+query II
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(CASE WHEN v IS NOT NULL THEN i / 28 END) IGNORE NULLS
+    OVER (PARTITION BY p ORDER BY i / 28) AS lv,
+  max(CASE WHEN v IS NOT NULL THEN i / 28 END) OVER (PARTITION BY p ORDER BY i / 28) AS mx
+FROM ignore_nulls_t);
+----
+22500 0
+
+statement ok
+DROP TABLE ignore_nulls_t;
 
 
 # Test for ignore nulls in nth_VALUE without null values

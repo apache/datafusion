@@ -24,8 +24,9 @@ use arrow::array::{
     PrimitiveArray, UInt32Array, UInt64Array, new_empty_array, new_null_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
-use arrow::datatypes::{ArrowNativeTypeOp, DataType, FieldRef};
+use arrow::datatypes::{ArrowNativeTypeOp, DataType};
 use arrow::row::{RowConverter, Rows, SortField};
+use arrow::util::bit_iterator::BitIterator;
 use arrow::{compute, compute::SortOptions, downcast_primitive_array};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_string_array};
 use datafusion_common::utils::{ListCoercion, offset_span};
@@ -188,13 +189,13 @@ fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         {
             Ok(Arc::clone(&args[0]))
         }
-        DataType::List(field) => {
+        DataType::List(_) => {
             let array = as_list_array(&args[0])?;
-            array_sort_generic(array, Arc::clone(field), sort_options)
+            array_sort_generic(array, sort_options)
         }
-        DataType::LargeList(field) => {
+        DataType::LargeList(_) => {
             let array = as_large_list_array(&args[0])?;
-            array_sort_generic(array, Arc::clone(field), sort_options)
+            array_sort_generic(array, sort_options)
         }
         // Signature should prevent this arm ever occurring
         _ => exec_err!("array_sort expects list for first argument"),
@@ -203,15 +204,14 @@ fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
-    field: FieldRef,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef> {
     let values = list_array.values();
 
     if values.data_type().is_primitive() {
-        array_sort_primitive(list_array, field, sort_options)
+        array_sort_primitive(list_array, sort_options)
     } else {
-        array_sort_non_primitive(list_array, field, sort_options)
+        array_sort_non_primitive(list_array, sort_options)
     }
 }
 
@@ -219,12 +219,11 @@ fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
 /// kernel.
 fn array_sort_primitive<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
-    field: FieldRef,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef> {
     let values = list_array.values().as_ref();
     downcast_primitive_array! {
-        values => sort_primitive_list(values, list_array, field, sort_options),
+        values => sort_primitive_list(values, list_array, sort_options),
         _ => exec_err!("array_sort: unsupported primitive type")
     }
 }
@@ -232,7 +231,6 @@ fn array_sort_primitive<OffsetSize: OffsetSizeTrait>(
 fn sort_primitive_list<T: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
     prim_values: &PrimitiveArray<T>,
     list_array: &GenericListArray<OffsetSize>,
-    field: FieldRef,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef>
 where
@@ -267,7 +265,7 @@ where
     );
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        field,
+        Arc::clone(list_array.value_field()),
         rebase_offsets(offsets),
         sorted_values,
         list_nulls.cloned(),
@@ -338,28 +336,29 @@ fn sort_rows_with_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
             continue;
         }
 
-        let null_count = src_nulls.slice(start, row_len).null_count();
-        let valid_count = row_len - null_count;
-
-        // Compact valid values directly into the target region of the output
-        // buffer: after nulls (if nulls_first) or at the start (if nulls_last).
-        let valid_offset = if nulls_first { null_count } else { 0 };
-        let mut write_pos = out_start + valid_offset;
-        for (i, &value) in src_values[start..end].iter().enumerate() {
-            if src_nulls.is_valid(start + i) {
-                out_values[write_pos] = value;
-                write_pos += 1;
-            }
+        // Compact valid values to the start of the row's output region and
+        // count them. The loop writes every value to the next slot but
+        // advances only past valid values, so it doesn't branch on each
+        // validity bit; that branch would be hard to predict when NULLs are
+        // scattered through the row.
+        let validity_bits =
+            BitIterator::new(src_nulls.validity(), src_nulls.offset() + start, row_len);
+        let mut write_pos = out_start;
+        for (&value, is_valid) in src_values[start..end].iter().zip(validity_bits) {
+            out_values[write_pos] = value;
+            write_pos += is_valid as usize;
         }
+        let valid_count = write_pos - out_start;
+        let null_count = row_len - valid_count;
 
-        sort_row(
-            &mut out_values
-                [out_start + valid_offset..out_start + valid_offset + valid_count],
-            descending,
-        );
+        sort_row(&mut out_values[out_start..write_pos], descending);
 
-        // Build validity bits
+        // Build validity bits. With nulls_first, move the sorted values after
+        // the NULLs.
         if nulls_first {
+            if null_count > 0 {
+                out_values.copy_within(out_start..write_pos, out_start + null_count);
+            }
             validity.append_n(null_count, false);
             validity.append_n(valid_count, true);
         } else {
@@ -377,7 +376,6 @@ fn sort_rows_with_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
 /// the result with a single `take()`.
 fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
-    field: FieldRef,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef> {
     let row_count = list_array.len();
@@ -427,7 +425,7 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
     };
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        field,
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::<OffsetSize>::new(new_offsets.into()),
         sorted_values,
         list_array.nulls().cloned(),
@@ -489,5 +487,63 @@ fn order_nulls_first(modifier: &str) -> Result<bool> {
         _ => exec_err!(
             "the third parameter of array_sort expects NULLS FIRST or NULLS LAST"
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Array, ArrayRef, Int32Array, ListArray, StringArray};
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::{DataType, Field, Int32Type};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_sliced_list() -> datafusion_common::Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            super::array_sort_inner(&[Arc::clone(input)])
+        })
+    }
+
+    #[test]
+    fn test_sliced_values() -> datafusion_common::Result<()> {
+        // Slicing the child array makes its validity bitmap start partway
+        // through a byte.
+        let values = Int32Array::from(vec![
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(3),
+            None,
+            Some(1),
+            Some(2),
+            None,
+        ]);
+        let input: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::from_lengths([3, 2]),
+            Arc::new(values.slice(3, 5)),
+            None,
+        ));
+        for (nulls, expected) in [
+            (
+                "NULLS FIRST",
+                [vec![None, Some(1), Some(3)], vec![None, Some(2)]],
+            ),
+            (
+                "NULLS LAST",
+                [vec![Some(1), Some(3), None], vec![Some(2), None]],
+            ),
+        ] {
+            let result = super::array_sort_inner(&[
+                Arc::clone(&input),
+                Arc::new(StringArray::from(vec!["ASC"; 2])),
+                Arc::new(StringArray::from(vec![nulls; 2])),
+            ])?;
+            let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
+                expected.into_iter().map(Some),
+            );
+            assert_eq!(result.as_ref(), &expected as &dyn Array, "{nulls}");
+        }
+        Ok(())
     }
 }

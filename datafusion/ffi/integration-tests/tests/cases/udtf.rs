@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod utils;
-
-/// Add an additional module here for convenience to scope this to only
-/// when the feature integration-tests is built
-#[cfg(feature = "integration-tests")]
 mod tests {
 
     use std::sync::Arc;
@@ -35,7 +30,7 @@ mod tests {
     #[tokio::test]
     async fn test_user_defined_table_function() -> Result<()> {
         let module = get_module()?;
-        let (ctx, codec) = super::utils::ctx_and_codec();
+        let (ctx, codec) = crate::utils::ctx_and_codec();
 
         let ffi_table_func = (module.create_table_function)(codec);
         let foreign_table_func: Arc<dyn TableFunctionImpl> = ffi_table_func.into();
