@@ -7206,6 +7206,14 @@ select count(*) over (order by l) from (values ([1]), ([2])) t(l)
 1
 2
 
+# NULL elements must form the same peers as Arrow's list sort order.
+query I
+select count(*) over (order by l nulls first) from (values ([NULL::int]), ([1]), ([NULL::int])) t(l)
+----
+2
+2
+3
+
 # Lists containing structs or lists also form RANGE peer groups.
 query I
 select count(*) over (order by l) from (values ([struct(1)]), ([struct(2)])) t(l)

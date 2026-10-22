@@ -19,3 +19,4 @@ mod coop;
 mod datasource_split;
 mod logical_plan;
 mod register_arrow;
+mod window_nested_range;

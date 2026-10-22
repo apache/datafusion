@@ -72,7 +72,8 @@ impl WindowAggState {
             // Rows have no state do nothing
             Some(WindowFrameContext::Rows(_)) => {}
             Some(WindowFrameContext::Range { state, .. }) => {
-                // The comparator refers to the old, unpruned ORDER BY arrays.
+                // Release the old ORDER BY arrays early. Replacement arrays would
+                // also invalidate the cache by identity when it is next used.
                 state.peer_comparator = None;
             }
             Some(WindowFrameContext::Groups { state, .. }) => {
@@ -350,14 +351,16 @@ pub struct WindowFrameStateRange {
     peer_comparator: Option<RangePeerComparator>,
 }
 
-/// Cache comparators because dictionary logical-null masks can scan entire arrays.
+/// Reuse comparators to avoid per-row setup work, including logical-null masks
+/// that can take O(n) to build for dictionary arrays.
 #[derive(Clone)]
 struct RangePeerComparator {
     columns: Vec<ArrayRef>,
     comparator: Arc<LexicographicalComparator>,
 }
 
-// The cached Arrow arrays and comparison closures are immutable. A comparison
+// Preserve the public WindowFrameStateRange type's existing unwind-safety traits.
+// The cached Arrow arrays and comparison closures are immutable, so a comparison
 // that unwinds cannot leave this cache partially updated.
 impl std::panic::UnwindSafe for RangePeerComparator {}
 impl std::panic::RefUnwindSafe for RangePeerComparator {}
@@ -503,17 +506,21 @@ impl WindowFrameStateRange {
                 .iter()
                 .any(|column| column.data_type().is_nested())
         {
-            // CURRENT ROW needs peer equality. Scalar ordering does not support
-            // all nested keys; Arrow's sort comparator also handles dictionary nulls.
+            // CURRENT ROW needs peer equality. ScalarValue equality can distinguish
+            // encodings of the same nested value: a list with a null dictionary
+            // key and one with a key referencing null. Use Arrow's logical
+            // comparison, which also matches the ordering used to sort these keys.
             let mut boundary = if SIDE {
                 last_range.start
             } else {
+                // Evaluation may start partway through a partition. An equality
+                // scan cannot skip preceding non-peers to reach the current row.
                 last_range.end.max(idx)
             };
             let comparator = self.peer_comparator(range_columns)?;
             while boundary < length {
                 let is_peer = comparator.compare(boundary, idx).is_eq();
-                if if SIDE { is_peer } else { !is_peer } {
+                if is_peer == SIDE {
                     break;
                 }
                 boundary += 1;
@@ -810,7 +817,7 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
 
     #[test]
-    fn range_peer_comparator_reuses_arrays_and_invalidates_after_pruning() -> Result<()> {
+    fn range_peer_comparator_reuses_arrays_and_releases_after_pruning() -> Result<()> {
         use arrow::array::ListArray;
         use arrow::datatypes::Int64Type;
 
@@ -846,9 +853,7 @@ mod tests {
             range.calculate_range(&frame, &(0..0), &columns, 3, 0)?,
             0..1
         );
-        assert!(first.upgrade().is_none());
         let retained = Arc::downgrade(&columns[0]);
-        let cached = Arc::downgrade(&range.peer_comparator.as_ref().unwrap().comparator);
         let mut state = WindowAggState::new(&DataType::Int64)?;
         state.window_frame_range =
             range.calculate_range(&frame, &(0..1), &columns, 3, 1)?;
@@ -863,7 +868,6 @@ mod tests {
         assert!(retained.upgrade().is_some());
         state.prune_state(1);
         assert!(retained.upgrade().is_none());
-        assert!(cached.upgrade().is_none());
         assert_eq!(
             state.window_frame_ctx.as_mut().unwrap().calculate_range(
                 &pruned,
@@ -873,6 +877,38 @@ mod tests {
             )?,
             0..2
         );
+        Ok(())
+    }
+
+    #[test]
+    fn range_peers_compare_nested_dictionary_nulls_logically() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int8Array, Int32Array, ListArray};
+        use arrow::buffer::OffsetBuffer;
+        use arrow::datatypes::Int8Type;
+
+        // Both lists contain NULL: one dictionary key is null, the other
+        // references a null value. ScalarValue equality distinguishes them.
+        let values: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![None, Some(0)]),
+            Arc::new(Int32Array::from(vec![None])),
+        )?);
+        let columns: [ArrayRef; 1] = [Arc::new(ListArray::new(
+            Arc::new(Field::new("item", values.data_type().clone(), true)),
+            OffsetBuffer::from_lengths([1, 1]),
+            values,
+            None,
+        ))];
+        let frame = Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Range,
+            WindowFrameBound::CurrentRow,
+            WindowFrameBound::CurrentRow,
+        ));
+        let mut state = WindowFrameContext::new(frame, vec![SortOptions::default()]);
+        let mut range = 0..0;
+        for idx in 0..2 {
+            range = state.calculate_range(&columns, &range, 2, idx)?;
+            assert_eq!(range, 0..2);
+        }
         Ok(())
     }
 

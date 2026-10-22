@@ -1326,7 +1326,8 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
 /// arithmetic for finite offsets.
 ///
 /// This fallback admits durations and intervals, including encoded values.
-/// Structs and maps remain outside its supported types.
+/// Admission remains conservative: Arrow peer comparison also supports nested
+/// types, but admitting structs and maps requires separate validation.
 fn supports_free_range_frame(col_type: &DataType) -> bool {
     match col_type {
         DataType::Duration(_) | DataType::Interval(_) => true,
@@ -1339,7 +1340,8 @@ fn supports_free_range_frame(col_type: &DataType) -> bool {
 }
 
 /// Whether `col_type` is a list, possibly behind dictionary or run-end
-/// encoding.
+/// encoding. Free-range fallback still excludes lists conservatively, although
+/// Arrow can now find peers for supported list keys.
 fn is_list_type(col_type: &DataType) -> bool {
     match col_type {
         DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
@@ -1353,7 +1355,8 @@ fn is_list_type(col_type: &DataType) -> bool {
 
 /// Errors if any ORDER BY expression has a type not supported in a free RANGE
 /// frame: a type with neither an offset target nor support in the free-range
-/// fallback, or a list (see `is_list_type`).
+/// fallback, or a list (see `is_list_type`). These conservative admission rules
+/// can be relaxed separately from the nested peer-comparison fix.
 fn check_free_range_order_by_types(
     expressions: &[Sort],
     schema: &DFSchema,

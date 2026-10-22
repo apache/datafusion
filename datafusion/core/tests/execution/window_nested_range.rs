@@ -35,7 +35,8 @@ use datafusion::physical_plan::windows::{
     BoundedWindowAggExec, WindowAggExec, create_window_expr,
 };
 use datafusion::physical_plan::{
-    ExecutionPlan, InputOrderMode, SendableRecordBatchStream, collect,
+    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, SendableRecordBatchStream,
+    collect,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_common::{Result, ScalarValue};
@@ -92,6 +93,11 @@ fn nested_batches() -> Result<Vec<RecordBatch>> {
             Ok(RecordBatch::try_from_iter(vec![
                 ("key", keys),
                 ("tie", tie),
+                // In Linear mode, the final row advances another partition's peers.
+                (
+                    "p",
+                    Arc::new(Int32Array::from(vec![0, 0, 0, 0, 0, 1])) as ArrayRef,
+                ),
                 (
                     "value",
                     Arc::new(Int64Array::from(vec![1, 2, 4, 8, 16, 32])) as ArrayRef,
@@ -131,12 +137,25 @@ async fn nested_range_current_row_physical_operators() -> Result<()> {
                 [63, 63, 60, 60, 48, 32],
             ),
         ] {
-            for bounded in [false, true] {
+            for mode in [
+                None,
+                Some(InputOrderMode::Sorted),
+                Some(InputOrderMode::Linear),
+            ] {
+                // The planner uses WindowAggExec for UNBOUNDED FOLLOWING.
+                if mode.is_some() && end.is_unbounded() {
+                    continue;
+                }
+                let partition_by = if mode == Some(InputOrderMode::Linear) {
+                    vec![col("p", &schema)?]
+                } else {
+                    vec![]
+                };
                 let expr = create_window_expr(
                     &WindowFunctionDefinition::AggregateUDF(sum_udaf()),
                     "sum".to_string(),
                     &[col("value", &schema)?],
-                    &[],
+                    &partition_by,
                     &order_by,
                     Arc::new(WindowFrame::new_bounds(
                         WindowFrameUnits::Range,
@@ -148,11 +167,11 @@ async fn nested_range_current_row_physical_operators() -> Result<()> {
                     false,
                     None,
                 )?;
-                let plan: Arc<dyn ExecutionPlan> = if bounded {
+                let plan: Arc<dyn ExecutionPlan> = if let Some(mode) = &mode {
                     Arc::new(BoundedWindowAggExec::try_new(
                         vec![expr],
                         Arc::clone(&input),
-                        InputOrderMode::Sorted,
+                        mode.clone(),
                         false,
                     )?)
                 } else {
@@ -162,14 +181,31 @@ async fn nested_range_current_row_physical_operators() -> Result<()> {
                         false,
                     )?)
                 };
+                assert!(
+                    input
+                        .equivalence_properties()
+                        .ordering_satisfy_requirement(
+                            plan.required_input_ordering()[0]
+                                .clone()
+                                .unwrap()
+                                .into_single(),
+                        )?
+                );
                 let output_schema = plan.schema();
                 let output = collect(plan, SessionContext::new().task_ctx()).await?;
                 let output = concat_batches(&output_schema, &output)?;
-                let actual = output.column(3).as_primitive::<Int64Type>();
+                let actual = output
+                    .column(batch.num_columns())
+                    .as_primitive::<Int64Type>();
+                let mut expected = expected;
+                if mode == Some(InputOrderMode::Linear) {
+                    // The final row is in its own PARTITION BY group.
+                    expected[5] = 32;
+                }
                 assert_eq!(
                     actual.iter().collect::<Vec<_>>(),
                     expected.map(Some),
-                    "{}, {start:?} to {end:?}, bounded={bounded}",
+                    "{}, {start:?} to {end:?}, mode={mode:?}",
                     batch.column(0).data_type(),
                 );
             }
@@ -200,52 +236,86 @@ impl PartitionStream for OpenEndedPartition {
 }
 
 #[tokio::test]
-async fn sorted_nested_range_emits_completed_peers_before_eof() -> Result<()> {
-    let batch = nested_batches()?.remove(0);
-    let schema = batch.schema();
-    let order_by = vec![
-        PhysicalSortExpr::new_default(col("key", &schema)?),
-        PhysicalSortExpr::new_default(col("tie", &schema)?),
-    ];
-    let source = Arc::new(StreamingTableExec::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(OpenEndedPartition { batch })],
-        None,
-        vec![LexOrdering::new(order_by.clone()).unwrap()],
-        true,
-        None,
-    )?);
-    let expr = create_window_expr(
-        &WindowFunctionDefinition::AggregateUDF(sum_udaf()),
-        "sum".to_string(),
-        &[col("value", &schema)?],
-        &[],
-        &order_by,
-        Arc::new(WindowFrame::new_bounds(
-            WindowFrameUnits::Range,
-            WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
-            WindowFrameBound::CurrentRow,
-        )),
-        schema,
-        false,
-        false,
-        None,
-    )?;
-    let plan =
-        BoundedWindowAggExec::try_new(vec![expr], source, InputOrderMode::Sorted, false)?;
-    let mut stream = plan.execute(0, SessionContext::new().task_ctx())?;
-    let actual = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut sums = Vec::new();
-        while sums.len() < 5 {
-            let batch = stream.next().await.unwrap()?;
-            sums.extend(batch.column(3).as_primitive::<Int64Type>().iter());
+async fn nested_range_emits_completed_peers_before_eof() -> Result<()> {
+    for batch in nested_batches()? {
+        for mode in [InputOrderMode::Sorted, InputOrderMode::Linear] {
+            let schema = batch.schema();
+            let order_by = vec![
+                PhysicalSortExpr::new_default(col("key", &schema)?),
+                PhysicalSortExpr::new_default(col("tie", &schema)?),
+            ];
+            let source: Arc<dyn ExecutionPlan> = Arc::new(StreamingTableExec::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(OpenEndedPartition {
+                    batch: batch.clone(),
+                })],
+                None,
+                vec![LexOrdering::new(order_by.clone()).unwrap()],
+                true,
+                None,
+            )?);
+            let partition_by = if mode == InputOrderMode::Linear {
+                vec![col("p", &schema)?]
+            } else {
+                vec![]
+            };
+            let expr = create_window_expr(
+                &WindowFunctionDefinition::AggregateUDF(sum_udaf()),
+                "sum".to_string(),
+                &[col("value", &schema)?],
+                &partition_by,
+                &order_by,
+                Arc::new(WindowFrame::new_bounds(
+                    WindowFrameUnits::Range,
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                    WindowFrameBound::CurrentRow,
+                )),
+                schema,
+                false,
+                false,
+                None,
+            )?;
+            let plan = BoundedWindowAggExec::try_new(
+                vec![expr],
+                Arc::clone(&source),
+                mode.clone(),
+                false,
+            )?;
+            assert!(
+                source
+                    .equivalence_properties()
+                    .ordering_satisfy_requirement(
+                        plan.required_input_ordering()[0]
+                            .clone()
+                            .unwrap()
+                            .into_single(),
+                    )?
+            );
+            let mut stream = plan.execute(0, SessionContext::new().task_ctx())?;
+            let actual = tokio::time::timeout(Duration::from_secs(5), async {
+                let mut sums = Vec::new();
+                while sums.len() < 5 {
+                    let output = stream.next().await.unwrap()?;
+                    sums.extend(
+                        output
+                            .column(batch.num_columns())
+                            .as_primitive::<Int64Type>()
+                            .iter(),
+                    );
+                }
+                Ok::<_, datafusion_common::DataFusionError>(sums)
+            })
+            .await
+            .expect("completed peer groups should emit before EOF")?;
+            assert_eq!(
+                actual,
+                [Some(3), Some(3), Some(15), Some(15), Some(31)],
+                "{}, mode={mode:?}",
+                batch.column(0).data_type()
+            );
+            // The final peer group cannot finish until another key or EOF arrives.
+            assert!(stream.next().now_or_never().is_none());
         }
-        Ok::<_, datafusion_common::DataFusionError>(sums)
-    })
-    .await
-    .expect("completed peer groups should emit before EOF")?;
-    assert_eq!(actual, [Some(3), Some(3), Some(15), Some(15), Some(31)]);
-    // The final peer group cannot finish until another key or EOF arrives.
-    assert!(stream.next().now_or_never().is_none());
+    }
     Ok(())
 }
