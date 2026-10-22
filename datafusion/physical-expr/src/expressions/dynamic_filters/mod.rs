@@ -350,8 +350,7 @@ impl DynamicFilterPhysicalExpr {
     /// and notify all waiters.
     ///
     /// The source's [`PhysicalExpr::expression_id`] must match this filter's.
-    /// The original children must also match, but the filters may have different
-    /// children remapped by [`PhysicalExpr::with_new_children`].
+    ///
     /// A compatible update is ignored if this filter is already complete.
     pub fn update_from(&self, source: &Self) -> Result<()> {
         if Arc::ptr_eq(&self.inner, &source.inner) {
@@ -360,11 +359,6 @@ impl DynamicFilterPhysicalExpr {
 
         // Release the source lock before acquiring the target lock via clone().
         let source_state = source.inner.read().clone();
-        if self.children != source.children {
-            return internal_err!(
-                "Cannot update dynamic filters with different original children"
-            );
-        }
 
         let mut current = self.inner.write();
         if current.expression_id != source_state.expression_id {
@@ -1158,43 +1152,33 @@ mod test {
     }
 
     #[test]
-    fn test_update_from_rejects_incompatible_filters() -> Result<()> {
+    fn test_update_from_rejects_different_expression_ids() -> Result<()> {
         use crate::expressions::Column;
         use datafusion_common::assert_contains;
 
         let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
         let target = DynamicFilterPhysicalExpr::new(vec![Arc::clone(&a)], lit(true));
-        let different_id = DynamicFilterPhysicalExpr::new(vec![a], lit(false));
-        let different_children = DynamicFilterPhysicalExpr::from_parts(
-            vec![Arc::new(Column::new("b", 0))],
-            None,
-            target.inner.read().clone(),
-        );
+        let source = DynamicFilterPhysicalExpr::new(vec![a], lit(false));
         let before = target.current()?;
         let generation = target.snapshot_generation();
         let mut subscription = target.subscribe();
 
-        for (source, expected_error) in [
-            (different_id, "different expression IDs"),
-            (different_children, "different original children"),
-        ] {
-            source.update(lit(false))?;
-            source.mark_complete();
-            assert_contains!(
-                target.update_from(&source).unwrap_err().to_string(),
-                expected_error
-            );
-            assert!(Arc::ptr_eq(&target.current()?, &before));
-            assert_eq!(target.snapshot_generation(), generation);
-            assert!(!target.is_complete());
-            assert_eq!(
-                subscription.observe(),
-                DynamicFilterChange {
-                    changed: false,
-                    complete: false,
-                },
-            );
-        }
+        source.update(lit(false))?;
+        source.mark_complete();
+        assert_contains!(
+            target.update_from(&source).unwrap_err().to_string(),
+            "different expression IDs"
+        );
+        assert!(Arc::ptr_eq(&target.current()?, &before));
+        assert_eq!(target.snapshot_generation(), generation);
+        assert!(!target.is_complete());
+        assert_eq!(
+            subscription.observe(),
+            DynamicFilterChange {
+                changed: false,
+                complete: false,
+            },
+        );
         Ok(())
     }
 
