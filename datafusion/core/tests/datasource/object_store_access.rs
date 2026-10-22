@@ -1019,6 +1019,181 @@ async fn query_single_parquet_file_multi_row_groups_multiple_predicates() {
     );
 }
 
+#[tokio::test]
+async fn query_single_parquet_file_pushdown_filters_one_shot_io() {
+    let test = Test::new().with_single_file_parquet().await;
+    test.set("datafusion.execution.parquet.pushdown_filters", "true")
+        .await;
+
+    // With filter pushdown enabled and `progressive_io` disabled (the
+    // default), all data needed for each row group (the columns needed by
+    // the filter and by the projection) is fetched with a single request per
+    // row group, the same I/O pattern as when pushdown_filters is disabled
+    // (compare `query_single_parquet_file_multi_row_groups_multiple_predicates`):
+    //
+    // * Row group 1 (`a` in 0..100): `a` (4-534) and `b` (534-1064) are
+    //   fetched together, even though `a` is only needed to evaluate the
+    //   filter.
+    // * Row group 2 (`a` in 100..200): the statistics prove every row
+    //   matches, so the filter is skipped and only `b` (1594-2124) is read.
+    assert_snapshot!(
+        test.query("select min(b) from parquet_table WHERE a > 50").await,
+        @r"
+    ------- Query Output (1 rows) -------
+    +----------------------+
+    | min(parquet_table.b) |
+    +----------------------+
+    | 1051                 |
+    +----------------------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 3
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (ranges) path=parquet_table.parquet ranges=4-534,534-1064
+    - GET  (ranges) path=parquet_table.parquet ranges=1594-2124
+    "
+    );
+}
+
+#[tokio::test]
+async fn query_single_parquet_file_pushdown_filters_progressive_io() {
+    let test = Test::new().with_single_file_parquet().await;
+    test.set("datafusion.execution.parquet.pushdown_filters", "true")
+        .await;
+    test.set("datafusion.execution.parquet.progressive_io", "true")
+        .await;
+
+    // With `progressive_io` enabled (and an offset index present in the
+    // file), a row group that needs the filter is fetched progressively:
+    // first the column needed to evaluate the filter (`a`, 4-534), then the
+    // remaining projected column (`b`, 534-1064) for the rows that passed,
+    // resulting in multiple requests for row group 1. Row group 2 is fully
+    // matched by its statistics, so the filter is skipped and only `b` is
+    // read, as in the one-shot case.
+    assert_snapshot!(
+        test.query("select min(b) from parquet_table WHERE a > 50").await,
+        @r"
+    ------- Query Output (1 rows) -------
+    +----------------------+
+    | min(parquet_table.b) |
+    +----------------------+
+    | 1051                 |
+    +----------------------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 4
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (ranges) path=parquet_table.parquet ranges=4-534
+    - GET  (ranges) path=parquet_table.parquet ranges=534-951,951-1064
+    - GET  (ranges) path=parquet_table.parquet ranges=1594-2124
+    "
+    );
+}
+
+#[tokio::test]
+async fn query_single_parquet_file_multi_page_no_pushdown() {
+    let test = Test::new().with_single_file_parquet_multi_page().await;
+
+    // Baseline for the `*_page_index` tests below: without filter pushdown
+    // the page index still prunes the first two pages of `a` in row group 1
+    // (values 0..40 cannot match `a > 50`) and the matching rows of `b`, so
+    // only the dictionary page and the selected data pages of each column
+    // chunk are fetched, with a single request per row group.
+    assert_snapshot!(
+        test.query("select min(b) from parquet_table WHERE a > 50").await,
+        @r"
+    ------- Query Output (1 rows) -------
+    +----------------------+
+    | min(parquet_table.b) |
+    +----------------------+
+    | 1051                 |
+    +----------------------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 3
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (ranges) path=parquet_table.parquet ranges=4-421,492-529,529-569,569-609,609-1026,1097-1134,1134-1174,1174-1214
+    - GET  (ranges) path=parquet_table.parquet ranges=1214-1819,1819-2424
+    "
+    );
+}
+
+#[tokio::test]
+async fn query_single_parquet_file_pushdown_filters_one_shot_io_page_index() {
+    let test = Test::new().with_single_file_parquet_multi_page().await;
+    test.set("datafusion.execution.parquet.pushdown_filters", "true")
+        .await;
+
+    // Each row group has five 20-row data pages per column. The page index
+    // proves the first two pages of `a` in row group 1 (values 0..40) cannot
+    // match `a > 50`, so the resulting row selection skips them. With
+    // one-shot I/O the data is still fetched with a single request per row
+    // group, but only the pages the decoder will read:
+    //
+    // * `a` (needed by the filter) becomes two ranges: its dictionary page
+    //   (4-421) and the run of selected data pages (492-609); the two pruned
+    //   pages (421-492) are not fetched.
+    // * `b` (the output column) is fetched as one range (609-1214). Note the
+    //   decoder reads every page of `b` once a row filter is installed, even
+    //   though the first two pages hold no selected rows (compare
+    //   `query_single_parquet_file_multi_page_no_pushdown`, which skips
+    //   1026-1097). The plan reproduces the decoder's own fetch, so one-shot
+    //   I/O reads the same bytes as progressive I/O does.
+    // * Row group 2 is fully matched by its statistics, so the filter is
+    //   skipped and only `b` (1819-2424) is read.
+    assert_snapshot!(
+        test.query("select min(b) from parquet_table WHERE a > 50").await,
+        @r"
+    ------- Query Output (1 rows) -------
+    +----------------------+
+    | min(parquet_table.b) |
+    +----------------------+
+    | 1051                 |
+    +----------------------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 3
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (ranges) path=parquet_table.parquet ranges=4-421,492-609,609-1214
+    - GET  (ranges) path=parquet_table.parquet ranges=1819-2424
+    "
+    );
+}
+
+#[tokio::test]
+async fn query_single_parquet_file_pushdown_filters_progressive_io_page_index() {
+    let test = Test::new().with_single_file_parquet_multi_page().await;
+    test.set("datafusion.execution.parquet.pushdown_filters", "true")
+        .await;
+    test.set("datafusion.execution.parquet.progressive_io", "true")
+        .await;
+
+    // Same file and query as
+    // `query_single_parquet_file_pushdown_filters_one_shot_io_page_index`,
+    // but fetched progressively: the dictionary and selected pages of `a`
+    // first, then (after the filter is evaluated) the dictionary and data
+    // pages of `b`. The bytes read are the same as with one-shot I/O; only
+    // the number of requests differs.
+    assert_snapshot!(
+        test.query("select min(b) from parquet_table WHERE a > 50").await,
+        @r"
+    ------- Query Output (1 rows) -------
+    +----------------------+
+    | min(parquet_table.b) |
+    +----------------------+
+    | 1051                 |
+    +----------------------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 4
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (ranges) path=parquet_table.parquet ranges=4-421,492-529,529-569,569-609
+    - GET  (ranges) path=parquet_table.parquet ranges=609-1026,1026-1060,1060-1097,1097-1134,1134-1174,1174-1214
+    - GET  (ranges) path=parquet_table.parquet ranges=1819-2424
+    "
+    );
+}
+
 /// Runs tests with a request counting object store
 struct Test {
     object_store: Arc<RequestCountingObjectStore>,
@@ -1058,6 +1233,17 @@ impl Test {
     /// Returns a string representation of all recorded requests thus far
     fn requests(&self) -> String {
         format!("{}", self.object_store)
+    }
+
+    /// Set a session configuration value via SQL `SET`
+    async fn set(&self, key: &str, value: &str) {
+        self.session_context
+            .sql(&format!("set {key} = {value}"))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
     }
 
     /// Store the specified bytes at the given path
@@ -1304,6 +1490,35 @@ impl Test {
         let mut buffer = vec![];
         let props = parquet::file::properties::WriterProperties::builder()
             .set_max_row_group_row_count(Some(100))
+            .build();
+        let mut writer = parquet::arrow::ArrowWriter::try_new(
+            &mut buffer,
+            batch.schema(),
+            Some(props),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        self.with_bytes("/parquet_table.parquet", buffer)
+            .await
+            .register_parquet("parquet_table", "/parquet_table.parquet")
+            .await
+    }
+
+    /// Like [`Self::with_single_file_parquet`], but each column chunk is
+    /// written as five 20-row data pages (plus a dictionary page) so that
+    /// the page index can prune individual pages within a row group.
+    async fn with_single_file_parquet_multi_page(self) -> Test {
+        let a: ArrayRef = Arc::new(Int32Array::from_iter_values(0..200));
+        let b: ArrayRef = Arc::new(Int32Array::from_iter_values(1000..1200));
+        let batch = RecordBatch::try_from_iter([("a", a), ("b", b)]).unwrap();
+
+        let mut buffer = vec![];
+        let props = parquet::file::properties::WriterProperties::builder()
+            .set_max_row_group_row_count(Some(100))
+            .set_data_page_row_count_limit(20)
+            .set_write_batch_size(20)
             .build();
         let mut writer = parquet::arrow::ArrowWriter::try_new(
             &mut buffer,

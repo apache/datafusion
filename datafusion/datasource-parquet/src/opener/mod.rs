@@ -270,6 +270,11 @@ pub(super) struct ParquetMorselizer {
     pub reorder_filters: bool,
     /// Should we force the reader to use RowSelections for filtering
     pub force_filter_selections: bool,
+    /// If true (and filters are pushed down), fetch column data
+    /// progressively as filters are evaluated. If false, fetch all data
+    /// pages needed for a row group in a single request. See
+    /// [`ParquetOptions::progressive_io`](datafusion_common::config::ParquetOptions::progressive_io)
+    pub progressive_io: bool,
     /// Should the page index be read from parquet files, if present, to skip
     /// data pages
     pub enable_page_index: bool,
@@ -469,6 +474,7 @@ struct PreparedParquetOpen {
     reorder_predicates: bool,
     pushdown_filters: bool,
     force_filter_selections: bool,
+    progressive_io: bool,
     enable_page_index: bool,
     enable_bloom_filter: bool,
     enable_row_group_stats_pruning: bool,
@@ -991,6 +997,7 @@ impl ParquetMorselizer {
             reorder_predicates: self.reorder_filters,
             pushdown_filters: self.pushdown_filters,
             force_filter_selections: self.force_filter_selections,
+            progressive_io: self.progressive_io,
             enable_page_index: self.enable_page_index,
             enable_bloom_filter: self.enable_bloom_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
@@ -1814,6 +1821,18 @@ impl RowGroupsPrunedParquetOpen {
             }
         };
 
+        // Decide the I/O pattern for the row groups read with a pushed down
+        // `RowFilter` (see `PushDecoderStreamState::one_shot_io`). Fetching
+        // progressively can only reduce the bytes read when the file has an
+        // offset index: without one the decoder fetches whole column chunks
+        // either way, and the extra requests are pure overhead.
+        let has_offset_index = reader_metadata
+            .metadata()
+            .page_index()
+            .is_some_and(|page_index| page_index.has_offset_indexes());
+        let one_shot_io = row_filter_context.is_some()
+            && (!prepared.progressive_io || !has_offset_index);
+
         // Track how much of this file range the scan has finished with. Credit
         // up front every row group it will not read: those pruning removed, and
         // — for a file split into ranges for parallelism — those belonging to
@@ -1902,6 +1921,7 @@ impl RowGroupsPrunedParquetOpen {
             filter_installed,
             row_filter_skipped_fully_matched,
             byte_progress,
+            one_shot_io,
         }
         .into_stream();
 
@@ -2211,6 +2231,7 @@ mod test {
         pushdown_filters: bool,
         reorder_filters: bool,
         force_filter_selections: bool,
+        progressive_io: bool,
         enable_page_index: bool,
         enable_bloom_filter: bool,
         enable_row_group_stats_pruning: bool,
@@ -2431,6 +2452,7 @@ mod test {
                 pushdown_filters: false,
                 reorder_filters: false,
                 force_filter_selections: false,
+                progressive_io: false,
                 enable_page_index: false,
                 enable_bloom_filter: false,
                 enable_row_group_stats_pruning: false,
@@ -2628,6 +2650,7 @@ mod test {
                 pushdown_filters: self.pushdown_filters,
                 reorder_filters: self.reorder_filters,
                 force_filter_selections: self.force_filter_selections,
+                progressive_io: self.progressive_io,
                 enable_page_index: self.enable_page_index,
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,

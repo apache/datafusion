@@ -409,3 +409,24 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# Pin arrow/parquet to arrow-rs main for pre-release testing
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-arith = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-avro = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-cmp = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-csv = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-json = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-row = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "dd240116c75a15a2a048a041c808d67f3f32a375" }

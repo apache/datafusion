@@ -375,6 +375,7 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             pushdown_filters: proto.pushdown_filters,
             reorder_filters: proto.reorder_filters,
             force_filter_selections: proto.force_filter_selections,
+            progressive_io: proto.progressive_io,
             data_pagesize_limit: to_usize(
                 proto.data_pagesize_limit,
                 "data_pagesize_limit",
