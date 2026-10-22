@@ -102,6 +102,7 @@ use sqlparser::{
 };
 use url::Url;
 use uuid::Uuid;
+use datafusion_sql::parser::ExplainStatement;
 
 /// `SessionState` contains all the necessary state to plan and execute queries,
 /// such as configuration, functions, and runtime environment. Please see the
@@ -672,19 +673,8 @@ impl SessionState {
         statement: Statement,
     ) -> datafusion_common::Result<LogicalPlan> {
         let mut references = self.resolve_table_references(&statement)?;
-        let require_info_schema = match &statement {
-            Statement::Statement(s) => matches!(
-                s.as_ref(),
-                SQLStatement::ShowCreate { .. }
-                    | SQLStatement::ShowTables { .. }
-                    | SQLStatement::ShowColumns { .. }
-                    | SQLStatement::ShowVariable { .. }
-                    | SQLStatement::ShowFunctions { .. }
-            ),
-            _ => false,
-        };
 
-        if require_info_schema {
+        if Self::requires_information_schema(&statement) {
             let info_tables = INFORMATION_SCHEMA_TABLES.iter();
             let info_table_refs: Vec<_> = if let Some(system_catalog) =
                 self.config().system_catalog()
@@ -719,6 +709,21 @@ impl SessionState {
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.statement_to_plan(statement)
+    }
+
+    fn requires_information_schema(statement: &Statement) -> bool {
+        match &statement {
+            Statement::Explain(ExplainStatement { statement, .. }) => Self::requires_information_schema(statement),
+            Statement::Statement(s) => matches!(
+                s.as_ref(),
+                SQLStatement::ShowCreate { .. }
+                    | SQLStatement::ShowTables { .. }
+                    | SQLStatement::ShowColumns { .. }
+                    | SQLStatement::ShowVariable { .. }
+                    | SQLStatement::ShowFunctions { .. }
+            ),
+            _ => false,
+        }
     }
 
     #[cfg(feature = "sql")]
