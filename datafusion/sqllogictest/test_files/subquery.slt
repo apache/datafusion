@@ -4215,3 +4215,34 @@ SELECT * FROM (VALUES (1)) AS x(d)
 WHERE x.d IN (SELECT t.c FROM (SELECT * FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0);
 ----
 1
+
+# A subquery in a JOIN ON correlated on an aliased table
+statement ok
+CREATE TABLE on_alias_t (a INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE on_alias_s (b INT) AS VALUES (1);
+
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON x.a = ANY (SELECT b FROM on_alias_s);
+----
+1 1
+1 2
+
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON x.a > ALL (SELECT b FROM on_alias_s);
+----
+2 1
+2 2
+
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON EXISTS (SELECT 1 FROM on_alias_s WHERE on_alias_s.b = x.a);
+----
+1 1
+1 2
+
+statement ok
+DROP TABLE on_alias_t;
+
+statement ok
+DROP TABLE on_alias_s;
