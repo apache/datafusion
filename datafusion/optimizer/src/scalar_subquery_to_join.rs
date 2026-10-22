@@ -399,15 +399,36 @@ fn build_join(
         // introduced is the untyped `Null` of the HAVING arm. The expressions
         // themselves come from a plan `TypeCoercion` has already coerced.
         let mut expr_rewrite = TypeCoercionRewriter::new(new_plan.schema());
+        // The HAVING reads the subquery's aggregates by their unqualified
+        // names, which can also appear in the outer input or in another
+        // decorrelated subquery, so qualify them with the subquery alias.
         let having_arm = pull_up
             .pull_up_having_expr
-            .as_ref()
-            .map(|f| (not(f.clone()), lit(ScalarValue::Null)));
+            .clone()
+            .map(|f| {
+                f.transform_up(|e| match e {
+                    Expr::Column(Column {
+                        relation: None,
+                        name,
+                        ..
+                    }) => Ok(Transformed::yes(Expr::Column(Column::new(
+                        Some(subquery_alias),
+                        name,
+                    )))),
+                    _ => Ok(Transformed::no(e)),
+                })
+                .data()
+            })
+            .transpose()?
+            .map(|f| (not(f), lit(ScalarValue::Null)));
         for (name, result) in expr_map {
-            if evaluates_to_null(result.clone(), result.column_refs())? {
+            if having_arm.is_none()
+                && evaluates_to_null(result.clone(), result.column_refs())?
+            {
                 // Aggregates whose empty-input value is NULL (max/min/sum/…)
                 // need no compensation: the LEFT JOIN already produces NULL
-                // for unmatched outer rows.
+                // for unmatched outer rows. A pulled up HAVING still has to
+                // be applied to the matched rows.
                 continue;
             }
 

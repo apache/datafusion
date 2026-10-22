@@ -1307,6 +1307,59 @@ SELECT t1_id, (
 33 NULL
 44 NULL
 
+# correlated_scalar_subquery_null_default_agg_having_true_on_empty_input
+query II rowsort
+SELECT t1_id, (
+  SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id HAVING sum(t2_int) IS NULL
+) AS v FROM t1
+----
+11 NULL
+22 NULL
+33 NULL
+44 NULL
+
+query II rowsort
+SELECT t1_id, (
+  SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id HAVING max(t2_int) IS NULL
+) AS v FROM t1
+----
+11 NULL
+22 NULL
+33 NULL
+44 NULL
+
+query II rowsort
+SELECT t1_id, (
+  SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id HAVING count(*) = 0
+) AS v FROM t1
+----
+11 NULL
+22 NULL
+33 NULL
+44 NULL
+
+query II rowsort
+SELECT t1_id, (
+  SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id HAVING sum(t2_int) IS NULL OR sum(t2_int) > 2
+) AS v FROM t1
+----
+11 3
+22 NULL
+33 NULL
+44 3
+
+query III rowsort
+SELECT t1_id, (
+  SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id HAVING sum(t2_int) IS NULL
+) AS v, (
+  SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id
+) AS w FROM t1
+----
+11 NULL 3
+22 NULL 1
+33 NULL NULL
+44 NULL 3
+
 #correlated_scalar_subquery_count_agg_in_case_when
 query TT
 explain
