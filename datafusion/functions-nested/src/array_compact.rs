@@ -26,8 +26,8 @@ use arrow::array::{
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
 use arrow::compute::filter;
+use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeList, List, Null};
-use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, exec_err, utils::take_function_args};
@@ -115,8 +115,8 @@ fn array_compact_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     let [input_array] = take_function_args("array_compact", arg)?;
 
     match &input_array.data_type() {
-        List(field) => compact_list::<i32>(input_array, field),
-        LargeList(field) => compact_list::<i64>(input_array, field),
+        List(_) => compact_list::<i32>(input_array),
+        LargeList(_) => compact_list::<i64>(input_array),
         Null => Ok(Arc::clone(input_array)),
         array_type => exec_err!("array_compact does not support type '{array_type}'."),
     }
@@ -126,10 +126,7 @@ fn array_compact_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 ///
 /// Each row is a range in a shared child array. Compaction removes null child
 /// values and rebuilds the row offsets, preserving null list rows.
-fn compact_list<O: OffsetSizeTrait>(
-    input_array: &ArrayRef,
-    field: &FieldRef,
-) -> Result<ArrayRef> {
+fn compact_list<O: OffsetSizeTrait>(input_array: &ArrayRef) -> Result<ArrayRef> {
     let list_array = as_generic_list_array::<O>(input_array.as_ref())?;
     let visible_len = offset_span_len(list_array.offsets());
     if visible_len == 0 || list_array.null_count() == list_array.len() {
@@ -152,10 +149,13 @@ fn compact_list<O: OffsetSizeTrait>(
         return Ok(Arc::clone(input_array));
     };
     if values_nulls.null_count() == values_nulls.len() {
-        return Ok(empty_list_values(list_array, Arc::clone(field)));
+        return Ok(empty_list_values(
+            list_array,
+            Arc::clone(list_array.value_field()),
+        ));
     }
 
-    build_compacted_list(list_array, field, values.as_ref(), &values_nulls)
+    build_compacted_list(list_array, values.as_ref(), &values_nulls)
 }
 
 /// Copy primitive values while computing result row offsets. For other types,
@@ -167,7 +167,6 @@ fn compact_list<O: OffsetSizeTrait>(
 /// subtract the first list offset when indexing `values`.
 fn build_compacted_list<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
-    field: &FieldRef,
     values: &dyn Array,
     values_nulls: &NullBuffer,
 ) -> Result<ArrayRef> {
@@ -176,7 +175,7 @@ fn build_compacted_list<O: OffsetSizeTrait>(
         _ => compact_non_primitive(values, list_array, values_nulls),
     }?;
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::clone(field),
+        Arc::clone(list_array.value_field()),
         offsets,
         new_values,
         list_array.nulls().cloned(),

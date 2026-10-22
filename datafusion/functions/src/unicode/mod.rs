@@ -27,6 +27,7 @@ pub mod find_in_set;
 pub mod initcap;
 pub mod left;
 pub mod lpad;
+mod pad;
 pub mod planner;
 pub mod reverse;
 pub mod right;

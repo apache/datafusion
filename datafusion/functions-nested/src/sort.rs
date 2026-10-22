@@ -24,7 +24,7 @@ use arrow::array::{
     PrimitiveArray, UInt32Array, UInt64Array, new_empty_array, new_null_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
-use arrow::datatypes::{ArrowNativeTypeOp, DataType, FieldRef};
+use arrow::datatypes::{ArrowNativeTypeOp, DataType};
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow::util::bit_iterator::BitIterator;
 use arrow::{compute, compute::SortOptions, downcast_primitive_array};
@@ -189,13 +189,13 @@ fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         {
             Ok(Arc::clone(&args[0]))
         }
-        DataType::List(field) => {
+        DataType::List(_) => {
             let array = as_list_array(&args[0])?;
-            array_sort_generic(array, Arc::clone(field), sort_options)
+            array_sort_generic(array, sort_options)
         }
-        DataType::LargeList(field) => {
+        DataType::LargeList(_) => {
             let array = as_large_list_array(&args[0])?;
-            array_sort_generic(array, Arc::clone(field), sort_options)
+            array_sort_generic(array, sort_options)
         }
         // Signature should prevent this arm ever occurring
         _ => exec_err!("array_sort expects list for first argument"),
@@ -204,15 +204,14 @@ fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
-    field: FieldRef,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef> {
     let values = list_array.values();
 
     if values.data_type().is_primitive() {
-        array_sort_primitive(list_array, field, sort_options)
+        array_sort_primitive(list_array, sort_options)
     } else {
-        array_sort_non_primitive(list_array, field, sort_options)
+        array_sort_non_primitive(list_array, sort_options)
     }
 }
 
@@ -220,12 +219,11 @@ fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
 /// kernel.
 fn array_sort_primitive<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
-    field: FieldRef,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef> {
     let values = list_array.values().as_ref();
     downcast_primitive_array! {
-        values => sort_primitive_list(values, list_array, field, sort_options),
+        values => sort_primitive_list(values, list_array, sort_options),
         _ => exec_err!("array_sort: unsupported primitive type")
     }
 }
@@ -233,7 +231,6 @@ fn array_sort_primitive<OffsetSize: OffsetSizeTrait>(
 fn sort_primitive_list<T: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
     prim_values: &PrimitiveArray<T>,
     list_array: &GenericListArray<OffsetSize>,
-    field: FieldRef,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef>
 where
@@ -268,7 +265,7 @@ where
     );
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        field,
+        Arc::clone(list_array.value_field()),
         rebase_offsets(offsets),
         sorted_values,
         list_nulls.cloned(),
@@ -379,7 +376,6 @@ fn sort_rows_with_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
 /// the result with a single `take()`.
 fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
-    field: FieldRef,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef> {
     let row_count = list_array.len();
@@ -429,7 +425,7 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
     };
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        field,
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::<OffsetSize>::new(new_offsets.into()),
         sorted_values,
         list_array.nulls().cloned(),
