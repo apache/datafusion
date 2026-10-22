@@ -446,9 +446,14 @@ pub fn ensure_sorting(
                 );
                 child = update_sort_ctx_children_data(child, true)?;
             }
-        } else if physical_ordering.is_none() || !plan.maintains_input_order()[idx] {
+        } else if (physical_ordering.is_none() || !plan.maintains_input_order()[idx])
+            && !is_limit(plan)
+        {
             // We have a `SortExec` whose effect may be neutralized by another
-            // order-imposing operator, remove this sort:
+            // order-imposing operator, remove this sort. A limit keeps or skips
+            // rows based on its input order, so a sort below it matters even
+            // when that ordering is no longer visible (e.g. a projection
+            // removed the sort columns):
             child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
         }
         updated_children.push(child);

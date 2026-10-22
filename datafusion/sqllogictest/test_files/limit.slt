@@ -1257,3 +1257,63 @@ physical_plan
 
 statement ok
 DROP TABLE t22489;
+
+# The sort below an OFFSET decides which rows are skipped, so it must be
+# kept even when an order-insensitive aggregate consumes the result and the
+# sort columns are projected away.
+# https://github.com/apache/datafusion/issues/26488
+statement ok
+CREATE TABLE t26488(id BIGINT, g BIGINT, v BIGINT, s VARCHAR) AS VALUES
+  (0, 0,  3, '中文'),
+  (1, 0,  0, 'a'),
+  (2, 1, -1, 'a'),
+  (3, 1, -1, 'a'),
+  (4, 0,  3, '中文'),
+  (5, 0,  3, NULL);
+
+# OFFSET 1 skips the first row in (s, id) order: id = 1 (g = 0, v = 0)
+query II
+SELECT g, SUM(v) AS sv
+FROM (
+  SELECT * FROM t26488 ORDER BY s ASC NULLS LAST, id ASC NULLS LAST OFFSET 1
+) q
+GROUP BY g
+ORDER BY g;
+----
+0 9
+1 -2
+
+query I
+SELECT SUM(v)
+FROM (SELECT * FROM t26488 ORDER BY s, id OFFSET 1) q;
+----
+7
+
+query TT
+EXPLAIN
+SELECT g, SUM(v) AS sv
+FROM (
+  SELECT * FROM t26488 ORDER BY s ASC NULLS LAST, id ASC NULLS LAST OFFSET 1
+) q
+GROUP BY g;
+----
+logical_plan
+01)Projection: q.g, sum(q.v) AS sv
+02)--Aggregate: groupBy=[[q.g]], aggr=[[sum(q.v)]]
+03)----SubqueryAlias: q
+04)------Limit: skip=1, fetch=None
+05)--------Projection: t26488.g, t26488.v
+06)----------Sort: t26488.s ASC NULLS LAST, t26488.id ASC NULLS LAST
+07)------------TableScan: t26488 projection=[id, g, v, s]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, sum(q.v)@1 as sv]
+02)--AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[sum(q.v)]
+03)----RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+04)------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[sum(q.v)]
+05)--------GlobalLimitExec: skip=1, fetch=None
+06)----------ProjectionExec: expr=[g@1 as g, v@2 as v]
+07)------------SortExec: expr=[s@3 ASC NULLS LAST, id@0 ASC NULLS LAST], preserve_partitioning=[false]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE t26488;
