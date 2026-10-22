@@ -27,7 +27,7 @@ use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Int64Array, ListArray, UInt32Array};
+use arrow::array::{Array, ArrayRef, Float64Array, Int64Array, ListArray, UInt32Array};
 use arrow::compute::{cast, concat, sort, take};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, TimeUnit};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -442,6 +442,22 @@ impl Input {
                     return Ok(
                         Arc::new(Int64Array::from_iter_values(0..num_rows as i64))
                             as ArrayRef,
+                    );
+                }
+                // percentile_cont accepts a column reference as percentile argument
+                // generate column so that it's constant for each group
+                if expr.fun().name() == "percentile_cont" && field.name() == "c1" {
+                    let num_groups = GROUP_SIZES.len() as f64;
+                    let values: Float64Array = group_indices
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &g)| {
+                            (i % 7 != 3).then_some((g as f64 + 1.0) / (num_groups + 1.0))
+                        })
+                        .collect();
+                    return cast_values(
+                        &(Arc::new(values) as ArrayRef),
+                        field.data_type(),
                     );
                 }
                 // Scale each column differently so that multi-column

@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Add an additional module here for convenience to scope this to only
-/// when the feature integration-tests is built
-#[cfg(feature = "integration-tests")]
 mod tests {
     use datafusion::error::Result;
     use datafusion_common::ScalarValue;

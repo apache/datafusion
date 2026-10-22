@@ -187,11 +187,10 @@ SELECT COUNT(DISTINCT l.x), COUNT(l.g) FROM l JOIN r ON l.id = r.id;
 ----
 2 7
 
-# REGR_COUNT declares `DistinctHandling::Unsupported`: its accumulator ignores
-# `is_distinct` and counts every joined row, so the results below are the
-# non-distinct counts (4 and 6; the distinct counts would be 2 and 4). DISTINCT
-# therefore does not hide the join fanout: the inner join must stay an inner
-# join, and the left join must be kept.
+# REGR_COUNT declares `DistinctHandling::Unsupported`: its accumulator rejects
+# `is_distinct`, so the queries below fail instead of returning the non-distinct
+# counts. DISTINCT therefore does not hide the join fanout: the inner join must
+# stay an inner join, and the left join must be kept.
 query TT
 EXPLAIN SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l JOIN r ON l.id = r.id;
 ----
@@ -202,15 +201,11 @@ logical_plan
 04)------TableScan: l projection=[id, g, x]
 05)------TableScan: r projection=[id]
 
-query I
+statement error DataFusion error: This feature is not implemented: REGR_COUNT\(DISTINCT\) aggregations are not available
 SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l JOIN r ON l.id = r.id;
-----
-4
 
-query I
+statement error DataFusion error: This feature is not implemented: REGR_COUNT\(DISTINCT\) aggregations are not available
 SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l LEFT JOIN r ON l.id = r.id;
-----
-6
 
 # A limit below the aggregate still observes repeated join rows.
 query I
