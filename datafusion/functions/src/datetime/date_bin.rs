@@ -1655,17 +1655,21 @@ mod tests {
         }
     }
 
+    fn timestamp_binning_strides() -> [(&'static str, ScalarValue); 5] {
+        [
+            ("three nanoseconds", ScalarValue::new_interval_mdn(0, 0, 3)),
+            ("one second", ScalarValue::new_interval_dt(0, 1000)),
+            ("one hour", ScalarValue::new_interval_dt(0, 3_600_000)),
+            ("one day", ScalarValue::new_interval_dt(1, 0)),
+            ("one month", ScalarValue::new_interval_mdn(1, 0, 0)),
+        ]
+    }
+
     fn assert_timestamp_nullness_preserved<T: ArrowTimestampType>() {
         let input = PrimitiveArray::<T>::from_iter([Some(-1), None, Some(0), Some(1)]);
         let return_field = Arc::new(Field::new("f", input.data_type().clone(), true));
-        let strides = [
-            ScalarValue::new_interval_mdn(0, 0, 3),
-            ScalarValue::new_interval_dt(0, 1000),
-            ScalarValue::new_interval_dt(0, 3_600_000),
-            ScalarValue::new_interval_dt(1, 0),
-            ScalarValue::new_interval_mdn(1, 0, 0),
-        ];
-        for stride in strides {
+
+        for (stride_name, stride) in timestamp_binning_strides() {
             for origin in [0, 1_234_567] {
                 let origin = ScalarValue::TimestampNanosecond(Some(origin), None);
                 let args = vec![
@@ -1681,25 +1685,49 @@ mod tests {
                 assert_eq!(
                     input.nulls(),
                     output.nulls(),
-                    "stride {stride:?}, origin {origin:?}, unit {:?}",
+                    "stride {stride_name}, origin {origin:?}, unit {:?}",
                     T::UNIT,
                 );
+            }
+        }
+    }
+
+    fn assert_timestamp_scalar_and_array_agree<T: ArrowTimestampType>() {
+        let input = PrimitiveArray::<T>::from_iter([Some(-1), None, Some(0), Some(1)]);
+        let return_field = Arc::new(Field::new("f", input.data_type().clone(), true));
+
+        for (stride_name, stride) in timestamp_binning_strides() {
+            for origin in [0, 1_234_567] {
+                let origin = ScalarValue::TimestampNanosecond(Some(origin), None);
+                let array_args = vec![
+                    ColumnarValue::Scalar(stride.clone()),
+                    ColumnarValue::Array(Arc::new(input.clone())),
+                    ColumnarValue::Scalar(origin.clone()),
+                ];
+                let ColumnarValue::Array(array_output) =
+                    invoke_date_bin_with_args(array_args, input.len(), &return_field)
+                        .unwrap()
+                else {
+                    panic!("expected array output");
+                };
+
                 for index in 0..input.len() {
                     let source = ScalarValue::try_from_array(&input, index).unwrap();
-                    let args = vec![
+                    let scalar_args = vec![
                         ColumnarValue::Scalar(stride.clone()),
-                        ColumnarValue::Scalar(source.clone()),
+                        ColumnarValue::Scalar(source),
                         ColumnarValue::Scalar(origin.clone()),
                     ];
-                    let ColumnarValue::Scalar(output_scalar) =
-                        invoke_date_bin_with_args(args, 1, &return_field).unwrap()
+                    let ColumnarValue::Scalar(scalar_output) =
+                        invoke_date_bin_with_args(scalar_args, 1, &return_field).unwrap()
                     else {
                         panic!("expected scalar output");
                     };
-                    assert_eq!(source.is_null(), output_scalar.is_null());
                     assert_eq!(
-                        output_scalar,
-                        ScalarValue::try_from_array(&output, index).unwrap(),
+                        scalar_output,
+                        ScalarValue::try_from_array(&array_output, index).unwrap(),
+                        "stride {stride_name}, origin {origin:?}, unit {:?}, index {index}",
+                        T::UNIT,
                     );
                 }
             }
@@ -1712,6 +1740,14 @@ mod tests {
         assert_timestamp_nullness_preserved::<TimestampMillisecondType>();
         assert_timestamp_nullness_preserved::<TimestampMicrosecondType>();
         assert_timestamp_nullness_preserved::<TimestampNanosecondType>();
+    }
+
+    #[test]
+    fn test_date_bin_timestamp_scalar_and_array_agree() {
+        assert_timestamp_scalar_and_array_agree::<TimestampSecondType>();
+        assert_timestamp_scalar_and_array_agree::<TimestampMillisecondType>();
+        assert_timestamp_scalar_and_array_agree::<TimestampMicrosecondType>();
+        assert_timestamp_scalar_and_array_agree::<TimestampNanosecondType>();
     }
 
     #[test]
@@ -1750,7 +1786,7 @@ mod tests {
         assert_overflow_error(invoke_date_bin_with_args(args, 2, return_field));
     }
 
-    // Compare scalar execution with a one-row array for the same input.
+    // Compare values or errors from scalar execution and a one-row array.
     fn assert_scalar_array_parity(
         stride: ScalarValue,
         source: ScalarValue,
@@ -1763,11 +1799,7 @@ mod tests {
             ColumnarValue::Scalar(source.clone()),
             ColumnarValue::Scalar(origin.clone()),
         ];
-        let scalar_result = invoke_date_bin_with_args(scalar_args, 1, &return_field)
-            .expect("scalar path should not error");
-        let ColumnarValue::Scalar(scalar_value) = scalar_result else {
-            panic!("expected scalar result, got {scalar_result:?}");
-        };
+        let scalar_result = invoke_date_bin_with_args(scalar_args, 1, &return_field);
 
         let source_array = source.to_array().expect("source value to array");
         let array_args = vec![
@@ -1775,18 +1807,34 @@ mod tests {
             ColumnarValue::Array(source_array),
             ColumnarValue::Scalar(origin),
         ];
-        let array_result = invoke_date_bin_with_args(array_args, 1, &return_field)
-            .expect("array path should not error");
-        let ColumnarValue::Array(array) = array_result else {
-            panic!("expected array result, got {array_result:?}");
-        };
-        let array_value =
-            ScalarValue::try_from_array(&array, 0).expect("array row to scalar");
+        let array_result = invoke_date_bin_with_args(array_args, 1, &return_field);
 
-        assert_eq!(
-            scalar_value, array_value,
-            "scalar and array results diverged for source {source:?}"
-        );
+        match (scalar_result, array_result) {
+            (
+                Ok(ColumnarValue::Scalar(scalar_value)),
+                Ok(ColumnarValue::Array(array)),
+            ) => {
+                let array_value =
+                    ScalarValue::try_from_array(&array, 0).expect("array row to scalar");
+                assert_eq!(
+                    scalar_value, array_value,
+                    "scalar and array values diverged for source {source:?}"
+                );
+            }
+            (Err(scalar_error), Err(array_error)) => {
+                assert_eq!(
+                    scalar_error.strip_backtrace(),
+                    array_error.strip_backtrace(),
+                    "scalar and array errors diverged for source {source:?}"
+                );
+            }
+            (scalar_result, array_result) => {
+                panic!(
+                    "scalar and array outcomes diverged for source {source:?}: \
+                     scalar {scalar_result:?}, array {array_result:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1805,6 +1853,16 @@ mod tests {
             ScalarValue::new_interval_dt(1, 0),
             ScalarValue::TimestampSecond(Some(i64::MAX), None),
             ScalarValue::TimestampNanosecond(Some(0), None),
+        );
+
+        // Month interval out-of-range binning must return the same error.
+        assert_scalar_array_parity(
+            ScalarValue::new_interval_mdn(1637426858, 0, 0),
+            ScalarValue::TimestampMillisecond(Some(1040292460), None),
+            ScalarValue::TimestampNanosecond(
+                Some(string_to_timestamp_nanos("1984-01-07 00:00:00").unwrap()),
+                None,
+            ),
         );
     }
 
