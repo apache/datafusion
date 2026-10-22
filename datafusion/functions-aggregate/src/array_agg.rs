@@ -192,7 +192,15 @@ impl AggregateUDFImpl for ArrayAgg {
             // ARRAY_AGG(DISTINCT col ORDER BY other_col)                   <- Invalid
             // ARRAY_AGG(DISTINCT col ORDER BY concat(col, ''))             <- Invalid
             let sort_option = match acc_args.order_bys {
-                [single] if single.expr.eq(&acc_args.exprs[0]) => Some(single.options),
+                // This accumulator sorts the values itself, so a reversed
+                // aggregate must still sort them in the requested order.
+                [single] if single.expr.eq(&acc_args.exprs[0]) => {
+                    Some(if acc_args.is_reversed {
+                        !single.options
+                    } else {
+                        single.options
+                    })
+                }
                 [] => None,
                 _ => {
                     return exec_err!(

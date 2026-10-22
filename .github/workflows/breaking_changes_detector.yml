@@ -18,7 +18,8 @@
 # Detect semver-incompatible (breaking) API changes in crates modified by a PR.
 #
 # Only public workspace crates that have file changes are checked.
-# Internal crates (benchmarks, test-utils, sqllogictest, doc) are excluded.
+# Crates with `publish = false` (such as benchmarks and test-utils) and
+# datafusion-sqllogictest are excluded.
 #
 # This workflow only runs cargo-semver-checks and uploads the result as an
 # artifact. The actual PR comment is posted by a companion workflow
@@ -78,14 +79,13 @@ jobs:
           echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
           echo "Changed crates: $PACKAGES"
 
-      # `datafusion-substrait` (and crates that depend on it via sqllogictest)
-      # have a build script that calls protoc, which is not preinstalled on
-      # ubuntu-latest runners.
-      - name: Install Protobuf Compiler
+      # The `substrait` crate's build script runs protoc, which is not
+      # preinstalled on ubuntu-latest runners.
+      - name: Install protoc
         if: steps.changed_crates.outputs.packages != ''
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2.87.29
+        with:
+          tool: protoc@3.21.12
 
       - name: Install cargo-semver-checks
         if: steps.changed_crates.outputs.packages != ''

@@ -21,10 +21,11 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
-use datafusion_expr::{Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
+use datafusion_expr::{Aggregate, Expr, LogicalPlan, Projection, Volatility};
 
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
 /// and places additional projection on top of aggregation, to preserve
@@ -56,10 +57,12 @@ impl OptimizerRule for EliminateGroupByConstant {
                     })
                     .collect();
 
-                let (redundant, required): (Vec<_>, Vec<_>) = aggregate
+                let is_redundant: Vec<bool> = aggregate
                     .group_expr
                     .iter()
-                    .partition(|expr| is_redundant_group_expr(expr, &group_by_columns));
+                    .map(|expr| is_redundant_group_expr(expr, &group_by_columns))
+                    .collect();
+                let redundant_count = is_redundant.iter().filter(|r| **r).count();
                 // Return now if no simplification can be done. We also bail out
                 // if applying the optimization would eliminate all of the
                 // grouping expressions (e.g., GROUP BY on only constant
@@ -67,22 +70,65 @@ impl OptimizerRule for EliminateGroupByConstant {
                 // ungrouped aggregate, which changes query semantics (grouped
                 // aggregates produce an empty result set on an empty input,
                 // whereas ungrouped aggregates return a single row).
-                if redundant.is_empty() || required.is_empty() {
+                if redundant_count == 0 || redundant_count == aggregate.group_expr.len() {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
-                let simplified_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
-                    aggregate.input,
-                    required.into_iter().cloned().collect(),
-                    aggregate.aggr_expr.clone(),
+                let original_schema = Arc::clone(&aggregate.schema);
+                let required = aggregate
+                    .group_expr
+                    .iter()
+                    .zip(&is_redundant)
+                    .filter(|(_, redundant)| !**redundant)
+                    .map(|(expr, _)| expr.clone())
+                    .collect();
+                let simplified_aggregate =
+                    Aggregate::try_new(aggregate.input, required, aggregate.aggr_expr)?;
+                let simplified_schema = Arc::clone(&simplified_aggregate.schema);
+
+                // Refer to the output columns of the simplified aggregate by
+                // position. Do not re-plan the original group expressions on top
+                // of it: an expression can refer to an input column through a
+                // name that the aggregate output does not carry, so a rebuilt
+                // projection does not always resolve. A redundant expression
+                // refers only to bare GROUP BY columns, which the simplified
+                // aggregate outputs unchanged.
+                let mut projection_expr =
+                    Vec::with_capacity(original_schema.fields().len());
+                let mut next_output = 0;
+                for (i, (expr, redundant)) in aggregate
+                    .group_expr
+                    .into_iter()
+                    .zip(is_redundant)
+                    .enumerate()
+                {
+                    let (qualifier, field) = original_schema.qualified_field(i);
+                    let expr = if redundant {
+                        expr
+                    } else {
+                        let column =
+                            Expr::from(simplified_schema.qualified_field(next_output));
+                        next_output += 1;
+                        column
+                    };
+                    let expr = if expr.qualified_name()
+                        == (qualifier.cloned(), field.name().clone())
+                    {
+                        expr
+                    } else {
+                        expr.alias_qualified(qualifier.cloned(), field.name())
+                    };
+                    projection_expr.push(expr);
+                }
+                for i in next_output..simplified_schema.fields().len() {
+                    projection_expr
+                        .push(Expr::from(simplified_schema.qualified_field(i)));
+                }
+
+                let projection = LogicalPlan::Projection(Projection::try_new(
+                    projection_expr,
+                    Arc::new(LogicalPlan::Aggregate(simplified_aggregate)),
                 )?);
-
-                let projection_expr =
-                    aggregate.group_expr.into_iter().chain(aggregate.aggr_expr);
-
-                let projection = LogicalPlanBuilder::from(simplified_aggregate)
-                    .project(projection_expr)?
-                    .build()?;
 
                 Ok(Transformed::yes(projection))
             }
@@ -217,6 +263,33 @@ mod tests {
         Projection: test.a, UInt32(1), count(test.c)
           Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]
             TableScan: test
+        ")
+    }
+
+    /// A required GROUP BY expression refers to an input column without the
+    /// qualifier that the input schema gives it. `ExtractLeafExpressions`
+    /// creates such references when it moves an extraction projection below a
+    /// `SubqueryAlias`. The rule must keep the plan valid.
+    #[test]
+    fn test_eliminate_with_unqualified_reference_to_qualified_input() -> Result<()> {
+        let input = LogicalPlanBuilder::from(test_table_scan()?)
+            .alias("m")?
+            .build()?;
+        let plan = LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::new(input),
+            vec![
+                Expr::Column(datafusion_common::Column::new_unqualified("b")).alias("k"),
+                col("m.a"),
+                col("m.a") + lit(1u32),
+            ],
+            vec![count(col("m.c"))],
+        )?);
+
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: k, m.a, m.a + UInt32(1), count(m.c)
+          Aggregate: groupBy=[[b AS k, m.a]], aggr=[[count(m.c)]]
+            SubqueryAlias: m
+              TableScan: test
         ")
     }
 
