@@ -381,7 +381,6 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
     }
 
     let mut session_config = SessionConfig::from(config_options)
-        .with_system_catalog(Some(String::from("system")))
         .with_information_schema(true);
 
     if args.reads_sql_from_stdin() {
