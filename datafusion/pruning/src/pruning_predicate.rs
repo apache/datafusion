@@ -4983,11 +4983,21 @@ mod tests {
 
     #[test]
     fn row_group_predicate_cast_timestamp_to_time() {
-        let schema = Schema::new(vec![Field::new(
-            "ts",
+        // A timezone shifts where the day boundary falls but does not remove
+        // it, so a timezone-aware timestamp is just as unsafe to prune on.
+        for timestamp_type in [
             DataType::Timestamp(TimeUnit::Second, None),
-            false,
-        )]);
+            DataType::Timestamp(TimeUnit::Second, Some("+05:00".into())),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+        ] {
+            assert_timestamp_to_time_cast_is_not_prunable(timestamp_type);
+        }
+    }
+
+    /// Asserts that no comparison of `CAST`/`TRY_CAST` from `timestamp_type` to
+    /// a time-of-day produces a pruning expression.
+    fn assert_timestamp_to_time_cast_is_not_prunable(timestamp_type: DataType) {
+        let schema = Schema::new(vec![Field::new("ts", timestamp_type, false)]);
 
         for (time_type, literal) in [
             (
