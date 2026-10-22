@@ -1,0 +1,139 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Projection pushdown must not move a part of a nested loop join filter that
+# is evaluated only for some rows into a projection below the join. Each
+# query returns the same rows as its filter applied to the cross product of
+# the inputs; evaluating the cast for every row of `cond_l` fails on 'x'.
+# The top-level conjuncts of the filter are still searched in full.
+
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+statement ok
+CREATE TABLE cond_l(s VARCHAR) AS VALUES ('1'), ('x')
+
+statement ok
+CREATE TABLE cond_r(v INT) AS VALUES (0), (5)
+
+statement ok
+CREATE TABLE cond_r2(v INT) AS VALUES (0), (5), (-1)
+
+# CASE THEN branch
+query TI
+SELECT l.s, r.v FROM cond_l l JOIN cond_r r
+ON CASE WHEN r.v > 100 THEN CAST(l.s AS INT) ELSE 0 END > 1
+----
+
+# CASE WHEN after the first one
+query TI
+SELECT l.s, r.v FROM cond_l l JOIN cond_r r
+ON CASE WHEN r.v < 100 THEN 0 WHEN CAST(l.s AS INT) > 1 THEN 1 END = 1
+----
+
+# Right operand of OR
+query TI rowsort
+SELECT l.s, r.v FROM cond_l l JOIN cond_r r
+ON r.v < 100 OR CAST(l.s AS INT) > 1
+----
+1 0
+1 5
+x 0
+x 5
+
+# coalesce arguments after the first one
+query TI rowsort
+SELECT l.s, r.v FROM cond_l l JOIN cond_r r
+ON coalesce(CAST(r.v AS VARCHAR), CAST(CAST(l.s AS INT) AS VARCHAR)) = '0'
+----
+1 0
+x 0
+
+# Right operand of an AND nested in OR
+query TI rowsort
+SELECT l.s, r.v FROM cond_l l JOIN cond_r2 r
+ON (r.v > 100 AND CAST(l.s AS INT) > 1) OR r.v = -1
+----
+1 -1
+x -1
+
+# A volatile CASE that reads one input is not pushed down as a whole. Its
+# THEN branch must stay in the join filter as well.
+query TI rowsort
+SELECT l.s, r.v FROM cond_l l JOIN cond_r r
+ON CASE WHEN random() > 2 THEN CAST(l.s AS INT) ELSE 0 END >= r.v
+----
+1 0
+x 0
+
+statement ok
+SET datafusion.explain.physical_plan_only = true
+
+# The first WHEN is evaluated for every row and is still pushed below the join.
+# The THEN branch stays in the join filter.
+query TT
+EXPLAIN SELECT l.s, r.v FROM cond_l l JOIN cond_r r
+ON CASE WHEN r.v > 100 THEN CAST(l.s AS INT) ELSE 0 END > 1
+----
+physical_plan
+01)ProjectionExec: expr=[s@1 as s, v@0 as v]
+02)--NestedLoopJoinExec: join_type=Inner, filter=CASE WHEN join_proj_push_down_1@1 THEN CAST(CAST(s@0 AS Int32) AS Int64) ELSE 0 END > 1, projection=[v@0, s@2]
+03)----ProjectionExec: expr=[v@0 as v, v@0 > 100 as join_proj_push_down_1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# coalesce is planned as a CASE. Only the null test of its first argument is
+# pushed below the join.
+query TT
+EXPLAIN SELECT l.s, r.v FROM cond_l l JOIN cond_r r
+ON coalesce(CAST(r.v AS VARCHAR), CAST(CAST(l.s AS INT) AS VARCHAR)) = '0'
+----
+physical_plan
+01)ProjectionExec: expr=[s@1 as s, v@0 as v]
+02)--NestedLoopJoinExec: join_type=Inner, filter=CASE WHEN join_proj_push_down_1@2 THEN CAST(v@1 AS Utf8View) ELSE CAST(CAST(s@0 AS Int32) AS Utf8View) END = 0, projection=[v@0, s@2]
+03)----ProjectionExec: expr=[v@0 as v, CAST(v@0 AS Utf8View) IS NOT NULL as join_proj_push_down_1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The left operand of the nested AND is still pushed below the join. Its right
+# operand and the right operand of OR stay in the join filter.
+query TT
+EXPLAIN SELECT l.s, r.v FROM cond_l l JOIN cond_r2 r
+ON (r.v > 100 AND CAST(l.s AS INT) > 1) OR r.v = -1
+----
+physical_plan
+01)ProjectionExec: expr=[s@1 as s, v@0 as v]
+02)--NestedLoopJoinExec: join_type=Inner, filter=join_proj_push_down_1@2 AND CAST(s@0 AS Int32) > 1 OR v@1 = -1, projection=[v@0, s@2]
+03)----ProjectionExec: expr=[v@0 as v, v@0 > 100 as join_proj_push_down_1]
+04)------FilterExec: v@0 > 100 OR v@0 = -1
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.explain.physical_plan_only
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+DROP TABLE cond_l
+
+statement ok
+DROP TABLE cond_r
+
+statement ok
+DROP TABLE cond_r2
