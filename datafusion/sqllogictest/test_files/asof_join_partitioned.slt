@@ -1,0 +1,203 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+SET datafusion.optimizer.repartition_asof_joins = true;
+
+statement ok
+SET datafusion.execution.target_partitions = 8;
+
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+statement ok
+CREATE TABLE partitioned_trades(id INT, symbol TEXT, venue TEXT, ts BIGINT) AS VALUES
+  (3, 'A', 'X', 7),
+  (1, 'A', 'X', 1),
+  (5, 'B', 'X', 2),
+  (2, 'A', 'X', 4),
+  (4, 'A', 'Y', 4),
+  (6, 'C', 'X', 3),
+  (7, NULL, 'X', 3),
+  (8, 'A', NULL, 3),
+  (9, 'A', 'X', NULL);
+
+statement ok
+CREATE TABLE partitioned_prices(symbol TEXT, venue TEXT, ts BIGINT, price INT) AS VALUES
+  ('B', 'X', 6, 106),
+  ('A', 'X', 4, 40),
+  ('A', 'Y', 3, 300),
+  ('A', 'X', 2, 20),
+  ('B', 'X', 1, 101),
+  ('A', 'X', 6, 60),
+  ('A', 'X', 4, 40),
+  (NULL, 'X', 2, 999),
+  ('A', NULL, 2, 888),
+  ('A', 'X', NULL, 777);
+
+# Composite keys isolate venues. Duplicate right timestamps must not multiply
+# output rows; either tied row has the same price. NULL keys never match.
+query II
+SELECT l.id, r.price
+FROM partitioned_trades l
+ASOF JOIN partitioned_prices r MATCH_CONDITION (l.ts >= r.ts)
+ON l.symbol = r.symbol AND l.venue = r.venue
+ORDER BY l.id;
+----
+1 NULL
+2 40
+3 60
+4 300
+5 101
+6 NULL
+7 NULL
+8 NULL
+9 NULL
+
+query II
+SELECT l.id, r.price
+FROM partitioned_trades l
+ASOF JOIN partitioned_prices r MATCH_CONDITION (l.ts > r.ts)
+ON l.symbol = r.symbol AND l.venue = r.venue
+ORDER BY l.id;
+----
+1 NULL
+2 20
+3 60
+4 300
+5 101
+6 NULL
+7 NULL
+8 NULL
+9 NULL
+
+query II
+SELECT l.id, r.price
+FROM partitioned_trades l
+ASOF JOIN partitioned_prices r MATCH_CONDITION (l.ts <= r.ts)
+ON l.symbol = r.symbol AND l.venue = r.venue
+ORDER BY l.id;
+----
+1 20
+2 40
+3 NULL
+4 NULL
+5 106
+6 NULL
+7 NULL
+8 NULL
+9 NULL
+
+query II
+SELECT l.id, r.price
+FROM partitioned_trades l
+ASOF JOIN partitioned_prices r MATCH_CONDITION (l.ts < r.ts)
+ON l.symbol = r.symbol AND l.venue = r.venue
+ORDER BY l.id;
+----
+1 20
+2 60
+3 NULL
+4 NULL
+5 106
+6 NULL
+7 NULL
+8 NULL
+9 NULL
+
+# An empty right input preserves every left row with NULL right columns.
+query II
+SELECT l.id, r.price
+FROM partitioned_trades l
+ASOF JOIN (SELECT * FROM partitioned_prices WHERE false) r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.symbol = r.symbol AND l.venue = r.venue
+ORDER BY l.id;
+----
+1 NULL
+2 NULL
+3 NULL
+4 NULL
+5 NULL
+6 NULL
+7 NULL
+8 NULL
+9 NULL
+
+# An empty left input produces no rows.
+query I
+SELECT count(*)
+FROM (SELECT * FROM partitioned_trades WHERE false) l
+ASOF JOIN partitioned_prices r MATCH_CONDITION (l.ts >= r.ts)
+ON l.symbol = r.symbol AND l.venue = r.venue;
+----
+0
+
+# One partition still uses streaming, with one-row output batches.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+query II
+SELECT l.id, r.price
+FROM partitioned_trades l
+ASOF JOIN partitioned_prices r MATCH_CONDITION (l.ts >= r.ts)
+ON l.symbol = r.symbol AND l.venue = r.venue
+ORDER BY l.id;
+----
+1 NULL
+2 40
+3 60
+4 300
+5 101
+6 NULL
+7 NULL
+8 NULL
+9 NULL
+
+# Computed equality expressions must also be used to align the inputs.
+statement ok
+SET datafusion.execution.target_partitions = 8;
+
+query II
+SELECT l.id, r.price
+FROM partitioned_trades l
+ASOF JOIN partitioned_prices r MATCH_CONDITION (l.ts >= r.ts)
+ON lower(l.symbol) = lower(r.symbol) AND l.venue = r.venue
+ORDER BY l.id;
+----
+1 NULL
+2 40
+3 60
+4 300
+5 101
+6 NULL
+7 NULL
+8 NULL
+9 NULL
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+# The SLT harness starts with four partitions rather than the machine default.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.optimizer.repartition_asof_joins;

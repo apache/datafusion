@@ -41,8 +41,8 @@ use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
-    AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExecBuilder, NestedLoopJoinExec,
-    PartitionMode, SortMergeJoinExec,
+    AsOfJoinExec, AsOfJoinMode, AsOfMatchExpr, CrossJoinExec, HashJoinExecBuilder,
+    NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::materialized_cte::{
@@ -1847,13 +1847,26 @@ impl DefaultPhysicalPlanner {
                         planning_ctx,
                     )?,
                 );
-                Arc::new(AsOfJoinExec::try_new(
-                    physical_left,
-                    physical_right,
-                    join_on,
-                    match_condition,
-                    None,
-                )?)
+                let mode = if session_state
+                    .config_options()
+                    .optimizer
+                    .repartition_asof_joins
+                    && !join_on.is_empty()
+                {
+                    AsOfJoinMode::Partitioned
+                } else {
+                    AsOfJoinMode::Broadcast
+                };
+                Arc::new(
+                    AsOfJoinExec::try_new(
+                        physical_left,
+                        physical_right,
+                        join_on,
+                        match_condition,
+                        None,
+                    )?
+                    .with_mode(mode)?,
+                )
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name,

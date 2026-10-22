@@ -1714,6 +1714,11 @@ config_namespace! {
         /// using the provided `target_partitions` level
         pub repartition_joins: bool, default = true
 
+        /// Use partitioned, streaming execution for ASOF joins with equality keys.
+        /// Both inputs are partitioned by those keys and sorted within each partition.
+        /// When false, or when no equality keys are present, use broadcast execution.
+        pub repartition_asof_joins: bool, default = false
+
         /// Should DataFusion allow symmetric hash joins for unbounded data sources even when
         /// its inputs do not have any ordering or filtering If the flag is not enabled,
         /// the SymmetricHashJoin operator will be unable to prune its internal buffers,

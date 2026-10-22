@@ -417,9 +417,8 @@ MATCH_CONDITION (t.ts >= p.ts)
 ON t.symbol = p.symbol;
 ```
 
-`MATCH_CONDITION` must compare an expression from the left input with an
-expression from the right input using one of the following operators. Operand
-order is significant: the left input expression must appear on the left.
+`MATCH_CONDITION` compares a left input expression with a right input expression
+using one of these operators:
 
 | Condition | Selected right row                        |
 | --------- | ----------------------------------------- |
@@ -433,11 +432,17 @@ a `USING` clause, divides rows into equality groups before the ordered match.
 An unqualified `USING` key appears once in wildcard output, while both qualified
 input keys remain addressable.
 
-Without equality keys, all rows belong to one group. The initial execution
-strategy collects one ordered right partition and shares it across every left
-partition, so output partitioning follows the left input. The complete right
-input must fit in memory and may be scanned once per left partition; spilling
-and repartitioned ASOF execution are not yet supported.
+By default, the complete right input must fit in memory. For joins with equality
+keys, enable partitioned streaming execution to avoid collecting the right input:
+
+```sql
+SET datafusion.optimizer.repartition_asof_joins = true;
+```
+
+Both inputs are partitioned by their equality keys and sorted within each
+partition. Sorts can spill to disk; the join requires memory for its active
+batches. The option defaults to `false` and has no effect on joins without
+equality keys.
 
 A `NULL` in either ordered expression or in any equality key does not match.
 Both inputs must be bounded. If multiple right rows have the same equality keys
