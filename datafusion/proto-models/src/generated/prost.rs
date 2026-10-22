@@ -2540,6 +2540,11 @@ pub struct PhysicalRangePartitioning {
     /// Zero in legacy payloads means split_point.len() + 1.
     #[prost(uint64, tag = "4")]
     pub partition_count: u64,
+    /// Inclusive start and exclusive end in sort_expr order. Absent means unbounded.
+    #[prost(message, optional, tag = "5")]
+    pub start_bound: ::core::option::Option<PhysicalRangeSplitPoint>,
+    #[prost(message, optional, tag = "6")]
+    pub end_bound: ::core::option::Option<PhysicalRangeSplitPoint>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalRangeSplitPoint {

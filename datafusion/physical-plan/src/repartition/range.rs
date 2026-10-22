@@ -28,7 +28,7 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_err, not_impl_err, plan_err,
     validate_range_split_points,
 };
-use datafusion_physical_expr::SplitPoint;
+use datafusion_physical_expr::{RangePartitioning, SplitPoint};
 
 /// A router for assigning rows to range partitions.
 #[derive(Debug, Clone)]
@@ -37,6 +37,9 @@ pub(crate) struct RangeRouter {
     split_points: Vec<SplitPoint>,
     sort_options: Vec<SortOptions>,
     inner: RangeRouterInner,
+    /// When outer bounds are included in `split_points`, only these partitions
+    /// are valid. Partitions before/after this range contain out-of-bounds keys.
+    valid_partitions: Option<std::ops::Range<usize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +51,44 @@ enum RangeRouterInner {
 }
 
 impl RangeRouter {
+    /// Constructs a router that enforces the partitioning's outer bounds.
+    ///
+    /// The bounds act as extra split points, creating up to two invalid outer
+    /// partitions. Valid partition IDs are shifted back to start at zero.
+    pub(crate) fn try_new_for_partitioning(
+        range: &RangePartitioning,
+        data_types: Option<&[DataType]>,
+    ) -> Result<Self> {
+        let sort_options = range
+            .ordering()
+            .iter()
+            .map(|expr| expr.options)
+            .collect::<Vec<_>>();
+        if range.start_bound().is_none() && range.end_bound().is_none() {
+            return Self::try_new_with_optional_data_types(
+                &sort_options,
+                range.split_points(),
+                data_types,
+            );
+        }
+
+        let split_points = range
+            .start_bound()
+            .into_iter()
+            .chain(range.split_points())
+            .chain(range.end_bound())
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut router = Self::try_new_with_optional_data_types(
+            &sort_options,
+            &split_points,
+            data_types,
+        )?;
+        let start = usize::from(range.start_bound().is_some());
+        router.valid_partitions = Some(start..start + range.partition_count());
+        Ok(router)
+    }
+
     /// Constructs the best router for the given sort options and split points,
     /// inferring key data types from the split points.
     pub(crate) fn try_new(
@@ -127,6 +168,7 @@ impl RangeRouter {
                 split_points,
                 sort_options: sort_options.to_vec(),
                 inner: RangeRouterInner::Primitive(primitive_router),
+                valid_partitions: None,
             });
         }
 
@@ -138,6 +180,7 @@ impl RangeRouter {
             split_points,
             sort_options: sort_options.to_vec(),
             inner: RangeRouterInner::Row(row_router),
+            valid_partitions: None,
         })
     }
 
@@ -192,6 +235,30 @@ impl RangeRouter {
             }
         }
 
+        if let Some(valid_partitions) = &self.valid_partitions {
+            let mut invalid_row = None;
+            self.route_inner(arrays, |row_idx, partition| {
+                if valid_partitions.contains(&partition) {
+                    emit(row_idx, partition - valid_partitions.start);
+                } else {
+                    invalid_row.get_or_insert(row_idx);
+                }
+            })?;
+            if let Some(row_idx) = invalid_row {
+                return exec_err!(
+                    "Range partitioning key at row {row_idx} is outside the declared bounds"
+                );
+            }
+            Ok(())
+        } else {
+            self.route_inner(arrays, emit)
+        }
+    }
+
+    fn route_inner<E>(&self, arrays: &[ArrayRef], emit: E) -> Result<()>
+    where
+        E: FnMut(usize, usize),
+    {
         match &self.inner {
             RangeRouterInner::Primitive(r) => {
                 if let Some(first_col) = arrays.first() {

@@ -37,8 +37,9 @@ use std::fmt::{self, Display};
 /// partition N: split_points[N - 1] <= key
 /// ```
 ///
-/// Values equal to split point `i` belong to partition `i + 1`, so interior
-/// partitions are lower-inclusive and upper-exclusive.
+/// Interior partitions are lower-inclusive and upper-exclusive. Repeated split
+/// points describe empty partitions: a key equal to several split points belongs
+/// to the partition after the last equal split point.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct SplitPoint {
     values: Vec<ScalarValue>,
@@ -68,8 +69,8 @@ impl Display for SplitPoint {
     }
 }
 
-/// Validates that split points match the ordering width and are strictly
-/// ordered according to the provided sort options.
+/// Validates that split points match the ordering width and are non-decreasing
+/// according to the provided sort options. Equal split points allow empty partitions.
 pub fn validate_range_split_points(
     split_points: &[SplitPoint],
     sort_options: &[SortOptions],
@@ -89,10 +90,10 @@ pub fn validate_range_split_points(
             split_points[0].values(),
             split_points[1].values(),
             sort_options,
-        )? != Ordering::Less
+        )? == Ordering::Greater
         {
             return _plan_err!(
-                "Range partitioning split points must be strictly ordered: split point {idx} ({}) must be less than split point {} ({})",
+                "Range partitioning split points must be ordered: split point {idx} ({}) must be less than or equal to split point {} ({})",
                 split_points[0],
                 idx + 1,
                 split_points[1]

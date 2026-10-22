@@ -1113,15 +1113,20 @@ fn roundtrip_parquet_exec_range_output_partitioning() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
     let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
-    let output_partitioning =
-        Partitioning::Range(RangePartitioning::try_new_with_samples(
+    let output_partitioning = Partitioning::Range(
+        RangePartitioning::try_new_with_samples(
             LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
                 "col", 0,
             )))])
             .unwrap(),
             vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
             2,
-        )?);
+        )?
+        .try_with_bounds(
+            Some(SplitPoint::new(vec![ScalarValue::Int32(Some(0))])),
+            Some(SplitPoint::new(vec![ScalarValue::Int32(Some(20))])),
+        )?,
+    );
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![

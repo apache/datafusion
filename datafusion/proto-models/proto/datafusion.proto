@@ -1697,6 +1697,9 @@ message PhysicalRangePartitioning {
   repeated PhysicalRangeSplitPoint sample_point = 3;
   // Zero in legacy payloads means split_point.len() + 1.
   uint64 partition_count = 4;
+  // Inclusive start and exclusive end in sort_expr order. Absent means unbounded.
+  PhysicalRangeSplitPoint start_bound = 5;
+  PhysicalRangeSplitPoint end_bound = 6;
 }
 
 message PhysicalRangeSplitPoint {

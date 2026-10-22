@@ -297,7 +297,11 @@ mod tests {
             SplitPoint::new(vec![ScalarValue::Int64(Some(40))]),
             SplitPoint::new(vec![ScalarValue::Int64(Some(50))]),
         ];
-        let range = RangePartitioning::try_new_with_samples(ordering, samples, 3)?;
+        let range = RangePartitioning::try_new_with_samples(ordering, samples, 3)?
+            .try_with_bounds(
+                Some(SplitPoint::new(vec![ScalarValue::Int64(Some(0))])),
+                Some(SplitPoint::new(vec![ScalarValue::Int64(Some(60))])),
+            )?;
 
         Ok(PlanProperties::new(
             EquivalenceProperties::new(schema),

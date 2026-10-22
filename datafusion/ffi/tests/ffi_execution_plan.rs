@@ -20,8 +20,8 @@ mod tests {
     use arrow::datatypes::Field;
     use arrow::datatypes::Schema;
     use arrow_schema::DataType;
-    use datafusion_common::DataFusionError;
     use datafusion_common::tree_node::TreeNodeRecursion;
+    use datafusion_common::{DataFusionError, ScalarValue, SplitPoint};
     use datafusion_ffi::execution_plan::{
         ExecutionPlanPrivateData, FFI_ExecutionPlan, ForeignExecutionPlan,
         tests::EmptyExec,
@@ -165,6 +165,14 @@ mod tests {
         assert_eq!(range.partition_count(), 3);
         assert_eq!(range.max_partition_count(), 6);
         assert_eq!(range.samples().len(), 5);
+        assert_eq!(
+            range.start_bound(),
+            Some(&SplitPoint::new(vec![ScalarValue::Int32(Some(0))]))
+        );
+        assert_eq!(
+            range.end_bound(),
+            Some(&SplitPoint::new(vec![ScalarValue::Int32(Some(60))]))
+        );
         assert_eq!(
             range
                 .split_points()

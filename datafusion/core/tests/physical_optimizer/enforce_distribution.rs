@@ -1728,13 +1728,51 @@ fn range_hash_join_repartitions_unpartitioned_side_to_match_range() -> Result<()
 }
 
 #[test]
+fn range_hash_join_does_not_copy_bounds_to_other_input() -> Result<()> {
+    let left = parquet_exec();
+    let range = RangePartitioning::try_new(
+        [PhysicalSortExpr::new_default(col("a", &schema())?)].into(),
+        [10, 20, 30]
+            .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+            .to_vec(),
+    )?
+    .try_with_bounds(
+        Some(SplitPoint::new(vec![ScalarValue::Int64(Some(0))])),
+        Some(SplitPoint::new(vec![ScalarValue::Int64(Some(40))])),
+    )?;
+    let right = parquet_exec_with_output_partitioning(Partitioning::Range(range.clone()));
+    let join_on = vec![(col("a", &left.schema())?, col("a", &right.schema())?)];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+    let children = plan.children();
+    assert!(children[0].is::<RepartitionExec>());
+    let Partitioning::Range(adapted) = children[0].output_partitioning() else {
+        panic!("expected range repartitioning");
+    };
+    assert_eq!(adapted.split_points(), range.split_points());
+    assert_eq!(adapted.start_bound(), None);
+    assert_eq!(adapted.end_bound(), None);
+    assert_eq!(
+        children[1].output_partitioning(),
+        &Partitioning::Range(range)
+    );
+    Ok(())
+}
+
+#[test]
 fn range_requirement_scales_within_sample_resolution() -> Result<()> {
     let ordering = [PhysicalSortExpr::new_default(col("a", &schema())?)].into();
     let samples = (10..=50)
         .step_by(10)
         .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
         .collect();
-    let range = RangePartitioning::try_new_with_samples(ordering, samples, 3)?;
+    let range = RangePartitioning::try_new_with_samples(ordering, samples, 3)?
+        .try_with_bounds(
+            Some(SplitPoint::new(vec![ScalarValue::Int64(Some(0))])),
+            Some(SplitPoint::new(vec![ScalarValue::Int64(Some(60))])),
+        )?;
     for target in [2, 3, 5, 6, 7] {
         let input =
             parquet_exec_with_output_partitioning(Partitioning::Range(range.clone()));
@@ -1756,6 +1794,8 @@ fn range_requirement_scales_within_sample_resolution() -> Result<()> {
             let expected_count = if (4..=6).contains(&target) { target } else { 3 };
             assert_eq!(actual.partition_count(), expected_count, "{rendered}");
             assert_eq!(actual.samples(), range.samples());
+            assert_eq!(actual.start_bound(), range.start_bound());
+            assert_eq!(actual.end_bound(), range.end_bound());
             assert_eq!(
                 actual.split_points(),
                 range.scale(expected_count).unwrap().split_points()

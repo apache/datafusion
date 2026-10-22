@@ -22869,6 +22869,12 @@ impl serde::Serialize for PhysicalRangePartitioning {
         if self.partition_count != 0 {
             len += 1;
         }
+        if self.start_bound.is_some() {
+            len += 1;
+        }
+        if self.end_bound.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalRangePartitioning", len)?;
         if !self.sort_expr.is_empty() {
             struct_ser.serialize_field("sortExpr", &self.sort_expr)?;
@@ -22883,6 +22889,12 @@ impl serde::Serialize for PhysicalRangePartitioning {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("partitionCount", ToString::to_string(&self.partition_count).as_str())?;
+        }
+        if let Some(v) = self.start_bound.as_ref() {
+            struct_ser.serialize_field("startBound", v)?;
+        }
+        if let Some(v) = self.end_bound.as_ref() {
+            struct_ser.serialize_field("endBound", v)?;
         }
         struct_ser.end()
     }
@@ -22902,6 +22914,10 @@ impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
             "samplePoint",
             "partition_count",
             "partitionCount",
+            "start_bound",
+            "startBound",
+            "end_bound",
+            "endBound",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22910,6 +22926,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
             SplitPoint,
             SamplePoint,
             PartitionCount,
+            StartBound,
+            EndBound,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22935,6 +22953,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
                             "splitPoint" | "split_point" => Ok(GeneratedField::SplitPoint),
                             "samplePoint" | "sample_point" => Ok(GeneratedField::SamplePoint),
                             "partitionCount" | "partition_count" => Ok(GeneratedField::PartitionCount),
+                            "startBound" | "start_bound" => Ok(GeneratedField::StartBound),
+                            "endBound" | "end_bound" => Ok(GeneratedField::EndBound),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22958,6 +22978,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
                 let mut split_point__ = None;
                 let mut sample_point__ = None;
                 let mut partition_count__ = None;
+                let mut start_bound__ = None;
+                let mut end_bound__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::SortExpr => {
@@ -22986,6 +23008,18 @@ impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::StartBound => {
+                            if start_bound__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("startBound"));
+                            }
+                            start_bound__ = map_.next_value()?;
+                        }
+                        GeneratedField::EndBound => {
+                            if end_bound__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("endBound"));
+                            }
+                            end_bound__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(PhysicalRangePartitioning {
@@ -22993,6 +23027,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
                     split_point: split_point__.unwrap_or_default(),
                     sample_point: sample_point__.unwrap_or_default(),
                     partition_count: partition_count__.unwrap_or_default(),
+                    start_bound: start_bound__,
+                    end_bound: end_bound__,
                 })
             }
         }

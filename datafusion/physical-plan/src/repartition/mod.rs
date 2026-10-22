@@ -573,16 +573,13 @@ impl RepartitionExecState {
         let range_router = if let Partitioning::Range(range_partitioning) = &partitioning
         {
             let ordering = range_partitioning.ordering();
-            let sort_options: Vec<SortOptions> =
-                ordering.iter().map(|e| e.options).collect();
             let data_types = ordering
                 .iter()
                 .map(|e| e.expr.data_type(input.schema().as_ref()))
                 .collect::<Result<Vec<_>>>()?;
-            Some(Arc::new(RangeRouter::try_new_with_data_types(
-                &sort_options,
-                range_partitioning.split_points(),
-                &data_types,
+            Some(Arc::new(RangeRouter::try_new_for_partitioning(
+                range_partitioning,
+                Some(&data_types),
             )?))
         } else {
             None
@@ -680,6 +677,9 @@ pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_
 ///
 /// This uses the same routing function as [`BatchPartitioner`], so dynamic
 /// filtering and repartitioning agree for every [`ScalarValue`] comparison.
+/// Only internal split points affect the result. Outer bounds are ignored,
+/// allowing dynamic filters to evaluate keys from another input whose range may
+/// extend beyond the source's bounds.
 #[derive(Debug, Clone)]
 pub struct RangeExpr {
     on_columns: Vec<PhysicalExprRef>,
@@ -1070,6 +1070,7 @@ impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] for range-based repartitioning.
     ///
     /// Key data types are inferred from `schema`, and split points are coerced to match.
+    /// Rows outside the range's declared start or end bounds cause an execution error.
     ///
     /// # Parameters
     /// - `range_partitioning`: `RangePartitioning` struct used for ordering, split points, and number of partitions
@@ -1082,15 +1083,13 @@ impl BatchPartitioner {
     ) -> Result<Self> {
         let ordering = range_partitioning.ordering().clone();
         let num_partitions = range_partitioning.partition_count();
-        let sort_options: Vec<SortOptions> = ordering.iter().map(|e| e.options).collect();
         let data_types = ordering
             .iter()
             .map(|e| e.expr.data_type(schema))
             .collect::<Result<Vec<_>>>()?;
-        let router = Arc::new(RangeRouter::try_new_with_data_types(
-            &sort_options,
-            range_partitioning.split_points(),
-            &data_types,
+        let router = Arc::new(RangeRouter::try_new_for_partitioning(
+            range_partitioning,
+            Some(&data_types),
         )?);
 
         Ok(Self::new_range_partitioner_with_router(
@@ -1123,9 +1122,8 @@ impl BatchPartitioner {
     ) -> Self {
         let ordering = range_partitioning.ordering().clone();
         let num_partitions = range_partitioning.partition_count();
-        let sort_options: Vec<SortOptions> = ordering.iter().map(|e| e.options).collect();
         let router = Arc::new(
-            RangeRouter::try_new(&sort_options, range_partitioning.split_points())
+            RangeRouter::try_new_for_partitioning(range_partitioning, None)
                 .expect("valid range partitioning"),
         );
 
@@ -1996,11 +1994,17 @@ impl ExecutionPlan for RepartitionExec {
                     );
                 };
 
-                Partitioning::Range(RangePartitioning::try_new_with_samples(
-                    ordering,
-                    range_partitioning.samples().to_vec(),
-                    range_partitioning.partition_count(),
-                )?)
+                Partitioning::Range(
+                    RangePartitioning::try_new_with_samples(
+                        ordering,
+                        range_partitioning.samples().to_vec(),
+                        range_partitioning.partition_count(),
+                    )?
+                    .try_with_bounds(
+                        range_partitioning.start_bound().cloned(),
+                        range_partitioning.end_bound().cloned(),
+                    )?,
+                )
             }
             others => others.clone(),
         };
@@ -2961,6 +2965,178 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn range_repartition_bounded_empty_partitions() -> Result<()> {
+        let schema = test_schema(false);
+        for descending in [false, true] {
+            let value = |v| if descending { 40 - v } else { v };
+            let point = |v| SplitPoint::new(vec![ScalarValue::UInt32(Some(value(v)))]);
+            let range = RangePartitioning::try_new(
+                [PhysicalSortExpr::new(
+                    col("c0", &schema)?,
+                    SortOptions::new(descending, false),
+                )]
+                .into(),
+                [10, 10, 20, 30].map(point).to_vec(),
+            )?
+            .try_with_bounds(Some(point(10)), Some(point(30)))?;
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(UInt32Array::from(
+                    [10, 19, 20, 29].map(value).to_vec(),
+                ))],
+            )?;
+            let output =
+                repartition(&schema, vec![vec![batch]], Partitioning::Range(range))
+                    .await?;
+            assert_eq!(output.len(), 5);
+            assert_eq!(partition_row_count(&output[0]), 0);
+            assert_eq!(partition_row_count(&output[1]), 0);
+            assert_eq!(
+                collect_partition_u32_values(&output[2]),
+                vec![Some(value(10)), Some(value(19))]
+            );
+            assert_eq!(
+                collect_partition_u32_values(&output[3]),
+                vec![Some(value(20)), Some(value(29))]
+            );
+            assert_eq!(partition_row_count(&output[4]), 0);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn range_repartition_rejects_keys_outside_bounds() -> Result<()> {
+        let schema = test_schema(true);
+        let point = |value| SplitPoint::new(vec![ScalarValue::UInt32(Some(value))]);
+        // Bounds must also be enforced with no internal split points, where
+        // unbounded repartitioning otherwise passes batches through unchanged.
+        for samples in [vec![], vec![point(20)]] {
+            let range = RangePartitioning::try_new(
+                [PhysicalSortExpr::new_default(col("c0", &schema)?)].into(),
+                samples,
+            )?
+            .try_with_bounds(Some(point(10)), Some(point(30)))?;
+            for value in [Some(5), Some(30), None] {
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(UInt32Array::from(vec![value]))],
+                )?;
+                let mut partitioner = BatchPartitioner::try_new_range_partitioner(
+                    &range,
+                    &schema,
+                    metrics::Time::default(),
+                )?;
+                let error = partitioner
+                    .partition(batch.clone(), |_, _| Ok(()))
+                    .unwrap_err();
+                assert!(
+                    error.to_string().contains("outside the declared bounds"),
+                    "{error}"
+                );
+                let error = repartition(
+                    &schema,
+                    vec![vec![batch]],
+                    Partitioning::Range(range.clone()),
+                )
+                .await
+                .unwrap_err();
+                assert!(
+                    error.to_string().contains("outside the declared bounds"),
+                    "{error}"
+                );
+            }
+        }
+
+        let empty = RangePartitioning::try_new(
+            [PhysicalSortExpr::new_default(col("c0", &schema)?)].into(),
+            vec![point(10); 3],
+        )?
+        .try_with_bounds(Some(point(10)), Some(point(10)))?;
+        let output = repartition(
+            &schema,
+            vec![vec![RecordBatch::new_empty(Arc::clone(&schema))]],
+            Partitioning::Range(empty.clone()),
+        )
+        .await?;
+        assert_eq!(output.len(), 4);
+        assert!(
+            output
+                .iter()
+                .all(|partition| partition_row_count(partition) == 0)
+        );
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![10]))],
+        )?;
+        assert!(
+            repartition(&schema, vec![vec![batch]], Partitioning::Range(empty))
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn range_repartition_null_bounds() -> Result<()> {
+        let schema = test_schema(true);
+        let point = |value| SplitPoint::new(vec![ScalarValue::UInt32(value)]);
+        for nulls_first in [false, true] {
+            let (start, splits, end, values, expected) = if nulls_first {
+                (
+                    None,
+                    vec![None, Some(10)],
+                    Some(20),
+                    vec![None, Some(5), Some(10)],
+                    vec![vec![], vec![None, Some(5)], vec![Some(10)]],
+                )
+            } else {
+                (
+                    Some(0),
+                    vec![Some(10), None],
+                    None,
+                    vec![Some(5), Some(10)],
+                    vec![vec![Some(5)], vec![Some(10)], vec![]],
+                )
+            };
+            let range = RangePartitioning::try_new(
+                [PhysicalSortExpr::new(
+                    col("c0", &schema)?,
+                    SortOptions::new(false, nulls_first),
+                )]
+                .into(),
+                splits.into_iter().map(point).collect(),
+            )?
+            .try_with_bounds(Some(point(start)), Some(point(end)))?;
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(UInt32Array::from(values))],
+            )?;
+            let output = repartition(
+                &schema,
+                vec![vec![batch]],
+                Partitioning::Range(range.clone()),
+            )
+            .await?;
+            let actual = output
+                .iter()
+                .map(|batches| collect_partition_u32_values(batches))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+            // The end is exclusive, including when it is NULL.
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(UInt32Array::from(vec![end]))],
+            )?;
+            assert!(
+                repartition(&schema, vec![vec![batch]], Partitioning::Range(range))
+                    .await
+                    .is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn range_repartition_routes_compound_keys() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
@@ -2973,39 +3149,56 @@ mod tests {
                 Arc::new(UInt32Array::from(vec![1, 1, 3, 5, 7, 0])),
             ],
         )?;
-        let partitioning = Partitioning::Range(RangePartitioning::try_new(
-            [
-                PhysicalSortExpr::new(col("a", &schema)?, SortOptions::default()),
-                PhysicalSortExpr::new(col("b", &schema)?, SortOptions::default()),
-            ]
-            .into(),
-            vec![
-                SplitPoint::new(vec![
-                    ScalarValue::UInt32(Some(10)),
-                    ScalarValue::UInt32(Some(1)),
-                ]),
-                SplitPoint::new(vec![
-                    ScalarValue::UInt32(Some(10)),
+        let partitioning = Partitioning::Range(
+            RangePartitioning::try_new(
+                [
+                    PhysicalSortExpr::new(col("a", &schema)?, SortOptions::default()),
+                    PhysicalSortExpr::new(col("b", &schema)?, SortOptions::default()),
+                ]
+                .into(),
+                vec![
+                    SplitPoint::new(vec![
+                        ScalarValue::UInt32(Some(10)),
+                        ScalarValue::UInt32(Some(1)),
+                    ]),
+                    SplitPoint::new(vec![
+                        ScalarValue::UInt32(Some(10)),
+                        ScalarValue::UInt32(Some(1)),
+                    ]),
+                    SplitPoint::new(vec![
+                        ScalarValue::UInt32(Some(10)),
+                        ScalarValue::UInt32(Some(5)),
+                    ]),
+                ],
+            )?
+            .try_with_bounds(
+                Some(SplitPoint::new(vec![
                     ScalarValue::UInt32(Some(5)),
-                ]),
-            ],
-        )?);
+                    ScalarValue::UInt32(Some(0)),
+                ])),
+                Some(SplitPoint::new(vec![
+                    ScalarValue::UInt32(Some(15)),
+                    ScalarValue::UInt32(Some(1)),
+                ])),
+            )?,
+        );
 
         let output_partitions =
             repartition(&schema, vec![vec![batch]], partitioning).await?;
 
-        assert_eq!(3, output_partitions.len());
+        assert_eq!(4, output_partitions.len());
         assert_eq!(
             vec![(5, 1)],
             collect_partition_u32_pairs(&output_partitions[0])
         );
         assert_eq!(
             vec![(10, 1), (10, 3)],
-            collect_partition_u32_pairs(&output_partitions[1])
+            collect_partition_u32_pairs(&output_partitions[2])
         );
+        assert_eq!(partition_row_count(&output_partitions[1]), 0);
         assert_eq!(
             vec![(10, 5), (10, 7), (15, 0)],
-            collect_partition_u32_pairs(&output_partitions[2])
+            collect_partition_u32_pairs(&output_partitions[3])
         );
 
         Ok(())
@@ -3378,6 +3571,27 @@ mod tests {
     }
 
     #[test]
+    fn range_expr_routes_keys_outside_source_bounds() -> Result<()> {
+        let schema = test_schema(false);
+        let point = |value| SplitPoint::new(vec![ScalarValue::UInt32(Some(value))]);
+        let range = RangePartitioning::try_new(
+            [PhysicalSortExpr::new_default(col("c0", &schema)?)].into(),
+            vec![point(15)],
+        )?
+        .try_with_bounds(Some(point(10)), Some(point(20)))?;
+        let expr =
+            RangeExpr::try_new_with_schema(vec![col("c0", &schema)?], &range, &schema)?;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![0, 10, 15, 20, 30]))],
+        )?;
+        let actual = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let actual = actual.as_any().downcast_ref::<UInt64Array>().unwrap();
+        assert_eq!(actual.values(), &[0, 0, 1, 1, 1]);
+        Ok(())
+    }
+
+    #[test]
     fn range_expr_routes_decimal_with_wider_column_precision() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "k",
@@ -3583,9 +3797,13 @@ mod tests {
             .collect();
         let repartition = Arc::new(RepartitionExec::try_new(
             Arc::new(EmptyExec::new(Arc::clone(&schema))),
-            Partitioning::Range(RangePartitioning::try_new_with_samples(
-                ordering, samples, 2,
-            )?),
+            Partitioning::Range(
+                RangePartitioning::try_new_with_samples(ordering, samples, 2)?
+                    .try_with_bounds(
+                        Some(SplitPoint::new(vec![ScalarValue::UInt32(Some(0))])),
+                        Some(SplitPoint::new(vec![ScalarValue::UInt32(Some(60))])),
+                    )?,
+            ),
         )?);
 
         let projection =
@@ -3602,6 +3820,14 @@ mod tests {
         let range = expect_range_partitioning(swapped_repartition.partitioning());
         assert_eq!(range.ordering()[0].to_string(), "id@1 ASC");
         assert_eq!(range.max_partition_count(), 6);
+        assert_eq!(
+            range.start_bound(),
+            Some(&SplitPoint::new(vec![ScalarValue::UInt32(Some(0))]))
+        );
+        assert_eq!(
+            range.end_bound(),
+            Some(&SplitPoint::new(vec![ScalarValue::UInt32(Some(60))]))
+        );
         assert_eq!(
             range.split_points(),
             &[SplitPoint::new(vec![ScalarValue::UInt32(Some(30))])]

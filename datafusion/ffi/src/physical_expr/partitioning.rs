@@ -25,6 +25,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use stabby::vec::Vec as SVec;
 
 use crate::arrow_wrappers::WrappedArray;
+use crate::ffi_option::FFI_Option;
 use crate::physical_expr::FFI_PhysicalExpr;
 use crate::physical_expr::sort::FFI_PhysicalSortExpr;
 
@@ -36,6 +37,8 @@ pub struct FFI_RangePartitioning {
     samples: SVec<SVec<WrappedArray>>,
     ordering: SVec<FFI_PhysicalSortExpr>,
     partition_count: usize,
+    start_bound: FFI_Option<SVec<WrappedArray>>,
+    end_bound: FFI_Option<SVec<WrappedArray>>,
 }
 
 /// A stable struct for sharing [`Partitioning`] across FFI boundaries.
@@ -63,21 +66,18 @@ impl From<&Partitioning> for FFI_Partitioning {
             }
             Partitioning::Range(range) => {
                 // Producer-side conversion should be infallible at ABI boundary
-                let samples = range
-                    .samples()
-                    .iter()
-                    .map(|split_point| {
-                        split_point
-                            .values()
-                            .iter()
-                            .map(|value| {
-                                WrappedArray::try_from(value).expect(
-                                    "ScalarValue in RangePartitioning should convert to WrappedArray",
-                                )
-                            })
-                            .collect()
-                    })
-                    .collect();
+                let encode_point = |split_point: &SplitPoint| {
+                    split_point
+                        .values()
+                        .iter()
+                        .map(|value| {
+                            WrappedArray::try_from(value).expect(
+                                "ScalarValue in RangePartitioning should convert to WrappedArray",
+                            )
+                        })
+                        .collect::<SVec<_>>()
+                };
+                let samples = range.samples().iter().map(encode_point).collect();
                 let ordering = range
                     .ordering()
                     .iter()
@@ -87,6 +87,8 @@ impl From<&Partitioning> for FFI_Partitioning {
                     samples,
                     ordering,
                     partition_count: range.partition_count(),
+                    start_bound: range.start_bound().map(encode_point).into(),
+                    end_bound: range.end_bound().map(encode_point).into(),
                 })
             }
             Partitioning::UnknownPartitioning(size) => Self::UnknownPartitioning(*size),
@@ -107,16 +109,17 @@ impl TryFrom<FFI_Partitioning> for Partitioning {
                 Self::Hash(exprs, size)
             }
             FFI_Partitioning::Range(range) => {
+                let decode_point = |split_point: SVec<WrappedArray>| {
+                    split_point
+                        .into_iter()
+                        .map(ScalarValue::try_from)
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(SplitPoint::new)
+                };
                 let samples = range
                     .samples
                     .into_iter()
-                    .map(|split_point| {
-                        split_point
-                            .into_iter()
-                            .map(ScalarValue::try_from)
-                            .collect::<Result<Vec<_>, _>>()
-                            .map(SplitPoint::new)
-                    })
+                    .map(decode_point)
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let ordering =
@@ -128,11 +131,25 @@ impl TryFrom<FFI_Partitioning> for Partitioning {
                         )
                     })?;
 
-                Self::Range(RangePartitioning::try_new_with_samples(
-                    ordering,
-                    samples,
-                    range.partition_count,
-                )?)
+                Self::Range(
+                    RangePartitioning::try_new_with_samples(
+                        ordering,
+                        samples,
+                        range.partition_count,
+                    )?
+                    .try_with_bounds(
+                        range
+                            .start_bound
+                            .into_option()
+                            .map(decode_point)
+                            .transpose()?,
+                        range
+                            .end_bound
+                            .into_option()
+                            .map(decode_point)
+                            .transpose()?,
+                    )?,
+                )
             }
             FFI_Partitioning::UnknownPartitioning(size) => {
                 Self::UnknownPartitioning(size)
@@ -154,6 +171,7 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use stabby::vec::Vec as SVec;
 
+    use crate::ffi_option::FFI_Option;
     use crate::physical_expr::partitioning::{FFI_Partitioning, FFI_RangePartitioning};
 
     fn range_partitioning() -> Result<Partitioning> {
@@ -207,11 +225,23 @@ mod tests {
 
     #[test]
     fn round_trip_ffi_range_partitioning_compound_key() -> Result<()> {
-        let partitioning = range_partitioning()?;
-
-        let ffi_partitioning: FFI_Partitioning = (&partitioning).into();
-        let returned: Partitioning = ffi_partitioning.try_into()?;
-        assert_eq!(partitioning, returned);
+        let Partitioning::Range(range) = range_partitioning()? else {
+            unreachable!();
+        };
+        let start = range.samples().first().cloned();
+        let end = range.samples().last().cloned();
+        for (start, end) in [
+            (None, None),
+            (start.clone(), None),
+            (None, end.clone()),
+            (start, end),
+        ] {
+            let partitioning =
+                Partitioning::Range(range.clone().try_with_bounds(start, end)?);
+            let ffi_partitioning: FFI_Partitioning = (&partitioning).into();
+            let returned: Partitioning = ffi_partitioning.try_into()?;
+            assert_eq!(partitioning, returned);
+        }
 
         Ok(())
     }
@@ -253,6 +283,8 @@ mod tests {
             samples: SVec::new(),
             ordering: SVec::new(),
             partition_count: 1,
+            start_bound: FFI_Option::None,
+            end_bound: FFI_Option::None,
         });
 
         let err = Partitioning::try_from(ffi_partitioning).unwrap_err();

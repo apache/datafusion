@@ -5824,20 +5824,14 @@ mod tests {
             vec![i32_split_point(20), i32_split_point(10)],
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("split points must be strictly ordered")
-        );
+        assert!(err.to_string().contains("split points must be ordered"));
 
-        let err = RangePartitioning::try_new(
+        let range = RangePartitioning::try_new(
             vec![col("id").sort(true, true)],
             vec![i32_split_point(10), i32_split_point(10)],
         )
-        .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("split points must be strictly ordered")
-        );
+        .unwrap();
+        assert_eq!(range.partition_count(), 3);
 
         let range = RangePartitioning::try_new(
             vec![col("id").sort(true, true)],

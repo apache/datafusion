@@ -240,7 +240,12 @@ pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
         .collect();
     let partitioning = Partitioning::Range(
         RangePartitioning::try_new_with_samples(ordering, samples, 3)
-            .expect("valid sampled range partitioning"),
+            .expect("valid sampled range partitioning")
+            .try_with_bounds(
+                Some(SplitPoint::new(vec![ScalarValue::Int32(Some(0))])),
+                Some(SplitPoint::new(vec![ScalarValue::Int32(Some(60))])),
+            )
+            .expect("valid bounds"),
     );
     let plan = Arc::new(
         EmptyExec::new(schema)
