@@ -89,6 +89,7 @@ use datafusion_sql::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_sql::parser::ExplainStatement;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use log::{debug, info};
@@ -102,7 +103,6 @@ use sqlparser::{
 };
 use url::Url;
 use uuid::Uuid;
-use datafusion_sql::parser::ExplainStatement;
 
 /// `SessionState` contains all the necessary state to plan and execute queries,
 /// such as configuration, functions, and runtime environment. Please see the
@@ -713,7 +713,9 @@ impl SessionState {
 
     fn requires_information_schema(statement: &Statement) -> bool {
         match &statement {
-            Statement::Explain(ExplainStatement { statement, .. }) => Self::requires_information_schema(statement),
+            Statement::Explain(ExplainStatement { statement, .. }) => {
+                Self::requires_information_schema(statement)
+            }
             Statement::Statement(s) => matches!(
                 s.as_ref(),
                 SQLStatement::ShowCreate { .. }

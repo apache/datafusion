@@ -380,8 +380,8 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
         config_options.sql_parser.dialect = Dialect::Spark;
     }
 
-    let mut session_config = SessionConfig::from(config_options)
-        .with_information_schema(true);
+    let mut session_config =
+        SessionConfig::from(config_options).with_information_schema(true);
 
     if args.reads_sql_from_stdin() {
         // When stdin carries the session's SQL — the REPL (including any rc
