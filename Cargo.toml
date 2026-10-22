@@ -409,3 +409,24 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# Pin arrow/parquet to the 60.1.0 release candidate (apache/arrow-rs#11750) for pre-release testing
+[patch.crates-io]
+arrow = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-arith = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-array = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-avro = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-cmp = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-csv = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-data = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-json = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-row = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-select = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-string = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", rev = "ad3ac04ae3457499f1607aee79fe71c31f4002e3" }
