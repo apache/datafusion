@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use datafusion_expr::ScalarUDF;
 
+pub(crate) mod civil;
 pub mod common;
 pub mod current_date;
 pub mod current_time;
