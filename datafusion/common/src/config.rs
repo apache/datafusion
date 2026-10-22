@@ -1006,6 +1006,39 @@ config_namespace! {
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
 
+        /// Sort with a bucket (distribution) sort instead of sorting every batch
+        /// and merging the sorted batches. Rows are scattered on arrival into
+        /// key-range buckets chosen from a sample of the sort keys, every bucket
+        /// is sorted on its own and the buckets are emitted in key order. Falls
+        /// back to the merge sort when the first sort key type is not supported.
+        pub sort_bucket_sort_enabled: bool, default = true
+
+        /// Number of key ranges rows are scattered into on arrival when
+        /// `sort_bucket_sort_enabled` is set (at most 4096). A range whose sort
+        /// keys exceed `sort_bucket_target_bytes` is split when it is sorted, and
+        /// ranges are the unit of spilling.
+        pub sort_bucket_count: usize, default = 64
+
+        /// Target size of the sort keys of a bucket when it is sorted, sized to
+        /// stay in cache. A bucket with larger keys is split by its keys before
+        /// sorting. Only the keys are sorted: the rows are gathered once in sorted
+        /// order, so their size does not count.
+        pub sort_bucket_target_bytes: usize, default = 2 * 1024 * 1024
+
+        /// Number of rows to buffer before choosing the bucket boundaries from
+        /// the sample of keys seen so far.
+        pub sort_bucket_sample_rows: usize, default = 65536
+
+        /// How the bucket sort holds arriving rows until it sorts them:
+        /// - `scatter`: each batch is reordered by key range on arrival, so a range's
+        ///   rows are copied out of a small area when it is sorted (two copies)
+        /// - `gather`: batches are kept as they came and each range keeps the numbers
+        ///   of its rows, copied once when the range is sorted (one copy, read from
+        ///   all over memory)
+        /// - `auto`: times both on the rows held when the boundaries are chosen, and
+        ///   gathers when that is clearly faster (wide rows), else scatters
+        pub sort_bucket_mode: String, default = "auto".to_string()
+
         /// Maximum buffer capacity (in bytes) per partition for BufferExec
         /// inserted during sort pushdown optimization.
         ///
