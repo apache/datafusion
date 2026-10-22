@@ -2417,8 +2417,8 @@ mod tests {
     }
 
     /// Projection containing a MoveTowardsLeafNodes sub-expression above an
-    /// Aggregate. Aggregate blocks pushdown, so the (None, true) recovery
-    /// fallback path fires: in-place extraction + recovery projection.
+    /// Aggregate. The Aggregate blocks pushdown, so the extraction cannot move
+    /// and the original projection is kept unchanged.
     #[test]
     fn test_projection_with_leaf_expr_above_aggregate() -> Result<()> {
         use datafusion_expr::test::function_stub::count;

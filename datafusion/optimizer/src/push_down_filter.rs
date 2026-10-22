@@ -1751,7 +1751,7 @@ mod tests {
     use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
-    use datafusion_expr::test::function_stub::sum;
+    use datafusion_expr::test::function_stub::{count, sum};
     use insta::assert_snapshot;
 
     use super::*;
@@ -4894,7 +4894,16 @@ mod tests {
             .project(vec![leaf_udf_expr(col("a"))])?
             .build()?;
 
-        for plan in [simple, two_filters, no_filter] {
+        // Leaf expression above an Aggregate: the Aggregate blocks movement.
+        let above_aggregate = LogicalPlanBuilder::from(test_table_scan_with_struct()?)
+            .aggregate(vec![col("user")], vec![count(lit(1))])?
+            .project(vec![
+                leaf_udf_expr(col("user")).is_not_null().alias("has_name"),
+                col("COUNT(Int32(1))"),
+            ])?
+            .build()?;
+
+        for plan in [simple, two_filters, no_filter, above_aggregate] {
             let passes = rules_that_changed_plan_per_pass(plan)?;
             let last = passes.last().unwrap();
             assert!(
