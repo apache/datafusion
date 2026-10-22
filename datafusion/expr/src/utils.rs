@@ -919,6 +919,28 @@ where
     err
 }
 
+/// Returns the element field at the given list unnesting depth.
+pub(crate) fn get_unnested_list_field(
+    data_type: &DataType,
+    depth: usize,
+) -> Result<&Field> {
+    match data_type {
+        DataType::List(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => {
+            if depth == 1 {
+                return Ok(field.as_ref());
+            }
+            return get_unnested_list_field(field.data_type(), depth - 1);
+        }
+        _ => {}
+    }
+
+    internal_err!("trying to unnest on invalid data type {data_type}")
+}
+
 /// Create schema fields from an expression list, for use in result set schema construction
 ///
 /// This function converts a list of expressions into a list of complete schema fields,
@@ -1572,6 +1594,38 @@ pub fn collect_subquery_cols(
 
         Result::<_>::Ok(cols)
     })
+}
+
+/// Determine the subquery-side expressions a join filter compares,
+/// stopping at the first subquery-referencing sub-expression rather than
+/// descending to the bare columns inside of it.
+///
+/// `t1.a = t2.b` yields `t2.b`, matching [`collect_subquery_cols`]. But
+/// `t1.a = CAST(t2.b AS INT)` yields `CAST(t2.b AS INT)` whole, not `t2.b`.
+/// The two differ whenever the correlated predicate wraps the subquery's
+/// column in an expression, in which case we need to evaluate the full
+/// expression before grouping, so that two column values which compare
+/// equal after the wrapping expression end up in the same group.
+pub fn collect_subquery_join_exprs(
+    exprs: &[Expr],
+    subquery_schema: &DFSchema,
+) -> Result<Vec<Expr>> {
+    let mut result: Vec<Expr> = vec![];
+    for expr in exprs {
+        expr.apply(|e| {
+            if e.column_refs()
+                .into_iter()
+                .all(|col| subquery_schema.has_column(col))
+                && !e.column_refs().is_empty()
+                && !result.contains(e)
+            {
+                result.push(e.clone());
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

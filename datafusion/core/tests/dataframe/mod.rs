@@ -35,6 +35,7 @@ use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{SortOptions, TimeUnit};
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq, dataframe};
 use datafusion_common::metadata::FieldMetadata;
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_functions_aggregate::count::{count_all, count_all_window};
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, avg_distinct, count, count_distinct, max, median, min, sum,
@@ -74,7 +75,9 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file_format::format_as_file_type;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_expr::expr::{GroupingSet, NullTreatment, Sort, WindowFunction};
+use datafusion_expr::expr::{
+    GroupingSet, NullTreatment, Sort, WildcardOptions, WindowFunction,
+};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     CreateMemoryTable, CreateView, DdlStatement, Expr, ExprFunctionExt, ExprSchemable,
@@ -3481,9 +3484,9 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r"
-    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
       SortPreservingMergeExec: [id@0 ASC NULLS LAST]
-        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -3499,9 +3502,9 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r"
-    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
       SortPreservingMergeExec: [id@0 ASC NULLS LAST]
-        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -4538,6 +4541,210 @@ async fn unnest_dict_encoded_columns() -> Result<()> {
     | fixed_string    | z       |
     +-----------------+---------+
     "
+    );
+    Ok(())
+}
+
+#[rstest]
+#[case::list(DataType::List)]
+#[case::large_list(DataType::LargeList)]
+#[case::fixed_size_list(|field| DataType::FixedSizeList(field, 2))]
+#[case::list_view(DataType::ListView)]
+#[case::large_list_view(DataType::LargeListView)]
+#[tokio::test]
+async fn unnest_list_item_metadata(
+    #[case] list_type: fn(Arc<Field>) -> DataType,
+) -> Result<()> {
+    use arrow::array::BinaryArray;
+    use arrow::buffer::OffsetBuffer;
+    use arrow::compute::cast;
+    use datafusion_common::RecursionUnnestOption;
+
+    let item = Arc::new(Field::new("wkb", DataType::Binary, false).with_metadata(
+        HashMap::from([
+            ("ARROW:extension:name".into(), "geoarrow.wkb".into()),
+            (
+                "ARROW:extension:metadata".into(),
+                r#"{"crs":"EPSG:4326"}"#.into(),
+            ),
+            ("custom".into(), "item".into()),
+        ]),
+    ));
+    let values: ArrayRef =
+        Arc::new(BinaryArray::from_iter_values([b"a", b"b", b"c", b"d"]));
+    let lists = ListArray::new(
+        Arc::clone(&item),
+        OffsetBuffer::new(vec![0, 2, 4].into()),
+        Arc::clone(&values),
+        None,
+    );
+    let lists = cast(&lists, &list_type(Arc::clone(&item)))?;
+    let nested_item = Arc::new(
+        Field::new("lists", lists.data_type().clone(), false)
+            .with_metadata(HashMap::from([("custom".into(), "nested item".into())])),
+    );
+    let nested = ListArray::new(
+        Arc::clone(&nested_item),
+        OffsetBuffer::new(vec![0, 2].into()),
+        Arc::clone(&lists),
+        None,
+    );
+    let nested = cast(&nested, &list_type(Arc::clone(&nested_item)))?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("input", nested.data_type().clone(), false)
+            .with_metadata(HashMap::from([("custom".into(), "container".into())])),
+    ]));
+    let ctx = SessionContext::new();
+    let batch = RecordBatch::try_new(schema, vec![nested])?;
+    ctx.register_batch("t", batch.clone())?;
+    let df = ctx.read_batch(batch)?;
+
+    // Each recursion depth must use that element's metadata, rather than the
+    // outer list's metadata. Renaming the result must retain it as well.
+    for (depth, field, expected_values) in
+        [(1, &nested_item, &lists), (2, &item, &values)]
+    {
+        let options = UnnestOptions::new().with_recursions(RecursionUnnestOption {
+            input_column: "input".into(),
+            output_column: "expanded".into(),
+            depth,
+        });
+        let unnested = df
+            .clone()
+            .unnest_columns_with_options(&["input"], options)?
+            .select(vec![col("expanded").alias("output")])?;
+        let expected_field = field
+            .as_ref()
+            .clone()
+            .with_name("output")
+            .with_nullable(true);
+        let sql = if depth == 1 {
+            "SELECT unnest(input) AS output FROM t"
+        } else {
+            "SELECT unnest(unnest(input)) AS output FROM t"
+        };
+        for unnested in [unnested, ctx.sql(sql).await?] {
+            assert_eq!(unnested.schema().field(0).as_ref(), &expected_field);
+            let batches = unnested.collect().await?;
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].schema().field(0), &expected_field);
+            assert_eq!(batches[0].column(0), expected_values);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_list_item_metadata_in_udf() -> Result<()> {
+    use arrow::buffer::OffsetBuffer;
+    use datafusion_expr::{
+        ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    };
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct RequireItemMetadata(Signature);
+
+    impl ScalarUDFImpl for RequireItemMetadata {
+        fn name(&self) -> &str {
+            "require_item_metadata"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.0
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            Ok(arg_types[0].clone())
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
+            let field = &args.arg_fields[0];
+            if field.metadata().get("custom").map(String::as_str) != Some("item") {
+                return datafusion_common::plan_err!("Missing item metadata");
+            }
+            Ok(Arc::clone(field))
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(args.args[0].clone())
+        }
+    }
+
+    let item = Arc::new(
+        Field::new("item", DataType::Int32, false)
+            .with_metadata(HashMap::from([("custom".into(), "item".into())])),
+    );
+    let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    let list = ListArray::new(
+        Arc::clone(&item),
+        OffsetBuffer::new(vec![0, 2].into()),
+        Arc::clone(&values),
+        None,
+    );
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "input",
+        list.data_type().clone(),
+        false,
+    )]));
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", RecordBatch::try_new(schema, vec![Arc::new(list)])?)?;
+    ctx.register_udf(ScalarUDF::from(RequireItemMetadata(Signature::any(
+        1,
+        Volatility::Immutable,
+    ))));
+    let expected_field = item
+        .as_ref()
+        .clone()
+        .with_name("output")
+        .with_nullable(true);
+
+    // A UDF can inspect argument metadata before SQL rewrites UNNEST into a plan.
+    for sql in [
+        "SELECT require_item_metadata(unnest(input)) AS output FROM t",
+        "SELECT require_item_metadata(output) AS output \
+         FROM (SELECT unnest(input) AS output FROM t)",
+    ] {
+        let df = ctx.sql(sql).await?;
+        assert_eq!(df.schema().field(0).as_ref(), &expected_field);
+        let batches = df.collect().await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].schema().field(0), &expected_field);
+        assert_eq!(batches[0].column(0), &values);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_list_item_metadata_with_nulls() -> Result<()> {
+    let item = Arc::new(
+        Field::new("item", DataType::Int32, false)
+            .with_metadata(HashMap::from([("custom".into(), "item".into())])),
+    );
+    let mut builder = ListBuilder::new(Int32Builder::new()).with_field(Arc::clone(&item));
+    builder.values().append_slice(&[1, 2]);
+    builder.append(true);
+    builder.append(true); // Empty list
+    builder.append(false); // NULL list
+    let list = builder.finish();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "input",
+        list.data_type().clone(),
+        true,
+    )]));
+    let ctx = SessionContext::new();
+    let options = UnnestOptions::new()
+        .with_null_handling(datafusion_common::NullHandling::PreserveAndExpandEmpty);
+    let df = ctx
+        .read_batch(RecordBatch::try_new(schema, vec![Arc::new(list)])?)?
+        .unnest_columns_with_options(&["input"], options)?;
+    let expected_field = item.as_ref().clone().with_name("input").with_nullable(true);
+    assert_eq!(df.schema().field(0).as_ref(), &expected_field);
+    let batches = df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].schema().field(0), &expected_field);
+    assert_eq!(
+        batches[0].column(0).as_ref(),
+        &Int32Array::from(vec![Some(1), Some(2), None, None]) as &dyn Array
     );
     Ok(())
 }
@@ -7850,6 +8057,495 @@ async fn test_unresolved_lambda_variable() -> Result<()> {
         "+-----------+----------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_api_select_semantics() -> Result<()> {
+    let df = test_table().await?;
+
+    // ----------------------------------------------------------------------
+    // Aggregate functions in SELECT (no GROUP BY)
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT
+    //   COUNT(c9) AS count_c9,
+    //   COUNT(CAST(c9 AS Utf8View)) AS count_c9_str,
+    //   SUM(c9) AS sum_c9,
+    //   COUNT(c8) AS count_c8,
+    //   SUM(c9) + COUNT(c8) AS total1,
+    //   (COUNT(c9) + 1) * 2 AS total2,
+    //   COUNT(c9) + 1 AS count_c9_add_1
+    // FROM t
+    let res = df.clone().select(vec![
+        count(col("c9")).alias("count_c9"),
+        count(cast(col("c9"), DataType::Utf8View)).alias("count_c9_str"),
+        sum(col("c9")).alias("sum_c9"),
+        count(col("c8")).alias("count_c8"),
+        (sum(col("c9")) + count(col("c8"))).alias("total1"),
+        ((count(col("c9")) + lit(1)) * lit(2)).alias("total2"),
+        (count(col("c9")) + lit(1)).alias("count_c9_add_1"),
+    ])?;
+
+    assert_batches_eq!(
+        &[
+            "+----------+--------------+--------------+----------+--------------+--------+----------------+",
+            "| count_c9 | count_c9_str | sum_c9       | count_c8 | total1       | total2 | count_c9_add_1 |",
+            "+----------+--------------+--------------+----------+--------------+--------+----------------+",
+            "| 100      | 100          | 222089770060 | 100      | 222089770160 | 202    | 101            |",
+            "+----------+--------------+--------------+----------+--------------+--------+----------------+",
+        ],
+        &res.collect().await?
+    );
+
+    // ----------------------------------------------------------------------
+    // Aggregate + literal (still one row)
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT SUM(c9) AS sum_c9, 1 AS one FROM t
+    let res = df
+        .clone()
+        .select(vec![sum(col("c9")).alias("sum_c9"), lit(1).alias("one")])?;
+
+    assert_batches_eq!(
+        &[
+            "+--------------+-----+",
+            "| sum_c9       | one |",
+            "+--------------+-----+",
+            "| 222089770060 | 1   |",
+            "+--------------+-----+",
+        ],
+        &res.collect().await?
+    );
+
+    // ----------------------------------------------------------------------
+    // Empty input (global aggregate still returns exactly one row)
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT COUNT(c9) AS cnt, SUM(c9) AS sum_c9, 1 AS one FROM t WHERE false
+    let res = df.clone().filter(lit(false))?.select(vec![
+        count(col("c9")).alias("cnt"),
+        sum(col("c9")).alias("sum_c9"),
+        lit(1).alias("one"),
+    ])?;
+
+    assert_batches_eq!(
+        &[
+            "+-----+--------+-----+",
+            "| cnt | sum_c9 | one |",
+            "+-----+--------+-----+",
+            "| 0   |        | 1   |",
+            "+-----+--------+-----+",
+        ],
+        &res.collect().await?
+    );
+
+    // ----------------------------------------------------------------------
+    // Duplicate output names are rejected, like any other projection
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT COUNT(c9) AS count_c9, COUNT(c9) AS count_c9 FROM t
+    let err = df
+        .clone()
+        .select(vec![
+            count(col("c9")).alias("count_c9"),
+            count(col("c9")).alias("count_c9"),
+        ])
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("require unique expression names"),
+        "duplicate aliases must be rejected at planning time, got: {msg}"
+    );
+
+    // SQL:
+    // SELECT COUNT(c9), COUNT(c9) FROM t
+    let err = df
+        .clone()
+        .select(vec![count(col("c9")), count(col("c9"))])
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("require unique expression names"),
+        "duplicate unaliased aggregates must be rejected at planning time, got: {msg}"
+    );
+
+    // ----------------------------------------------------------------------
+    // Mixed column + aggregate (no implicit GROUP BY)
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT c1, SUM(c9) AS sum_c9 FROM t
+    // Must not become GROUP BY c1. Planning succeeds; execution still fails.
+    let res = df
+        .clone()
+        .select(vec![col("c1"), sum(col("c9")).alias("sum_c9")])?;
+    let err = res.collect().await.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not supported in this position"),
+        "mixed list must not run as grouped aggregation, got: {msg}"
+    );
+
+    // ----------------------------------------------------------------------
+    // Wildcard handling
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT *, 42 FROM t
+    let res = df
+        .clone()
+        .select(vec![
+            SelectExpr::Wildcard(WildcardOptions::default()),
+            lit(42).into(),
+        ])?
+        .limit(0, None)?;
+
+    let batches = res.collect().await?;
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 14));
+
+    // SQL:
+    // SELECT aggregate_test_100.*, 42 FROM t
+    let res = df.clone().select(vec![
+        SelectExpr::QualifiedWildcard(
+            "aggregate_test_100".into(),
+            WildcardOptions::default(),
+        ),
+        lit(42).into(),
+    ])?;
+
+    let batches = res.collect().await?;
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 14));
+
+    // ----------------------------------------------------------------------
+    // Window functions
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT
+    //   c1,
+    //   COUNT(c9) OVER (PARTITION BY c1) AS cnt,
+    //   SUM(c9) OVER (PARTITION BY c1) AS sum_c9,
+    //   AVG(c9) OVER (PARTITION BY c1) AS avg_c9
+    // FROM t
+    // ORDER BY c1
+    let count_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::count::count_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let sum_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::sum::sum_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let avg_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::average::avg_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let res = df
+        .clone()
+        .select(vec![
+            col("c1"),
+            count_window_function.alias("cnt"),
+            sum_window_function.alias("sum_c9"),
+            avg_window_function.alias("avg_c9"),
+        ])?
+        .sort(vec![col("c1").sort(true, true)])?;
+    let batches = res.collect().await?;
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 4));
+    let batch = &batches[0];
+    assert_batches_eq!(
+        &[
+            "+----+-----+-------------+--------------------+",
+            "| c1 | cnt | sum_c9      | avg_c9             |",
+            "+----+-----+-------------+--------------------+",
+            "| a  | 21  | 42619217323 | 2029486539.1904762 |",
+            "| b  | 19  | 42365566310 | 2229766647.894737  |",
+            "| c  | 21  | 46381998762 | 2208666607.714286  |",
+            "| d  | 18  | 39910269981 | 2217237221.1666665 |",
+            "| e  | 21  | 50812717684 | 2419653223.047619  |",
+            "+----+-----+-------------+--------------------+",
+        ],
+        &[
+            batch.slice(0, 1),  // a
+            batch.slice(21, 1), // b
+            batch.slice(40, 1), // c
+            batch.slice(61, 1), // d
+            batch.slice(79, 1)  // e
+        ]
+    );
+
+    // ----------------------------------------------------------------------
+    // Window with ORDER BY
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT
+    //   c1,
+    //   ROW_NUMBER() OVER (PARTITION BY c1 ORDER BY c9) AS rn
+    // FROM t
+    // ORDER BY c1
+    let row_number_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(
+            datafusion::functions_window::row_number::row_number_udwf(),
+        ),
+        vec![],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![col("c9").sort(true, true)])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let res = df
+        .clone()
+        .select(vec![col("c1"), row_number_window_function.alias("rn")])?
+        .sort(vec![col("c1").sort(true, true)])?;
+
+    let batches = res.collect().await?;
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 2));
+    assert_batches_eq!(
+        &[
+            "+----+----+",
+            "| c1 | rn |",
+            "+----+----+",
+            "| a  | 1  |",
+            "| a  | 2  |",
+            "| a  | 3  |",
+            "| a  | 4  |",
+            "| a  | 5  |",
+            "| a  | 6  |",
+            "| a  | 7  |",
+            "| a  | 8  |",
+            "| a  | 9  |",
+            "| a  | 10 |",
+            "| a  | 11 |",
+            "| a  | 12 |",
+            "| a  | 13 |",
+            "| a  | 14 |",
+            "| a  | 15 |",
+            "| a  | 16 |",
+            "| a  | 17 |",
+            "| a  | 18 |",
+            "| a  | 19 |",
+            "| a  | 20 |",
+            "| a  | 21 |",
+            "| b  | 1  |",
+            "| b  | 2  |",
+            "| b  | 3  |",
+            "| b  | 4  |",
+            "| b  | 5  |",
+            "| b  | 6  |",
+            "| b  | 7  |",
+            "| b  | 8  |",
+            "| b  | 9  |",
+            "| b  | 10 |",
+            "| b  | 11 |",
+            "| b  | 12 |",
+            "| b  | 13 |",
+            "| b  | 14 |",
+            "| b  | 15 |",
+            "| b  | 16 |",
+            "| b  | 17 |",
+            "| b  | 18 |",
+            "| b  | 19 |",
+            "| c  | 1  |",
+            "| c  | 2  |",
+            "| c  | 3  |",
+            "| c  | 4  |",
+            "| c  | 5  |",
+            "| c  | 6  |",
+            "| c  | 7  |",
+            "| c  | 8  |",
+            "| c  | 9  |",
+            "| c  | 10 |",
+            "| c  | 11 |",
+            "| c  | 12 |",
+            "| c  | 13 |",
+            "| c  | 14 |",
+            "| c  | 15 |",
+            "| c  | 16 |",
+            "| c  | 17 |",
+            "| c  | 18 |",
+            "| c  | 19 |",
+            "| c  | 20 |",
+            "| c  | 21 |",
+            "| d  | 1  |",
+            "| d  | 2  |",
+            "| d  | 3  |",
+            "| d  | 4  |",
+            "| d  | 5  |",
+            "| d  | 6  |",
+            "| d  | 7  |",
+            "| d  | 8  |",
+            "| d  | 9  |",
+            "| d  | 10 |",
+            "| d  | 11 |",
+            "| d  | 12 |",
+            "| d  | 13 |",
+            "| d  | 14 |",
+            "| d  | 15 |",
+            "| d  | 16 |",
+            "| d  | 17 |",
+            "| d  | 18 |",
+            "| e  | 1  |",
+            "| e  | 2  |",
+            "| e  | 3  |",
+            "| e  | 4  |",
+            "| e  | 5  |",
+            "| e  | 6  |",
+            "| e  | 7  |",
+            "| e  | 8  |",
+            "| e  | 9  |",
+            "| e  | 10 |",
+            "| e  | 11 |",
+            "| e  | 12 |",
+            "| e  | 13 |",
+            "| e  | 14 |",
+            "| e  | 15 |",
+            "| e  | 16 |",
+            "| e  | 17 |",
+            "| e  | 18 |",
+            "| e  | 19 |",
+            "| e  | 20 |",
+            "| e  | 21 |",
+            "+----+----+",
+        ],
+        &batches
+    );
+
+    // ----------------------------------------------------------------------
+    // Window inside expression
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT
+    //   c1,
+    //   COUNT(c9) OVER (PARTITION BY c1) + 1 AS cnt_plus
+    // FROM t
+    // ORDER BY c1
+    let count_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::count::count_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let cnt_plus_expr = count_window_function + lit(1);
+
+    let res = df
+        .clone()
+        .select(vec![col("c1"), cnt_plus_expr.alias("cnt_plus")])?
+        .sort(vec![col("c1").sort(true, true)])?;
+    let batches = res.collect().await?;
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 2));
+    let batch = &batches[0];
+    assert_batches_eq!(
+        &[
+            "+----+----------+",
+            "| c1 | cnt_plus |",
+            "+----+----------+",
+            "| a  | 22       |",
+            "| b  | 20       |",
+            "| c  | 22       |",
+            "| d  | 19       |",
+            "| e  | 22       |",
+            "+----+----------+",
+        ],
+        &[
+            batch.slice(0, 1),  // a
+            batch.slice(21, 1), // b
+            batch.slice(40, 1), // c
+            batch.slice(61, 1), // d
+            batch.slice(79, 1)  // e
+        ]
+    );
+
+    // ----------------------------------------------------------------------
+    // Window functions with mixed frames
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT
+    //   c1,
+    //   SUM(c9) OVER () AS total_sum,
+    //   COUNT(c9) OVER (PARTITION BY c1) AS cnt
+    // FROM t
+    let sum_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::sum::sum_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let count_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::count::count_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let res = df
+        .clone()
+        .select(vec![
+            col("c1"),
+            sum_window_function.alias("total_sum"),
+            count_window_function.alias("cnt"),
+        ])?
+        .sort(vec![col("c1").sort(true, true)])?;
+
+    let batches = res.collect().await?;
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 3));
+    let batch = &batches[0];
+
+    assert_batches_eq!(
+        &[
+            "+----+--------------+-----+",
+            "| c1 | total_sum    | cnt |",
+            "+----+--------------+-----+",
+            "| a  | 222089770060 | 21  |",
+            "+----+--------------+-----+"
+        ],
+        &[batch.slice(0, 1)]
+    );
 
     Ok(())
 }
