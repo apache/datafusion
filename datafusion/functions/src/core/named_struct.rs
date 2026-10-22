@@ -25,6 +25,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[user_doc(
@@ -191,9 +192,14 @@ impl ScalarUDFImpl for NamedStructFunc {
         }
 
         let mut fields = Vec::with_capacity(literal_args.len() / 2);
+        let mut names = HashSet::new();
         for (i, chunk) in literal_args.chunks(2).enumerate() {
             match chunk {
                 [Some(ScalarValue::Utf8(Some(name))), _] => {
+                    // Field access resolves only the first occurrence of a name.
+                    if !names.insert(name) {
+                        return None;
+                    }
                     fields.push((
                         vec![ScalarValue::Utf8(Some(name.clone()))],
                         i * 2 + 1, // index of the value argument
