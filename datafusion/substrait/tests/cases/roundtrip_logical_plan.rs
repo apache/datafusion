@@ -43,9 +43,11 @@ use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::expr::{Exists, SetComparison, SetQuantifier};
+use datafusion::logical_expr::utils::grouping_set_to_exprlist;
 use datafusion::logical_expr::{
-    EmptyRelation, Extension, InvariantLevel, LogicalPlan, Operator, PartitionEvaluator,
-    Repartition, Subquery, UserDefinedLogicalNode, Values, Volatility,
+    Aggregate, EmptyRelation, Extension, InvariantLevel, LogicalPlan, Operator,
+    PartitionEvaluator, Repartition, Subquery, UserDefinedLogicalNode, Values,
+    Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -54,7 +56,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
-use substrait::proto::{Plan, Rel, plan_rel};
+use substrait::proto::{AggregateRel, Plan, Rel, plan_rel};
 
 #[derive(Debug)]
 struct MockSerializerRegistry;
@@ -576,24 +578,62 @@ async fn aggregate_grouping_sets_wider_grouping_id() -> Result<()> {
     Ok(())
 }
 
-/// Eight distinct grouping expressions alone keep `__grouping_id` in `UInt8`
-/// (8 bits), unlike [`aggregate_grouping_sets_wider_grouping_id`], which
-/// widens it with a ninth *column*. Repeating one of those eight sets instead
-/// needs a ninth bit for the duplicate *ordinal*, which widens it the same
-/// way - this isolates that the widening follows from the ordinal bit alone.
+/// The number of distinct grouping expressions the first `Aggregate` in
+/// `plan` holds, with the type its `__grouping_id` column takes.
+fn grouping_id_shape(plan: &LogicalPlan) -> Result<(usize, DataType)> {
+    fn find(plan: &LogicalPlan) -> Option<&Aggregate> {
+        if let LogicalPlan::Aggregate(aggregate) = plan {
+            return Some(aggregate);
+        }
+        plan.inputs().into_iter().find_map(find)
+    }
+
+    let aggregate = find(plan).expect("plan holds an Aggregate");
+    let distinct = grouping_set_to_exprlist(&aggregate.group_expr)?.len();
+    let grouping_id = aggregate
+        .schema
+        .fields()
+        .iter()
+        .find(|field| field.name() == Aggregate::INTERNAL_GROUPING_ID)
+        .expect("aggregate schema holds __grouping_id")
+        .data_type()
+        .clone();
+    Ok((distinct, grouping_id))
+}
+
+/// Eight distinct grouping expressions fill a `UInt8` `__grouping_id` mask
+/// exactly, so it is repeating one of those sets - not adding a ninth column -
+/// that needs a ninth bit for the duplicate *ordinal* and widens the column to
+/// `UInt16`. Both shapes are asserted, which is what keeps the widening
+/// attributable to the ordinal alone: a ninth distinct *column* widens it just
+/// as well, and that is what [`aggregate_grouping_sets_wider_grouping_id`]
+/// covers instead.
 #[tokio::test]
 async fn aggregate_grouping_sets_wider_grouping_id_from_duplicate_ordinal() -> Result<()>
 {
     let ctx = create_context().await?;
-    let columns = (0..8)
-        .map(|offset| format!("a + {offset}"))
+    // Bare `a` is one of the eight, so the trailing `(a)` set reuses it rather
+    // than adding a ninth distinct expression of its own.
+    let columns = std::iter::once("a".to_string())
+        .chain((1..8).map(|offset| format!("a + {offset}")))
         .collect::<Vec<_>>()
         .join(", ");
+
+    // Without the repeat the same eight columns still fit in `UInt8`.
+    let single_sql = format!(
+        "SELECT a, GROUPING(a) AS ga, avg(b) FROM data \
+         GROUP BY GROUPING SETS (({columns}), (a)) ORDER BY a, ga"
+    );
+    let single_plan = ctx.sql(&single_sql).await?.into_optimized_plan()?;
+    assert_eq!(grouping_id_shape(&single_plan)?, (8, DataType::UInt8));
+
     let sql = format!(
         "SELECT a, GROUPING(a) AS ga, avg(b) FROM data \
          GROUP BY GROUPING SETS (({columns}), ({columns}), (a)) ORDER BY a, ga"
     );
     let plan = ctx.sql(&sql).await?.into_optimized_plan()?;
+    assert_eq!(grouping_id_shape(&plan)?, (8, DataType::UInt16));
+
     let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
 
     let proto = to_substrait_plan(&plan, &ctx.state())?;
@@ -779,6 +819,102 @@ async fn aggregate_grouping_sets_63_columns_repeated_thrice_is_rejected() -> Res
 
     assert!(
         err.to_string().contains("cannot be repeated"),
+        "unexpected error: {err}"
+    );
+    Ok(())
+}
+
+/// The first `AggregateRel` in `rel`.
+fn find_aggregate_rel(rel: &mut Rel) -> Option<&mut AggregateRel> {
+    match rel.rel_type.as_mut()? {
+        RelType::Aggregate(aggregate) => Some(aggregate),
+        RelType::Project(project) => find_aggregate_rel(project.input.as_deref_mut()?),
+        RelType::Filter(filter) => find_aggregate_rel(filter.input.as_deref_mut()?),
+        RelType::Fetch(fetch) => find_aggregate_rel(fetch.input.as_deref_mut()?),
+        RelType::Sort(sort) => find_aggregate_rel(sort.input.as_deref_mut()?),
+        _ => None,
+    }
+}
+
+/// The `AggregateRel` of a produced plan, so a test can edit it into a shape
+/// the producer itself refuses to emit but another producer could send.
+fn aggregate_rel_of(plan: &mut Plan) -> &mut AggregateRel {
+    let rel = match plan.relations[0].rel_type.as_mut().expect("rel type") {
+        plan_rel::RelType::Rel(rel) => rel,
+        plan_rel::RelType::Root(root) => root.input.as_mut().expect("root input"),
+    };
+    find_aggregate_rel(rel).expect("plan holds an AggregateRel")
+}
+
+/// The producer refuses to emit a duplicate ordinal it cannot represent, but
+/// a plan carrying one can still arrive from another producer. The consumer
+/// computes the same ids, so it has to reject the plan with the same error
+/// rather than silently give two sets the same `__grouping_id`.
+///
+/// Three occurrences of a 63-column set need ordinal `2`, which does not fit
+/// in the single bit left above the mask. Two occurrences do, so the plan is
+/// produced with two and the third is appended to the proto here.
+#[tokio::test]
+async fn consume_grouping_sets_63_columns_repeated_thrice_is_rejected() -> Result<()> {
+    let ctx = create_context().await?;
+    let columns = (0..63)
+        .map(|offset| format!("a + {offset}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT GROUPING(a + 0) AS g0, avg(b) FROM data \
+         GROUP BY GROUPING SETS (({columns}), ({columns})) ORDER BY g0"
+    );
+    let plan = ctx.sql(&sql).await?.into_optimized_plan()?;
+    let mut proto = to_substrait_plan(&plan, &ctx.state())?;
+
+    let aggregate = aggregate_rel_of(&mut proto);
+    let repeated = aggregate.groupings[0].clone();
+    aggregate.groupings.push(repeated);
+
+    let err = from_substrait_plan(&ctx.state(), &proto)
+        .await
+        .expect_err("a third occurrence is not representable");
+
+    let err = err.to_string();
+    assert!(
+        err.contains("A grouping set with 63 columns cannot be repeated")
+            && err.contains("does not fit in the 1 bit(s) left above the mask"),
+        "unexpected error: {err}"
+    );
+    Ok(())
+}
+
+/// The same check at 64 columns, where the mask already fills every bit and
+/// no ordinal is representable at all. A 64-column set and the empty set are
+/// representable together, so the plan is produced that way and the empty set
+/// is overwritten with a copy of the 64-column one here.
+#[tokio::test]
+async fn consume_grouping_sets_64_columns_repeated_is_rejected() -> Result<()> {
+    let ctx = create_context().await?;
+    let columns = (0..64)
+        .map(|offset| format!("a + {offset}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT GROUPING(a + 0) AS g0, avg(b) FROM data \
+         GROUP BY GROUPING SETS (({columns}), ()) ORDER BY g0"
+    );
+    let plan = ctx.sql(&sql).await?.into_optimized_plan()?;
+    let mut proto = to_substrait_plan(&plan, &ctx.state())?;
+
+    let aggregate = aggregate_rel_of(&mut proto);
+    assert_eq!(aggregate.groupings.len(), 2, "expected two grouping sets");
+    aggregate.groupings[1] = aggregate.groupings[0].clone();
+
+    let err = from_substrait_plan(&ctx.state(), &proto)
+        .await
+        .expect_err("a repeat of a 64-column set is not representable");
+
+    let err = err.to_string();
+    assert!(
+        err.contains("A grouping set with 64 columns cannot be repeated")
+            && err.contains("does not fit in the 0 bit(s) left above the mask"),
         "unexpected error: {err}"
     );
     Ok(())
