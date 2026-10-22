@@ -272,6 +272,11 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "parquet_bloom_filter_pruning"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
 name = "parquet_struct_query"
 required-features = ["parquet"]
 

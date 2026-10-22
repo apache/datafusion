@@ -397,9 +397,7 @@ enum ParquetOpenState {
     /// Loading [Parquet Page Index](https://parquet.apache.org/docs/file-format/pageindex/)
     LoadPageIndex(BoxFuture<'static, Result<RowGroupsPrunedParquetOpen>>),
     /// Loading bloom filters required for row-group pruning
-    LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
-    /// Pruning with preloaded Bloom Filters
-    PruneWithBloomFilters(Box<BloomFiltersLoadedParquetOpen>),
+    LoadBloomFilters(BoxFuture<'static, Result<RowGroupsPrunedParquetOpen>>),
     /// Builds the final reader stream
     ///
     /// TODO: split state as this currently does both I/O and CPU work.
@@ -422,7 +420,6 @@ impl fmt::Debug for ParquetOpenState {
             ParquetOpenState::LoadPageIndex(_) => "LoadPageIndex",
             ParquetOpenState::PruneWithStatistics(_) => "PruneWithStatistics",
             ParquetOpenState::LoadBloomFilters(_) => "LoadBloomFilters",
-            ParquetOpenState::PruneWithBloomFilters(_) => "PruneWithBloomFilters",
             ParquetOpenState::BuildStream(_) => "BuildStream",
             ParquetOpenState::Ready(_) => "Ready",
             ParquetOpenState::Done => "Done",
@@ -596,16 +593,6 @@ impl DecoderReadPlans {
 }
 
 /// State of [`ParquetOpenState`]
-///
-/// Result of loading bloom filters needed for row-group pruning.
-struct BloomFiltersLoadedParquetOpen {
-    prepared: RowGroupsPrunedParquetOpen,
-    /// Bloom filters loaded for each row group that remains under consideration.
-    ///
-    /// indexed by parquet row-group index
-    row_group_bloom_filters: Vec<BloomFilterStatistics>,
-}
-
 impl ParquetOpenState {
     /// Applies one CPU-only state transition.
     ///
@@ -690,9 +677,6 @@ impl ParquetOpenState {
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(ParquetOpenState::LoadBloomFilters(future))
             }
-            ParquetOpenState::PruneWithBloomFilters(loaded) => Ok(
-                ParquetOpenState::BuildStream(Box::new(loaded.prune_bloom_filters())),
-            ),
             ParquetOpenState::BuildStream(prepared) => {
                 Ok(ParquetOpenState::Ready(prepared.build_stream()?))
             }
@@ -807,9 +791,7 @@ impl MorselPlanner for ParquetMorselPlanner {
             }
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(Some(Self::schedule_io(async move {
-                    Ok(ParquetOpenState::PruneWithBloomFilters(Box::new(
-                        future.await?,
-                    )))
+                    Ok(ParquetOpenState::BuildStream(Box::new(future.await?)))
                 })))
             }
             ParquetOpenState::Ready(stream) => {
@@ -1472,16 +1454,7 @@ impl RowGroupsPrunedParquetOpen {
     }
 
     /// Load bloom filters needed for pruning when enabled and a pruning predicate exists.
-    async fn load_bloom_filters(mut self) -> Result<BloomFiltersLoadedParquetOpen> {
-        let num_row_groups = self
-            .prepared
-            .loaded
-            .reader_metadata
-            .metadata()
-            .num_row_groups();
-        let mut row_group_bloom_filters =
-            vec![BloomFilterStatistics::new(); num_row_groups];
-
+    async fn load_bloom_filters(mut self) -> Result<RowGroupsPrunedParquetOpen> {
         if let Some(predicate) =
             self.prepared.pruning_predicate.as_ref().map(|p| p.as_ref())
             && self.prepared.loaded.prepared.enable_bloom_filter
@@ -1491,6 +1464,14 @@ impl RowGroupsPrunedParquetOpen {
                 .row_group_indexes()
                 .any(|idx| !self.row_groups.access_plan().is_fully_matched(idx))
         {
+            let bloom_filter_eval_time = self
+                .prepared
+                .loaded
+                .prepared
+                .file_metrics
+                .bloom_filter_eval_time
+                .clone();
+
             // Use the existing reader for bloom filter I/O;
             // replace with a fresh reader for decoding below.
             let reader_metadata = self.prepared.loaded.reader_metadata.clone();
@@ -1528,14 +1509,26 @@ impl RowGroupsPrunedParquetOpen {
                 })
                 .collect();
 
-            for idx in self.row_groups.row_group_indexes() {
-                // Statistics have already proved that every row in this group
-                // matches the predicate, so its Bloom filters cannot prune it.
+            // Collect up front so the iterator's immutable borrow on
+            // `self.row_groups` is released before we mutably call
+            // `access_plan_mut().skip()` inside the loop body.
+            let row_group_indexes: Vec<usize> =
+                self.row_groups.row_group_indexes().collect();
+            for idx in row_group_indexes {
+                if !self.row_groups.access_plan().should_scan(idx) {
+                    continue;
+                }
+                // Statistics have already proved every row in this group matches
+                // the predicate, so Bloom filters cannot prune it — skip early.
                 if self.row_groups.access_plan().is_fully_matched(idx) {
                     continue;
                 }
-                let mut row_group_filters =
-                    BloomFilterStatistics::with_capacity(parquet_columns.len());
+                // Track whether at least one Bloom filter was loaded for this row
+                // group so we can correctly gate the matched/pruned metric updates.
+                let mut any_filter_loaded = false;
+                let mut prune_group = false;
+                let mut eval_error = false;
+
                 for (column_name, column_idx, physical_type, type_length) in
                     &parquet_columns
                 {
@@ -1551,53 +1544,62 @@ impl RowGroupsPrunedParquetOpen {
                             continue;
                         }
                     };
-                    row_group_filters.insert(
-                        column_name,
-                        bf,
-                        *physical_type,
-                        *type_length,
-                    );
+                    any_filter_loaded = true;
+
+                    // Evaluate the predicate against *only* this column's Bloom filter.
+                    //
+                    // Accumulating all loaded filters into a single statistics object
+                    // and re-running `predicate.prune()` after every column would make
+                    // membership-check complexity O(N²) for N filtered columns (e.g. 528
+                    // checks instead of 32 for N=32 when all values survive). Because
+                    // `PruningStatistics::contained` returns `None` for columns absent
+                    // from the statistics object, evaluating a single-column filter is
+                    // semantically equivalent: only this column can contribute a pruning
+                    // decision in this round, so short-circuit correctness is preserved
+                    // for both conjunctive and disjunctive predicates.
+                    let mut col_filter = BloomFilterStatistics::with_capacity(1);
+                    col_filter.insert(column_name, bf, *physical_type, *type_length);
+
+                    let _timer_guard = bloom_filter_eval_time.timer();
+                    match predicate.prune(&col_filter) {
+                        Ok(values) => {
+                            if !values[0] {
+                                prune_group = true;
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            log::debug!(
+                                "Error evaluating row group predicate on bloom filter: {e}"
+                            );
+                            prepared.file_metrics.predicate_evaluation_errors.add(1);
+                            eval_error = true;
+                        }
+                    }
                 }
-                row_group_bloom_filters[idx] = row_group_filters;
+
+                if !any_filter_loaded {
+                    // No Bloom filters were available for this row group; evaluation was
+                    // not performed, so do not update matched or pruned metrics.
+                    continue;
+                }
+
+                if prune_group {
+                    prepared
+                        .file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_pruned(1);
+                    self.row_groups.access_plan_mut().skip(idx);
+                } else if !eval_error {
+                    prepared
+                        .file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_matched(1);
+                }
             }
         }
 
-        Ok(BloomFiltersLoadedParquetOpen {
-            prepared: self,
-            row_group_bloom_filters,
-        })
-    }
-}
-
-impl BloomFiltersLoadedParquetOpen {
-    /// Apply bloom filter pruning using already loaded bloom filters.
-    fn prune_bloom_filters(mut self) -> RowGroupsPrunedParquetOpen {
-        let bloom_filter_eval_time = self
-            .prepared
-            .prepared
-            .loaded
-            .prepared
-            .file_metrics
-            .bloom_filter_eval_time
-            .clone();
-        let _timer_guard = bloom_filter_eval_time.timer();
-        if let Some(predicate) = self
-            .prepared
-            .prepared
-            .pruning_predicate
-            .as_ref()
-            .map(|p| p.as_ref())
-            && self.prepared.prepared.loaded.prepared.enable_bloom_filter
-            && !self.prepared.row_groups.is_empty()
-        {
-            self.prepared.row_groups.prune_by_bloom_filters(
-                predicate,
-                &self.prepared.prepared.loaded.prepared.file_metrics,
-                &self.row_group_bloom_filters,
-            );
-        }
-
-        self.prepared
+        Ok(self)
     }
 }
 
@@ -4809,6 +4811,200 @@ mod test {
         // Bloom reads and evaluation are skipped for an entirely fully matched file.
         assert_eq!(pruned, 0);
         assert_eq!(matched, 0);
+    }
+
+    #[tokio::test]
+    async fn incremental_bloom_filter_pruning_short_circuits_remaining_columns() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        // Two row groups, each with columns a and b:
+        //   RG-0: a = [99, 98, 97],  b = [900, 980, 970]  — no predicate values present
+        //   RG-1: a = [10, 20, 30],  b = [100, 200, 300]  — contains predicate match
+        //
+        // Statistics pruning is disabled throughout; Bloom filters are the only pruning
+        // mechanism.  Decoder-level filter push-down is enabled so matching rows are
+        // physically filtered out of RG-1 where possible.
+        let batch_rg0 = record_batch!(
+            ("a", Int32, vec![99_i32, 98, 97]),
+            ("b", Int32, vec![900_i32, 980, 970])
+        )
+        .unwrap();
+        let batch_rg1 = record_batch!(
+            ("a", Int32, vec![10_i32, 20, 30]),
+            ("b", Int32, vec![100_i32, 200, 300])
+        )
+        .unwrap();
+        let schema = batch_rg0.schema();
+        let props = WriterProperties::builder()
+            // Force each batch into its own row group.
+            .set_max_row_group_row_count(Some(3))
+            .set_bloom_filter_enabled(true)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "multi_col_bloom.parquet",
+            vec![batch_rg0, batch_rg1],
+            Some(props),
+        )
+        .await;
+        let file =
+            PartitionedFile::new("multi_col_bloom.parquet".to_string(), data_size as u64);
+
+        // ── Query 1: a = 999 AND b = 100 ─────────────────────────────────────────────
+        // 'a' Bloom filter is checked first for each row group.  999 is absent from
+        // both, so both groups are pruned after reading only the 'a' filter — the 'b'
+        // filter is never fetched (short-circuit).
+        let pred1 =
+            logical2physical(&col("a").eq(lit(999)).and(col("b").eq(lit(100))), &schema);
+        let metrics1 = ExecutionPlanMetricsSet::new();
+        let morselizer1 = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(Arc::clone(&pred1))
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(false)
+            .with_enable_bloom_filter(true)
+            .with_metrics(metrics1.clone())
+            .build();
+        let stream1 = open_file(&morselizer1, file.clone()).await.unwrap();
+        let bytes_scanned1 = counter_metric_value(&metrics1, "bytes_scanned");
+        assert_eq!(collect_int32_values(stream1).await, Vec::<i32>::new());
+        let (pruned1, matched1) = bloom_filter_pruning_metrics(&metrics1);
+        // Both row groups pruned; no row group survived Bloom evaluation.
+        assert_eq!(pruned1, 2);
+        assert_eq!(matched1, 0);
+
+        // ── Query 2: a = 10 AND b = 999 ──────────────────────────────────────────────
+        // RG-0: 'a' filter doesn't contain 10 → pruned immediately (no 'b' read).
+        // RG-1: 'a' filter contains 10 → must read 'b'; 'b' filter doesn't contain 999
+        //        → pruned on the second column.
+        let pred2 =
+            logical2physical(&col("a").eq(lit(10)).and(col("b").eq(lit(999))), &schema);
+        let metrics2 = ExecutionPlanMetricsSet::new();
+        let morselizer2 = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(Arc::clone(&pred2))
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(false)
+            .with_enable_bloom_filter(true)
+            .with_metrics(metrics2.clone())
+            .build();
+        let stream2 = open_file(&morselizer2, file.clone()).await.unwrap();
+        let bytes_scanned2 = counter_metric_value(&metrics2, "bytes_scanned");
+        assert_eq!(collect_int32_values(stream2).await, Vec::<i32>::new());
+        let (pruned2, matched2) = bloom_filter_pruning_metrics(&metrics2);
+        assert_eq!(pruned2, 2);
+        assert_eq!(matched2, 0);
+
+        // Query 2 must read both 'a' and 'b' filters for RG-1, so it scans strictly
+        // more Bloom filter bytes than Query 1 (which short-circuits on 'a' alone).
+        assert!(bytes_scanned1 > 0, "expected non-zero bloom filter I/O");
+        assert!(
+            bytes_scanned2 > bytes_scanned1,
+            "query 2 should scan more bloom filter bytes due to loading 'b' filter for RG-1"
+        );
+
+        // ── Query 3: a = 10 (one row group pruned, one matched) ───────────────────────
+        // RG-0: 'a' filter doesn't contain 10 → pruned.
+        // RG-1: 'a' filter contains 10 → matched (not pruned); the actual matching
+        //        rows [10, 20, 30] are returned through decoder-level filtering.
+        let pred3 = logical2physical(&col("a").eq(lit(10)), &schema);
+        let metrics3 = ExecutionPlanMetricsSet::new();
+        let morselizer3 = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(Arc::clone(&pred3))
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(false)
+            .with_enable_bloom_filter(true)
+            .with_metrics(metrics3.clone())
+            .build();
+        let stream3 = open_file(&morselizer3, file.clone()).await.unwrap();
+        // The matching row (a=10) must be returned; decoder filtering removes a=20,30.
+        assert_eq!(collect_int32_values(stream3).await, vec![10_i32]);
+        let (pruned3, matched3) = bloom_filter_pruning_metrics(&metrics3);
+        assert_eq!(pruned3, 1, "RG-0 should be pruned by Bloom filter");
+        assert_eq!(
+            matched3, 1,
+            "RG-1 passed Bloom evaluation and must count as matched"
+        );
+    }
+
+    /// Verify that a Bloom filter available for only one predicate column is still
+    /// sufficient to prune a row group, and that the matched/pruned metrics behave
+    /// correctly when filters are partially absent.
+    ///
+    /// Setup: predicate is `a = 10 AND b = 999`.  The Parquet file has a Bloom filter
+    /// on column `b` only (column `a` has no filter).
+    ///   RG-0: a = [1, 2, 3],  b = [10, 20, 30]   — 999 absent from `b` → pruned
+    ///   RG-1: a = [10, 11, 12], b = [999, 888, 777] — both values might be present
+    //    (Bloom false positives aside) → survives, `matched` is incremented once
+    #[tokio::test]
+    async fn bloom_filter_pruning_with_partial_column_availability() {
+        use parquet::schema::types::ColumnPath;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batch_rg0 = record_batch!(
+            ("a", Int32, vec![1_i32, 2, 3]),
+            ("b", Int32, vec![10_i32, 20, 30])
+        )
+        .unwrap();
+        let batch_rg1 = record_batch!(
+            ("a", Int32, vec![10_i32, 11, 12]),
+            ("b", Int32, vec![999_i32, 888, 777])
+        )
+        .unwrap();
+        let schema = batch_rg0.schema();
+
+        // Enable Bloom filter only for column `b`; column `a` intentionally has no filter.
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .set_statistics_enabled(EnabledStatistics::None)
+            // Disable the global default first, then opt column `b` in.
+            .set_bloom_filter_enabled(false)
+            .set_column_bloom_filter_enabled(ColumnPath::from("b"), true)
+            .build();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "partial_bloom.parquet",
+            vec![batch_rg0, batch_rg1],
+            Some(props),
+        )
+        .await;
+        let file =
+            PartitionedFile::new("partial_bloom.parquet".to_string(), data_size as u64);
+
+        let predicate =
+            logical2physical(&col("a").eq(lit(10)).and(col("b").eq(lit(999))), &schema);
+        let metrics = ExecutionPlanMetricsSet::new();
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(Arc::clone(&predicate))
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(false)
+            .with_enable_bloom_filter(true)
+            .with_metrics(metrics.clone())
+            .build();
+        let stream = open_file(&morselizer, file).await.unwrap();
+
+        // RG-1 (a=10, b=999) survives Bloom evaluation; the filter push-down produces
+        // the matching row.  Return value is column `a` only (our collect helper).
+        let values = collect_int32_values(stream).await;
+        assert_eq!(values, vec![10_i32]);
+
+        let (pruned, matched) = bloom_filter_pruning_metrics(&metrics);
+        // RG-0: `b` filter is present but does not contain 999 → pruned.
+        assert_eq!(
+            pruned, 1,
+            "RG-0 should be pruned via column b's Bloom filter"
+        );
+        // RG-1: `b` filter is present and 999 may be present (Bloom says yes) → matched.
+        assert_eq!(
+            matched, 1,
+            "RG-1 survived Bloom evaluation and must be counted as matched"
+        );
     }
 
     #[test]
