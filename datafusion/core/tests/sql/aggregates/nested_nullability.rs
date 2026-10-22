@@ -235,7 +235,8 @@ async fn array_agg_struct_from_stricter_batches_with_spilling() -> Result<()> {
 #[tokio::test]
 async fn array_agg_distinct_struct_from_stricter_batches_with_spilling() -> Result<()> {
     AggregateBatchesTest::new()
-        .with_num_rows(10_000)
+        // Enough groups that even the compact native accumulator exceeds the limit
+        .with_num_rows(100_000)
         // One partition keeps the native aggregate's memory pressure deterministic.
         .with_target_partitions(1)
         .without_single_distinct_to_groupby()
