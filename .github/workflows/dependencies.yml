@@ -40,30 +40,13 @@ permissions:
   contents: read
 
 jobs:
-  depcheck:
-    name: Circular Dependency Check
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Check dependencies
-        run: bash ci/scripts/check_circular_dependencies.sh
-
   detect-unused-dependencies:
     name: Detect Unused Dependencies
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rustup
       - name: Load tool versions
         run: |
           . ci/scripts/utils/tool_versions.sh

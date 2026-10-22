@@ -2269,6 +2269,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-ffi-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-schema",
+ "datafusion",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-ffi",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-optimizer",
+ "datafusion-physical-plan",
+ "datafusion-proto",
+ "datafusion-session",
+ "tokio",
+]
+
+[[package]]
 name = "datafusion-functions"
 version = "55.1.0"
 dependencies = [

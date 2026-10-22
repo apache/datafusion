@@ -282,6 +282,8 @@ impl StepContext {
                     "ci",
                     "-p",
                     "datafusion-ffi",
+                    "-p",
+                    "datafusion-ffi-integration-tests",
                     "--lib",
                     "--tests",
                     "--features",
@@ -790,6 +792,7 @@ cd /workspace && \
 cargo test \
 --profile ci \
 -p datafusion-ffi \
+-p datafusion-ffi-integration-tests \
 --lib \
 --tests \
 --features integration-tests
