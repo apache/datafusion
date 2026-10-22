@@ -796,6 +796,20 @@ impl RangeExpr {
     pub fn sort_options(&self) -> &[SortOptions] {
         self.router.sort_options()
     }
+
+    /// Appends the partition of each row of `arrays`, the evaluated
+    /// `on_columns`, to `partition_ids`.
+    pub(crate) fn route_partition_ids(
+        &self,
+        arrays: &[arrow::array::ArrayRef],
+        partition_ids: &mut Vec<u64>,
+    ) -> Result<()> {
+        if self.router.split_points().is_empty() {
+            partition_ids.resize(partition_ids.len() + arrays[0].len(), 0);
+            return Ok(());
+        }
+        self.router.route_partition_ids(arrays, partition_ids)
+    }
 }
 
 impl Display for RangeExpr {

@@ -20,21 +20,20 @@
 use std::{fmt::Display, hash::Hash, sync::Arc};
 
 use arrow::{
-    array::{ArrayRef, UInt64Array},
+    array::{ArrayRef, BooleanArray, BooleanBufferBuilder, UInt64Array},
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::{create_hashes, with_hashes};
-#[cfg(feature = "proto")]
-use datafusion_common::internal_err;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use crate::joins::Map;
 use crate::joins::key_range_bitmap::KeyRangeBitmap;
+use crate::repartition::RangeExpr;
 
 /// RandomState wrapper that preserves the seed used to create it.
 ///
@@ -281,13 +280,71 @@ pub struct HashTableLookupExpr {
     on_columns: Vec<PhysicalExprRef>,
     /// Random state for hashing (with seeds preserved for serialization)
     random_state: SeededRandomState,
-    /// Map to check against (hash table or array map)
-    map: Arc<Map>,
+    /// Map(s) to check against
+    lookup: Lookup,
     /// Description for display
     description: String,
     /// Shared pruning-only view of the build side's key range
     pruning_bitmap: Option<Arc<KeyRangeBitmap>>,
 }
+
+/// The build side a [`HashTableLookupExpr`] checks probe keys against.
+#[derive(Clone)]
+enum Lookup {
+    /// One map holding every build key.
+    Single(Arc<Map>),
+    /// One hash table per build partition of a `Partitioned` join, `None` where
+    /// the partition is empty. A key is only ever built into the partition its
+    /// key routes to, so each probe row is looked up in that partition's table
+    /// alone: no `CASE` over per-partition filters, and no merged table.
+    Routed {
+        router: PartitionRouter,
+        maps: Arc<[Option<Arc<Map>>]>,
+    },
+}
+
+/// Assigns probe rows to the build partition their key was repartitioned to.
+#[derive(Clone)]
+pub(crate) enum PartitionRouter {
+    /// `hash(keys) % partitions`, as hash repartitioning routes rows.
+    Hash(SeededRandomState),
+    /// The probe side's range partitioning.
+    Range(Arc<RangeExpr>),
+}
+
+impl PartitionRouter {
+    /// Writes the partition of each row of `keys` to `partition_ids`, which
+    /// holds one slot per row.
+    fn route(
+        &self,
+        keys: &[ArrayRef],
+        partitions: usize,
+        partition_ids: &mut Vec<u64>,
+    ) -> Result<()> {
+        match self {
+            PartitionRouter::Hash(random_state) => {
+                partition_ids.resize(keys[0].len(), 0);
+                create_hashes(keys, random_state.random_state(), partition_ids)?;
+                let partitions = partitions as u64;
+                for id in partition_ids.iter_mut() {
+                    *id %= partitions;
+                }
+                Ok(())
+            }
+            PartitionRouter::Range(range) => {
+                range.route_partition_ids(keys, partition_ids)
+            }
+        }
+    }
+
+    fn seed(&self) -> Option<u64> {
+        match self {
+            PartitionRouter::Hash(random_state) => Some(random_state.seed()),
+            PartitionRouter::Range(_) => None,
+        }
+    }
+}
+
 impl HashTableLookupExpr {
     /// Create a new HashTableLookupExpr
     ///
@@ -312,15 +369,100 @@ impl HashTableLookupExpr {
         Self {
             on_columns,
             random_state,
-            map,
+            lookup: Lookup::Single(map),
             description,
             pruning_bitmap,
         }
     }
 
+    /// Looks each probe row up in the hash table of the build partition
+    /// `router` assigns it to. `maps` holds one entry per partition, each a
+    /// [`Map::HashMap`] or `None` for an empty partition, and `pruning_bitmap`
+    /// must cover every partition's keys.
+    pub(crate) fn new_routed(
+        on_columns: Vec<PhysicalExprRef>,
+        random_state: SeededRandomState,
+        router: PartitionRouter,
+        maps: Vec<Option<Arc<Map>>>,
+        description: String,
+        pruning_bitmap: Option<Arc<KeyRangeBitmap>>,
+    ) -> Result<Self> {
+        if maps
+            .iter()
+            .flatten()
+            .any(|map| !matches!(map.as_ref(), Map::HashMap(_)))
+        {
+            return internal_err!("routed lookups only support hash table partitions");
+        }
+        Ok(Self {
+            on_columns,
+            random_state,
+            lookup: Lookup::Routed {
+                router,
+                maps: maps.into(),
+            },
+            description,
+            pruning_bitmap,
+        })
+    }
+
     /// Which parts of this build side's key range hold keys, for container pruning.
     pub fn pruning_bitmap(&self) -> Option<&Arc<KeyRangeBitmap>> {
         self.pruning_bitmap.as_ref()
+    }
+
+    /// Membership of each row of `keys` in the hash table of its routed partition.
+    fn evaluate_routed(
+        &self,
+        keys: &[ArrayRef],
+        router: &PartitionRouter,
+        maps: &[Option<Arc<Map>>],
+    ) -> Result<BooleanArray> {
+        let num_rows = keys[0].len();
+        let mut partition_ids = Vec::with_capacity(num_rows);
+        router.route(keys, maps.len(), &mut partition_ids)?;
+
+        with_hashes(keys, self.random_state.random_state(), |hashes| {
+            // Counting sort of the rows by partition, so each table is probed
+            // once per batch over a contiguous run of its rows' hashes.
+            let mut starts = vec![0usize; maps.len() + 1];
+            for &id in &partition_ids {
+                starts[id as usize + 1] += 1;
+            }
+            for i in 0..maps.len() {
+                starts[i + 1] += starts[i];
+            }
+            let mut next = starts.clone();
+            let mut rows = vec![0u32; num_rows];
+            let mut sorted_hashes = vec![0u64; num_rows];
+            for (row, (&id, &hash)) in partition_ids.iter().zip(hashes).enumerate() {
+                let slot = &mut next[id as usize];
+                rows[*slot] = row as u32;
+                sorted_hashes[*slot] = hash;
+                *slot += 1;
+            }
+
+            let mut matched = BooleanBufferBuilder::new(num_rows);
+            matched.append_n(num_rows, false);
+            for (partition, map) in maps.iter().enumerate() {
+                // An empty partition holds no key, so its rows stay unmatched.
+                let Some(map) = map else { continue };
+                let Map::HashMap(map) = map.as_ref() else {
+                    return internal_err!(
+                        "routed lookups only support hash table partitions"
+                    );
+                };
+                let run = starts[partition]..starts[partition + 1];
+                if run.is_empty() {
+                    continue;
+                }
+                let hits = map.contain_hashes(&sorted_hashes[run.clone()]);
+                for hit in hits.values().set_indices() {
+                    matched.set_bit(rows[run.start + hit] as usize, true);
+                }
+            }
+            Ok(BooleanArray::new(matched.finish(), None))
+        })
     }
 }
 impl std::fmt::Debug for HashTableLookupExpr {
@@ -332,7 +474,21 @@ impl std::fmt::Debug for HashTableLookupExpr {
             .collect::<Vec<_>>()
             .join(", ");
         let seed = self.random_state.seed();
-        write!(f, "{}({cols}, [{seed}])", self.description)
+        match &self.lookup {
+            Lookup::Single(_) => write!(f, "{}({cols}, [{seed}])", self.description),
+            Lookup::Routed { router, maps } => {
+                let router = match router.seed() {
+                    Some(routing_seed) => format!("hash [{routing_seed}]"),
+                    None => "range".to_string(),
+                };
+                write!(
+                    f,
+                    "{}({cols}, [{seed}], routed by {router} over {} partitions)",
+                    self.description,
+                    maps.len()
+                )
+            }
+        }
     }
 }
 
@@ -342,7 +498,7 @@ impl Hash for HashTableLookupExpr {
         self.description.hash(state);
         self.random_state.seed().hash(state);
         // Hash immutable map identity, consistently with pointer equality below.
-        Arc::as_ptr(&self.map).hash(state);
+        self.lookup.identity().hash(state);
     }
 }
 
@@ -353,11 +509,22 @@ impl PartialEq for HashTableLookupExpr {
         self.on_columns == other.on_columns
             && self.description == other.description
             && self.random_state.seed() == other.random_state.seed()
-            && Arc::ptr_eq(&self.map, &other.map)
+            && self.lookup.identity() == other.lookup.identity()
     }
 }
 
 impl Eq for HashTableLookupExpr {}
+
+impl Lookup {
+    /// Identity of the immutable build-side maps. A routed lookup's router is
+    /// created together with its maps, so the maps identify it as well.
+    fn identity(&self) -> *const () {
+        match self {
+            Lookup::Single(map) => Arc::as_ptr(map).cast(),
+            Lookup::Routed { maps, .. } => Arc::as_ptr(maps).cast(),
+        }
+    }
+}
 
 impl Display for HashTableLookupExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -377,7 +544,7 @@ impl PhysicalExpr for HashTableLookupExpr {
         Ok(Arc::new(HashTableLookupExpr {
             on_columns: children,
             random_state: self.random_state.clone(),
-            map: Arc::clone(&self.map),
+            lookup: self.lookup.clone(),
             description: self.description.clone(),
             pruning_bitmap: self.pruning_bitmap.clone(),
         }))
@@ -395,15 +562,21 @@ impl PhysicalExpr for HashTableLookupExpr {
         // Evaluate columns
         let join_keys = evaluate_columns(&self.on_columns, batch)?;
 
-        match self.map.as_ref() {
-            Map::HashMap(map) => {
-                with_hashes(&join_keys, self.random_state.random_state(), |hashes| {
-                    let array = map.contain_hashes(hashes);
+        match &self.lookup {
+            Lookup::Single(map) => match map.as_ref() {
+                Map::HashMap(map) => {
+                    with_hashes(&join_keys, self.random_state.random_state(), |hashes| {
+                        let array = map.contain_hashes(hashes);
+                        Ok(ColumnarValue::Array(Arc::new(array)))
+                    })
+                }
+                Map::ArrayMap(map) => {
+                    let array = map.contain_keys(&join_keys)?;
                     Ok(ColumnarValue::Array(Arc::new(array)))
-                })
-            }
-            Map::ArrayMap(map) => {
-                let array = map.contain_keys(&join_keys)?;
+                }
+            },
+            Lookup::Routed { router, maps } => {
+                let array = self.evaluate_routed(&join_keys, router, maps)?;
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
         }
@@ -424,7 +597,7 @@ impl PhysicalExpr for HashTableLookupExpr {
             // with lit(true), see the comment below
             on_columns: _,
             random_state: _,
-            map: _,
+            lookup: _,
             description: _,
             pruning_bitmap: _,
         } = self;
