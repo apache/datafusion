@@ -38,9 +38,7 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
-use crate::execution_plan::{
-    CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
-};
+use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -241,18 +239,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
             cache: Arc::clone(&self.cache),
             enable_round_robin_repartition: self.enable_round_robin_repartition,
         }))
-    }
-
-    fn with_preserve_order(
-        &self,
-        preserve_order: bool,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.input
-            .with_preserve_order(preserve_order)
-            .and_then(|new_input| {
-                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
-                    .ok()
-            })
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

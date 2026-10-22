@@ -928,6 +928,7 @@ mod tests {
         {
             table_options.parquet.global.coerce_int96 =
                 Some(datafusion_common::parquet_config::DFTimeUnit::Microsecond);
+            table_options.parquet.global.coerce_int96_tz = Some("UTC".parse()?);
         }
         table_options.current_format = Some(ConfigFileType::JSON);
 
