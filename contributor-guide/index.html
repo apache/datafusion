@@ -635,6 +635,13 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
 <section id="github-runners">
 <h3>GitHub Runners<a class="headerlink" href="#github-runners" title="Link to this heading">#</a></h3>
 <p>We also use standard GitHub runners for some actions in the main repository; these are also runnable in forks.</p>
+<p>Small, short jobs run on <code class="docutils literal notranslate"><span class="pre">ubuntu-slim</span></code>, as ASF Infrastructure
+<a class="reference external" href="https://infra.apache.org/services.html">recommends</a>, because it starts quickly
+even when the shared <code class="docutils literal notranslate"><span class="pre">ubuntu-latest</span></code> pool is busy. Use it for any job that
+stays well within its limits: one vCPU, 5 GB of memory, 15 minutes, and no
+Docker engine, so no <code class="docutils literal notranslate"><span class="pre">container:</span></code> jobs or service containers. Slim has no Rust
+toolchain; jobs that need <code class="docutils literal notranslate"><span class="pre">cargo</span></code> install it with
+<code class="docutils literal notranslate"><span class="pre">.github/actions/setup-rustup</span></code>.</p>
 <section id="pull-requests-from-forks">
 <h4>Pull Requests from Forks<a class="headerlink" href="#pull-requests-from-forks" title="Link to this heading">#</a></h4>
 <p>DataFusion and its subprojects use substantial CI runner time. ASF Infrastructure
