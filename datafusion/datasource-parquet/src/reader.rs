@@ -68,7 +68,7 @@ pub trait ParquetFileSchemaProvider: Debug + Send + Sync + 'static {
 /// such as pre-cached metadata, I/O coalescing, etc.
 ///
 /// See [`DefaultParquetFileReaderFactory`] for a simple implementation.
-pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
+pub trait ParquetFileReaderFactory: Any + Debug + Send + Sync {
     /// Provides an `AsyncFileReader` for reading data from a parquet file specified
     ///
     /// # Notes
@@ -90,6 +90,18 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>>;
+}
+
+impl dyn ParquetFileReaderFactory {
+    /// Returns `true` if this factory is of type `T`.
+    pub fn is<T: ParquetFileReaderFactory>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this factory to a concrete type `T`.
+    pub fn downcast_ref<T: ParquetFileReaderFactory>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
 }
 
 /// Default implementation of [`ParquetFileReaderFactory`]

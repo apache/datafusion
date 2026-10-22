@@ -1465,6 +1465,40 @@ mod tests {
         assert!(source.filter().is_some());
     }
 
+    #[test]
+    fn parquet_file_reader_factory_downcasts_to_concrete_type() {
+        use crate::CachedParquetFileReaderFactory;
+        use datafusion_execution::cache::cache_manager::FileMetadataCache;
+        use datafusion_execution::cache::default_cache::DefaultCache;
+        use object_store::memory::InMemory;
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let source = ParquetSource::new(Arc::new(Schema::empty()))
+            .with_parquet_file_reader_factory(Arc::new(
+                DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
+            ));
+        let factory = source.parquet_file_reader_factory().unwrap();
+        assert!(factory.is::<DefaultParquetFileReaderFactory>());
+        assert!(
+            factory
+                .downcast_ref::<CachedParquetFileReaderFactory>()
+                .is_none()
+        );
+
+        let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024));
+        let source = ParquetSource::new(Arc::new(Schema::empty()))
+            .with_parquet_file_reader_factory(Arc::new(
+                CachedParquetFileReaderFactory::new(store, cache),
+            ));
+        let factory = source.parquet_file_reader_factory().unwrap();
+        assert!(factory.is::<CachedParquetFileReaderFactory>());
+        assert!(
+            factory
+                .downcast_ref::<DefaultParquetFileReaderFactory>()
+                .is_none()
+        );
+    }
+
     /// Render a `ParquetSource`'s `fmt_extra` output as a `String` for
     /// inspection in tests.
     fn render_fmt_extra(source: &ParquetSource, t: DisplayFormatType) -> String {
