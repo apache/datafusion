@@ -209,17 +209,21 @@ impl Display for Partitioning {
 /// partition 2: keys at/after (2023, Allston)
 /// ```
 ///
-/// Bounds preserve the boundary between contiguous groups of partitions when
-/// distributing a range across tasks. For example, splitting at `(30)` gives:
+/// Bounds optionally restrict the keys of the first and last partition:
 ///
 /// ```text
-/// original: start = None, split_points = [(10), (20), (30), (40), (50)], end = None
-/// task 0:   start = None, split_points = [(10), (20)], end = Some((30))
-/// task 1:   start = Some((30)), split_points = [(40), (50)], end = None
-/// ```
+/// split_points = [
+///   2022,
+///   2023,
+/// ]
+/// start_bound = 2020
+/// end_bound = 2025
 ///
-/// The shared boundary `(30)` can then be recovered when concatenating the
-/// tasks' partitions. Use [`Self::try_with_bounds`] to specify these bounds.
+/// partition 0: 2020 <= key < 2022
+/// partition 1: 2022 <= key < 2023
+/// partition 2: 2023 <= key < 2025
+/// ```
+/// Use [`Self::try_with_bounds`] to specify these bounds.
 ///
 /// Equality includes bounds and retained samples, since they describe the key
 /// space and determine which future scales are possible. Use
@@ -294,8 +298,7 @@ impl RangePartitioning {
     /// ```
     ///
     /// Retain at least `maximum_expected_partitions - 1` samples to support that
-    /// many partitions later. Repeated samples allow padding with empty partitions
-    /// when there are not enough distinct values.
+    /// many partitions later. Duplicate samples may result in duplicate split points.
     pub fn try_new_with_samples(
         ordering: LexOrdering,
         samples: Vec<SplitPoint>,
