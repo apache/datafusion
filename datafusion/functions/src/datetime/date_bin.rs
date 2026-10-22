@@ -45,7 +45,8 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
+use super::civil::CivilTimestamp;
+use chrono::{Duration, TimeDelta};
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
@@ -402,88 +403,49 @@ fn compute_distance_wide(time_diff: i128, stride: i128) -> i128 {
     time_diff - time_diff.rem_euclid(stride)
 }
 
-// Shift `origin_date` by `month_delta` months, mapping an out-of-range result to
-// the same error the binning paths reported when this was written inline.
-fn shift_months(origin_date: DateTime<Utc>, month_delta: i64) -> Result<DateTime<Utc>> {
-    if month_delta < 0 {
-        origin_date
-            .checked_sub_months(Months::new(month_delta.unsigned_abs() as u32))
-            .ok_or_else(|| {
-                exec_datafusion_err!("DATE_BIN month subtraction out of range")
-            })
+// The month bin that `source` falls into, on the civil calendar. All arithmetic
+// is i64; callers widen only at the nanosecond boundary.
+fn bin_months_civil(
+    stride_months: i64,
+    source: CivilTimestamp,
+    origin: CivilTimestamp,
+) -> Option<CivilTimestamp> {
+    let month_delta =
+        compute_distance(source.month_index() - origin.month_index(), stride_months)
+            .ok()?;
+    let bin = origin.shift_months(month_delta);
+    // Step back one stride from the origin when the candidate is after the source.
+    Some(if bin > source {
+        origin.shift_months(month_delta.checked_sub(stride_months)?)
     } else {
-        origin_date
-            .checked_add_months(Months::new(month_delta as u32))
-            .ok_or_else(|| exec_datafusion_err!("DATE_BIN month addition out of range"))
-    }
+        bin
+    })
 }
 
 // return time in nanoseconds that the source timestamp falls into based on the stride and origin
 fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> Result<i64> {
-    // convert source and origin to DateTime<Utc>
-    let source_date = to_utc_date_time(source)?;
-    let origin_date = to_utc_date_time(origin)?;
-
-    let bin_time = bin_months(stride_months, source_date, origin_date)?;
-    match bin_time.timestamp_nanos_opt() {
-        Some(nanos) => Ok(nanos),
-        None => exec_err!("DATE_BIN result timestamp out of range"),
-    }
+    bin_months_civil(
+        stride_months,
+        CivilTimestamp::from_nanos(source),
+        CivilTimestamp::from_nanos(origin),
+    )
+    .and_then(CivilTimestamp::to_nanos)
+    .ok_or_else(|| exec_datafusion_err!("DATE_BIN result timestamp out of range"))
 }
 
-// `date_bin_months_interval` with i128 nanoseconds, limited by the range of
-// `DateTime<Utc>` instead of i64 nanoseconds.
+// Month bins on the civil calendar. `DateTime<Utc>` cannot represent every
+// second, millisecond, or microsecond timestamp (#25855).
 fn date_bin_months_interval_wide(
     stride_months: i64,
     source: i128,
     origin: i64,
 ) -> Option<i128> {
-    let nanos_per_sec = i128::from(NANOS_PER_SEC);
-    let secs = i64::try_from(source.div_euclid(nanos_per_sec)).ok()?;
-    let nsec = source.rem_euclid(nanos_per_sec) as u32;
-    let source_date = DateTime::from_timestamp(secs, nsec)?;
-    let origin_date = to_utc_date_time(origin).ok()?;
-
-    let bin_time = bin_months(stride_months, source_date, origin_date).ok()?;
-    Some(
-        i128::from(bin_time.timestamp()) * nanos_per_sec
-            + i128::from(bin_time.timestamp_subsec_nanos()),
-    )
-}
-
-// return the start of the month bin that `source_date` falls into
-fn bin_months(
-    stride_months: i64,
-    source_date: DateTime<Utc>,
-    origin_date: DateTime<Utc>,
-) -> Result<DateTime<Utc>> {
-    // calculate the number of months between the source and origin
-    let month_diff = (source_date.year() - origin_date.year()) * 12
-        + source_date.month() as i32
-        - origin_date.month() as i32;
-
-    // distance from origin to bin
-    let month_delta = compute_distance(month_diff as i64, stride_months)?;
-
-    let mut bin_time = shift_months(origin_date, month_delta)?;
-
-    // If origin is not midnight of first date of the month, the bin_time may be larger than the source
-    // In this case, we need to move back to previous bin
-    if bin_time > source_date {
-        let month_delta = month_delta - stride_months;
-        bin_time = shift_months(origin_date, month_delta)?;
-    }
-    Ok(bin_time)
-}
-
-fn to_utc_date_time(nanos: i64) -> Result<DateTime<Utc>> {
-    // Keep negative sub-second values normalized as seconds + non-negative nanos.
-    let secs = nanos.div_euclid(NANOS_PER_SEC);
-    let nsec = nanos.rem_euclid(NANOS_PER_SEC) as u32;
-    match DateTime::from_timestamp(secs, nsec) {
-        Some(dt) => Ok(dt),
-        None => exec_err!("Invalid timestamp value"),
-    }
+    let bin = bin_months_civil(
+        stride_months,
+        CivilTimestamp::from_nanos_wide(source)?,
+        CivilTimestamp::from_nanos(origin),
+    )?;
+    Some(bin.to_nanos_wide())
 }
 
 fn timestamp_scale<T: ArrowTimestampType>() -> i64 {
@@ -911,7 +873,10 @@ fn date_bin_impl(
 mod tests {
     use std::sync::Arc;
 
-    use crate::datetime::date_bin::{DateBinFunc, date_bin_nanos_interval};
+    use crate::datetime::date_bin::{
+        DateBinFunc, date_bin_months_interval, date_bin_months_interval_wide,
+        date_bin_nanos_interval,
+    };
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
@@ -1487,14 +1452,22 @@ mod tests {
             )),
         ];
 
-        let result = invoke_date_bin_with_args(args, 1, return_field);
-        assert!(result.is_ok());
-        if let ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(val, _)) =
-            result.unwrap()
+        // The bin fits in milliseconds even though it is outside `DateTime<Utc>`.
+        let expected_ms = Some(-4_306_016_287_785_600_000);
+        let assert_millis = |args: Vec<ColumnarValue>| match invoke_date_bin_with_args(
+            args,
+            1,
+            return_field,
+        )
+        .unwrap()
         {
-            assert!(val.is_none(), "Expected None for out of range operation");
-        }
-        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(val, _)) => {
+                assert_eq!(val, expected_ms);
+            }
+            other => panic!("expected TimestampMillisecond, got {other:?}"),
+        };
+        assert_millis(args);
+        assert_millis(vec![
             ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1637426858, 0, 0)),
             ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
                 Some(-1040292460),
@@ -1504,14 +1477,43 @@ mod tests {
                 Some(string_to_timestamp_nanos("1984-01-07 00:00:00").unwrap()),
                 None,
             )),
-        ];
+        ]);
+    }
 
-        let result = invoke_date_bin_with_args(args, 1, return_field);
-        assert!(result.is_ok());
-        if let ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(val, _)) =
-            result.unwrap()
-        {
-            assert!(val.is_none(), "Expected None for out of range operation");
+    #[test]
+    fn test_date_bin_months_wide_matches_chrono_path() {
+        let origins = [
+            0,
+            string_to_timestamp_nanos("2020-01-31T15:30:00").unwrap(),
+            string_to_timestamp_nanos("2020-02-29T23:59:59.500").unwrap(),
+            string_to_timestamp_nanos("1969-12-31T00:00:01").unwrap(),
+            string_to_timestamp_nanos("1970-03-01T00:00:00").unwrap(),
+        ];
+        let sources = [
+            string_to_timestamp_nanos("2020-02-15T00:00:00").unwrap(),
+            string_to_timestamp_nanos("2020-02-29T00:00:00").unwrap(),
+            string_to_timestamp_nanos("2021-02-28T12:00:00").unwrap(),
+            string_to_timestamp_nanos("2021-03-01T00:00:00").unwrap(),
+            string_to_timestamp_nanos("2019-12-31T23:59:59").unwrap(),
+            string_to_timestamp_nanos("1960-01-31T00:00:00").unwrap(),
+            0,
+            -1,
+        ];
+        for stride in [1, 2, 3, 12, 15, -1, -12] {
+            for &origin in &origins {
+                for &source in &sources {
+                    let narrow =
+                        date_bin_months_interval(stride, source, origin).unwrap();
+                    let wide =
+                        date_bin_months_interval_wide(stride, i128::from(source), origin)
+                            .expect("wide month bin");
+                    assert_eq!(
+                        wide,
+                        i128::from(narrow),
+                        "stride={stride} source={source} origin={origin}"
+                    );
+                }
+            }
         }
     }
 
@@ -1594,6 +1596,14 @@ mod tests {
             (month(), secs(10_000_000_000), secs(month_start(2286, 11))),
             // An exact bin at the minimum value.
             (second(), secs(i64::MIN), secs(i64::MIN)),
+            // Regression for #25855: past `DateTime<Utc>`, the month bin still fits.
+            (month(), secs(10_000_000_000_000), secs(9_999_998_294_400)),
+            (
+                month(),
+                secs(-10_000_000_000_000),
+                secs(-10_000_001_059_200),
+            ),
+            (month(), secs(i64::MAX), secs(9_223_372_036_854_460_800)),
         ];
         for (stride, source, expected) in cases {
             assert_date_bin(stride, source, epoch(), expected);
@@ -1622,10 +1632,10 @@ mod tests {
                 ScalarValue::new_interval_mdn(0, 0, 3),
                 ScalarValue::TimestampNanosecond(Some(i64::MIN), None),
             ),
-            // Month bins are limited by the range of `DateTime<Utc>`.
+            // The month bin of Timestamp(Second)::MIN does not fit (#25855).
             (
                 ScalarValue::new_interval_mdn(1, 0, 0),
-                ScalarValue::TimestampSecond(Some(i64::MAX), None),
+                ScalarValue::TimestampSecond(Some(i64::MIN), None),
             ),
         ];
         for (stride, source) in cases {

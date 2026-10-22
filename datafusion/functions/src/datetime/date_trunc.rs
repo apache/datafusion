@@ -52,6 +52,8 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
+use super::civil::{civil_from_days, days_from_civil};
+
 use chrono::{
     DateTime, Datelike, Duration, LocalResult, Months, NaiveDate, NaiveDateTime, Offset,
     TimeDelta, Timelike, Weekday,
@@ -1055,65 +1057,6 @@ fn _date_trunc_coarse_with_tz(
     });
     Ok(truncated.and_then(|value| value.timestamp_nanos_opt()))
 }
-
-// The two helpers below duplicate `chrono::NaiveDate::{from_epoch_days,
-// to_epoch_days}`. They are kept separate because chrono's versions round trip
-// through a validated `NaiveDate`: `from_epoch_days` computes year flags and
-// returns an `Option`, and reading the year/month/day back out decodes them from
-// its packed representation. These helpers stay in plain integers, which is all
-// the truncation below needs.
-
-/// Days from the Unix epoch to 0000-03-01, the epoch used by the civil calendar
-/// conversions below.
-const DAYS_EPOCH_SHIFT: i64 = 719_468;
-
-/// Days in a 400 year era of the proleptic Gregorian calendar.
-const DAYS_PER_ERA: i64 = 146_097;
-
-/// Splits a day count relative to the Unix epoch into a proleptic Gregorian
-/// year, month (1-12) and day of month (1-31).
-///
-/// This is a port of Howard Hinnant's `civil_from_days`, which documents the
-/// derivation of the constants and the March-based year used below:
-/// <https://howardhinnant.github.io/date_algorithms.html#civil_from_days>
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + DAYS_EPOCH_SHIFT;
-    let era = z.div_euclid(DAYS_PER_ERA);
-    let day_of_era = z.rem_euclid(DAYS_PER_ERA);
-    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36524
-        - day_of_era / 146_096)
-        / 365;
-    let day_of_year =
-        day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    // Month index with March as 0, so that the leap day falls at the end of the year.
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    (year, month, day)
-}
-
-/// Inverse of [`civil_from_days`]: the day count relative to the Unix epoch for
-/// the given proleptic Gregorian date.
-///
-/// This is a port of Howard Hinnant's `days_from_civil`, which documents the
-/// derivation of the constants and the March-based year used below:
-/// <https://howardhinnant.github.io/date_algorithms.html#days_from_civil>
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = year - i64::from(month <= 2);
-    let era = year.div_euclid(400);
-    let year_of_era = year.rem_euclid(400);
-    let month_index = if month > 2 { month - 3 } else { month + 9 };
-    let day_of_year = (153 * month_index + 2) / 5 + day - 1;
-    let day_of_era =
-        year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * DAYS_PER_ERA + day_of_era - DAYS_EPOCH_SHIFT
-}
-
 /// Truncates a UTC nanosecond timestamp with integer arithmetic. Truncating on
 /// the calendar directly avoids converting every value to a `NaiveDateTime` and
 /// rebuilding it field by field.
