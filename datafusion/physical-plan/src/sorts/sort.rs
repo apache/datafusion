@@ -784,7 +784,7 @@ impl ExternalSorter {
             .build()
     }
 
-    /// Sort runs concurrently, preserving their order for the merge's equal-key ties.
+    /// Sort runs concurrently, returning their streams in input order.
     async fn prepare_sort_runs(
         &mut self,
         runs: Vec<RecordBatch>,
@@ -814,7 +814,7 @@ impl ExternalSorter {
         Self::collect_prepared_runs(run_count, jobs).await
     }
 
-    /// Restore input order because the merge uses it to break equal-key ties.
+    /// Restore input order so job completion order does not affect the merge's output.
     async fn collect_prepared_runs(
         run_count: usize,
         mut jobs: impl Stream<Item = Result<(usize, SendableRecordBatchStream)>> + Unpin,
