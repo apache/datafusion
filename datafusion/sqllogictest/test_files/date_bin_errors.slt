@@ -17,11 +17,9 @@
 
 # Tests for DATE_BIN error handling with out-of-range values
 
-# Test case from issue #20219 - should return NULL instead of panicking
-query P
+# Issue #20219: out-of-range calendar arithmetic must error instead of panicking.
+query error DataFusion error: Execution error: DATE_BIN timestamp out of range
 select date_bin(interval '1637426858 months', to_timestamp_millis(1040292460), timestamp '1984-01-07 00:00:00');
-----
-NULL
 
 # Issue #22528: negative sub-second source with month interval.
 query P
@@ -36,42 +34,32 @@ from values (to_timestamp_millis(-1040292460)) t(c);
 ----
 1969-12-07T00:00:00
 
-# Array path should return NULL for per-row overflow.
-query P
+# Column inputs propagate the same error.
+query error DataFusion error: Execution error: DATE_BIN timestamp out of range
 select date_bin(interval '1637426858 months', c, timestamp '1984-01-07 00:00:00')
 from values (to_timestamp_millis(1040292460)) t(c);
-----
-NULL
 
-# Large stride causing overflow - should return NULL
-query P
+# A large month stride can exceed the supported calendar range.
+query error DataFusion error: Execution error: DATE_BIN timestamp out of range
 select date_bin(
   interval '1637426858 months',
   timestamp '1969-12-31 00:00:00',
   timestamp '1984-01-07 00:00:00'
 );
-----
-NULL
 
-# Another large stride test
-query P
+query error DataFusion error: Execution error: DATE_BIN timestamp out of range
 select date_bin(
   interval '1637426858 months',
   to_timestamp_millis(-1040292000),
   timestamp '1984-01-07 00:00:00'
 ) as b;
-----
-NULL
 
-# Test with 1900-01-01 timestamp
-query P
+query error DataFusion error: Execution error: DATE_BIN timestamp out of range
 select date_bin(
   interval '1637426858 months',
   to_timestamp_millis(-2208988800000),
   timestamp '1984-01-07 00:00:00'
 ) as b;
-----
-NULL
 
 # source - origin overflows i64 nanoseconds
 query P
@@ -83,13 +71,48 @@ select date_bin(
 ----
 2262-04-11T23:47:16.854775807
 
-# compute_distance overflow: source at i64::MIN nanoseconds previously panicked
-# inside compute_distance; it must return NULL through the SQL execution path
-query P
+# The bin starts below the minimum nanosecond timestamp.
+query error DataFusion error: Execution error: DATE_BIN timestamp out of range
 select date_bin(
   interval '3 nanoseconds',
   arrow_cast(-9223372036854775808, 'Timestamp(Nanosecond, None)')
 );
+
+# The same underflow must fail for column inputs, even alongside valid and NULL rows.
+query error DataFusion error: Execution error: DATE_BIN timestamp out of range
+select date_bin(interval '3 nanoseconds', arrow_cast(ts, 'Timestamp(Nanosecond, None)'))
+from (values (0::bigint), (NULL::bigint), (-9223372036854775808)) t(ts);
+
+# Fixed-duration bins can underflow every timestamp precision.
+query error DataFusion error: Execution error: DATE_BIN timestamp out of range
+select date_bin(interval '1 day', arrow_cast(-9223372036854775808, 'Timestamp(Second, None)'));
+
+query error DataFusion error: Execution error: DATE_BIN timestamp out of range
+select date_bin(interval '1 day', arrow_cast(-9223372036854775808, 'Timestamp(Millisecond, None)'));
+
+query error DataFusion error: Execution error: DATE_BIN timestamp out of range
+select date_bin(interval '1 day', arrow_cast(-9223372036854775808, 'Timestamp(Microsecond, None)'));
+
+# A month calculation can exceed chrono's range even when the input type accepts it.
+query error DataFusion error: Execution error: DATE_BIN timestamp out of range
+select date_bin(interval '1 month', arrow_cast(9223372036854775807, 'Timestamp(Second, None)'));
+
+# NULL source values remain NULL, including in mixed column inputs.
+query PPPP
+select
+  date_bin(interval '1 day', arrow_cast(ts, 'Timestamp(Second, None)')),
+  date_bin(interval '1 day', arrow_cast(ts, 'Timestamp(Millisecond, None)')),
+  date_bin(interval '1 day', arrow_cast(ts, 'Timestamp(Microsecond, None)')),
+  date_bin(interval '1 day', arrow_cast(ts, 'Timestamp(Nanosecond, None)'))
+from (values (0::bigint), (NULL::bigint)) t(ts)
+order by ts NULLS LAST;
+----
+1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00
+NULL NULL NULL NULL
+
+# A NULL interval still produces NULL for a non-null timestamp.
+query P
+select date_bin(NULL, timestamp '2026-01-01 00:00:00');
 ----
 NULL
 
