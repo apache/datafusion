@@ -26,7 +26,7 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::take;
-use arrow::datatypes::{DataType, FieldRef};
+use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::utils::{ListCoercion, take_function_args};
 use datafusion_common::{HashSet, Result, internal_err};
@@ -143,18 +143,18 @@ fn array_except_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         | (DataType::Null, dt @ DataType::LargeList(_))
         | (dt @ DataType::List(_), DataType::Null)
         | (dt @ DataType::LargeList(_), DataType::Null) => Ok(new_null_array(dt, len)),
-        (DataType::List(field), DataType::List(_)) => {
+        (DataType::List(_), DataType::List(_)) => {
             check_datatypes("array_except", &[array1, array2])?;
             let list1 = array1.as_list::<i32>();
             let list2 = array2.as_list::<i32>();
-            let result = general_except::<i32>(list1, list2, field)?;
+            let result = general_except::<i32>(list1, list2)?;
             Ok(Arc::new(result))
         }
-        (DataType::LargeList(field), DataType::LargeList(_)) => {
+        (DataType::LargeList(_), DataType::LargeList(_)) => {
             check_datatypes("array_except", &[array1, array2])?;
             let list1 = array1.as_list::<i64>();
             let list2 = array2.as_list::<i64>();
-            let result = general_except::<i64>(list1, list2, field)?;
+            let result = general_except::<i64>(list1, list2)?;
             Ok(Arc::new(result))
         }
         (dt1, dt2) => {
@@ -166,7 +166,6 @@ fn array_except_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn general_except<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
-    field: &FieldRef,
 ) -> Result<GenericListArray<OffsetSize>> {
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
 
@@ -231,7 +230,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
     };
 
     Ok(GenericListArray::<OffsetSize>::new(
-        field.to_owned(),
+        Arc::clone(l.value_field()),
         OffsetBuffer::new(offsets.into()),
         values,
         nulls,
@@ -242,7 +241,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
 mod tests {
     use super::{ArrayExcept, general_except};
     use arrow::array::{Array, AsArray, Int32Array, LargeListArray, ListArray};
-    use arrow::datatypes::{DataType, Field, Float64Type, Int32Type};
+    use arrow::datatypes::{Field, Float64Type, Int32Type};
     use datafusion_common::{Result, config::ConfigOptions};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
@@ -312,11 +311,7 @@ mod tests {
             Some(vec![Some(-98.0)]),
         ])
         .slice(1, 1);
-        let DataType::LargeList(field) = l.data_type() else {
-            unreachable!()
-        };
-
-        let result = general_except::<i64>(&l, &r, field)?;
+        let result = general_except::<i64>(&l, &r)?;
         let values = result.value(0);
         let values = values.as_primitive::<Float64Type>();
         assert_eq!(values.len(), 1);

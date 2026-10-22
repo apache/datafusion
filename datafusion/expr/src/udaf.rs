@@ -1626,7 +1626,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(args)
+        self.inner.create_sliding_accumulator(args)
     }
 
     fn with_beneficial_ordering(
@@ -1761,8 +1761,9 @@ pub enum DistinctHandling {
 #[cfg(test)]
 mod test {
     use crate::{AggregateUDF, AggregateUDFImpl};
-    use arrow::datatypes::{DataType, Field, FieldRef};
-    use datafusion_common::Result;
+    use arrow::array::ArrayRef;
+    use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+    use datafusion_common::{Result, ScalarValue, not_impl_err};
     use datafusion_expr_common::accumulator::Accumulator;
     use datafusion_expr_common::signature::{Signature, Volatility};
     use datafusion_functions_aggregate_common::accumulator::{
@@ -1883,6 +1884,103 @@ mod test {
         ) -> Result<Box<dyn Accumulator>> {
             unimplemented!()
         }
+    }
+
+    /// Panics if driven: the test only checks which inner method is forwarded to.
+    #[derive(Debug)]
+    struct PanicAccumulator;
+
+    impl Accumulator for PanicAccumulator {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            unimplemented!()
+        }
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            unimplemented!()
+        }
+        fn size(&self) -> usize {
+            size_of::<Self>()
+        }
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            unimplemented!()
+        }
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    /// Distinguishable accumulators: the plain one fails, the sliding one succeeds.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct SlidingOnlyUdf {
+        signature: Signature,
+    }
+
+    impl SlidingOnlyUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for SlidingOnlyUdf {
+        fn name(&self) -> &str {
+            "sliding_only"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            not_impl_err!("no plain accumulator")
+        }
+        fn create_sliding_accumulator(
+            &self,
+            _args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            Ok(Box::new(PanicAccumulator))
+        }
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_aliased_udaf_forwards_create_sliding_accumulator() {
+        let udaf = AggregateUDF::from(SlidingOnlyUdf::new()).with_aliases(["some_alias"]);
+
+        let schema = Schema::empty();
+        let args = || AccumulatorArgs {
+            return_field: Arc::new(Field::new("f", DataType::Int64, true)),
+            schema: &schema,
+            expr_fields: &[],
+            ignore_nulls: false,
+            order_bys: &[],
+            is_reversed: false,
+            name: "sliding_only",
+            is_distinct: false,
+            exprs: &[],
+        };
+
+        // Asserting both directions proves the wrapper distinguishes the two
+        // methods rather than routing both to the same one.
+        let sliding = udaf.create_sliding_accumulator(args());
+        assert!(
+            sliding.is_ok(),
+            "aliased UDAF must forward create_sliding_accumulator to the inner UDAF, got: {:?}",
+            sliding.err()
+        );
+        assert!(udaf.accumulator(args()).is_err());
+
+        assert!(udaf.aliases().iter().any(|a| a == "some_alias"));
     }
 
     #[test]
