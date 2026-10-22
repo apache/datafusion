@@ -42,6 +42,7 @@
 //! [`LogicalPlan`]: datafusion_expr::logical_plan::LogicalPlan
 //! [`Expr`]: datafusion_expr::expr::Expr
 
+mod column_labels;
 mod cte;
 mod expr;
 pub mod parser;

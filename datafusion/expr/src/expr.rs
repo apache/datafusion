@@ -1069,6 +1069,61 @@ impl Sort {
             nulls_first: self.nulls_first,
         }
     }
+
+    /// Human readable display formatting for this sort expression, in SQL
+    /// syntax. `ASC` and the default null ordering for the sort direction
+    /// (`ASC NULLS LAST`, `DESC NULLS FIRST`) are left out.
+    ///
+    /// See [`Expr::human_display`] for details.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// assert_eq!(col("a").sort(true, false).human_display().to_string(), "a");
+    /// assert_eq!(col("a").sort(false, false).human_display().to_string(), "a DESC NULLS LAST");
+    /// ```
+    pub fn human_display(&self) -> impl Display + '_ {
+        SortSqlDisplay(self)
+    }
+}
+
+/// A helper struct for displaying a `Sort` as an SQL-like string.
+struct SortSqlDisplay<'a>(&'a Sort);
+
+impl Display for SortSqlDisplay<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let Sort {
+            expr,
+            asc,
+            nulls_first,
+        } = self.0;
+        write!(f, "{}", SqlDisplay(expr))?;
+        if !asc {
+            write!(f, " DESC")?;
+        }
+        // The default is NULLS LAST for ASC and NULLS FIRST for DESC
+        if *asc == *nulls_first {
+            let nulls = if *nulls_first { "FIRST" } else { "LAST" };
+            write!(f, " NULLS {nulls}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Formats a list of [`Sort`] expressions, separated by `", "`, using
+/// [`Sort::human_display`].
+pub struct SortListDisplay<'a>(pub &'a [Sort]);
+
+impl Display for SortListDisplay<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for (i, sort) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", sort.human_display())?;
+        }
+        Ok(())
+    }
 }
 
 impl Display for Sort {
@@ -4293,6 +4348,26 @@ mod test {
         assert_eq!("Decimal128(NULL,10,2)", format!("{null_expr}"));
         assert_eq!("Decimal128(NULL,10,2)", null_expr.schema_name().to_string());
         assert_eq!("NULL", null_expr.human_display().to_string());
+    }
+
+    #[test]
+    fn human_display_sort() {
+        assert_eq!("a", col("a").sort(true, false).human_display().to_string());
+        assert_eq!(
+            "a NULLS FIRST",
+            col("a").sort(true, true).human_display().to_string()
+        );
+        assert_eq!(
+            "a DESC",
+            col("a").sort(false, true).human_display().to_string()
+        );
+        assert_eq!(
+            "a + 1 DESC NULLS LAST",
+            (col("a") + lit(1i64))
+                .sort(false, false)
+                .human_display()
+                .to_string()
+        );
     }
 
     #[test]
