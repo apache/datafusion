@@ -660,12 +660,7 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PruneWithStatistics(prepared) => {
                 let mut prepared_row_groups = (*prepared).prune_row_groups()?;
-                if prepared_row_groups
-                    .row_groups
-                    .row_group_indexes()
-                    .next()
-                    .is_none()
-                {
+                if prepared_row_groups.row_groups.is_fully_pruned() {
                     return Ok(ParquetOpenState::Done);
                 }
                 if prepared_row_groups.should_load_page_index()? {
@@ -700,7 +695,7 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PruneWithBloomFilters(loaded) => {
                 let pruned = loaded.prune_bloom_filters();
-                if pruned.row_groups.row_group_indexes().next().is_none() {
+                if pruned.row_groups.is_fully_pruned() {
                     return Ok(ParquetOpenState::Done);
                 }
                 Ok(ParquetOpenState::BuildStream(Box::new(pruned)))
