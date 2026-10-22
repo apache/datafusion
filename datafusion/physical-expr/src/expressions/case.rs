@@ -3302,6 +3302,37 @@ mod tests {
         );
     }
 
+    /// Covers both the linear and the hash lookup of primitive literals, with inputs
+    /// spanning several chunks of the linear lookup.
+    #[rstest::rstest]
+    fn test_case_when_literal_lookup_int64_by_number_of_literals(
+        #[values(2, 16, 17, 40)] num_literals: i64,
+    ) {
+        let literal = |i: i64| i * 7 - 50;
+        let lookup_map = create_lookup(
+            (0..num_literals).map(|i| (Some(literal(i)), Some(format!("v{i}")))),
+        );
+
+        let (input_values, expected): (Vec<_>, Vec<_>) = (0..700i64)
+            .map(|row| match row % 11 {
+                // Null input
+                0 => (None, None),
+                // No match in WHEN
+                1 => (Some(literal(num_literals) + row), None),
+                _ => {
+                    let i = row % num_literals;
+                    (Some(literal(i)), Some(format!("v{i}")))
+                }
+            })
+            .unzip();
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(Int64Array::from(input_values)),
+            StringArray::from(expected),
+        );
+    }
+
     #[test]
     fn test_case_when_literal_lookup_none_case_should_never_match() {
         let lookup_map = create_lookup([
