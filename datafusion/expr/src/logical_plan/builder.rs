@@ -1689,6 +1689,7 @@ impl LogicalPlanBuilder {
             (joined, repeat)
         };
         // Emit each distinct row `repeat` times.
+        // `range` materializes all copies for a group before `unnest` expands them.
         projection.push(
             Expr::ScalarFunction(ScalarFunction::new_udf(
                 Arc::clone(range),

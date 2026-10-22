@@ -187,12 +187,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Arc<datafusion_expr::AggregateUDF>,
         Arc<datafusion_expr::ScalarUDF>,
     )> {
-        let (Some(count), Some(range)) = (
-            self.context_provider.get_aggregate_meta("count"),
-            self.context_provider.get_function_meta("range"),
-        ) else {
+        let Some((count, range)) = self.context_provider.get_set_operation_functions()
+        else {
             return plan_err!(
-                "INTERSECT ALL and EXCEPT ALL require the count aggregate function and the range scalar function to be registered"
+                "INTERSECT ALL and EXCEPT ALL require the built-in count and range functions to be available"
             );
         };
         Ok((count, range))

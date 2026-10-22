@@ -2123,16 +2123,13 @@ impl DataFrame {
     pub fn intersect(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
-        let (Some(count), Some(range)) = (
-            self.session_state.aggregate_functions().get("count"),
-            self.session_state.scalar_functions().get("range"),
-        ) else {
+        let Some((count, range)) = self.session_state.set_operation_functions() else {
             return plan_err!(
-                "DataFrame::intersect requires the count aggregate function and the range scalar function to be registered"
+                "DataFrame::intersect requires the built-in count and range functions to be available"
             );
         };
         let plan =
-            LogicalPlanBuilder::intersect_all(left_plan, right_plan, count, range)?;
+            LogicalPlanBuilder::intersect_all(left_plan, right_plan, &count, &range)?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -2210,15 +2207,12 @@ impl DataFrame {
     pub fn except(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
-        let (Some(count), Some(range)) = (
-            self.session_state.aggregate_functions().get("count"),
-            self.session_state.scalar_functions().get("range"),
-        ) else {
+        let Some((count, range)) = self.session_state.set_operation_functions() else {
             return plan_err!(
-                "DataFrame::except requires the count aggregate function and the range scalar function to be registered"
+                "DataFrame::except requires the built-in count and range functions to be available"
             );
         };
-        let plan = LogicalPlanBuilder::except_all(left_plan, right_plan, count, range)?;
+        let plan = LogicalPlanBuilder::except_all(left_plan, right_plan, &count, &range)?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,

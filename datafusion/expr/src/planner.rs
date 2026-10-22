@@ -113,6 +113,15 @@ pub trait ContextProvider {
     /// Return the aggregate function with a given name, if any
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;
 
+    /// Return the built-in functions used to plan `INTERSECT ALL` and `EXCEPT ALL`.
+    ///
+    /// Implementations must not look these up by name because users can shadow them.
+    /// The default returns `None`; custom providers must override this method to
+    /// support these operations.
+    fn get_set_operation_functions(&self) -> Option<(Arc<AggregateUDF>, Arc<ScalarUDF>)> {
+        None
+    }
+
     /// Return the window function with a given name, if any
     fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>>;
 

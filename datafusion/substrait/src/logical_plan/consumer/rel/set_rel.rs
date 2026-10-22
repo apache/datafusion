@@ -18,7 +18,6 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::Field;
 use datafusion::common::{JoinType, NullEquality, not_impl_err, substrait_err};
-use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
     Cast, Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
 };
@@ -83,12 +82,12 @@ async fn intersect_rels(
     for input in &rels[1..] {
         let right = consumer.consume_rel(input).await?;
         rel = if is_all {
-            LogicalPlanBuilder::intersect_all(
-                rel,
-                right,
-                &consumer.get_function_registry().udaf("count")?,
-                &consumer.get_function_registry().udf("range")?,
-            )?
+            let Some((count, range)) = consumer.get_set_operation_functions() else {
+                return substrait_err!(
+                    "Multiset set operations require the built-in count and range functions to be available"
+                );
+            };
+            LogicalPlanBuilder::intersect_all(rel, right, &count, &range)?
         } else {
             intersect_rel(rel, right)?
         };
@@ -231,12 +230,12 @@ async fn except_rels(
     for input in &rels[1..] {
         let right = consumer.consume_rel(input).await?;
         rel = if is_all {
-            LogicalPlanBuilder::except_all(
-                rel,
-                right,
-                &consumer.get_function_registry().udaf("count")?,
-                &consumer.get_function_registry().udf("range")?,
-            )?
+            let Some((count, range)) = consumer.get_set_operation_functions() else {
+                return substrait_err!(
+                    "Multiset set operations require the built-in count and range functions to be available"
+                );
+            };
+            LogicalPlanBuilder::except_all(rel, right, &count, &range)?
         } else {
             LogicalPlanBuilder::except(rel, right, false)?
         };

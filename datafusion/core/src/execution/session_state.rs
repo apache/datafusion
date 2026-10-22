@@ -69,6 +69,10 @@ use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
     AggregateUDF, Explain, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
 };
+#[cfg(feature = "nested_expressions")]
+use datafusion_functions_aggregate::count::count_udaf;
+#[cfg(feature = "nested_expressions")]
+use datafusion_functions_nested::range::range_udf;
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerRule,
@@ -1056,6 +1060,24 @@ impl SessionState {
     /// Return reference to aggregate_functions
     pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
         &self.inner.aggregate_functions
+    }
+
+    /// Return the built-in functions used by `INTERSECT ALL` and `EXCEPT ALL`.
+    ///
+    /// Returns `None` when `count` or `range` is unavailable or
+    /// `nested_expressions` is disabled.
+    pub fn set_operation_functions(&self) -> Option<(Arc<AggregateUDF>, Arc<ScalarUDF>)> {
+        self.aggregate_functions().get("count")?;
+        self.scalar_functions().get("range")?;
+
+        #[cfg(feature = "nested_expressions")]
+        {
+            Some((count_udaf(), range_udf()))
+        }
+        #[cfg(not(feature = "nested_expressions"))]
+        {
+            None
+        }
     }
 
     /// Return reference to window functions
@@ -2190,6 +2212,10 @@ impl ContextProvider for SessionContextProvider<'_> {
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.state.aggregate_functions().get(name).cloned()
+    }
+
+    fn get_set_operation_functions(&self) -> Option<(Arc<AggregateUDF>, Arc<ScalarUDF>)> {
+        self.state.set_operation_functions()
     }
 
     fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {

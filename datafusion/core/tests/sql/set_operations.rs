@@ -181,7 +181,7 @@ async fn set_operation_all_without_count_or_range_is_a_plan_error() -> Result<()
             .unwrap_err();
         assert_contains!(
             err.strip_backtrace(),
-            "Error during planning: INTERSECT ALL and EXCEPT ALL require the count aggregate function and the range scalar function to be registered"
+            "Error during planning: INTERSECT ALL and EXCEPT ALL require the built-in count and range functions to be available"
         );
     }
 
@@ -189,13 +189,84 @@ async fn set_operation_all_without_count_or_range_is_a_plan_error() -> Result<()
     let err = df.clone().intersect(df.clone()).unwrap_err();
     assert_contains!(
         err.strip_backtrace(),
-        "DataFrame::intersect requires the count aggregate function"
+        "DataFrame::intersect requires the built-in count and range functions to be available"
     );
     let err = df.clone().except(df).unwrap_err();
     assert_contains!(
         err.strip_backtrace(),
-        "DataFrame::except requires the count aggregate function"
+        "DataFrame::except requires the built-in count and range functions to be available"
     );
+    Ok(())
+}
+
+#[cfg(feature = "nested_expressions")]
+#[tokio::test]
+async fn set_operation_all_uses_builtin_count_and_range_functions() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_udaf(
+        datafusion_functions_aggregate::min_max::min_udaf()
+            .as_ref()
+            .clone()
+            .with_aliases(["count"]),
+    );
+    ctx.register_udf(create_udf(
+        "range",
+        vec![DataType::Int64],
+        DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+        datafusion_expr::Volatility::Immutable,
+        Arc::new(|_| {
+            Err(datafusion_common::DataFusionError::Execution(
+                "shadow range called".to_string(),
+            ))
+        }),
+    ));
+
+    let count_result = ctx
+        .sql("SELECT count(1) FROM VALUES (1), (1), (1)")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(
+        count_result
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>(),
+        1,
+        "the registered count alias should resolve to min"
+    );
+
+    for (operation, expected_count) in [("INTERSECT ALL", 2), ("EXCEPT ALL", 1)] {
+        let left = "SELECT column1 FROM VALUES (1), (1), (1)";
+        let right = "SELECT column1 FROM VALUES (1), (1)";
+        let sql_result = ctx
+            .sql(&format!("{left} {operation} {right}"))
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(
+            sql_result.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            expected_count,
+            "{operation} through SQL"
+        );
+
+        let left = ctx.sql(left).await?;
+        let right = ctx.sql(right).await?;
+        let dataframe_result = if operation == "INTERSECT ALL" {
+            left.intersect(right)?
+        } else {
+            left.except(right)?
+        }
+        .collect()
+        .await?;
+        assert_eq!(
+            dataframe_result
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>(),
+            expected_count,
+            "{operation} through the DataFrame API"
+        );
+    }
     Ok(())
 }
 
