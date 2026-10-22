@@ -1728,7 +1728,8 @@ fn range_hash_join_repartitions_unpartitioned_side_to_match_range() -> Result<()
 }
 
 #[test]
-fn range_hash_join_does_not_copy_bounds_to_other_input() -> Result<()> {
+fn range_hash_join_repartitions_unpartitioned_side_to_match_range_with_bounds()
+-> Result<()> {
     let left = parquet_exec();
     let range = RangePartitioning::try_new(
         [PhysicalSortExpr::new_default(col("a", &schema())?)].into(),
@@ -1740,24 +1741,101 @@ fn range_hash_join_does_not_copy_bounds_to_other_input() -> Result<()> {
         Some(SplitPoint::new(vec![ScalarValue::Int64(Some(0))])),
         Some(SplitPoint::new(vec![ScalarValue::Int64(Some(40))])),
     )?;
-    let right = parquet_exec_with_output_partitioning(Partitioning::Range(range.clone()));
+    let right = parquet_exec_with_output_partitioning(Partitioning::Range(range));
     let join_on = vec![(col("a", &left.schema())?, col("a", &right.schema())?)];
     let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
     let plan = TestConfig::default()
         .with_query_execution_partitions(4)
         .to_plan(join, &DISTRIB_DISTRIB_SORT);
-    let children = plan.children();
-    assert!(children[0].is::<RepartitionExec>());
-    let Partitioning::Range(adapted) = children[0].output_partitioning() else {
-        panic!("expected range repartitioning");
-    };
-    assert_eq!(adapted.split_points(), range.split_points());
-    assert_eq!(adapted.start_bound(), None);
-    assert_eq!(adapted.end_bound(), None);
-    assert_eq!(
-        children[1].output_partitioning(),
-        &Partitioning::Range(range)
+
+    // Bounds are dropped in the RepartitionExec because the unpartitioned data
+    // source might contain any values outside of the range bounds.
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
+      RepartitionExec: partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4, start=(0), end=(40)), file_type=parquet
+    "
     );
+
+    // Because the join is an inner join, it inherits the right side's partitioning. Inheriting
+    // the bounds is safe because it's an inner join.
+    insta::assert_snapshot!(
+        plan.output_partitioning().to_string(),
+        @"Range([a@5 ASC], [(10), (20), (30)], 4, start=(0), end=(40))"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_join_output_partitioning_depends_on_join_type() -> Result<()> {
+    let range = RangePartitioning::try_new(
+        [PhysicalSortExpr::new_default(col("a", &schema())?)].into(),
+        [10, 20, 30]
+            .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+            .to_vec(),
+    )?;
+    let left_range = range.clone().try_with_bounds(
+        Some(SplitPoint::new(vec![ScalarValue::Int64(Some(0))])),
+        Some(SplitPoint::new(vec![ScalarValue::Int64(Some(40))])),
+    )?;
+    let right_range = range.try_with_bounds(
+        Some(SplitPoint::new(vec![ScalarValue::Int64(Some(0))])),
+        Some(SplitPoint::new(vec![ScalarValue::Int64(Some(35))])),
+    )?;
+    let left = parquet_exec_with_output_partitioning(Partitioning::Range(left_range));
+    let right = parquet_exec_with_output_partitioning(Partitioning::Range(right_range));
+    let join_on = vec![(col("a", &left.schema())?, col("a", &right.schema())?)];
+    let mut output_partitionings = Vec::new();
+
+    for join_type in [
+        JoinType::Inner,
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::Full,
+        JoinType::LeftSemi,
+        JoinType::RightSemi,
+        JoinType::LeftAnti,
+        JoinType::RightAnti,
+        JoinType::LeftMark,
+        JoinType::RightMark,
+    ] {
+        let join = hash_join_exec(left.clone(), right.clone(), &join_on, &join_type);
+        let plan = TestConfig::default()
+            .with_query_execution_partitions(4)
+            .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+        let (captured_join_type, modified_plan) =
+            hide_first(plan.as_ref(), r"join_type=(\w+)", "join_type=...");
+        assert_eq!(captured_join_type, join_type.to_string());
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(modified_plan, @r"
+            HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, a@0)]
+              DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4, start=(0), end=(40)), file_type=parquet
+              DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4, start=(0), end=(35)), file_type=parquet
+            ");
+        }
+        output_partitionings.push(format!("{join_type}: {}", plan.output_partitioning()));
+    }
+
+    // The join type determines which input's partitioning can describe the output.
+    // In particular, unmatched left rows can have keys in [35, 40).
+    insta::assert_snapshot!(output_partitionings.join("\n"), @r"
+    Inner: Range([a@5 ASC], [(10), (20), (30)], 4, start=(0), end=(35))
+    Left: Range([a@0 ASC], [(10), (20), (30)], 4, start=(0), end=(40))
+    Right: Range([a@5 ASC], [(10), (20), (30)], 4, start=(0), end=(35))
+    Full: UnknownPartitioning(4)
+    LeftSemi: Range([a@0 ASC], [(10), (20), (30)], 4, start=(0), end=(40))
+    RightSemi: Range([a@0 ASC], [(10), (20), (30)], 4, start=(0), end=(35))
+    LeftAnti: Range([a@0 ASC], [(10), (20), (30)], 4, start=(0), end=(40))
+    RightAnti: Range([a@0 ASC], [(10), (20), (30)], 4, start=(0), end=(35))
+    LeftMark: Range([a@0 ASC], [(10), (20), (30)], 4, start=(0), end=(40))
+    RightMark: Range([a@0 ASC], [(10), (20), (30)], 4, start=(0), end=(35))
+    ");
+
     Ok(())
 }
 
