@@ -45,8 +45,8 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-use super::date_trunc::{civil_from_days, days_from_civil};
-use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
+use super::civil::CivilTimestamp;
+use chrono::{Duration, TimeDelta};
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
@@ -403,42 +403,34 @@ fn compute_distance_wide(time_diff: i128, stride: i128) -> i128 {
     time_diff - time_diff.rem_euclid(stride)
 }
 
-// Shift `origin_date` by `month_delta` months, mapping an out-of-range result to
-// the same error the binning paths reported when this was written inline.
-fn shift_months(origin_date: DateTime<Utc>, month_delta: i64) -> Result<DateTime<Utc>> {
-    if month_delta < 0 {
-        origin_date
-            .checked_sub_months(Months::new(month_delta.unsigned_abs() as u32))
-            .ok_or_else(|| {
-                exec_datafusion_err!("DATE_BIN month subtraction out of range")
-            })
+// The month bin that `source` falls into, on the civil calendar. All arithmetic
+// is i64; callers widen only at the nanosecond boundary.
+fn bin_months_civil(
+    stride_months: i64,
+    source: CivilTimestamp,
+    origin: CivilTimestamp,
+) -> Option<CivilTimestamp> {
+    let month_delta =
+        compute_distance(source.month_index() - origin.month_index(), stride_months)
+            .ok()?;
+    let bin = origin.shift_months(month_delta);
+    // Step back one stride from the origin when the candidate is after the source.
+    Some(if bin > source {
+        origin.shift_months(month_delta.checked_sub(stride_months)?)
     } else {
-        origin_date
-            .checked_add_months(Months::new(month_delta as u32))
-            .ok_or_else(|| exec_datafusion_err!("DATE_BIN month addition out of range"))
-    }
+        bin
+    })
 }
 
 // return time in nanoseconds that the source timestamp falls into based on the stride and origin
 fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> Result<i64> {
-    // convert source and origin to DateTime<Utc>
-    let source_date = to_utc_date_time(source)?;
-    let origin_date = to_utc_date_time(origin)?;
-
-    let bin_time = bin_months(stride_months, source_date, origin_date)?;
-    match bin_time.timestamp_nanos_opt() {
-        Some(nanos) => Ok(nanos),
-        None => exec_err!("DATE_BIN result timestamp out of range"),
-    }
-}
-
-// Compared in field order, which is chronological.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct CivilTimestamp {
-    year: i64,
-    month: i64,
-    day: i64,
-    tod_nanos: i64,
+    bin_months_civil(
+        stride_months,
+        CivilTimestamp::from_nanos(source),
+        CivilTimestamp::from_nanos(origin),
+    )
+    .and_then(CivilTimestamp::to_nanos)
+    .ok_or_else(|| exec_datafusion_err!("DATE_BIN result timestamp out of range"))
 }
 
 // Month bins on the civil calendar. `DateTime<Utc>` cannot represent every
@@ -448,104 +440,12 @@ fn date_bin_months_interval_wide(
     source: i128,
     origin: i64,
 ) -> Option<i128> {
-    let source_ts = nanos_to_civil(source)?;
-    let origin_ts = nanos_to_civil(i128::from(origin))?;
-    let month_diff = month_index(source_ts)?.checked_sub(month_index(origin_ts)?)?;
-    let month_delta = compute_distance(month_diff, stride_months).ok()?;
-
-    // Step back one stride from the origin when the candidate is after the source.
-    let mut bin = shift_civil_months(origin_ts, month_delta)?;
-    if bin > source_ts {
-        let month_delta = month_delta.checked_sub(stride_months)?;
-        bin = shift_civil_months(origin_ts, month_delta)?;
-    }
-    civil_to_nanos(bin)
-}
-
-fn month_index(ts: CivilTimestamp) -> Option<i64> {
-    ts.year.checked_mul(12)?.checked_add(ts.month)
-}
-
-fn nanos_to_civil(nanos: i128) -> Option<CivilTimestamp> {
-    let nanos_per_day = i128::from(NANOSECONDS_IN_DAY);
-    let days = i64::try_from(nanos.div_euclid(nanos_per_day)).ok()?;
-    let tod_nanos = i64::try_from(nanos.rem_euclid(nanos_per_day)).ok()?;
-    let (year, month, day) = civil_from_days(days);
-    Some(CivilTimestamp {
-        year,
-        month,
-        day,
-        tod_nanos,
-    })
-}
-
-fn civil_to_nanos(ts: CivilTimestamp) -> Option<i128> {
-    let days = days_from_civil(ts.year, ts.month, ts.day);
-    i128::from(days)
-        .checked_mul(i128::from(NANOSECONDS_IN_DAY))?
-        .checked_add(i128::from(ts.tod_nanos))
-}
-
-// Keeps the origin's day and time. A missing day clamps to the month's end,
-// matching `chrono`'s `checked_add_months`.
-fn shift_civil_months(
-    origin: CivilTimestamp,
-    month_delta: i64,
-) -> Option<CivilTimestamp> {
-    let total = (origin.month - 1).checked_add(month_delta)?;
-    let year = origin.year.checked_add(total.div_euclid(12))?;
-    let month = total.rem_euclid(12) + 1;
-    let last_day = days_in_month(year, month)?;
-    Some(CivilTimestamp {
-        year,
-        month,
-        day: origin.day.min(last_day),
-        tod_nanos: origin.tod_nanos,
-    })
-}
-
-fn days_in_month(year: i64, month: i64) -> Option<i64> {
-    let (next_year, next_month) = if month == 12 {
-        (year.checked_add(1)?, 1)
-    } else {
-        (year, month + 1)
-    };
-    days_from_civil(next_year, next_month, 1).checked_sub(days_from_civil(year, month, 1))
-}
-
-// return the start of the month bin that `source_date` falls into
-fn bin_months(
-    stride_months: i64,
-    source_date: DateTime<Utc>,
-    origin_date: DateTime<Utc>,
-) -> Result<DateTime<Utc>> {
-    // calculate the number of months between the source and origin
-    let month_diff = (source_date.year() - origin_date.year()) * 12
-        + source_date.month() as i32
-        - origin_date.month() as i32;
-
-    // distance from origin to bin
-    let month_delta = compute_distance(month_diff as i64, stride_months)?;
-
-    let mut bin_time = shift_months(origin_date, month_delta)?;
-
-    // If origin is not midnight of first date of the month, the bin_time may be larger than the source
-    // In this case, we need to move back to previous bin
-    if bin_time > source_date {
-        let month_delta = month_delta - stride_months;
-        bin_time = shift_months(origin_date, month_delta)?;
-    }
-    Ok(bin_time)
-}
-
-fn to_utc_date_time(nanos: i64) -> Result<DateTime<Utc>> {
-    // Keep negative sub-second values normalized as seconds + non-negative nanos.
-    let secs = nanos.div_euclid(NANOS_PER_SEC);
-    let nsec = nanos.rem_euclid(NANOS_PER_SEC) as u32;
-    match DateTime::from_timestamp(secs, nsec) {
-        Some(dt) => Ok(dt),
-        None => exec_err!("Invalid timestamp value"),
-    }
+    let bin = bin_months_civil(
+        stride_months,
+        CivilTimestamp::from_nanos_wide(source)?,
+        CivilTimestamp::from_nanos(origin),
+    )?;
+    Some(bin.to_nanos_wide())
 }
 
 fn timestamp_scale<T: ArrowTimestampType>() -> i64 {
