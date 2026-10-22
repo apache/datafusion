@@ -837,6 +837,8 @@ jobs:
               shared-key: "amd-ci-clippy"
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
+      - name: Run clippy with all features
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting
