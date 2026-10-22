@@ -347,9 +347,18 @@ impl ArrayAggAccumulator {
 /// ARRAY_AGG(DISTINCT concat(col, '') ORDER BY concat(col, '')) <- Valid
 /// ARRAY_AGG(DISTINCT col ORDER BY other_col)                   <- Invalid
 /// ARRAY_AGG(DISTINCT col ORDER BY concat(col, ''))             <- Invalid
+///
+/// The DISTINCT accumulators sort the values themselves, so a reversed
+/// aggregate must still sort them in the requested order.
 fn distinct_sort_options(acc_args: &AccumulatorArgs) -> Result<Option<SortOptions>> {
     match acc_args.order_bys {
-        [single] if single.expr.eq(&acc_args.exprs[0]) => Ok(Some(single.options)),
+        [single] if single.expr.eq(&acc_args.exprs[0]) => {
+            Ok(Some(if acc_args.is_reversed {
+                !single.options
+            } else {
+                single.options
+            }))
+        }
         [] => Ok(None),
         _ => exec_err!(
             "In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list"
