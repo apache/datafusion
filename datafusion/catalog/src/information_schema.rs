@@ -251,16 +251,7 @@ impl InformationSchemaConfig {
                         .await?;
                     }
                 }
-
-                // Add the information schema views themselves
-                Self::add_views(builder, &catalog_name, INFORMATION_SCHEMA, self).await?;
             }
-        }
-
-        // Add the system information schema
-        if let Some(system_catalog_name) = &self.system_catalog_name {
-            Self::add_views(builder, system_catalog_name, INFORMATION_SCHEMA, self)
-                .await?;
         }
 
         Ok(())
