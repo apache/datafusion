@@ -234,15 +234,15 @@ impl ScalarUDFImpl for ArrayIntersect {
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns distinct values from the array after removing duplicates.",
+    description = "Returns distinct values from the array after removing duplicates, in the order they first appear.",
     syntax_example = "array_distinct(array)",
     sql_example = r#"```sql
 > select array_distinct([1, 3, 2, 3, 1, 2, 4]);
-+---------------------------------+
-| array_distinct(List([1,2,3,4])) |
-+---------------------------------+
-| [1, 2, 3, 4]                    |
-+---------------------------------+
++---------------------------------------+
+| array_distinct(List([1,3,2,3,1,2,4])) |
++---------------------------------------+
+| [1, 3, 2, 4]                          |
++---------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -297,7 +297,7 @@ impl ScalarUDFImpl for ArrayDistinct {
 }
 
 /// array_distinct SQL function
-/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
+/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 3, 2, 4]
 fn array_distinct_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_distinct", args)?;
     match array.data_type() {
@@ -343,7 +343,6 @@ pub(crate) fn normalize_visible_values<OffsetSize: OffsetSizeTrait>(
 fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
-    field: Arc<Field>,
     set_op: SetOp,
 ) -> Result<ArrayRef> {
     if l.is_empty() || l.value_type().is_null() {
@@ -383,7 +382,6 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
             r,
             &rows_l,
             &rows_r,
-            field,
             &combined_values,
             r_offset,
         ),
@@ -392,7 +390,6 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
             r,
             &rows_l,
             &rows_r,
-            field,
             &combined_values,
             r_offset,
         ),
@@ -406,7 +403,6 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait, const IS_UNION: bool>(
     r: &GenericListArray<OffsetSize>,
     rows_l: &arrow::row::Rows,
     rows_r: &arrow::row::Rows,
-    field: Arc<Field>,
     combined_values: &ArrayRef,
     r_offset: usize,
 ) -> Result<ArrayRef> {
@@ -504,7 +500,7 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait, const IS_UNION: bool>(
     };
 
     let arr = GenericListArray::<OffsetSize>::try_new(
-        field,
+        Arc::clone(l.value_field()),
         OffsetBuffer::new(result_offsets.into()),
         final_values,
         NullBuffer::union(l.nulls(), r.nulls()),
@@ -524,15 +520,15 @@ fn general_set_op(
         | (Null, dt @ LargeList(_))
         | (dt @ List(_), Null)
         | (dt @ LargeList(_), Null) => Ok(new_null_array(dt, len)),
-        (List(field), List(_)) => {
+        (List(_), List(_)) => {
             let array1 = as_list_array(&array1)?;
             let array2 = as_list_array(&array2)?;
-            generic_set_lists::<i32>(array1, array2, Arc::clone(field), set_op)
+            generic_set_lists::<i32>(array1, array2, set_op)
         }
-        (LargeList(field), LargeList(_)) => {
+        (LargeList(_), LargeList(_)) => {
             let array1 = as_large_list_array(&array1)?;
             let array2 = as_large_list_array(&array2)?;
-            generic_set_lists::<i64>(array1, array2, Arc::clone(field), set_op)
+            generic_set_lists::<i64>(array1, array2, set_op)
         }
         (data_type1, data_type2) => {
             internal_err!(
@@ -794,11 +790,7 @@ mod tests {
             Some(vec![Some(-98.0)]),
         ])
         .slice(1, 2);
-        let DataType::List(field) = l.data_type() else {
-            unreachable!()
-        };
-
-        let distinct = general_array_distinct::<i32>(&l, field)?;
+        let distinct = general_array_distinct::<i32>(&l, l.value_field())?;
         let distinct = distinct.as_list::<i32>();
         assert_eq!(
             collect_f64_bits(distinct, 0),
@@ -811,7 +803,7 @@ mod tests {
         );
         assert!(distinct.is_null(1));
 
-        let union = generic_set_lists::<i32>(&l, &r, Arc::clone(field), SetOp::Union)?;
+        let union = generic_set_lists::<i32>(&l, &r, SetOp::Union)?;
         let union = union.as_list::<i32>();
         assert_eq!(
             collect_f64_bits(union, 0),
@@ -825,8 +817,7 @@ mod tests {
         );
         assert!(union.is_null(1));
 
-        let intersect =
-            generic_set_lists::<i32>(&l, &r, Arc::clone(field), SetOp::Intersect)?;
+        let intersect = generic_set_lists::<i32>(&l, &r, SetOp::Intersect)?;
         let intersect = intersect.as_list::<i32>();
         assert_eq!(
             collect_f64_bits(intersect, 0),
@@ -844,11 +835,7 @@ mod tests {
             Some(vec![Some(-99.0)]),
         ]);
         let sliced = list.slice(1, 1);
-        let DataType::LargeList(field) = sliced.data_type() else {
-            unreachable!()
-        };
-
-        let result = general_array_distinct::<i64>(&sliced, field)?;
+        let result = general_array_distinct::<i64>(&sliced, sliced.value_field())?;
         let result = result.as_list::<i64>();
         assert_eq!(
             collect_f64_bits(result, 0),
@@ -865,11 +852,7 @@ mod tests {
             Some(vec![Some(-0.0), Some(0.0)]),
         ]);
         let sliced = list.slice(1, 1);
-        let DataType::List(field) = sliced.data_type() else {
-            unreachable!()
-        };
-
-        let result = general_array_distinct::<i32>(&sliced, field)?;
+        let result = general_array_distinct::<i32>(&sliced, sliced.value_field())?;
         let result = result.as_list::<i32>();
         assert_eq!(result.len(), 1);
         assert_eq!(result.value_length(0), 0);

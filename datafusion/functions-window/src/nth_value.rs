@@ -19,8 +19,9 @@
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 
-use arrow::buffer::NullBuffer;
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::FieldRef;
+use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
@@ -487,14 +488,15 @@ impl PartitionEvaluator for NthValueEvaluator {
 impl NthValueEvaluator {
     fn valid_index(&self, array: &ArrayRef, range: &Range<usize>) -> Option<usize> {
         let n_range = range.end - range.start;
-        if self.ignore_nulls {
-            // Calculate valid indices, inside the window frame boundaries.
-            let slice = array.slice(range.start, n_range);
-            if let Some(nulls) = slice.nulls()
-                && nulls.null_count() > 0
-            {
-                return self.valid_index_with_nulls(nulls, range.start);
-            }
+        if self.ignore_nulls
+            && let Some(nulls) = array.nulls()
+        {
+            // Read the validity bits inside the window frame boundaries in place. Slicing
+            // `array` instead would allocate and count the frame's nulls for every row.
+            let valid = nulls.inner().slice(range.start, n_range);
+            return self
+                .valid_index_with_nulls(&valid)
+                .map(|idx| idx + range.start);
         }
         // Either no nulls, or nulls are regarded as valid rows
         match self.state.kind {
@@ -525,33 +527,53 @@ impl NthValueEvaluator {
         }
     }
 
-    fn valid_index_with_nulls(&self, nulls: &NullBuffer, offset: usize) -> Option<usize> {
+    /// Returns the index within the frame of the value to return, given the frame's validity
+    /// bits.
+    fn valid_index_with_nulls(&self, valid: &BooleanBuffer) -> Option<usize> {
         match self.state.kind {
-            NthValueKind::First => nulls.valid_indices().next().map(|idx| idx + offset),
-            NthValueKind::Last => nulls.valid_indices().last().map(|idx| idx + offset),
+            NthValueKind::First => valid.set_indices().next(),
+            NthValueKind::Last => nth_set_bit_from_end(valid, 1),
             NthValueKind::Nth => {
                 match self.n.cmp(&0) {
                     Ordering::Greater => {
                         // SQL indices are not 0-based.
                         let index = (self.n as usize) - 1;
-                        nulls.valid_indices().nth(index).map(|idx| idx + offset)
+                        valid.set_indices().nth(index)
                     }
-                    Ordering::Less => {
-                        let reverse_index = (-self.n) as usize;
-                        let valid_indices_len = nulls.len() - nulls.null_count();
-                        if reverse_index > valid_indices_len {
-                            return None;
-                        }
-                        nulls
-                            .valid_indices()
-                            .nth(valid_indices_len - reverse_index)
-                            .map(|idx| idx + offset)
-                    }
+                    Ordering::Less => nth_set_bit_from_end(valid, (-self.n) as usize),
                     Ordering::Equal => None,
                 }
             }
         }
     }
+}
+
+/// Returns the index of the `n`th set bit from the end of `bits`, where `n = 1` is the last
+/// set bit, or `None` if fewer than `n` bits are set.
+///
+/// The bits are read a 64-bit word at a time from the end, so the cost grows with the distance
+/// from the end to that bit rather than with the length of `bits`. Enumerating the set bits
+/// from the start instead is quadratic for a frame that grows with every row.
+fn nth_set_bit_from_end(bits: &BooleanBuffer, n: usize) -> Option<usize> {
+    debug_assert!(n > 0, "n is 1-based");
+    let chunk = UnalignedBitChunk::new(bits.values(), bits.offset(), bits.len());
+    // The words hold `lead_padding` unset bits before `bits` and `trailing_padding` after it.
+    let mut word_start = chunk.lead_padding() + bits.len() + chunk.trailing_padding();
+    let mut remaining = n;
+    for mut word in chunk.iter().rev() {
+        word_start -= 64;
+        let ones = word.count_ones() as usize;
+        if ones < remaining {
+            remaining -= ones;
+            continue;
+        }
+        // Clear the `remaining - 1` highest set bits, leaving the one we want on top
+        for _ in 1..remaining {
+            word ^= 1 << word.ilog2();
+        }
+        return Some(word_start + word.ilog2() as usize - chunk.lead_padding());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -708,5 +730,41 @@ mod tests {
                 "Execution error: first_value requires at least one argument"
             )
         );
+    }
+
+    #[test]
+    fn nth_set_bit_from_end_matches_a_scan_from_the_end() {
+        // The slices cover every bit offset within a word, byte-aligned and unaligned starts,
+        // and lengths from empty to several words, which are the cases `UnalignedBitChunk`
+        // splits into a prefix, aligned words and a suffix.
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let random = BooleanBuffer::collect_bool(640, |_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state.is_multiple_of(5)
+        });
+        let patterns = [
+            random,
+            BooleanBuffer::collect_bool(640, |i| i.is_multiple_of(97)),
+            BooleanBuffer::new_set(640),
+            BooleanBuffer::new_unset(640),
+        ];
+        for bits in &patterns {
+            for offset in 0..70 {
+                for len in 0..=200 {
+                    let slice = bits.slice(offset, len);
+                    for n in [1, 2, 3, 63, 64, 65, 130] {
+                        let expected =
+                            (0..len).rev().filter(|&i| slice.value(i)).nth(n - 1);
+                        assert_eq!(
+                            nth_set_bit_from_end(&slice, n),
+                            expected,
+                            "offset {offset}, len {len}, n {n}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

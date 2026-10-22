@@ -880,16 +880,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 if fields.is_empty() {
                     let map_types = plan.get_parameter_fields()?;
-                    let param_types: Vec<_> = (1..=map_types.len())
-                        .filter_map(|i| {
+                    let param_types: Option<Vec<FieldRef>> = (1..=map_types.len())
+                        .map(|i| {
                             let key = format!("${i}");
                             map_types.get(&key).and_then(|opt| opt.clone())
                         })
                         .collect();
-                    fields.extend(param_types.iter().cloned());
-                    planner_context.with_prepare_param_data_types(
-                        param_types.into_iter().map(Some).collect(),
-                    );
+                    if let Some(param_types) = param_types {
+                        fields.extend(param_types.iter().cloned());
+                        planner_context.with_prepare_param_data_types(
+                            param_types.into_iter().map(Some).collect(),
+                        );
+                    }
                 }
 
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
@@ -1246,6 +1248,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_err!("Delete-order-by clause not yet supported")?;
                 }
 
+                if limit.is_some() {
+                    return plan_err!("Delete-limit clause is not supported");
+                }
+
                 if !optimizer_hints.is_empty() {
                     plan_err!("Optimizer hints not supported")?;
                 }
@@ -1254,7 +1260,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 let table_name = self.get_delete_target(from)?;
-                self.delete_to_plan(&table_name, selection, limit)
+                self.delete_to_plan(&table_name, selection)
             }
 
             Statement::Merge(merge) => self.merge_to_plan(merge),
@@ -1416,18 +1422,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None => None,
                 };
                 // Validate default arguments
-                let first_default = match args.as_ref() {
-                    Some(arg) => arg.iter().position(|t| t.default_expr.is_some()),
-                    None => None,
-                };
-                let last_non_default = match args.as_ref() {
-                    Some(arg) => arg
-                        .iter()
-                        .rev()
-                        .position(|t| t.default_expr.is_none())
-                        .map(|reverse_pos| arg.len() - reverse_pos - 1),
-                    None => None,
-                };
+                let first_default = args
+                    .as_ref()
+                    .and_then(|arg| arg.iter().position(|t| t.default_expr.is_some()));
+                let last_non_default = args
+                    .as_ref()
+                    .and_then(|arg| arg.iter().rposition(|t| t.default_expr.is_none()));
                 if let (Some(pos_default), Some(pos_non_default)) =
                     (first_default, last_non_default)
                     && pos_non_default > pos_default
@@ -1825,7 +1825,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return Ok(results);
         }
 
-        let mut all_results = vec![];
+        let mut all_results = Vec::with_capacity(order_exprs.len());
         for expr in order_exprs {
             // Convert each OrderByExpr to a SortExpr:
             let expr_vec =
@@ -2084,7 +2084,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         options: Vec<(String, Value)>,
         allow_duplicates: bool,
     ) -> Result<HashMap<String, String>> {
-        let mut options_map = HashMap::new();
+        let mut options_map = HashMap::with_capacity(options.len());
         for (key, value) in options {
             if !allow_duplicates && options_map.contains_key(&key) {
                 return plan_err!("Option {key} is specified multiple times");
@@ -2344,7 +2344,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         table_name: &ObjectName,
         predicate_expr: Option<SQLExpr>,
-        limit: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
@@ -2358,7 +2357,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .build()?;
         let mut planner_context = PlannerContext::new();
 
-        let mut source = match predicate_expr {
+        let source = match predicate_expr {
             None => scan,
             Some(predicate_expr) => {
                 let filter_expr =
@@ -2374,14 +2373,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
             }
         };
-
-        if let Some(limit) = limit {
-            let empty_schema = DFSchema::empty();
-            let limit = self.sql_to_expr(limit, &empty_schema, &mut planner_context)?;
-            source = LogicalPlanBuilder::from(source)
-                .limit_by_expr(None, Some(limit))?
-                .build()?
-        }
 
         let plan = LogicalPlan::Dml(DmlStatement::new(
             table_ref,
@@ -2423,7 +2414,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 let col_name: &Ident = cols
                     .0
-                    .iter()
                     .last()
                     .ok_or_else(|| plan_datafusion_err!("Empty column id"))?
                     .as_ident()
@@ -2640,7 +2630,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<String> {
         let part = name
             .0
-            .iter()
             .last()
             .ok_or_else(|| plan_datafusion_err!("Empty column name"))?;
         let ident = part
@@ -2724,7 +2713,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         Ok((col_name, value))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let mut seen = HashSet::new();
+                let mut seen = HashSet::with_capacity(assignments.len());
                 for (column, _) in &assignments {
                     if !seen.insert(column.as_str()) {
                         return plan_err!("Duplicate column '{column}' in MERGE UPDATE");
@@ -2745,7 +2734,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .collect::<Result<Vec<_>>>()?;
 
                 // Validate: no duplicates, all columns exist in target schema
-                let mut seen = HashSet::new();
+                let mut seen = HashSet::with_capacity(columns.len());
                 for col in &columns {
                     if !seen.insert(col.as_str()) {
                         return plan_err!("Duplicate column '{col}' in MERGE INSERT");

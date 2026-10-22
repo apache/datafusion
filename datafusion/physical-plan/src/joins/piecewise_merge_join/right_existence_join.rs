@@ -355,7 +355,8 @@ impl RightExistencePWMJStream {
             Some(matched) => Arc::new(boolean_mask_from_filter(&matched)),
         };
 
-        let mut columns = batch.columns().to_vec();
+        let mut columns = Vec::with_capacity(batch.num_columns() + 1);
+        columns.extend_from_slice(batch.columns());
         columns.push(mark);
 
         // Right existence joins output the streamed columns (plus `mark` for `RightMark`)
