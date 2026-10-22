@@ -34,6 +34,10 @@
 //! itself — see [`from_proto`] and [`to_proto`]. It is the schema source of
 //! truth for [`datafusion-proto`].
 //!
+//! It also hosts [`ProtoDecoderRegistry`], the
+//! one store of extension decoders every serializable kind shares, for the same
+//! layering reason: it sits below every crate that owns one of those traits.
+//!
 //! Most users should depend on [`datafusion-proto`] instead, which re-exports
 //! these types under [`datafusion_proto::protobuf`].
 //!
@@ -43,6 +47,7 @@
 
 pub mod from_proto;
 pub mod generated;
+pub mod registry;
 pub mod to_proto;
 
 /// All DataFusion protobuf model types.
@@ -57,6 +62,7 @@ pub mod protobuf {
 /// Re-export of the `datafusion_proto_common` types as exposed through this
 /// crate's generated module, for callers that want the common-only namespace.
 pub use generated::datafusion_common;
+pub use registry::ProtoDecoderRegistry;
 
 #[cfg(all(test, feature = "json"))]
 mod tests {

@@ -55,7 +55,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait|extended|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         error_message: "Cargo test step failed",
@@ -282,6 +282,8 @@ impl StepContext {
                     "ci",
                     "-p",
                     "datafusion-ffi",
+                    "-p",
+                    "datafusion-ffi-integration-tests",
                     "--lib",
                     "--tests",
                     "--features",
@@ -344,7 +346,7 @@ impl StepContext {
                     .env("PG_COMPAT", "true")
                     .env("PG_URI", uri);
             }
-            "substrait" => {
+            "substrait" | "substrait-optimized" => {
                 command.args([
                     "test",
                     "-p",
@@ -355,8 +357,12 @@ impl StepContext {
                     "substrait",
                     "--",
                     "--substrait-round-trip",
-                    "limit.slt",
                 ]);
+                if variant == "substrait-optimized" {
+                    command.args(["--substrait-optimize", "joins_conditionless.slt"]);
+                } else {
+                    command.args(["limit.slt"]);
+                }
             }
             "extended" => {
                 command
@@ -610,7 +616,7 @@ fn required_env(name: &str) -> Result<String> {
 mod tests {
     use super::*;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait|extended|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|hash-collisions|sqlite> [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -786,6 +792,7 @@ cd /workspace && \
 cargo test \
 --profile ci \
 -p datafusion-ffi \
+-p datafusion-ffi-integration-tests \
 --lib \
 --tests \
 --features integration-tests
@@ -848,6 +855,19 @@ cargo test \
 --test sqllogictests \
 --features substrait \
 -- --substrait-round-trip limit.slt
+")
+                },
+            },
+            Cmd {
+                command: &["test", "substrait-optimized"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo test \
+-p datafusion-sqllogictest \
+--test sqllogictests \
+--features substrait \
+-- --substrait-round-trip --substrait-optimize joins_conditionless.slt
 ")
                 },
             },

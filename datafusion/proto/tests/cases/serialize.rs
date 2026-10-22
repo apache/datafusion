@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Metadata};
 
 use datafusion::execution::FunctionRegistry;
 use datafusion::prelude::SessionContext;
@@ -109,7 +109,7 @@ fn plan_to_json() {
         schema: Arc::new(DFSchema::empty()),
     });
     let actual = logical_plan_to_json(&plan).unwrap();
-    let expected = r#"{"emptyRelation":{}}"#.to_string();
+    let expected = r#"{"emptyRelation":{"schema":{}}}"#.to_string();
     assert_eq!(actual, expected);
 }
 
@@ -203,9 +203,7 @@ fn roundtrip_placeholder_with_metadata() {
         "placeholder_id".to_string(),
         Some(
             Field::new("", DataType::Utf8, false)
-                .with_metadata(
-                    [("some_key".to_string(), "some_value".to_string())].into(),
-                )
+                .with_metadata(Metadata::new().with("some_key", "some_value"))
                 .into(),
         ),
     ));

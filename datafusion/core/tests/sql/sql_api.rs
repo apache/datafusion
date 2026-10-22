@@ -16,7 +16,10 @@
 // under the License.
 
 use datafusion::prelude::*;
-use datafusion_common::assert_contains;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{TableReference, assert_batches_eq, assert_contains};
+use datafusion_expr::dml::MergeIntoOp;
+use datafusion_expr::{Expr, LogicalPlan, WriteOp};
 
 use tempfile::TempDir;
 
@@ -110,6 +113,45 @@ async fn unsupported_copy_returns_error() {
     );
 
     let options = options.with_allow_dml(true);
+    ctx.sql_with_options(&sql, options).await.unwrap();
+}
+
+#[tokio::test]
+async fn copy_can_be_disabled_independently_from_dml() {
+    let tmpdir = TempDir::new().unwrap();
+    let tmpfile = tmpdir.path().join("foo.parquet");
+
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE test (x int)").await.unwrap();
+
+    let options = SQLOptions::new().with_allow_copy(false);
+    let sql = format!(
+        "COPY (values(1)) TO '{}' STORED AS parquet",
+        tmpfile.to_string_lossy()
+    );
+    let df = ctx.sql_with_options(&sql, options).await;
+    assert_eq!(
+        df.unwrap_err().strip_backtrace(),
+        "Error during planning: COPY not supported"
+    );
+
+    ctx.sql_with_options("INSERT INTO test VALUES (1)", options)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let results = ctx
+        .sql_with_options("SELECT x FROM test", options)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(["+---+", "| x |", "+---+", "| 1 |", "+---+"], &results);
+
+    let options = options.with_allow_copy(true);
     ctx.sql_with_options(&sql, options).await.unwrap();
 }
 
@@ -215,93 +257,93 @@ async fn merge_into_context() -> SessionContext {
     ctx
 }
 
-async fn assert_merge_sql_error(ctx: &SessionContext, sql: &str, expected: &str) {
-    let err = ctx.sql(sql).await.unwrap_err();
-    assert_contains!(err.strip_backtrace(), expected);
+async fn merge_operation(ctx: &SessionContext, sql: &str) -> Box<MergeIntoOp> {
+    let plan = ctx.state().create_logical_plan(sql).await.unwrap();
+    let LogicalPlan::Dml(dml) = plan else {
+        panic!("expected MERGE DML")
+    };
+    let WriteOp::MergeInto(merge_op) = dml.op else {
+        panic!("expected MERGE operation")
+    };
+    merge_op
 }
 
-async fn assert_merge_physical_error(ctx: &SessionContext, sql: &str, expected: &str) {
-    let err = ctx
-        .sql(sql)
-        .await
-        .unwrap()
-        .create_physical_plan()
-        .await
-        .unwrap_err();
-    assert_contains!(err.strip_backtrace(), expected);
+fn has_outer_reference_to(expr: &Expr, qualifier: &TableReference) -> bool {
+    let mut found = false;
+    expr.apply(|expr| {
+        let outer_refs = match expr {
+            Expr::Exists(exists) => Some(&exists.subquery.outer_ref_columns),
+            Expr::InSubquery(in_subquery) => {
+                Some(&in_subquery.subquery.outer_ref_columns)
+            }
+            Expr::SetComparison(set_comparison) => {
+                Some(&set_comparison.subquery.outer_ref_columns)
+            }
+            Expr::ScalarSubquery(subquery) => Some(&subquery.outer_ref_columns),
+            _ => None,
+        };
+        found = outer_refs.is_some_and(|outer_refs| {
+            outer_refs.iter().any(|expr| {
+                matches!(
+                    expr,
+                    Expr::OuterReferenceColumn(_, column)
+                        if column.relation.as_ref() == Some(qualifier)
+                )
+            })
+        });
+        Ok(if found {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })
+    .unwrap();
+    found
 }
 
 #[tokio::test]
-async fn merge_into_rejects_source_alias_colliding_with_target_name() {
-    // Canonicalizing `t.id` to `target.id` must not collapse it onto a source
-    // that also uses `target` as its qualifier.
+async fn merge_into_preserves_target_alias_in_correlated_subquery() {
     let ctx = merge_into_context().await;
-
-    for target_ref in ["target", "public.target", "datafusion.public.target"] {
-        assert_merge_sql_error(
-            &ctx,
-            &format!(
-                "MERGE INTO {target_ref} AS t USING source AS target \
-                 ON t.id = target.id WHEN MATCHED THEN DELETE"
-            ),
-            &format!(
-                "MERGE source may not use the target table name '{target_ref}' \
-                 as a qualifier"
-            ),
-        )
-        .await;
-    }
-}
-
-#[tokio::test]
-async fn merge_into_rejects_subqueries_correlated_to_target_alias() {
-    let ctx = merge_into_context().await;
-    assert_merge_sql_error(
-        &ctx,
-        "MERGE INTO target AS t USING source AS s \
+    let direct_exists = "MERGE INTO target AS t USING source AS s \
          ON EXISTS (SELECT 1 FROM source AS x WHERE x.id = t.id) \
-         WHEN MATCHED THEN DELETE",
-        "MERGE subqueries correlated to target alias 't' are not supported",
-    )
-    .await;
+         WHEN MATCHED THEN DELETE";
+    let direct_in = "MERGE INTO target AS t USING source AS s \
+         ON t.id IN (SELECT x.id FROM source AS x WHERE x.id = t.id) \
+         WHEN MATCHED THEN DELETE";
+    let direct_any = "MERGE INTO target AS t USING source AS s \
+         ON t.id = ANY (SELECT x.id FROM source AS x WHERE x.id = t.id) \
+         WHEN MATCHED THEN DELETE";
+    let direct_all = "MERGE INTO target AS t USING source AS s \
+         ON t.id = ALL (SELECT x.id FROM source AS x WHERE x.id = t.id) \
+         WHEN MATCHED THEN DELETE";
+    let direct_scalar = "MERGE INTO target AS t USING source AS s \
+         ON t.id = (SELECT max(x.id) FROM source AS x WHERE x.id = t.id) \
+         WHEN MATCHED THEN DELETE";
 
-    // Source-correlated and uncorrelated subqueries remain supported through
-    // logical optimization.
     for sql in [
-        "MERGE INTO target AS t USING source AS s \
-         ON EXISTS (SELECT 1 FROM source AS x WHERE x.id = s.id) \
-         WHEN MATCHED THEN DELETE",
-        "MERGE INTO target AS t USING source AS s \
-         ON t.id = ANY (SELECT id FROM source) \
-         WHEN MATCHED THEN DELETE",
+        direct_exists,
+        direct_in,
+        direct_any,
+        direct_all,
+        direct_scalar,
     ] {
-        assert_merge_physical_error(&ctx, sql, "MERGE INTO not supported for Base table")
-            .await;
+        let merge_op = merge_operation(&ctx, sql).await;
+        assert_eq!(merge_op.target_qualifier(), &TableReference::bare("t"));
+        assert!(has_outer_reference_to(
+            &merge_op.on,
+            &TableReference::bare("t")
+        ));
     }
-}
 
-#[tokio::test]
-async fn merge_into_requires_boolean_conditions() {
-    let ctx = merge_into_context().await;
-
-    for (sql, expected) in [
-        (
-            "MERGE INTO target USING source ON 1 WHEN MATCHED THEN DELETE",
-            "MERGE ON condition must be boolean type, but got Int64",
-        ),
-        (
-            "MERGE INTO target USING source ON true \
-             WHEN MATCHED AND 1 THEN DELETE",
-            "MERGE WHEN condition must be boolean type, but got Int64",
-        ),
-        (
-            "MERGE INTO target USING source ON NULL \
-             WHEN MATCHED AND NULL THEN DELETE",
-            "MERGE INTO not supported for Base table",
-        ),
-    ] {
-        assert_merge_physical_error(&ctx, sql, expected).await;
-    }
+    let shadowed_correlation = "MERGE INTO target AS t USING source AS s \
+         ON EXISTS (SELECT 1 FROM source AS t \
+           WHERE EXISTS (SELECT 1 FROM source AS x WHERE x.id = t.id)) \
+         WHEN MATCHED THEN DELETE";
+    let merge_op = merge_operation(&ctx, shadowed_correlation).await;
+    assert!(!has_outer_reference_to(
+        &merge_op.on,
+        &TableReference::bare("t")
+    ));
 }
 
 #[tokio::test]

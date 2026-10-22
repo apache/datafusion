@@ -57,3 +57,7 @@ rand = { workspace = true }
 [[bench]]
 harness = false
 name = "accumulate"
+
+[[bench]]
+harness = false
+name = "groups_accumulator_adapter"

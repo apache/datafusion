@@ -34,6 +34,7 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 
 use crate::approx_percentile_cont::ApproxPercentileAccumulator;
+use crate::utils::{PercentileParam, PercentileParamState};
 
 make_udaf_expr_and_func!(
     ApproxMedian,
@@ -108,6 +109,7 @@ impl AggregateUDFImpl for ApproxMedian {
                     Field::new_list_field(Float64, true),
                     false,
                 ),
+                Field::new(format_state_name(args.name, "percentile"), Float64, true),
             ]
             .into_iter()
             .map(Arc::new)
@@ -138,7 +140,11 @@ impl AggregateUDFImpl for ApproxMedian {
             Ok(Box::new(NoopAccumulator::default()))
         } else {
             Ok(Box::new(ApproxPercentileAccumulator::new(
-                0.5_f64,
+                PercentileParam {
+                    aggregate_fn_name: "APPROX_MEDIAN".to_string(),
+                    state: PercentileParamState::Resolved(0.5_f64),
+                    is_desc: false,
+                },
                 acc_args.expr_fields[0].data_type().clone(),
             )))
         }
@@ -146,5 +152,11 @@ impl AggregateUDFImpl for ApproxMedian {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> datafusion_expr::DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`, so the
+        // planner has to deduplicate the input first.
+        datafusion_expr::DistinctHandling::Unsupported
     }
 }

@@ -727,6 +727,22 @@ select get_field(s, 'inner', 'val') from nested_test;
 ----
 100
 
+# Snowflake-style colon access uses the structured JSON path before it is serialized.
+query III
+select
+  s:inner.val as unquoted,
+  s:"inner"."val" as quoted,
+  s:['inner']['val'] as bracketed
+from nested_test;
+----
+100 100 100
+
+# Quoted dots are part of the field name, not path separators.
+query I
+select named_struct('inner.val', 200):"inner.val";
+----
+200
+
 statement ok
 drop table nested_test;
 
@@ -766,22 +782,23 @@ select get_field(CAST(NULL AS STRUCT(a STRUCT(b INT))), 'a', 'b');
 ----
 NULL
 
-# Null handling: null in middle of chain
+# Null parents at either level make a non-nullable child nullable.
 statement ok
-create table null_mid_test (s STRUCT(a STRUCT(b INT)));
-
-statement ok
-insert into null_mid_test values ({'a': NULL});
+create table null_mid_test as
+select arrow_cast(NULL, 'Struct("a": non-null Struct("b": non-null Int32))') as null_base,
+       arrow_cast({'a': NULL}, 'Struct("a": Struct("b": non-null Int32))') as s;
 
 query I
 select s['a']['b'] from null_mid_test;
 ----
 NULL
 
-query I
-select get_field(s, 'a', 'b') from null_mid_test;
+query IBIB
+select get_field(null_base, 'a', 'b'), arrow_field(null_base['a']['b'])['nullable'],
+       get_field(s, 'a', 'b'), arrow_field(s['a']['b'])['nullable']
+from null_mid_test;
 ----
-NULL
+NULL true NULL true
 
 statement ok
 drop table null_mid_test;
@@ -1752,3 +1769,265 @@ limit 2;
 
 statement ok
 drop table list_cast_limit;
+
+# named_struct() and struct() never produce a NULL row, so their return field
+# is non-nullable and `IS NOT NULL` on the constructor folds to `true`. A guard
+# on a struct built by a view then no longer keeps the whole struct alive, and
+# the scan is pruned to the fields that are actually read.
+statement ok
+create table struct_ctor_null (a int, b int, c int) as values (1, 2, 3), (NULL, 5, 6);
+
+statement ok
+create view struct_ctor_view as select named_struct('a', a, 'b', b, 'c', c) as s from struct_ctor_null;
+
+query BB
+select named_struct('a', a) is not null, struct(a) is null from struct_ctor_null;
+----
+true false
+true false
+
+query TT
+explain select s['b'] from struct_ctor_view where s is not null;
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS struct_ctor_view.s[b]
+02)--SubqueryAlias: struct_ctor_view
+03)----Projection: struct_ctor_null.b AS __datafusion_extracted_1
+04)------TableScan: struct_ctor_null projection=[b]
+physical_plan
+01)ProjectionExec: expr=[b@0 as struct_ctor_view.s[b]]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select s['b'] from struct_ctor_view where s is not null;
+----
+2
+5
+
+query TT
+explain select case when named_struct('a', a) is not null then b end from struct_ctor_null;
+----
+logical_plan
+01)Projection: struct_ctor_null.b AS CASE WHEN named_struct(Utf8("a"),struct_ctor_null.a) IS NOT NULL THEN struct_ctor_null.b END
+02)--TableScan: struct_ctor_null projection=[b]
+physical_plan
+01)ProjectionExec: expr=[b@0 as CASE WHEN named_struct(Utf8("a"),struct_ctor_null.a) IS NOT NULL THEN struct_ctor_null.b END]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop view struct_ctor_view;
+
+statement ok
+drop table struct_ctor_null;
+
+# Regression test for https://github.com/apache/datafusion/issues/25414.
+# `-a AS a` computes a new value under the same name as its input column.
+# Leaf expression pushdown moves `s['b']` below that projection. The projection
+# that computes `-a` must stay, or the query returns the input column `a`.
+
+statement ok
+create table leaf_same_name(a int, s struct<b varchar>) as values (1, {b: 'x'}), (2, {b: 'y'});
+
+# The computed column must survive the pushdown. Line 02 holds `(- t.a) AS a`.
+query TT
+explain select a, s['b'] from (select -a as a, s from leaf_same_name where a > 0);
+----
+logical_plan
+01)Projection: (- leaf_same_name.a) AS a, __datafusion_extracted_1 AS leaf_same_name.s[b]
+02)--Filter: leaf_same_name.a > Int32(0)
+03)----Projection: get_field(leaf_same_name.s, Utf8("b")) AS __datafusion_extracted_1, leaf_same_name.a
+04)------TableScan: leaf_same_name projection=[a, s]
+physical_plan
+01)ProjectionExec: expr=[(- a@1) as a, __datafusion_extracted_1@0 as leaf_same_name.s[b]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----FilterExec: a@1 > 0
+04)------ProjectionExec: expr=[get_field(s@1, b) as __datafusion_extracted_1, a@0 as a]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Through a Filter
+query IT rowsort
+select a, s['b'] from (select -a as a, s from leaf_same_name where a > 0);
+----
+-1 x
+-2 y
+
+# Through a Limit
+query IT rowsort
+select a, s['b'] from (select -a as a, s from leaf_same_name limit 10);
+----
+-1 x
+-2 y
+
+# A computed column whose type differs from its input column
+query IT rowsort
+select a, s['b'] from (select a * 10 as a, s from leaf_same_name limit 10);
+----
+10 x
+20 y
+
+# The outer filter must see the computed value
+query IT rowsort
+select a, s['b'] from (select -a as a, s from leaf_same_name) where a < 0;
+----
+-1 x
+-2 y
+
+# The group key must be the computed value
+query II rowsort
+select a, count(s['b']) from (select -a as a, s from leaf_same_name where a > 0) group by a;
+----
+-1 1
+-2 1
+
+# Through a Sort
+query IT rowsort
+select a, s['b'] from (select -a as a, s from leaf_same_name order by a);
+----
+-1 x
+-2 y
+
+statement ok
+drop table leaf_same_name;
+
+# GROUP BY / DISTINCT over a zero-field struct key must not panic on emit
+query ?I
+select arrow_cast(null, 'Struct()') as s, count(*) from (values (1),(2),(3)) group by 1;
+----
+NULL 3
+
+query ?
+select distinct arrow_cast(null, 'Struct()') as s from (values (1),(2));
+----
+NULL
+
+query ?I rowsort
+select named_struct('a', column1, 'z', arrow_cast(null, 'Struct()')) as s, count(*)
+from (values (1),(2),(1)) group by 1;
+----
+{a: 1, z: NULL} 2
+{a: 2, z: NULL} 1
+
+# A sub-query projection that renames a column to the name of a different
+# column of the same input, with a struct field read above it. Leaf projection
+# pushdown resolved the parent's column references through the rename map and
+# added the renamed input column a second time, which made the output schema
+# ambiguous (https://github.com/apache/datafusion/issues/25446).
+statement ok
+create table rename_swap_struct(a int, b int, s struct<x varchar>) as values (1, 10, {x: 'p'}), (2, 20, {x: 'q'});
+
+# a rename beside a same-name alias, under a filter
+query IIT
+select b, a, s['x'] from (select rename_swap_struct.a as b, rename_swap_struct.b as a, s from rename_swap_struct) where a > 15 order by b;
+----
+2 20 q
+
+# the same shape under a limit
+query IIT rowsort
+select b, a, s['x'] from (select rename_swap_struct.a as b, rename_swap_struct.b as a, s from rename_swap_struct) limit 10;
+----
+1 10 p
+2 20 q
+
+# a swap of two column names
+query IIT
+select a, c, s['x'] from (select rename_swap_struct.b as a, rename_swap_struct.a as c, s from rename_swap_struct) where a > 0 order by a;
+----
+10 1 p
+20 2 q
+
+# the same shape under an order by
+query IIT
+select b, a, s['x'] from (select rename_swap_struct.a as b, rename_swap_struct.b as a, s from rename_swap_struct) order by b;
+----
+1 10 p
+2 20 q
+
+# the same shape under a group by
+query III
+select b, a, count(s['x']) from (select rename_swap_struct.a as b, rename_swap_struct.b as a, s from rename_swap_struct) group by b, a order by b;
+----
+1 10 1
+2 20 1
+
+# the rename stays above the extraction projection, and the struct field is
+# still read at the scan
+query TT
+explain select b, a, s['x'] from (select rename_swap_struct.a as b, rename_swap_struct.b as a, s from rename_swap_struct) where a > 15;
+----
+logical_plan
+01)Projection: rename_swap_struct.a AS b, rename_swap_struct.b AS a, __datafusion_extracted_1 AS rename_swap_struct.s[x]
+02)--Filter: rename_swap_struct.b > Int32(15)
+03)----Projection: get_field(rename_swap_struct.s, Utf8("x")) AS __datafusion_extracted_1, rename_swap_struct.a, rename_swap_struct.b
+04)------TableScan: rename_swap_struct projection=[a, b, s]
+physical_plan
+01)ProjectionExec: expr=[a@1 as b, b@2 as a, __datafusion_extracted_1@0 as rename_swap_struct.s[x]]
+02)--FilterExec: b@2 > 15
+03)----ProjectionExec: expr=[get_field(s@2, x) as __datafusion_extracted_1, a@0 as a, b@1 as b]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table rename_swap_struct;
+
+# The same swap where the struct field name is also a column name of the table.
+statement ok
+create table rename_swap_struct_field(a int, b int, s struct<b varchar>) as values (1, 10, {b: 'p'}), (2, 20, {b: 'q'});
+
+query IIT
+select a, b, s['b'] from (select b as a, a as b, s from rename_swap_struct_field limit 100) order by a;
+----
+10 1 p
+20 2 q
+
+statement ok
+drop table rename_swap_struct_field;
+
+# Merging an extraction projection into a projection whose output lost its
+# qualifier. Eliminating the empty side of the union leaves a projection of
+# bare column names over a qualified input, and the merge used to add the
+# pass-through columns under those bare names beside the qualified ones the
+# projection already carried, which is an ambiguous schema.
+statement ok
+create table leaf_merge_source(v int, s struct<a int>, env varchar) as values (1, {a: 10}, 'prod'), (2, {a: 20}, 'dev');
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+explain with samples as (
+  select v, s, env from leaf_merge_source
+),
+expanded as (
+  select v, s, env from samples
+  union all
+  select v, s, env from samples where 1 = 2
+)
+select env, sum(s['a']) from expanded group by env order by env;
+----
+logical_plan
+01)Sort: expanded.env ASC NULLS LAST
+02)--Projection: expanded.env, sum(__datafusion_extracted_1) AS sum(expanded.s[a])
+03)----Aggregate: groupBy=[[expanded.env]], aggr=[[sum(CAST(__datafusion_extracted_1 AS Int64))]]
+04)------SubqueryAlias: expanded
+05)--------SubqueryAlias: samples
+06)----------Projection: leaf_merge_source.env, get_field(s, Utf8("a")) AS __datafusion_extracted_1
+07)------------TableScan: leaf_merge_source projection=[s, env]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+query TI
+with samples as (
+  select v, s, env from leaf_merge_source
+),
+expanded as (
+  select v, s, env from samples
+  union all
+  select v, s, env from samples where 1 = 2
+)
+select env, sum(s['a']) from expanded group by env order by env;
+----
+dev 20
+prod 10
+
+statement ok
+drop table leaf_merge_source;

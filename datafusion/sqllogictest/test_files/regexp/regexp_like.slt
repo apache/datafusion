@@ -148,7 +148,7 @@ SELECT regexp_like('bb-1', '.*-(\d)', 'g');
 query error Error during planning: regexp_like\(\) does not support the "global" option
 SELECT regexp_like('bb-1', '.*-(\d)', 'g');
 
-query error Arrow error: Compute error: Regular expression did not compile: CompiledTooBig\(10485760\)
+query error DataFusion error: Execution error: Regular expression did not compile: Compiled regex exceeds size limit of 10485760 bytes
 SELECT regexp_like('aaaaa', 'a{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}');
 
 # look-around is not supported and will just return false
@@ -401,3 +401,96 @@ true true
 
 statement ok
 DROP TABLE regexp_empty_flags;
+
+# A literal pattern without flags, like every `~` operator, is simplified at
+# planning time, so a pattern that does not compile is reported there, with the
+# same wording that the function uses at execution time.
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Error during planning: Regular expression did not compile: regex parse error
+SELECT regexp_like('abc', 'a(b');
+
+statement ok
+CREATE TABLE t_invalid_pattern(str varchar, pattern varchar) AS VALUES ('abc', 'a(b'), ('abc', NULL);
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Error during planning: Regular expression did not compile: regex parse error
+SELECT regexp_like(str, 'a(b') FROM t_invalid_pattern;
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Error during planning: Regular expression did not compile: regex parse error
+SELECT str ~ 'a(b' FROM t_invalid_pattern;
+
+# Flags that have no operator equivalent keep the call as a function, which
+# gives the same diagnosis at execution time.
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_like('abc', 'a(b', 'm');
+
+# An unknown flag makes the pattern fail to compile in the same way.
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_like('abc', 'a', 'z');
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_like(str, 'a', 'z') FROM t_invalid_pattern;
+
+# A pattern that varies per row is simplified to the `~` operator, which
+# compiles each row's pattern inside the arrow kernel. The kernel failure is
+# explained in the same way.
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_like(str, pattern) FROM t_invalid_pattern;
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT str ~ pattern FROM t_invalid_pattern;
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT str ~* pattern FROM t_invalid_pattern;
+
+# A NULL value or a NULL pattern gives NULL, and compiles nothing.
+query B
+SELECT regexp_like(NULL, 'a(b');
+----
+NULL
+
+query B
+SELECT regexp_like('abc', NULL);
+----
+NULL
+
+statement ok
+DROP TABLE t_invalid_pattern;
+
+# A row whose value or whose pattern is NULL gives NULL, and the kernel never
+# compiles that row's pattern. The diagnosis therefore names the pattern that
+# made the kernel fail, not the one of a row the kernel skipped.
+statement ok
+CREATE TABLE t_null_value(str varchar, pattern varchar) AS VALUES (NULL, 'a(b'), ('abc', NULL), ('abc', 'c[d');
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error[\s\S]*unclosed character class
+SELECT str ~ pattern FROM t_null_value;
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error[\s\S]*unclosed character class
+SELECT regexp_like(str, pattern) FROM t_null_value;
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error[\s\S]*unclosed character class
+SELECT regexp_like(str, pattern, 'm') FROM t_null_value;
+
+# The control: on their own, the rows that the kernel skips give NULL, and the
+# pattern that does not compile is never reported.
+query B
+SELECT str ~ pattern FROM t_null_value WHERE str IS NULL;
+----
+NULL
+
+query B
+SELECT str ~ pattern FROM t_null_value WHERE pattern IS NULL;
+----
+NULL
+
+query B
+SELECT regexp_like(str, pattern, 'm') FROM t_null_value WHERE str IS NULL;
+----
+NULL
+
+query B
+SELECT regexp_like(str, pattern, 'm') FROM t_null_value WHERE pattern IS NULL;
+----
+NULL
+
+statement ok
+DROP TABLE t_null_value;

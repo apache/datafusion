@@ -21,6 +21,7 @@ pub mod display;
 pub mod dml;
 mod extension;
 pub(crate) mod invariants;
+pub mod materialized_cte;
 pub use invariants::{InvariantLevel, assert_expected_schema, check_subquery_expr};
 mod plan;
 mod statement;
@@ -32,9 +33,10 @@ pub use builder::{
     union, wrap_projection_for_join_if_necessary,
 };
 pub use ddl::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
-    CreateFunctionBody, CreateIndex, CreateMemoryTable, CreateView, DdlStatement,
-    DropCatalogSchema, DropFunction, DropTable, DropView, OperateFunctionArg,
+    CreateCatalog, CreateCatalogSchema, CreateExternalCatalog, CreateExternalTable,
+    CreateFunction, CreateFunctionBody, CreateIndex, CreateMemoryTable, CreateView,
+    DdlStatement, DropCatalog, DropCatalogSchema, DropFunction, DropTable, DropView,
+    OperateFunctionArg,
 };
 pub use dml::{
     DmlStatement, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
@@ -59,3 +61,4 @@ pub use datafusion_common::format::ExplainFormat;
 pub use display::display_schema;
 
 pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
+pub use materialized_cte::{MaterializedCte, MaterializedCteId, MaterializedCteScan};

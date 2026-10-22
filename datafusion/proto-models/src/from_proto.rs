@@ -30,6 +30,7 @@ use datafusion_common::config::{
     ParquetOptions, TableParquetOptions,
 };
 use datafusion_common::display::{PlanType, StringifiedPlan};
+use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use datafusion_common::utils::usize_from_wire;
 use datafusion_common::{
@@ -380,11 +381,16 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             )?,
             write_batch_size: to_usize(proto.write_batch_size, "write_batch_size")?,
             writer_version,
-            compression: proto.compression_opt.as_ref().map(|opt| match opt {
-                parquet_options::CompressionOpt::Compression(compression) => {
-                    compression.clone()
-                }
-            }),
+            compression: proto
+                .compression_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::CompressionOpt::Compression(compression) => {
+                        compression.parse()
+                    }
+                })
+                .transpose()?,
+            enable_rle_to_dictionary: proto.enable_rle_to_dictionary,
             dictionary_enabled: proto.dictionary_enabled_opt.as_ref().map(|opt| {
                 match opt {
                     parquet_options::DictionaryEnabledOpt::DictionaryEnabled(
@@ -407,6 +413,9 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .transpose()?,
             max_row_group_size: to_usize(proto.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(proto.max_in_list_size, "max_in_list_size")?,
+            row_group_range_assignment: RowGroupRangeAssignment::from_proto_str(
+                &proto.row_group_range_assignment,
+            )?,
             created_by: proto.created_by.clone(),
             column_index_truncate_length: proto
                 .column_index_truncate_length_opt
@@ -430,11 +439,13 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 proto.data_page_row_count_limit,
                 "data_page_row_count_limit",
             )?,
-            encoding: proto.encoding_opt.as_ref().map(|opt| match opt {
-                parquet_options::EncodingOpt::Encoding(encoding) => {
-                    encoding.clone()
-                }
-            }),
+            encoding: proto
+                .encoding_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::EncodingOpt::Encoding(encoding) => encoding.parse(),
+                })
+                .transpose()?,
             bloom_filter_on_read: proto.bloom_filter_on_read,
             bloom_filter_on_write: proto.bloom_filter_on_write,
             bloom_filter_fpp: proto
@@ -461,19 +472,24 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             schema_force_view_types: proto.schema_force_view_types,
             binary_as_string: proto.binary_as_string,
             skip_arrow_metadata: proto.skip_arrow_metadata,
-            coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
-                parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => {
-                    coerce_int96.clone()
-                }
-            }),
+            write_row_group_number_distinct_values: proto
+                .write_row_group_number_distinct_values,
+            coerce_int96: proto
+                .coerce_int96_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => {
+                        coerce_int96.parse()
+                    }
+                })
+                .transpose()?,
             coerce_int96_tz: proto
                 .coerce_int96_tz_opt
                 .as_ref()
                 .map(|opt| match opt {
-                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => {
-                        tz.clone()
-                    }
-                }),
+                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => tz.parse(),
+                })
+                .transpose()?,
             max_predicate_cache_size: proto
                 .max_predicate_cache_size_opt
                 .as_ref()
@@ -569,6 +585,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rejects_invalid_parquet_encoding() {
+        let proto = ParquetOptionsProto {
+            encoding_opt: Some(parquet_options::EncodingOpt::Encoding(
+                "invalid".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unknown or unsupported parquet encoding: invalid")
+        );
+    }
+
+    #[test]
     fn rejects_invalid_parquet_statistics() {
         let proto = ParquetOptionsProto {
             statistics_enabled_opt: Some(
@@ -583,6 +615,40 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Invalid parquet statistics setting: invalid")
+        );
+    }
+
+    #[test]
+    fn accepts_parquet_coerce_int96_tz_without_unit() {
+        let proto = ParquetOptionsProto {
+            coerce_int96_tz_opt: Some(parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(
+                "+08".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let options = ParquetOptions::try_from(&proto).unwrap();
+        assert_eq!(options.coerce_int96, None);
+        assert_eq!(
+            options.coerce_int96_tz.as_ref().map(|tz| tz.as_str()),
+            Some("+08")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_parquet_coerce_int96_tz() {
+        let proto = ParquetOptionsProto {
+            coerce_int96_tz_opt: Some(parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(
+                "Not/A_Timezone".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid time zone: Not/A_Timezone."),
+            "unexpected error: {err}"
         );
     }
 }

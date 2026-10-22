@@ -162,10 +162,11 @@ impl HigherOrderUDFImpl for ArrayAnyMatch {
         };
 
         let predicate = evaluated.boolean_predicate(self.name())?;
+        let row_offsets = evaluated.row_offsets()?;
 
         let mut values = BooleanBuilder::with_capacity(evaluated.len());
-        for i in 0..evaluated.len() {
-            let (start, end) = evaluated.row_range(i);
+        for window in row_offsets.windows(2) {
+            let (start, end) = (window[0], window[1]);
             // any_match_for_range returns None when nulls poison the result;
             // null rows produce an empty range and return Some(false), but their
             // null bit is preserved by attaching the original null bitmap below.
@@ -191,11 +192,14 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::{
-        array::{ArrayRef, BooleanArray, Int32Array, ListArray, RecordBatch},
+        array::{
+            ArrayRef, BooleanArray, DictionaryArray, Int32Array, ListArray, RecordBatch,
+            StringViewArray,
+        },
         buffer::{NullBuffer, OffsetBuffer},
-        datatypes::{DataType, Field},
+        datatypes::{DataType, Field, UInt32Type},
     };
-    use datafusion_common::{DFSchema, Result};
+    use datafusion_common::{DFSchema, Result, ScalarValue};
     use datafusion_expr::{
         Expr, HigherOrderReturnFieldArgs, HigherOrderUDFImpl, ValueOrLambda, col,
         execution_props::ExecutionProps,
@@ -487,6 +491,76 @@ mod tests {
         assert_eq!(
             result.as_any().downcast_ref::<BooleanArray>().unwrap(),
             &BooleanArray::from(vec![Some(true), Some(true), Some(false)])
+        );
+        Ok(())
+    }
+
+    /// Evaluates `any_match(list, x -> x = needle)` over two rows, `[a, b]` and
+    /// `[c, a]`, built from `values`, with the lambda variable declared as the element
+    /// type. `needle` carries its own type, as these expressions are planned directly
+    /// and so are never type coerced.
+    fn run_any_match_eq(values: ArrayRef, needle: Expr) -> Result<ArrayRef> {
+        let element_type = values.data_type().clone();
+        let element_field = Arc::new(Field::new_list_field(element_type.clone(), true));
+        let list = ListArray::new(
+            Arc::clone(&element_field),
+            OffsetBuffer::<i32>::from_lengths(vec![2, 2]),
+            values,
+            None,
+        );
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![Field::new("list", DataType::List(element_field), true)].into(),
+            HashMap::new(),
+        )?;
+
+        create_physical_expr(
+            &Expr::HigherOrderFunction(HigherOrderFunction::new(
+                array_any_match_higher_order_function(),
+                vec![
+                    col("list"),
+                    lambda(
+                        ["x"],
+                        Expr::LambdaVariable(LambdaVariable::new(
+                            "x".to_string(),
+                            Some(Arc::new(Field::new("x", element_type, true))),
+                        ))
+                        .eq(needle),
+                    ),
+                ],
+            )),
+            &schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?
+        .evaluate(&RecordBatch::try_new(
+            Arc::clone(schema.inner()),
+            vec![Arc::new(list)],
+        )?)?
+        .into_array(2)
+    }
+
+    #[test]
+    fn test_any_match_on_dictionary_encoded_elements() -> Result<()> {
+        let values: ArrayRef = Arc::new(DictionaryArray::<UInt32Type>::from_iter([
+            "a", "b", "c", "a",
+        ]));
+        let result = run_any_match_eq(values, lit("c"))?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![Some(false), Some(true)])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_any_match_on_string_view_elements() -> Result<()> {
+        let values: ArrayRef = Arc::new(StringViewArray::from(vec!["a", "b", "c", "a"]));
+        let needle = lit(ScalarValue::Utf8View(Some("c".to_string())));
+        let result = run_any_match_eq(values, needle)?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![Some(false), Some(true)])
         );
         Ok(())
     }

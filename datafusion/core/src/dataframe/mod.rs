@@ -1267,8 +1267,9 @@ impl DataFrame {
         let mut array_ref_vec: Vec<ArrayRef> = vec![Arc::new(StringArray::from(
             supported_describe_functions.clone(),
         ))];
+        let mut array_datas = Vec::with_capacity(describe_record_batch.len());
         for field in original_schema_fields {
-            let mut array_datas = vec![];
+            array_datas.clear();
             for result in describe_record_batch.iter() {
                 let array_ref = match result {
                     Ok(df) => {

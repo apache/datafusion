@@ -17,8 +17,10 @@
 
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::ops::Range;
 use std::sync::Arc;
 
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
     plan_err,
@@ -26,11 +28,15 @@ use datafusion_common::{
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, BinaryArray, BinaryViewArray,
-    ByteView, GenericStringArray, LargeBinaryArray, LargeStringArray, OffsetSizeTrait,
+    ByteView, GenericByteArray, GenericByteViewArray, GenericStringArray,
+    LargeBinaryArray, LargeStringArray, MAX_INLINE_VIEW_LEN, OffsetSizeTrait,
     StringArray, StringViewArray, as_largestring_array, make_view,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    ByteArrayType, ByteViewType, DataType, GenericBinaryType, GenericStringType,
+    LargeUtf8Type, StringViewType, Utf8Type,
+};
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::{
     as_binary_array, as_binary_view_array, as_large_binary_array, as_string_array,
@@ -51,8 +57,26 @@ pub(crate) trait ConcatBuilder {
     fn finish(self, null_buffer: Option<NullBuffer>) -> Result<ArrayRef>;
 }
 
-/// Builder used by `concat`/`concat_ws` to assemble a [`GenericStringArray<O>`]
-/// (`StringArray` or `LargeStringArray`) one row at a time from multiple input columns.
+/// A [`ByteArrayType`] that [`ConcatByteArrayBuilder`] can build.
+///
+/// Like [`ByteViewType::IS_UTF8`], `IS_UTF8` tells string types from binary
+/// ones. Using `T::DATA_TYPE.is_string()` in [`ColumnarValueRef::write_bytes`]
+/// instead would build a `DataType` and call its destructor for every value.
+pub(crate) trait ConcatByteArrayType: ByteArrayType {
+    const IS_UTF8: bool;
+}
+
+impl<O: OffsetSizeTrait> ConcatByteArrayType for GenericStringType<O> {
+    const IS_UTF8: bool = true;
+}
+
+impl<O: OffsetSizeTrait> ConcatByteArrayType for GenericBinaryType<O> {
+    const IS_UTF8: bool = false;
+}
+
+/// Builder used by `concat`/`concat_ws` to assemble a [`GenericByteArray<T>`]
+/// (`StringArray`, `LargeStringArray`, `BinaryArray` or `LargeBinaryArray`)
+/// one row at a time from multiple input columns.
 ///
 /// Each row is written via repeated `write` calls (one per input fragment)
 /// followed by a single `append_offset` to commit the row.  The output null
@@ -61,24 +85,24 @@ pub(crate) trait ConcatBuilder {
 ///
 /// For the common "produce one `&str` per row" pattern, prefer
 /// `GenericStringArrayBuilder` instead.
-pub(crate) struct ConcatGenericStringBuilder<O: OffsetSizeTrait + ArrowNativeType> {
+pub(crate) struct ConcatByteArrayBuilder<T: ConcatByteArrayType> {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
-    _phantom: PhantomData<O>,
+    _phantom: PhantomData<T>,
 }
-pub(crate) type ConcatStringBuilder = ConcatGenericStringBuilder<i32>;
-pub(crate) type ConcatLargeStringBuilder = ConcatGenericStringBuilder<i64>;
+pub(crate) type ConcatStringBuilder = ConcatByteArrayBuilder<Utf8Type>;
+pub(crate) type ConcatLargeStringBuilder = ConcatByteArrayBuilder<LargeUtf8Type>;
 
-impl<O: OffsetSizeTrait + ArrowNativeType> ConcatGenericStringBuilder<O> {
+impl<T: ConcatByteArrayType> ConcatByteArrayBuilder<T> {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         let capacity = item_capacity
             .checked_add(1)
-            .map(|i| i.saturating_mul(size_of::<O>()))
+            .map(|i| i.saturating_mul(size_of::<T::Offset>()))
             .expect("capacity integer overflow");
 
         let mut offsets_buffer = MutableBuffer::with_capacity(capacity);
         // SAFETY: the first offset value is definitely not going to exceed the bounds.
-        unsafe { offsets_buffer.push_unchecked(O::usize_as(0)) };
+        unsafe { offsets_buffer.push_unchecked(T::Offset::usize_as(0)) };
         Self {
             offsets_buffer,
             value_buffer: MutableBuffer::with_capacity(data_capacity),
@@ -87,68 +111,25 @@ impl<O: OffsetSizeTrait + ArrowNativeType> ConcatGenericStringBuilder<O> {
     }
 }
 
-impl<O: OffsetSizeTrait + ArrowNativeType> ConcatBuilder
-    for ConcatGenericStringBuilder<O>
-{
+impl<T: ConcatByteArrayType> ConcatBuilder for ConcatByteArrayBuilder<T> {
     fn write<const CHECK_VALID: bool>(
         &mut self,
         column: &ColumnarValueRef,
         i: usize,
     ) -> Result<()> {
-        match column {
-            ColumnarValueRef::Scalar(s) => {
-                std::str::from_utf8(s).map_err(|_| {
-                    exec_datafusion_err!("concat: scalar bytes are not valid UTF-8")
-                })?;
-                self.value_buffer.extend_from_slice(s);
-            }
-            ColumnarValueRef::NullableArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NullableLargeStringArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NullableStringViewArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NonNullableArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
-            }
-            ColumnarValueRef::NonNullableLargeStringArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
-            }
-            ColumnarValueRef::NonNullableStringViewArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
-            }
-            _ => {
-                return exec_err!(
-                    "concat: unexpected column type for string builder: {column:?}"
-                );
-            }
-        }
-        Ok(())
+        column.write_bytes::<CHECK_VALID>(i, T::IS_UTF8, |bytes| {
+            self.value_buffer.extend_from_slice(bytes)
+        })
     }
 
     fn append_offset(&mut self) -> Result<()> {
-        let next_offset: O = O::from_usize(self.value_buffer.len())
+        let next_offset = T::Offset::from_usize(self.value_buffer.len())
             .ok_or_else(|| exec_datafusion_err!("byte array offset overflow"))?;
         self.offsets_buffer.push(next_offset);
         Ok(())
     }
 
-    /// Finalize the builder into a concrete [`GenericStringArray<O>`].
+    /// Finalize the builder into a concrete [`GenericByteArray<T>`].
     ///
     /// # Errors
     ///
@@ -156,7 +137,7 @@ impl<O: OffsetSizeTrait + ArrowNativeType> ConcatBuilder
     ///
     /// - the provided `null_buffer` is not the same length as the `offsets_buffer`.
     fn finish(self, null_buffer: Option<NullBuffer>) -> Result<ArrayRef> {
-        let row_count = self.offsets_buffer.len() / size_of::<O>() - 1;
+        let row_count = self.offsets_buffer.len() / size_of::<T::Offset>() - 1;
         if let Some(ref null_buffer) = null_buffer
             && null_buffer.len() != row_count
         {
@@ -164,96 +145,65 @@ impl<O: OffsetSizeTrait + ArrowNativeType> ConcatBuilder
                 "Null buffer and offsets buffer must be the same length"
             );
         }
-        let array_builder = ArrayDataBuilder::new(GenericStringArray::<O>::DATA_TYPE)
+        let array_builder = ArrayDataBuilder::new(T::DATA_TYPE)
             .len(row_count)
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);
-        // SAFETY: all data that was appended was valid UTF8 and the values
-        // and offsets were created correctly
+        // SAFETY: the values and offsets were created correctly, and when `T`
+        // is a string type, `write_bytes` only wrote valid UTF-8
         let array_data = unsafe { array_builder.build_unchecked() };
-        let array = GenericStringArray::<O>::from(array_data);
+        let array = GenericByteArray::<T>::from(array_data);
         Ok(Arc::new(array))
     }
 }
 
-/// Builder used by `concat`/`concat_ws` to assemble a [`StringViewArray`] one
+/// Builder used by `concat`/`concat_ws` to assemble a
+/// [`GenericByteViewArray<T>`] (`StringViewArray` or `BinaryViewArray`) one
 /// row at a time from multiple input columns.
 ///
 /// Each row is written via repeated `write` calls (one per input
 /// fragment) followed by a single `append_offset` to commit the row
-/// as a single string view. The output null buffer is supplied by the caller
+/// as a single view. The output null buffer is supplied by the caller
 /// at `finish` time, avoiding per-row NULL handling work.
 ///
 /// For the common "produce one `&str` per row" pattern, prefer
 /// [`StringViewArrayBuilder`] instead.
-pub(crate) struct ConcatStringViewBuilder {
+pub(crate) struct ConcatByteViewBuilder<T: ByteViewType> {
     views: Vec<u128>,
     data: Vec<u8>,
     block: Vec<u8>,
+    _phantom: PhantomData<T>,
 }
+pub(crate) type ConcatStringViewBuilder = ConcatByteViewBuilder<StringViewType>;
 
-impl ConcatStringViewBuilder {
+impl<T: ByteViewType> ConcatByteViewBuilder<T> {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         Self {
             views: Vec::with_capacity(item_capacity),
             data: Vec::with_capacity(data_capacity),
             block: vec![],
+            _phantom: PhantomData,
         }
     }
 }
 
-impl ConcatBuilder for ConcatStringViewBuilder {
+impl<T: ByteViewType> ConcatBuilder for ConcatByteViewBuilder<T> {
     fn write<const CHECK_VALID: bool>(
         &mut self,
         column: &ColumnarValueRef,
         i: usize,
     ) -> Result<()> {
-        match column {
-            ColumnarValueRef::Scalar(s) => {
-                std::str::from_utf8(s).map_err(|_| {
-                    exec_datafusion_err!("concat: scalar bytes are not valid UTF-8")
-                })?;
-                self.block.extend_from_slice(s);
-            }
-            ColumnarValueRef::NullableArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.block.extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NullableLargeStringArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.block.extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NullableStringViewArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.block.extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NonNullableArray(array) => {
-                self.block.extend_from_slice(array.value(i).as_bytes());
-            }
-            ColumnarValueRef::NonNullableLargeStringArray(array) => {
-                self.block.extend_from_slice(array.value(i).as_bytes());
-            }
-            ColumnarValueRef::NonNullableStringViewArray(array) => {
-                self.block.extend_from_slice(array.value(i).as_bytes());
-            }
-            _ => {
-                return exec_err!(
-                    "concat: unexpected column type for string view builder: {column:?}"
-                );
-            }
-        }
-        Ok(())
+        column.write_bytes::<CHECK_VALID>(i, T::IS_UTF8, |bytes| {
+            self.block.extend_from_slice(bytes)
+        })
     }
 
     /// Finalizes the current row by converting the accumulated data into a
-    /// StringView and appending it to the views buffer.
+    /// view and appending it to the views buffer.
     fn append_offset(&mut self) -> Result<()> {
         let v = &self.block;
-        if v.len() > 12 {
+        if v.len() > MAX_INLINE_LEN {
             let offset: u32 = self
                 .data
                 .len()
@@ -269,7 +219,7 @@ impl ConcatBuilder for ConcatStringViewBuilder {
         Ok(())
     }
 
-    /// Finalize the builder into a concrete [`StringViewArray`].
+    /// Finalize the builder into a concrete [`GenericByteViewArray<T>`].
     ///
     /// # Errors
     ///
@@ -294,12 +244,12 @@ impl ConcatBuilder for ConcatStringViewBuilder {
         };
 
         // SAFETY: views were constructed with correct lengths, offsets, and
-        // prefixes. All input fragments came from string arrays or string
-        // scalars, all of which are valid UTF-8.
+        // prefixes, and when `T` is `StringViewType`, `write_bytes` only
+        // wrote valid UTF-8.
         let array = unsafe {
-            StringViewArray::new_unchecked(
+            GenericByteViewArray::<T>::new_unchecked(
                 ScalarBuffer::from(self.views),
-                buffers,
+                buffers.into(),
                 null_buffer,
             )
         };
@@ -419,8 +369,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
 
     /// See [`BulkNullStringArrayBuilder::append_value`].
     ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_value`].
+    /// Prefer [`Self::try_append_value`], which returns an error instead of
+    /// panicking.
     ///
     /// # Panics
     ///
@@ -433,8 +383,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
 
     /// See [`BulkNullStringArrayBuilder::append_placeholder`].
     ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_placeholder`].
+    /// Prefer [`Self::try_append_placeholder`], which returns an error instead
+    /// of panicking.
     #[inline]
     pub fn append_placeholder(&mut self) {
         self.try_append_placeholder()
@@ -459,14 +409,20 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         mut map: F,
     ) -> Result<()> {
         self.try_append_bytes(src.len(), |value_buffer| {
-            value_buffer.extend(src.iter().map(|&b| map(b)));
+            // Copy, then map the bytes in place: a plain loop over a slice,
+            // which the compiler can vectorize.
+            let old_len = value_buffer.len();
+            value_buffer.extend_from_slice(src);
+            for b in &mut value_buffer.as_slice_mut()[old_len..] {
+                *b = map(*b);
+            }
         })
     }
 
     /// See [`BulkNullStringArrayBuilder::append_byte_map`].
     ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_byte_map`].
+    /// Prefer [`Self::try_append_byte_map`], which returns an error instead of
+    /// panicking.
     ///
     /// # Safety
     ///
@@ -514,8 +470,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
 
     /// See [`BulkNullStringArrayBuilder::append_with`].
     ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_with`].
+    /// Prefer [`Self::try_append_with`], which returns an error instead of
+    /// panicking.
     ///
     /// # Panics
     ///
@@ -728,8 +684,8 @@ impl StringViewArrayBuilder {
 
     /// See [`BulkNullStringArrayBuilder::append_value`].
     ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_value`].
+    /// Prefer [`Self::try_append_value`], which returns an error instead of
+    /// panicking.
     ///
     /// # Panics
     ///
@@ -754,9 +710,6 @@ impl StringViewArrayBuilder {
     }
 
     /// See [`BulkNullStringArrayBuilder::append_placeholder`].
-    ///
-    /// Note: new call sites that need recoverable overflow handling should
-    /// prefer [`Self::try_append_placeholder`].
     #[inline]
     pub fn append_placeholder(&mut self) {
         // Zero-length inline view — `length` field is 0, no buffer ref.
@@ -826,7 +779,62 @@ impl StringViewArrayBuilder {
         Self::make_long_view_checked(length, buffer_index, offset, prefix_bytes)
     }
 
+    /// Fallible variant of [`Self::append_byte_map`].
+    ///
+    /// # Safety
+    ///
+    /// The bytes produced by applying `map` to each byte of `src`, in order,
+    /// must form valid UTF-8.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as
+    /// [`Self::try_append_value`].
+    #[inline]
+    pub unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
+        &mut self,
+        src: &[u8],
+        mut map: F,
+    ) -> Result<()> {
+        if src.len() <= MAX_INLINE_LEN {
+            // An inline view holds the length in its low 4 bytes, followed by
+            // the value zero-padded to 12 bytes. Writing the mapped bytes
+            // straight into it is faster than going through `inline_view`.
+            let mut view = (src.len() as u128).to_le_bytes();
+            for (d, &b) in view[4..].iter_mut().zip(src) {
+                *d = map(b);
+            }
+            self.views.push(u128::from_le_bytes(view));
+            return Ok(());
+        }
+
+        let length: u32 = i32::try_from(src.len())
+            .map_err(|_| string_view_overflow_error("value length"))?
+            as u32;
+        self.try_ensure_long_capacity(length)?;
+
+        let cursor = self.in_progress.len();
+        let offset: u32 = i32::try_from(cursor)
+            .map_err(|_| string_view_overflow_error("offset"))?
+            as u32;
+        let buffer_index: u32 = i32::try_from(self.completed.len())
+            .map_err(|_| string_view_overflow_error("buffer count"))?
+            as u32;
+        self.in_progress.extend(src.iter().map(|&b| map(b)));
+        // The prefix comes from the mapped bytes, not from `src`.
+        self.views.push(Self::make_long_view_checked(
+            length,
+            buffer_index,
+            offset,
+            &self.in_progress[cursor..],
+        ));
+        Ok(())
+    }
+
     /// See [`BulkNullStringArrayBuilder::append_byte_map`].
+    ///
+    /// Prefer [`Self::try_append_byte_map`], which returns an error instead of
+    /// panicking.
     ///
     /// # Safety
     ///
@@ -839,25 +847,10 @@ impl StringViewArrayBuilder {
     /// `src.len()`, the in-progress buffer offset, or the number of completed
     /// buffers exceeds `i32::MAX`.
     #[inline]
-    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], mut map: F) {
-        let length: u32 =
-            i32::try_from(src.len()).expect("value length exceeds i32::MAX") as u32;
-        if length <= 12 {
-            let mut bytes = [0u8; 12];
-            for (d, &b) in bytes[..src.len()].iter_mut().zip(src) {
-                *d = map(b);
-            }
-            self.views.push(make_view(&bytes[..src.len()], 0, 0));
-            return;
-        }
-
-        self.ensure_long_capacity(length);
-
-        let cursor = self.in_progress.len();
-        let offset: u32 = i32::try_from(cursor).expect("offset exceeds i32::MAX") as u32;
-        self.in_progress.extend(src.iter().map(|&b| map(b)));
-        self.views
-            .push(self.make_long_view(length, offset, &self.in_progress[cursor..]));
+    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
+        // SAFETY: caller upholds this method's UTF-8 contract.
+        unsafe { self.try_append_byte_map(src, map) }
+            .expect("byte array offset overflow");
     }
 
     /// See [`BulkNullStringArrayBuilder::append_with`].
@@ -948,7 +941,7 @@ impl StringViewArrayBuilder {
         let array = unsafe {
             StringViewArray::new_unchecked(
                 ScalarBuffer::from(self.views),
-                self.completed,
+                self.completed.into(),
                 null_buffer,
             )
         };
@@ -1178,42 +1171,80 @@ impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
     }
 }
 
-/// Append a new view to the views buffer with the given substr.
-///
-/// Callers are responsible for their own null tracking.
-///
-/// # Safety
-///
-/// original_view must be a valid view (the format described on
-/// [`GenericByteViewArray`](arrow::array::GenericByteViewArray).
+/// Values of at most this many bytes are stored inline in their view.
+pub(crate) const MAX_INLINE_LEN: usize = MAX_INLINE_VIEW_LEN as usize;
+
+/// Returns the view for a substring of the value an existing view refers to.
 ///
 /// # Arguments
-/// - views_buffer: The buffer to append the new view to
-/// - original_view: The original view value
-/// - substr: The substring to append. Must be a valid substring of the original view
-/// - start_offset: The start offset of the substring in the view
+/// - view: The original view value
+/// - source: The bytes the original view refers to
+/// - range: The byte range within `source` of the substring to return a view for
 ///
-/// LLVM is apparently overly eager to inline this function into some hot loops,
-/// which bloats them and regresses performance, so we disable inlining for now.
-#[inline(never)]
-pub(crate) fn append_view(
-    views_buffer: &mut Vec<u128>,
-    original_view: &u128,
-    substr: &str,
-    start_offset: u32,
-) {
-    let substr_len = substr.len();
-    let sub_view = if substr_len > 12 {
-        let view = ByteView::from(*original_view);
-        make_view(
-            substr.as_bytes(),
-            view.buffer_index,
-            view.offset + start_offset,
-        )
+/// Substrings longer than 12 bytes point into the same data buffer as `view`;
+/// shorter ones are stored inline in the new view.
+///
+/// This uses shifts and masks rather than [`make_view`], which picks copy code
+/// based on the substring's length; the CPU often mispredicts that choice when
+/// lengths vary from row to row.
+#[inline]
+pub(crate) fn sub_view(view: u128, source: &[u8], range: Range<usize>) -> u128 {
+    debug_assert!(range.start <= range.end && range.end <= source.len());
+
+    let len = range.end - range.start;
+    if len > MAX_INLINE_LEN {
+        // The substring has more than 12 bytes, so its 4-byte prefix is in bounds.
+        let prefix = source[range.start..range.start + 4].try_into().unwrap();
+        let original = ByteView::from(view);
+        return ByteView {
+            length: len as u32,
+            prefix: u32::from_le_bytes(prefix),
+            offset: original.offset + range.start as u32,
+            ..original
+        }
+        .as_u128();
+    }
+
+    // The substring's bytes, in the low-order bits. Any bits past the end of
+    // the substring are masked off by `inline_view`.
+    let bytes = if source.len() <= MAX_INLINE_LEN {
+        // `source` is stored in `view` itself, after its 4-byte length.
+        (view >> 32) >> (8 * range.start)
     } else {
-        make_view(substr.as_bytes(), 0, 0)
+        // `source` has more than 12 bytes, so read the 12 bytes starting at
+        // `range.start`, or the last 12 bytes if that would run past the end,
+        // and skip any that come before `range.start`.
+        let window_start = range.start.min(source.len() - MAX_INLINE_LEN);
+        let window = source[window_start..window_start + MAX_INLINE_LEN]
+            .try_into()
+            .unwrap();
+        read_12_bytes(window) >> (8 * (range.start - window_start))
     };
-    views_buffer.push(sub_view);
+    inline_view(bytes, len)
+}
+
+/// Returns the view for `substr`, which must be a slice of `string`, the value
+/// `view` refers to. See [`sub_view`].
+#[inline]
+pub(crate) fn substr_view(view: u128, string: &str, substr: &str) -> u128 {
+    let start = substr.as_ptr() as usize - string.as_ptr() as usize;
+    sub_view(view, string.as_bytes(), start..start + substr.len())
+}
+
+/// Reads `bytes` as a little-endian integer.
+#[inline]
+fn read_12_bytes(bytes: &[u8; 12]) -> u128 {
+    let low = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+    let high = u32::from_le_bytes(bytes[8..].try_into().unwrap());
+    u128::from(low) | (u128::from(high) << 64)
+}
+
+/// Returns an inline view of the `len` low-order bytes of `bytes`.
+#[inline]
+fn inline_view(bytes: u128, len: usize) -> u128 {
+    debug_assert!(len <= MAX_INLINE_LEN);
+    let mask = (1u128 << (8 * len)) - 1;
+    ((bytes & mask) << 32) | len as u128
 }
 
 #[derive(Debug)]
@@ -1272,6 +1303,81 @@ impl ColumnarValueRef<'_> {
         }
     }
 
+    /// Calls `write` with the bytes of the value at row `i`, for appending to a
+    /// string (`utf8`) or binary array, unless the value is null.
+    ///
+    /// Validity is only checked if `CHECK_VALID` is true, so callers passing
+    /// `false` must have checked it already.
+    ///
+    /// # Errors
+    ///
+    /// String arrays only take values from string arrays and valid UTF-8
+    /// scalars, and binary arrays only from binary arrays and scalars. Returns
+    /// an error, without calling `write`, for any other value.
+    #[inline]
+    pub fn write_bytes<const CHECK_VALID: bool>(
+        &self,
+        i: usize,
+        utf8: bool,
+        write: impl FnOnce(&[u8]),
+    ) -> Result<()> {
+        match self {
+            Self::Scalar(s) => {
+                if utf8 && std::str::from_utf8(s).is_err() {
+                    return exec_err!("concat: scalar bytes are not valid UTF-8");
+                }
+                write(s)
+            }
+            Self::NullableArray(array) if utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i).as_bytes())
+                }
+            }
+            Self::NonNullableArray(array) if utf8 => write(array.value(i).as_bytes()),
+            Self::NullableLargeStringArray(array) if utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i).as_bytes())
+                }
+            }
+            Self::NonNullableLargeStringArray(array) if utf8 => {
+                write(array.value(i).as_bytes())
+            }
+            Self::NullableStringViewArray(array) if utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i).as_bytes())
+                }
+            }
+            Self::NonNullableStringViewArray(array) if utf8 => {
+                write(array.value(i).as_bytes())
+            }
+            Self::NullableBinaryArray(array) if !utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i))
+                }
+            }
+            Self::NonNullableBinaryArray(array) if !utf8 => write(array.value(i)),
+            Self::NullableLargeBinaryArray(array) if !utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i))
+                }
+            }
+            Self::NonNullableLargeBinaryArray(array) if !utf8 => write(array.value(i)),
+            Self::NullableBinaryViewArray(array) if !utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i))
+                }
+            }
+            Self::NonNullableBinaryViewArray(array) if !utf8 => write(array.value(i)),
+            _ => {
+                let kind = if utf8 { "string" } else { "binary" };
+                return exec_err!(
+                    "concat: unexpected column type for {kind} builder: {self:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Parse a [`ColumnarValue`] argument into `ColumnarValueRef`.
     /// Returns `None` when the argument is null or null scalar
     /// Returns an error when a columnar value type is not supported.
@@ -1324,7 +1430,7 @@ impl ColumnarValueRef<'_> {
             ColumnarValue::Array(array) => match array.data_type() {
                 DataType::Utf8 => {
                     let string_array = as_string_array(array)?;
-                    *data_size += string_array.values().len() * size_factor;
+                    *data_size += offset_span_len(string_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableArray(string_array)
                     } else {
@@ -1334,7 +1440,7 @@ impl ColumnarValueRef<'_> {
                 }
                 DataType::LargeUtf8 => {
                     let string_array = as_largestring_array(array);
-                    *data_size += string_array.values().len() * size_factor;
+                    *data_size += offset_span_len(string_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableLargeStringArray(string_array)
                     } else {
@@ -1354,7 +1460,7 @@ impl ColumnarValueRef<'_> {
                 }
                 DataType::Binary => {
                     let binary_array = as_binary_array(array)?;
-                    *data_size += binary_array.values().len() * size_factor;
+                    *data_size += offset_span_len(binary_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableBinaryArray(binary_array)
                     } else {
@@ -1364,7 +1470,7 @@ impl ColumnarValueRef<'_> {
                 }
                 DataType::LargeBinary => {
                     let binary_array = as_large_binary_array(array)?;
-                    *data_size += binary_array.values().len() * size_factor;
+                    *data_size += offset_span_len(binary_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableLargeBinaryArray(binary_array)
                     } else {
@@ -1427,6 +1533,60 @@ pub(crate) fn widest_string_type(types: &[DataType]) -> DataType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binaries::{
+        ConcatBinaryBuilder, ConcatBinaryViewBuilder, ConcatLargeBinaryBuilder,
+    };
+    use crate::utils::test::sliced_byte_array;
+
+    #[test]
+    fn sub_view_matches_make_view() {
+        let buffer_index = 3;
+        let offset = 100;
+        for source_len in 0..=40 {
+            // Include bytes >= 0x80 so that masking errors would show up.
+            let source: Vec<u8> = (0..source_len).map(|i| (i * 37 + 11) as u8).collect();
+            let view = make_view(&source, buffer_index, offset);
+            for start in 0..=source_len {
+                for end in start..=source_len {
+                    let expected = make_view(
+                        &source[start..end],
+                        buffer_index,
+                        offset + start as u32,
+                    );
+                    assert_eq!(
+                        sub_view(view, &source, start..end),
+                        expected,
+                        "source_len={source_len}, range={start}..{end}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn concat_capacity_uses_visible_bytes() -> Result<()> {
+        for data_type in [
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Binary,
+            DataType::LargeBinary,
+        ] {
+            let array = sliced_byte_array(&[Some("abc")], &data_type)?;
+            for len in [0, 1] {
+                let input = ColumnarValue::Array(array.slice(0, len));
+                let mut data_size = 0;
+                ColumnarValueRef::from_columnar_value(
+                    &input,
+                    &mut data_size,
+                    len,
+                    2,
+                    false,
+                )?;
+                assert_eq!(data_size, 6 * len, "{data_type}");
+            }
+        }
+        Ok(())
+    }
 
     /// Run `scenario` against `builder`, finish with a null buffer derived
     /// from `expected` (a bit is set wherever `expected[i].is_some()`), and
@@ -1507,6 +1667,90 @@ mod tests {
     #[should_panic(expected = "capacity integer overflow")]
     fn test_overflow_concat_large_string_builder() {
         let _builder = ConcatLargeStringBuilder::with_capacity(usize::MAX, usize::MAX);
+    }
+
+    /// Asserts that builders made by `new` accept the `valid` columns and
+    /// reject the `invalid` ones.
+    fn check_concat_inputs<B: ConcatBuilder>(
+        new: impl Fn() -> B,
+        valid: &[&ColumnarValueRef],
+        invalid: &[&ColumnarValueRef],
+    ) {
+        for column in valid {
+            assert!(new().write::<true>(column, 0).is_ok(), "{column:?}");
+        }
+        for column in invalid {
+            assert!(new().write::<true>(column, 0).is_err(), "{column:?}");
+        }
+    }
+
+    #[test]
+    fn concat_builders_check_input_types() {
+        let strings = StringArray::from(vec!["a"]);
+        let large_strings = LargeStringArray::from(vec!["a"]);
+        let string_views = StringViewArray::from(vec!["a"]);
+        let binaries = BinaryArray::from_vec(vec![b"a"]);
+        let large_binaries = LargeBinaryArray::from_vec(vec![b"a"]);
+        let binary_views = BinaryViewArray::from_iter_values([b"a"]);
+        let string_columns = [
+            ColumnarValueRef::NullableArray(&strings),
+            ColumnarValueRef::NonNullableArray(&strings),
+            ColumnarValueRef::NullableLargeStringArray(&large_strings),
+            ColumnarValueRef::NonNullableLargeStringArray(&large_strings),
+            ColumnarValueRef::NullableStringViewArray(&string_views),
+            ColumnarValueRef::NonNullableStringViewArray(&string_views),
+        ];
+        let binary_columns = [
+            ColumnarValueRef::NullableBinaryArray(&binaries),
+            ColumnarValueRef::NonNullableBinaryArray(&binaries),
+            ColumnarValueRef::NullableLargeBinaryArray(&large_binaries),
+            ColumnarValueRef::NonNullableLargeBinaryArray(&large_binaries),
+            ColumnarValueRef::NullableBinaryViewArray(&binary_views),
+            ColumnarValueRef::NonNullableBinaryViewArray(&binary_views),
+        ];
+        let utf8_scalar = ColumnarValueRef::Scalar(b"a");
+        let non_utf8_scalar = ColumnarValueRef::Scalar(&[0xff]);
+
+        // String builders take string arrays and UTF-8 scalars
+        let valid: Vec<_> = string_columns.iter().chain([&utf8_scalar]).collect();
+        let invalid: Vec<_> = binary_columns.iter().chain([&non_utf8_scalar]).collect();
+        check_concat_inputs(
+            || ConcatStringBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
+        check_concat_inputs(
+            || ConcatLargeStringBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
+        check_concat_inputs(
+            || ConcatStringViewBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
+
+        // Binary builders take binary arrays and any scalar
+        let valid: Vec<_> = binary_columns
+            .iter()
+            .chain([&utf8_scalar, &non_utf8_scalar])
+            .collect();
+        let invalid: Vec<_> = string_columns.iter().collect();
+        check_concat_inputs(
+            || ConcatBinaryBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
+        check_concat_inputs(
+            || ConcatLargeBinaryBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
+        check_concat_inputs(
+            || ConcatBinaryViewBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
     }
 
     #[test]
@@ -1661,16 +1905,28 @@ mod tests {
 
     #[test]
     fn string_view_builder_try_append_success_path() {
-        let mut builder = StringViewArrayBuilder::with_capacity(3);
+        let mut builder = StringViewArrayBuilder::with_capacity(5);
         builder.try_append_value("abc").unwrap();
         builder.try_append_placeholder().unwrap();
         builder.try_append_value("a long string value").unwrap();
+        // SAFETY: ASCII inputs and ASCII outputs.
+        unsafe {
+            builder
+                .try_append_byte_map(b"de", |b| b.to_ascii_uppercase())
+                .unwrap();
+            builder
+                .try_append_byte_map(b"a long mapped value", |b| b.to_ascii_uppercase())
+                .unwrap();
+        }
 
-        let nulls = Some(NullBuffer::from(vec![true, false, true]));
+        let nulls = Some(NullBuffer::from(vec![true, false, true, true, true]));
         let array = builder.finish(nulls).unwrap();
+        array.to_data().validate_full().unwrap();
         assert_eq!(array.value(0), "abc");
         assert!(array.is_null(1));
         assert_eq!(array.value(2), "a long string value");
+        assert_eq!(array.value(3), "DE");
+        assert_eq!(array.value(4), "A LONG MAPPED VALUE");
     }
 
     #[test]

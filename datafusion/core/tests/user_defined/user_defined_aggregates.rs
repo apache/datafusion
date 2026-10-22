@@ -30,7 +30,7 @@ use arrow::array::{
     Array, AsArray, Int32Array, PrimitiveArray, StringArray, StructArray, UInt64Array,
     record_batch, types::UInt64Type,
 };
-use arrow::datatypes::{Fields, Schema};
+use arrow::datatypes::{Fields, Metadata, Schema};
 use arrow_schema::FieldRef;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::dataframe::DataFrame;
@@ -59,6 +59,8 @@ use datafusion_expr::{
     WindowFunctionDefinition, col, create_udaf, function::AccumulatorArgs,
 };
 use datafusion_functions_aggregate::average::AvgAccumulator;
+use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
+use datafusion_functions_aggregate::sum::sum_udaf;
 
 /// Test to show the contents of the setup
 #[tokio::test]
@@ -391,6 +393,114 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     +------------------+
     | 1.0              |
     +------------------+
+    ");
+
+    Ok(())
+}
+
+/// Creates a context with table `t` (single `Int32` column `i` holding 1, 2, 3, 4).
+fn context_with_int_table() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+    let arr = Int32Array::from(vec![1, 2, 3, 4]);
+    let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
+    ctx.register_batch("t", batch)?;
+    Ok(ctx)
+}
+
+/// An aliased aggregate over a sliding frame must still get the inner
+/// function's sliding accumulator. Windows are [1], [1,2], [2,3], [3,4].
+#[tokio::test]
+async fn test_aliased_udaf_as_window_with_frame() -> Result<()> {
+    let ctx = context_with_int_table()?;
+    ctx.register_udaf(sum_udaf().as_ref().clone().with_aliases(["my_sum"]));
+    ctx.register_udaf(min_udaf().as_ref().clone().with_aliases(["my_min"]));
+    ctx.register_udaf(max_udaf().as_ref().clone().with_aliases(["my_max"]));
+
+    let frame = "OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)";
+
+    let sql = format!("SELECT my_sum(i) {frame} AS r FROM t");
+    let result = plan_and_collect(&ctx, &sql).await?;
+    insta::assert_snapshot!(batches_to_string(&result), @r"
+    +---+
+    | r |
+    +---+
+    | 1 |
+    | 3 |
+    | 5 |
+    | 7 |
+    +---+
+    ");
+
+    let sql = format!("SELECT my_min(i) {frame} AS r FROM t");
+    let result = plan_and_collect(&ctx, &sql).await?;
+    insta::assert_snapshot!(batches_to_string(&result), @r"
+    +---+
+    | r |
+    +---+
+    | 1 |
+    | 1 |
+    | 2 |
+    | 3 |
+    +---+
+    ");
+
+    let sql = format!("SELECT my_max(i) {frame} AS r FROM t");
+    let result = plan_and_collect(&ctx, &sql).await?;
+    insta::assert_snapshot!(batches_to_string(&result), @r"
+    +---+
+    | r |
+    +---+
+    | 1 |
+    | 2 |
+    | 3 |
+    | 4 |
+    +---+
+    ");
+
+    Ok(())
+}
+
+/// `name()` forwards to the inner function, so registering the aliased `sum`
+/// overwrites the built-in `sum` as well: the original name is affected too.
+#[tokio::test]
+async fn test_aliased_udaf_as_window_with_frame_original_name() -> Result<()> {
+    let ctx = context_with_int_table()?;
+    ctx.register_udaf(sum_udaf().as_ref().clone().with_aliases(["my_sum"]));
+
+    let sql = "SELECT sum(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS r FROM t";
+    let result = plan_and_collect(&ctx, sql).await?;
+    insta::assert_snapshot!(batches_to_string(&result), @r"
+    +---+
+    | r |
+    +---+
+    | 1 |
+    | 3 |
+    | 5 |
+    | 7 |
+    +---+
+    ");
+
+    Ok(())
+}
+
+/// Control: an `UNBOUNDED PRECEDING` frame uses the plain accumulator, so this
+/// passes both before and after the fix.
+#[tokio::test]
+async fn test_aliased_udaf_as_window_unbounded_preceding() -> Result<()> {
+    let ctx = context_with_int_table()?;
+    ctx.register_udaf(sum_udaf().as_ref().clone().with_aliases(["my_sum"]));
+
+    let sql = "SELECT my_sum(i) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS r FROM t";
+    let result = plan_and_collect(&ctx, sql).await?;
+    insta::assert_snapshot!(batches_to_string(&result), @r"
+    +----+
+    | r  |
+    +----+
+    | 1  |
+    | 3  |
+    | 6  |
+    | 10 |
+    +----+
     ");
 
     Ok(())
@@ -1018,10 +1128,8 @@ async fn test_metadata_based_aggregate() -> Result<()> {
     let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
     let schema = Arc::new(Schema::new(vec![
         Field::new("no_metadata", DataType::UInt64, true),
-        Field::new("with_metadata", DataType::UInt64, true).with_metadata(
-            std::iter::once(("modify_values".to_string(), "double_output".to_string()))
-                .collect(),
-        ),
+        Field::new("with_metadata", DataType::UInt64, true)
+            .with_metadata(Metadata::new().with("modify_values", "double_output")),
     ]));
 
     let batch = RecordBatch::try_new(
@@ -1091,10 +1199,8 @@ async fn test_metadata_based_aggregate_as_window() -> Result<()> {
     let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
     let schema = Arc::new(Schema::new(vec![
         Field::new("no_metadata", DataType::UInt64, true),
-        Field::new("with_metadata", DataType::UInt64, true).with_metadata(
-            std::iter::once(("modify_values".to_string(), "double_output".to_string()))
-                .collect(),
-        ),
+        Field::new("with_metadata", DataType::UInt64, true)
+            .with_metadata(Metadata::new().with("modify_values", "double_output")),
     ]));
 
     let batch = RecordBatch::try_new(

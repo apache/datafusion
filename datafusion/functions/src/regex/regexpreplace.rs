@@ -32,9 +32,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
-use datafusion_common::{
-    DataFusionError, Result, cast::as_generic_string_array, internal_err,
-};
+use datafusion_common::utils::offset_span_len;
+use datafusion_common::{Result, cast::as_generic_string_array, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::function::Hint;
@@ -43,6 +42,8 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use regex::{CaptureLocations, Regex};
+
+use super::compile_regex;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -361,15 +362,15 @@ where
                             // if patterns hashmap already has regexp then use else create and return
                             let re = match patterns.get(pattern) {
                                 Some(re) => Ok(re),
-                                None => match Regex::new(pattern) {
-                                    Ok(re) => {
-                                        patterns.insert(pattern.to_string(), re);
-                                        Ok(patterns.get(pattern).unwrap())
+                                None => {
+                                    match compile_regex("regexp_replace", pattern, None) {
+                                        Ok(re) => {
+                                            patterns.insert(pattern.to_string(), re);
+                                            Ok(patterns.get(pattern).unwrap())
+                                        }
+                                        Err(err) => Err(err),
                                     }
-                                    Err(err) => {
-                                        Err(DataFusionError::External(Box::new(err)))
-                                    }
-                                },
+                                }
                             };
 
                             Some(re.map(|re| re.replace(string, replacement.as_str())))
@@ -398,6 +399,8 @@ where
         }
         Some(flags_array) => {
             let flags_array_iter = ArrayIter::new(flags_array);
+            // Reused across rows to build the pattern cache key
+            let mut pattern_buf = String::new();
 
             let result_iter = string_array_iter
                 .zip(pattern_array_iter)
@@ -411,24 +414,27 @@ where
                             // format flags into rust pattern
                             let replace_all = flags.contains('g');
                             let flags = flags.replace('g', "");
-                            let pattern = if flags.is_empty() {
-                                pattern.to_string()
-                            } else {
-                                format!("(?{flags}){pattern}")
-                            };
+                            pattern_buf.clear();
+                            if !flags.is_empty() {
+                                pattern_buf.push_str("(?");
+                                pattern_buf.push_str(&flags);
+                                pattern_buf.push(')');
+                            }
+                            pattern_buf.push_str(pattern);
+                            let pattern = pattern_buf.as_str();
 
                             // if patterns hashmap already has regexp then use else create and return
-                            let re = match patterns.get(&pattern) {
+                            let re = match patterns.get(pattern) {
                                 Some(re) => Ok(re),
-                                None => match Regex::new(pattern.as_str()) {
-                                    Ok(re) => {
-                                        patterns.insert(pattern.clone(), re);
-                                        Ok(patterns.get(&pattern).unwrap())
+                                None => {
+                                    match compile_regex("regexp_replace", pattern, None) {
+                                        Ok(re) => {
+                                            patterns.insert(pattern.to_string(), re);
+                                            Ok(patterns.get(pattern).unwrap())
+                                        }
+                                        Err(err) => Err(err),
                                     }
-                                    Err(err) => {
-                                        Err(DataFusionError::External(Box::new(err)))
-                                    }
-                                },
+                                }
                             };
 
                             Some(re.map(|re| {
@@ -537,8 +543,7 @@ fn regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         None => (pattern.to_string(), 1),
     };
 
-    let re =
-        Regex::new(&pattern).map_err(|err| DataFusionError::External(Box::new(err)))?;
+    let re = compile_regex("regexp_replace", &pattern, None)?;
 
     // Replaces the posix groups in the replacement string
     // with rust ones.
@@ -553,12 +558,8 @@ fn regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
 
             // We are going to create the underlying string buffer from its parts
             // to be able to re-use the existing null buffer for sparse arrays.
-            let mut vals = BufferBuilder::<u8>::new({
-                let offsets = string_array.value_offsets();
-                (offsets[string_array.len()] - offsets[0])
-                    .to_usize()
-                    .unwrap()
-            });
+            let mut vals =
+                BufferBuilder::<u8>::new(offset_span_len(string_array.offsets()));
             let mut new_offsets = BufferBuilder::<T>::new(string_array.len() + 1);
             new_offsets.append(T::zero());
 
@@ -976,7 +977,7 @@ mod tests {
         let pattern_err = re.expect_err("broken pattern should have failed");
         assert_eq!(
             pattern_err.strip_backtrace(),
-            "External error: regex parse error:\n    [\n    ^\nerror: unclosed character class"
+            "Execution error: Regular expression did not compile: regex parse error:\n    [\n    ^\nerror: unclosed character class"
         );
     }
 

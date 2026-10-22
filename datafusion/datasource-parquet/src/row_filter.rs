@@ -468,6 +468,12 @@ pub(crate) struct PrebuiltRowFilterCandidate {
     required_bytes: usize,
 }
 
+impl PrebuiltRowFilterCandidate {
+    pub(crate) fn reads_leaf(&self, leaf_idx: usize) -> bool {
+        self.projection_mask.leaf_included(leaf_idx)
+    }
+}
+
 /// Precompute the list of [`PrebuiltRowFilterCandidate`]s for a predicate.
 ///
 /// This is the expensive part of [`build_row_filter`]: split into conjuncts,

@@ -486,6 +486,68 @@ BAR Dictionary(Int32, Utf8)
 statement ok
 DROP TABLE upper_dictionary_test
 
+# The array is not all ASCII, so each row is converted on its own: ASCII rows,
+# and rows with non-ASCII characters at the start, middle and end, including
+# values longer than the 12 bytes a Utf8View can store inline.
+statement ok
+CREATE TABLE upper_mixed_test AS
+SELECT column1 AS id,
+  arrow_cast(column2, 'Utf8') AS utf8,
+  arrow_cast(column2, 'LargeUtf8') AS large_utf8,
+  arrow_cast(column2, 'Utf8View') AS utf8view
+FROM (VALUES
+(1, 'datafusion'),
+(2, 'a long ascii-only value'),
+(3, ''),
+(4, NULL),
+(5, 'éa'),
+(6, 'über alles, then ascii'),
+(7, 'straße'),
+(8, 'a long value ending in ß'),
+(9, 'ⱦx'),
+(10, '农历新年 new year'));
+
+query TTT
+SELECT upper(utf8), upper(large_utf8), upper(utf8view) FROM upper_mixed_test ORDER BY id
+----
+DATAFUSION DATAFUSION DATAFUSION
+A LONG ASCII-ONLY VALUE A LONG ASCII-ONLY VALUE A LONG ASCII-ONLY VALUE
+(empty) (empty) (empty)
+NULL NULL NULL
+ÉA ÉA ÉA
+ÜBER ALLES, THEN ASCII ÜBER ALLES, THEN ASCII ÜBER ALLES, THEN ASCII
+STRASSE STRASSE STRASSE
+A LONG VALUE ENDING IN SS A LONG VALUE ENDING IN SS A LONG VALUE ENDING IN SS
+ȾX ȾX ȾX
+农历新年 NEW YEAR 农历新年 NEW YEAR 农历新年 NEW YEAR
+
+statement ok
+DROP TABLE upper_mixed_test
+
+# upper and lower preserve input nullability in the planned schema
+query TTT
+DESCRIBE SELECT upper(a) AS ua, lower(a) AS la, upper(b) AS ub
+FROM (VALUES ('Ab', CAST(NULL AS VARCHAR))) AS t(a, b)
+----
+ua Utf8 NO
+la Utf8 NO
+ub Utf8View YES
+
+# An outer join widens a non-nullable input before it reaches upper
+query TTT
+DESCRIBE SELECT upper(t.a) AS ua
+FROM (SELECT 1 AS k) x
+LEFT JOIN (VALUES ('Ab')) AS t(a) ON false
+----
+ua Utf8 YES
+
+query T
+SELECT upper(t.a)
+FROM (SELECT 1 AS k) x
+LEFT JOIN (VALUES ('Ab')) AS t(a) ON false
+----
+NULL
+
 query T
 SELECT btrim('   foo  ')
 ----
@@ -683,6 +745,47 @@ bar Dictionary(Int32, Utf8)
 
 statement ok
 DROP TABLE lower_dictionary_test
+
+# The array is not all ASCII, so each row is converted on its own: ASCII rows,
+# and rows with non-ASCII characters at the start and end, including values
+# longer than the 12 bytes a Utf8View can store inline. A sigma lowercases to ς
+# at the end of a word and to σ elsewhere.
+statement ok
+CREATE TABLE lower_mixed_test AS
+SELECT column1 AS id,
+  arrow_cast(column2, 'Utf8') AS utf8,
+  arrow_cast(column2, 'LargeUtf8') AS large_utf8,
+  arrow_cast(column2, 'Utf8View') AS utf8view
+FROM (VALUES
+(1, 'DATAFUSION'),
+(2, 'A LONG ASCII-ONLY VALUE'),
+(3, ''),
+(4, NULL),
+(5, 'ÉA'),
+(6, 'ÜBER ALLES, THEN ASCII'),
+(7, 'A LONG VALUE ENDING IN ΟΔΟΣ'),
+(8, 'ABΣ'),
+(9, 'ȾX'),
+(10, '农历新年 NEW YEAR'),
+(11, 'ὈΔΥΣΣΕΎΣ'));
+
+query TTT
+SELECT lower(utf8), lower(large_utf8), lower(utf8view) FROM lower_mixed_test ORDER BY id
+----
+datafusion datafusion datafusion
+a long ascii-only value a long ascii-only value a long ascii-only value
+(empty) (empty) (empty)
+NULL NULL NULL
+éa éa éa
+über alles, then ascii über alles, then ascii über alles, then ascii
+a long value ending in οδος a long value ending in οδος a long value ending in οδος
+abς abς abς
+ⱦx ⱦx ⱦx
+农历新年 new year 农历新年 new year 农历新年 new year
+ὀδυσσεύς ὀδυσσεύς ὀδυσσεύς
+
+statement ok
+DROP TABLE lower_mixed_test
 
 query T
 SELECT ltrim('   foo')

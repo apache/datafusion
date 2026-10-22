@@ -110,6 +110,7 @@ use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, Gauge, MetricBuilder, MetricsSet,
     RecordOutput, Time,
 };
+use crate::projection::{EmbeddedProjection, ProjectionExec, try_embed_projection};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
@@ -250,6 +251,18 @@ impl AsOfJoinExec {
         })
     }
 
+    /// Returns this join emitting only the columns in `projection`, in that order.
+    /// The indices address the join's own schema, before any projection.
+    pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        Self::try_new(
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
+            self.on.clone(),
+            self.match_condition.clone(),
+            projection,
+        )
+    }
+
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         join_schema: &SchemaRef,
@@ -290,6 +303,12 @@ impl AsOfJoinExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         ))
+    }
+}
+
+impl EmbeddedProjection for AsOfJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
     }
 }
 
@@ -384,6 +403,16 @@ impl ExecutionPlan for AsOfJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.projection.is_some() {
+            return Ok(None);
+        }
+        try_embed_projection(projection, self)
     }
 
     fn apply_expressions(
@@ -980,6 +1009,7 @@ impl PendingRows {
         &self,
         source_column: usize,
         data_type: &arrow::datatypes::DataType,
+        interleave_indices: &mut Vec<(usize, usize)>,
     ) -> Result<ArrayRef> {
         if self.indices.is_empty() {
             return internal_err!("ASOF output materialization has no pending rows");
@@ -1012,15 +1042,12 @@ impl PendingRows {
                 .map(|batch| batch.column(source_column).as_ref()),
         );
         let source_offset = usize::from(has_null);
-        let interleave_indices = self
-            .indices
-            .iter()
-            .map(|index| match index {
-                Some((source, row)) => (source + source_offset, *row),
-                None => (0, 0),
-            })
-            .collect::<Vec<_>>();
-        interleave(&source_arrays, &interleave_indices).map_err(Into::into)
+        interleave_indices.clear();
+        interleave_indices.extend(self.indices.iter().map(|index| match index {
+            Some((source, row)) => (source + source_offset, *row),
+            None => (0, 0),
+        }));
+        interleave(&source_arrays, interleave_indices).map_err(Into::into)
     }
 
     fn clear(&mut self) {
@@ -1345,6 +1372,7 @@ impl AsOfJoinStream {
         let _timer = self.metrics.baseline.elapsed_compute().timer();
         let row_count = self.pending_left.len();
         let mut arrays = Vec::with_capacity(self.schema.fields().len());
+        let mut interleave_indices = Vec::new();
         for (field, column) in self.schema.fields().iter().zip(&self.column_indices) {
             let pending = match column.side {
                 JoinSide::Left => &self.pending_left,
@@ -1353,7 +1381,11 @@ impl AsOfJoinStream {
                     return internal_err!("ASOF projection cannot contain a mark column");
                 }
             };
-            arrays.push(pending.materialize_column(column.index, field.data_type())?);
+            arrays.push(pending.materialize_column(
+                column.index,
+                field.data_type(),
+                &mut interleave_indices,
+            )?);
         }
         self.pending_left.clear();
         self.pending_right.clear();
@@ -1493,6 +1525,7 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::ColumnarValue;
     use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr};
+    use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use insta::assert_snapshot;
 
@@ -1667,6 +1700,95 @@ mod tests {
         let metrics = exec.metrics().expect("ASOF metrics must be present");
         assert_eq!(metrics.output_rows(), Some(7));
         assert!(metrics.elapsed_compute().is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn embeds_output_projection() -> Result<()> {
+        let exec = Arc::new(test_exec()?.with_projection(None)?);
+        let input = Arc::clone(&exec) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(
+            [
+                ProjectionExpr {
+                    expr: Arc::new(PhysicalColumn::new("id", 2)),
+                    alias: "id".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(PhysicalColumn::new("price", 5)),
+                    alias: "price".to_string(),
+                },
+            ],
+            input,
+        )?;
+
+        let embedded = exec
+            .try_swapping_with_projection(&projection)?
+            .expect("projection should be embedded");
+        let embedded_exec = embedded
+            .downcast_ref::<AsOfJoinExec>()
+            .expect("identity projection should be removed");
+        assert_eq!(embedded_exec.projection.as_deref(), Some(&[2, 5][..]));
+        assert_eq!(
+            embedded_exec
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "price"]
+        );
+
+        let batches = collect(embedded, Arc::new(TaskContext::default())).await?;
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+-------+
+        | id | price |
+        +----+-------+
+        | 0  |       |
+        | 1  |       |
+        | 2  |       |
+        | 3  | 40    |
+        | 4  | 60    |
+        | 5  | 101   |
+        | 6  |       |
+        +----+-------+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_projection_preserves_row_count() -> Result<()> {
+        let exec = Arc::new(test_exec()?.with_projection(None)?);
+        let input = Arc::clone(&exec) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(Vec::<ProjectionExpr>::new(), input)?;
+
+        let embedded = exec
+            .try_swapping_with_projection(&projection)?
+            .expect("empty projection should be embedded");
+        let embedded_exec = embedded
+            .downcast_ref::<AsOfJoinExec>()
+            .expect("empty projection should remove ProjectionExec");
+        assert_eq!(embedded_exec.projection.as_deref(), Some(&[][..]));
+        assert!(embedded_exec.schema().fields().is_empty());
+
+        let batches = collect(embedded, Arc::new(TaskContext::default())).await?;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 7);
+        assert!(batches.iter().all(|batch| batch.num_columns() == 0));
+        Ok(())
+    }
+
+    #[test]
+    fn declines_projection_when_already_embedded() -> Result<()> {
+        let exec = test_exec()?;
+        let input = Arc::clone(&exec) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(
+            [ProjectionExpr {
+                expr: Arc::new(PhysicalColumn::new("id", 2)),
+                alias: "id".to_string(),
+            }],
+            input,
+        )?;
+
+        assert!(exec.try_swapping_with_projection(&projection)?.is_none());
         Ok(())
     }
 

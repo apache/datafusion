@@ -192,6 +192,18 @@ pub struct RowValues {
     /// Cached byte length for the current row.
     current_len: usize,
 
+    /// The offset the cache was last refreshed for. Used by
+    /// [`CursorValues::compare`] to assert callers only compare at the
+    /// current offset (the narrowed contract this impl relies on).
+    ///
+    /// Gated on `debug_assertions` deliberately, not for tidiness: a plain
+    /// `debug_assert_eq!` would compile away on its own, but the field
+    /// itself would still widen `Cursor<RowValues>` — the struct the loser
+    /// tree shuffles on every comparison — by eight bytes in release. The
+    /// cfg keeps the release layout byte-identical.
+    #[cfg(debug_assertions)]
+    current_offset: usize,
+
     /// Tracks for the memory used by in the `Rows` of this
     /// cursor. Freed on drop
     _reservation: MemoryReservation,
@@ -206,16 +218,21 @@ impl RowValues {
     /// Create a new [`RowValues`] from `rows` and a `reservation`
     /// that tracks its memory. There must be at least one row
     ///
-    /// Panics if the reservation is not for exactly `rows.size()`
-    /// bytes or if `rows` is empty.
+    /// The reservation must cover exactly `rows.size()` bytes, or be empty when
+    /// the caller accounts for `rows` elsewhere for its whole lifetime.
+    ///
+    /// Panics if the reservation is neither of those, or if `rows` is empty.
     pub fn new(rows: Arc<Rows>, reservation: MemoryReservation) -> Self {
-        assert_eq!(
-            rows.size(),
-            reservation.size(),
+        assert!(
+            reservation.size() == 0 || reservation.size() == rows.size(),
             "memory reservation mismatch"
         );
         let len = rows.num_rows();
         assert!(len > 0);
+        // Seed the cache for row 0. `current_ptr`, `current_len`, and (in
+        // debug builds) `current_offset` must always describe the same row;
+        // `Cursor::new` starts at offset 0 without calling `set_offset`, so
+        // it depends on this constructor having seeded exactly row 0.
         // Extract raw ptr + length while the temporary `Row` is still alive.
         // The pointer is into `rows`'s Arc buffer heap and stays valid.
         let (current_ptr, current_len) = {
@@ -228,6 +245,8 @@ impl RowValues {
             len,
             current_ptr,
             current_len,
+            #[cfg(debug_assertions)]
+            current_offset: 0,
             _reservation: reservation,
         }
     }
@@ -241,6 +260,11 @@ impl RowValues {
     }
 }
 
+/// Note: this implementation deliberately narrows the [`CursorValues`]
+/// contract for [`CursorValues::compare`]: it only supports comparing the
+/// *current* offsets of `l` and `r` (as [`Cursor::cmp`] does), reading the
+/// cached slices instead of the passed indices. Debug builds assert this;
+/// callers needing arbitrary-index comparisons must not use `RowValues`.
 impl CursorValues for RowValues {
     // Reuse arrow-row's own owned-row type: `Row::owned()` copies just that
     // row's bytes out of the shared `Rows` buffer, with no `RowConverter`
@@ -267,9 +291,27 @@ impl CursorValues for RowValues {
     }
 
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        // Merge callers always compare at current offsets; the cache is up
-        // to date. (Debug-only: verify the invariant.)
-        debug_assert!(l_idx < l.len && r_idx < r.len);
+        // Narrowed contract (see impl docs): merge callers always compare at
+        // the current offsets, so the cached slices are the requested rows.
+        // Debug builds verify the indices match the offsets the cache was
+        // refreshed for; zero cost in release.
+        //
+        // A finished cursor (`offset == len`) has `current_offset == len - 1`
+        // because `advance` skips the out-of-bounds `set_offset`; the assert
+        // would fire on it, intentionally — a finished cursor's stale cache
+        // must never be read, and `Cursor::advance` upholds that one layer up
+        // (the previous bounds-only assert rejected the same state).
+        #[cfg(debug_assertions)]
+        {
+            debug_assert_eq!(
+                l_idx, l.current_offset,
+                "RowValues::compare only supports the current offset"
+            );
+            debug_assert_eq!(
+                r_idx, r.current_offset,
+                "RowValues::compare only supports the current offset"
+            );
+        }
         let _ = (l_idx, r_idx);
         l.current_slice().cmp(r.current_slice())
     }
@@ -287,6 +329,10 @@ impl CursorValues for RowValues {
         };
         self.current_ptr = ptr;
         self.current_len = len;
+        #[cfg(debug_assertions)]
+        {
+            self.current_offset = offset;
+        }
     }
 
     fn get_value(&self, idx: usize) -> OwnedRow {
@@ -551,6 +597,10 @@ pub struct ArrayValues<T: CursorValues> {
     // Otherwise, the first null index
     null_threshold: usize,
     options: SortOptions,
+    /// `true` when this array has at least one null. When `false`, the hot
+    /// `compare` / `eq` paths skip the two `is_null(idx)` checks entirely
+    /// (sort keys are usually null-free, so this branch is common).
+    has_nulls: bool,
 
     /// Tracks the memory used by the values array,
     /// freed on drop.
@@ -568,15 +618,17 @@ impl<T: CursorValues> ArrayValues<T> {
         reservation: MemoryReservation,
     ) -> Self {
         assert!(array.len() > 0, "Empty array passed to FieldCursor");
+        let null_count = array.null_count();
         let null_threshold = match options.nulls_first {
-            true => array.null_count(),
-            false => array.len() - array.null_count(),
+            true => null_count,
+            false => array.len() - null_count,
         };
 
         Self {
             values: array.values(),
             null_threshold,
             options,
+            has_nulls: null_count > 0,
             _reservation: reservation,
         }
     }
@@ -598,6 +650,11 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
     #[inline(always)]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        // Fast path: neither array has nulls, so the match below would take
+        // the (false, false) arm every time.
+        if !l.has_nulls && !r.has_nulls {
+            return T::eq(&l.values, l_idx, &r.values, r_idx);
+        }
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => true,
             (false, false) => T::eq(&l.values, l_idx, &r.values, r_idx),
@@ -608,6 +665,9 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
     #[inline(always)]
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
         assert!(idx > 0);
+        if !cursor.has_nulls {
+            return T::eq_to_previous(&cursor.values, idx);
+        }
         match (cursor.is_null(idx), cursor.is_null(idx - 1)) {
             (true, true) => true,
             // Delegate to inner `eq_to_previous` so a caching cursor can answer
@@ -619,6 +679,13 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
     #[inline(always)]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        // Fast path: neither array has nulls, so skip both is_null checks.
+        if !l.has_nulls && !r.has_nulls {
+            return match l.options.descending {
+                true => T::compare(&r.values, r_idx, &l.values, l_idx),
+                false => T::compare(&l.values, l_idx, &r.values, r_idx),
+            };
+        }
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => Ordering::Equal,
             (true, false) => match l.options.nulls_first {
@@ -691,6 +758,7 @@ mod tests {
             values: PrimitiveValues::new(values),
             null_threshold,
             options,
+            has_nulls: null_count > 0,
             _reservation: reservation,
         };
 
@@ -754,6 +822,18 @@ mod tests {
         let cursor = new_row_values(&["solo"]);
         assert_eq!(cursor.values.len(), 1);
         assert!(!cursor.is_finished());
+    }
+
+    /// Debug builds must reject callers passing indices other than the current
+    /// offset — the narrowed contract `RowValues::compare` relies on.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "only supports the current offset")]
+    fn test_row_values_compare_rejects_non_current_offset() {
+        let a = new_row_values(&["a", "b"]);
+        let b = new_row_values(&["a", "b"]);
+        // Both cursors are at offset 0; index 1 is in bounds but stale.
+        RowValues::compare(&a.values, 1, &b.values, 1);
     }
 
     #[test]
@@ -888,5 +968,83 @@ mod tests {
         // 6 < -3
         b.advance();
         assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    /// Builds a cursor over `values` positioned at `idx`.
+    ///
+    /// With `with_null`, the array carries one extra null in the slot where
+    /// `options` sorts nulls, so `ArrayValues` takes its null-aware path while
+    /// every value the test touches stays non-null. Both variants therefore
+    /// hold the same logical value at `idx`, which is what lets the two paths
+    /// be compared directly.
+    fn new_primitive_at(
+        options: SortOptions,
+        values: &[i32],
+        with_null: bool,
+        idx: usize,
+    ) -> Cursor<ArrayValues<PrimitiveValues<i32>>> {
+        let (buffer, shift, null_count) = match (with_null, options.nulls_first) {
+            (false, _) => (values.to_vec(), 0, 0),
+            (true, true) => ([&[0i32][..], values].concat(), 1, 1),
+            (true, false) => ([values, &[0i32][..]].concat(), 0, 1),
+        };
+
+        let mut cursor = new_primitive(options, ScalarBuffer::from(buffer), null_count);
+        for _ in 0..idx + shift {
+            cursor.advance();
+        }
+        cursor
+    }
+
+    /// Every `ArrayValues` method carrying a `has_nulls` fast path must answer
+    /// exactly as the null-aware path does on the same values, for both sort
+    /// directions and both null placements.
+    #[test]
+    fn test_array_values_has_nulls_fast_path_agrees_with_slow_path() {
+        // Repeated values so `eq` / `eq_to_previous` see ties as well as
+        // differences; `i32::MAX` catches a compare that overflows.
+        let values = [1i32, 2, 2, 5, i32::MAX];
+
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+
+                for i in 0..values.len() {
+                    for j in 0..values.len() {
+                        let fast_l = new_primitive_at(options, &values, false, i);
+                        let fast_r = new_primitive_at(options, &values, false, j);
+                        let slow_l = new_primitive_at(options, &values, true, i);
+                        let slow_r = new_primitive_at(options, &values, true, j);
+
+                        assert!(!fast_l.values.has_nulls && !fast_r.values.has_nulls);
+                        assert!(slow_l.values.has_nulls && slow_r.values.has_nulls);
+
+                        assert_eq!(
+                            fast_l.cmp(&fast_r),
+                            slow_l.cmp(&slow_r),
+                            "compare({i}, {j}) disagreed for {options:?}"
+                        );
+                        assert_eq!(
+                            fast_l == fast_r,
+                            slow_l == slow_r,
+                            "eq({i}, {j}) disagreed for {options:?}"
+                        );
+                    }
+
+                    if i > 0 {
+                        let fast = new_primitive_at(options, &values, false, i);
+                        let slow = new_primitive_at(options, &values, true, i);
+                        assert_eq!(
+                            fast.is_eq_to_prev_row(),
+                            slow.is_eq_to_prev_row(),
+                            "eq_to_previous({i}) disagreed for {options:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
