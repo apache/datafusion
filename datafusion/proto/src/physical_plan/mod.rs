@@ -419,7 +419,10 @@ mod file_scan_config_serde {
         assert!(!do_not_preserve_with_ordering.output_ordering.is_empty());
         let mut encoded = serde.encode(&do_not_preserve_with_ordering)?;
         assert_eq!(encoded.preserve_order, Some(false));
-        assert!(!serde.decode(&encoded)?.preserve_order);
+        let decoded = serde.decode(&encoded)?;
+        assert!(!decoded.preserve_order);
+        // The output ordering alone keeps the files in order.
+        assert!(decoded.preserves_file_order());
 
         // Older payloads had no flag and derived it from the ordering.
         encoded.preserve_order = None;
@@ -1558,6 +1561,13 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
 
     /// Decode a custom extension expression from `buf`.
     ///
+    /// Expressions can instead name themselves on the wire and be decoded by a
+    /// per-type decoder registered on the session — see
+    /// [`ExtensionExprFromProto`] and [`register_physical_expr`]. That path
+    /// resolves by name rather than by codec registration order, so two crates
+    /// claiming the same name collide at registration. This method stays the
+    /// fallback for everything unnamed or unregistered.
+    ///
     /// `inputs` holds the already-decoded children carried in the
     /// `PhysicalExtensionExprNode.inputs` field. If the codec instead embeds
     /// nested `PhysicalExprNode`s *inside* `buf`, decode them through
@@ -1570,6 +1580,8 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     /// cache-hits on its `expr_id` and re-shares one `Arc<dyn PhysicalExpr>`.
     ///
     /// [`parse_physical_expr`]: crate::physical_plan::from_proto::parse_physical_expr
+    /// [`ExtensionExprFromProto`]: datafusion_physical_plan::proto::ExtensionExprFromProto
+    /// [`register_physical_expr`]: datafusion_physical_plan::proto::register_physical_expr
     fn try_decode_expr(
         &self,
         _buf: &[u8],

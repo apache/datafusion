@@ -308,6 +308,9 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.approx_percentile_cont_accumulator
+            .resolve_percentile(&values[2])?;
+
         let mut means = Arc::clone(&values[0]);
         let mut weights = Arc::clone(&values[1]);
         // If nulls are present in either array, need to filter those rows out in both arrays

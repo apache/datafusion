@@ -436,6 +436,50 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     None
                 };
 
+                if self.exists_sub_query
+                    && self.pull_up_having_expr.is_some()
+                    && let Some(expr) = conjunction(subquery_filters.clone())
+                {
+                    let unqualified_expr = expr
+                        .transform_up(|e| {
+                            if let Expr::Column(Column { name, .. }) = &e {
+                                Ok(Transformed::yes(Expr::Column(
+                                    Column::new_unqualified(name),
+                                )))
+                            } else {
+                                Ok(Transformed::no(e))
+                            }
+                        })
+                        .data()?;
+                    let combined = match self.pull_up_having_expr.take() {
+                        Some(existing) => existing.and(unqualified_expr),
+                        None => unqualified_expr,
+                    };
+                    self.pull_up_having_expr = Some(combined);
+                    let new_plan =
+                        LogicalPlanBuilder::from((*plan_filter.input).clone()).build()?;
+                    let mut carried_correlated_cols = correlated_subquery_cols;
+                    if let Some(existing) =
+                        self.correlated_subquery_cols_map.get(&*plan_filter.input)
+                    {
+                        carried_correlated_cols.extend(existing.iter().cloned());
+                    }
+                    self.correlated_subquery_cols_map
+                        .insert(new_plan.clone(), carried_correlated_cols);
+                    if !expr_result_map_for_count_bug.is_empty() {
+                        self.collected_count_expr_map
+                            .insert(new_plan.clone(), expr_result_map_for_count_bug);
+                    } else if let Some(input_map) = self
+                        .collected_count_expr_map
+                        .get(&*plan_filter.input)
+                        .cloned()
+                    {
+                        self.collected_count_expr_map
+                            .insert(new_plan.clone(), input_map);
+                    }
+                    return Ok(Transformed::yes(new_plan));
+                }
+
                 match (&pull_up_expr_opt, &self.pull_up_having_expr) {
                     (Some(_), Some(_)) => {
                         // Error path
@@ -474,15 +518,18 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &mut local_correlated_cols,
                 );
                 // add missing columns to Projection
-                let mut missing_exprs =
-                    self.collect_missing_exprs(&projection.expr, &local_correlated_cols)?;
+                let mut missing_exprs = self.collect_missing_exprs(
+                    &projection.expr,
+                    &local_correlated_cols,
+                    projection.input.schema(),
+                )?;
 
                 let mut expr_result_map_for_count_bug = HashMap::new();
                 if let Some(expr_result_map) =
                     self.collected_count_expr_map.get(&*projection.input)
                 {
                     proj_exprs_evaluation_result_on_empty_batch(
-                        &projection.expr,
+                        &missing_exprs,
                         projection.input.schema(),
                         expr_result_map,
                         &mut expr_result_map_for_count_bug,
@@ -521,7 +568,6 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &self.correlated_subquery_cols_map,
                     &mut local_correlated_cols,
                 );
-
                 // A grouping set that omits a column the pull up adds either
                 // keeps its sets as they are (every set already groups by the
                 // column), or gains the column in every set, `ROLLUP(i.k)`
@@ -554,6 +600,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                             self.collect_missing_exprs(
                                 &aggregate.group_expr,
                                 &local_correlated_cols,
+                                aggregate.input.schema(),
                             )?
                         }
                         GroupingSetsPullUp::Unsafe => {
@@ -568,6 +615,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                             self.collect_missing_exprs(
                                 &aggregate.group_expr,
                                 &local_correlated_cols,
+                                aggregate.input.schema(),
                             )?
                         }
                     }
@@ -576,6 +624,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     self.collect_missing_exprs(
                         &aggregate.group_expr,
                         &local_correlated_cols,
+                        aggregate.input.schema(),
                     )?
                 };
 
@@ -820,9 +869,10 @@ impl PullUpCorrelatedExpr {
     }
 
     fn collect_missing_exprs(
-        &self,
+        &mut self,
         exprs: &[Expr],
         correlated_subquery_cols: &BTreeSet<Column>,
+        _subquery_schema: &DFSchemaRef,
     ) -> Result<Vec<Expr>> {
         let mut missing_exprs =
             Vec::with_capacity(exprs.len() + correlated_subquery_cols.len());
@@ -833,19 +883,22 @@ impl PullUpCorrelatedExpr {
         }
         for col in correlated_subquery_cols.iter() {
             let col_expr = Expr::Column(col.clone());
-            if !missing_exprs.contains(&col_expr) {
+            if !collides_with_existing(&missing_exprs, &col_expr) {
                 missing_exprs.push(col_expr)
             }
         }
         if let Some(pull_up_having) = &self.pull_up_having_expr {
-            let filter_apply_columns = pull_up_having.column_refs();
-            for col in filter_apply_columns {
-                // add to missing_exprs if not already there
-                let contains = missing_exprs
+            for col in pull_up_having.column_refs() {
+                let col_expr = Expr::Column(col.clone());
+                // `col` is unqualified but the projection may already have
+                // it as `agg.c`. Check by bare name so that doesn't get
+                // added twice.
+                let already_present = missing_exprs
                     .iter()
-                    .any(|expr| matches!(expr, Expr::Column(c) if c == col));
-                if !contains {
-                    missing_exprs.push(Expr::Column(col.clone()))
+                    .any(|expr| matches!(expr, Expr::Column(c) if c.name == col.name))
+                    || collides_with_existing(&missing_exprs, &col_expr);
+                if !already_present {
+                    missing_exprs.push(col_expr)
                 }
             }
         }
@@ -985,6 +1038,16 @@ fn partitions_by_all(expr: &Expr, cols: &BTreeSet<Column>) -> bool {
     })
 }
 
+/// True if `candidate` collides with an existing entry's schema name,
+/// e.g. a bare column already wrapped in an equally-named `CAST`.
+/// Colliding means `LogicalPlanBuilder::project` would reject it as a duplicate.
+fn collides_with_existing(exprs: &[Expr], candidate: &Expr) -> bool {
+    let candidate_name = candidate.schema_name().to_string();
+    exprs
+        .iter()
+        .any(|expr| expr.schema_name().to_string() == candidate_name)
+}
+
 fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     split_column_equality(expr).is_some()
 }
@@ -1063,7 +1126,7 @@ fn remove_duplicated_filter(
             Expr::BinaryExpr(b) => b.op.swap() == Some(b.op),
             _ => true,
         },
-        "remove_duplicated_filter: in_predicate must use a commutative operator"
+        "in_predicate must use a commutative operator"
     );
 
     Ok(filters
@@ -1193,9 +1256,14 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {
-            // evaluate to false or null on empty batch, no need to pull up
             Expr::Literal(ScalarValue::Null, _)
-            | Expr::Literal(ScalarValue::Boolean(Some(false)), _) => None,
+            | Expr::Literal(ScalarValue::Boolean(None), _)
+            | Expr::Literal(ScalarValue::Boolean(Some(false)), _) => {
+                for (name, exprs) in input_expr_result_map_for_count_bug {
+                    expr_result_map_for_count_bug.insert(name.clone(), exprs.clone());
+                }
+                None
+            }
             // evaluate to true on empty batch, need to pull up the expr
             Expr::Literal(ScalarValue::Boolean(Some(true)), _) => {
                 for (name, exprs) in input_expr_result_map_for_count_bug {
