@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![cfg(not(feature = "nested_expressions"))]
+#![cfg(all(feature = "sql", not(feature = "nested_expressions")))]
 
 use datafusion::prelude::SessionContext;
 
