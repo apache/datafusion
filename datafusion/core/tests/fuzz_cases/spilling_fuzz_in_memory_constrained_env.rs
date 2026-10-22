@@ -92,8 +92,9 @@ async fn test_sort_with_limited_memory() -> Result<()> {
     })
     .await?;
 
-    let total_spill_files_size =
-        metrics.spill_count().unwrap_or_default() * record_batch_size;
+    // Spilled bytes, not spill files: a merge sort spill file is about one run, while
+    // the bucket sort appends many batches to each of its range files
+    let total_spill_files_size = metrics.spilled_bytes().unwrap_or_default();
     assert!(
         total_spill_files_size > pool_size,
         "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",
@@ -260,9 +261,11 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch() -> Result<()
         let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         TaskContext::default()
             .with_session_config(
+                // Checks the merge sort's multi-level merge, not the bucket sort
                 SessionConfig::new()
                     .with_batch_size(record_batch_size)
-                    .with_sort_spill_reservation_bytes(1),
+                    .with_sort_spill_reservation_bytes(1)
+                    .set_bool("datafusion.execution.sort_bucket_sort_enabled", false),
             )
             .with_runtime(Arc::new(
                 RuntimeEnvBuilder::new()
@@ -681,8 +684,9 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory() -> Result<()
         })
         .await?;
 
-    let total_spill_files_size =
-        metrics.spill_count().unwrap_or_default() * record_batch_size;
+    // Spilled bytes, not spill files: a merge sort spill file is about one run, while
+    // the bucket sort appends many batches to each of its range files
+    let total_spill_files_size = metrics.spilled_bytes().unwrap_or_default();
     assert!(
         total_spill_files_size > pool_size,
         "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",

@@ -17,8 +17,10 @@
 
 //! Sort functionalities
 
+mod bucket_sort;
 mod builder;
 mod cursor;
+mod deep_copy;
 mod merge;
 #[cfg(test)]
 mod merge_trace;

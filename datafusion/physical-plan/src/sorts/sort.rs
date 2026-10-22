@@ -42,6 +42,9 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
+use crate::sorts::bucket_sort::{
+    BucketSortMetrics, BucketSortOptions, BucketSorter, NestedSort,
+};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
@@ -82,6 +85,7 @@ use log::{debug, trace};
 #[cfg(test)]
 mod spill_tests;
 
+#[derive(Clone)]
 struct ExternalSorterMetrics {
     /// metrics
     baseline: BaselineMetrics,
@@ -279,6 +283,14 @@ struct ExternalSorter {
     /// How much memory to reserve for performing in-memory sort/merges
     /// prior to spilling.
     sort_spill_reservation_bytes: usize,
+
+    /// Bucket sort state, when `sort_bucket_sort_enabled` is set and the first sort
+    /// key type is supported. It then holds the buffered data instead of
+    /// `in_mem_batches`, see [`crate::sorts::bucket_sort`].
+    bucket: Option<BucketSorter>,
+    /// To build the nested sorters of the bucket sort
+    partition_id: usize,
+    spill_compression: SpillCompression,
 }
 
 impl ExternalSorter {
@@ -297,10 +309,39 @@ impl ExternalSorter {
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Result<Self> {
-        let metrics = ExternalSorterMetrics::new(metrics, partition_id);
-        let reservation = MemoryConsumer::new(format!("ExternalSorter[{partition_id}]"))
-            .with_can_spill(true)
-            .register(&runtime.memory_pool);
+        Self::new_with_metrics(
+            partition_id,
+            schema,
+            expr,
+            batch_size,
+            sort_spill_reservation_bytes,
+            sort_in_place_threshold_bytes,
+            spill_compression,
+            ExternalSorterMetrics::new(metrics, partition_id),
+            runtime,
+            None,
+        )
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn new_with_metrics(
+        partition_id: usize,
+        schema: SchemaRef,
+        expr: LexOrdering,
+        batch_size: usize,
+        sort_spill_reservation_bytes: usize,
+        sort_in_place_threshold_bytes: usize,
+        spill_compression: SpillCompression,
+        metrics: ExternalSorterMetrics,
+        runtime: Arc<RuntimeEnv>,
+        // Reserves under the consumer of this reservation instead of a new one
+        reservation: Option<MemoryReservation>,
+    ) -> Result<Self> {
+        let reservation = reservation.unwrap_or_else(|| {
+            MemoryConsumer::new(format!("ExternalSorter[{partition_id}]"))
+                .with_can_spill(true)
+                .register(&runtime.memory_pool)
+        });
 
         let merge_name = format!("ExternalSorterMerge[{partition_id}]");
         let merge_pool = Arc::new(MergeMemoryPool::new(
@@ -339,6 +380,81 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
+            bucket: None,
+            partition_id,
+            spill_compression,
+        })
+    }
+
+    /// Sorts with the bucket sort when the first sort key type supports it
+    fn with_bucket_sort(
+        mut self,
+        options: BucketSortOptions,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<Self> {
+        self.bucket = BucketSorter::try_new(
+            Arc::clone(&self.schema),
+            self.expr.clone(),
+            self.batch_size,
+            options,
+            BucketSortMetrics::new(metrics, self.partition_id),
+            Arc::clone(&self.runtime),
+            self.spill_manager.clone(),
+        )?;
+        Ok(self)
+    }
+
+    /// Sorts a stream with a merge sort sharing this sorter's settings and metrics,
+    /// for the bucket sort's data too large to sort in the memory available
+    fn nested_sort(&self) -> NestedSort {
+        let partition_id = self.partition_id;
+        let expr = self.expr.clone();
+        let batch_size = self.batch_size;
+        let sort_spill_reservation_bytes = self.sort_spill_reservation_bytes;
+        let sort_in_place_threshold_bytes = self.sort_in_place_threshold_bytes;
+        let spill_compression = self.spill_compression;
+        let mut metrics = self.metrics.clone();
+        // The rows are counted once, by the bucket sort's output
+        metrics.baseline = metrics.baseline.intermediate();
+        let runtime = Arc::clone(&self.runtime);
+        // The nested sorter reserves as this sorter's consumer: a pool sharing its
+        // memory between spillable consumers (`FairSpillPool`) would otherwise give it
+        // a share only, though this sorter holds almost nothing while it runs
+        let reservation = self.reservation.new_empty();
+        Arc::new(move |schema, mut input| {
+            let expr = expr.clone();
+            let metrics = metrics.clone();
+            let runtime = Arc::clone(&runtime);
+            let reservation = reservation.new_empty();
+            Box::pin(async move {
+                let mut sorter = ExternalSorter::new_with_metrics(
+                    partition_id,
+                    schema,
+                    expr,
+                    batch_size,
+                    sort_spill_reservation_bytes,
+                    sort_in_place_threshold_bytes,
+                    spill_compression,
+                    metrics,
+                    runtime,
+                    Some(reservation),
+                )?;
+                while let Some(batch) = input.next().await {
+                    let batch = match batch {
+                        Ok(batch) => batch,
+                        Err(error) => {
+                            sorter.abort_in_progress_spill().await;
+                            return Err(error);
+                        }
+                    };
+                    if let Err(error) = sorter.insert_batch(batch).await {
+                        sorter.abort_in_progress_spill().await;
+                        return Err(error);
+                    }
+                }
+                drop(input);
+                sorter.sort().await
+            })
         })
     }
 
@@ -350,9 +466,22 @@ impl ExternalSorter {
             return Ok(());
         }
 
-        self.reserve_memory_for_merge()?;
+        if self.bucket.is_some() {
+            self.reserve_memory_for_merge_spilling_buckets()?;
+        } else {
+            self.reserve_memory_for_merge()?;
+        }
         self.reserve_memory_for_batch_and_maybe_spill(&input)
             .await?;
+
+        if let Some(bucket) = self.bucket.as_mut() {
+            let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+            let _timer = elapsed_compute.timer();
+            bucket.insert(input)?;
+            // What is held after scattering differs from the input's estimate
+            bucket.reconcile(&mut self.reservation)?;
+            return Ok(());
+        }
 
         self.in_mem_batches.push(input);
         Ok(())
@@ -372,6 +501,30 @@ impl ExternalSorter {
     /// 2. A combined streaming merge incorporating both in-memory
     ///    batches and data from spill files on disk.
     async fn sort(&mut self) -> Result<SendableRecordBatchStream> {
+        if let Some(mut bucket) = self.bucket.take() {
+            // Too little data for the bucket sort to pay off
+            if let Some(batches) =
+                bucket.take_small_input(self.sort_in_place_threshold_bytes)
+            {
+                self.in_mem_batches = batches;
+                self.merge_pool.release_unused();
+                self.merge_reservation.free();
+                return self.in_mem_sort_stream(true, true);
+            }
+            let nested = self.nested_sort();
+            let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+            let _timer = elapsed_compute.timer();
+            // The merge workspace is used only to merge spilled presorted runs with
+            // the buckets; the rest goes back to the pool
+            self.merge_pool.release_unused();
+            return bucket.into_stream(
+                self.reservation.take(),
+                self.merge_reservation.take(),
+                self.metrics.baseline.clone(),
+                nested,
+            );
+        }
+
         if self.spilled_before() {
             // Sort `in_mem_batches` and spill it first. If there are many
             // `in_mem_batches` and the memory limit is almost reached, merging
@@ -505,6 +658,14 @@ impl ExternalSorter {
     /// Sorts the in-memory batches and merges them into a single sorted run, then writes
     /// the result to spill files.
     async fn sort_and_spill_in_mem_batches(&mut self) -> Result<()> {
+        self.bucket_falls_back();
+        if let Some(bucket) = self.bucket.as_mut() {
+            self.merge_reservation.free();
+            let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+            let _timer = elapsed_compute.timer();
+            bucket.spill(&mut self.reservation)?;
+            return self.reserve_memory_for_merge();
+        }
         let result = self.try_sort_and_spill_in_mem_batches().await;
         if result.is_err() {
             self.abort_in_progress_spill().await;
@@ -937,10 +1098,79 @@ impl ExternalSorter {
 
     /// Reserves memory to be able to accommodate the given batch.
     /// If memory is scarce, tries to spill current in-memory batches to disk first.
+    /// [`Self::reserve_memory_for_merge`], spilling part of what the bucket sort holds
+    /// until it fits
+    fn reserve_memory_for_merge_spilling_buckets(&mut self) -> Result<()> {
+        loop {
+            let Err(e) = self.reserve_memory_for_merge() else {
+                return Ok(());
+            };
+            if self.bucket_falls_back() {
+                return Err(e);
+            }
+            let Some(bucket) = self.bucket.as_mut() else {
+                return Err(e);
+            };
+            if !bucket.has_in_memory_data() {
+                return Err(e);
+            }
+            bucket
+                .spill_part(&mut self.reservation, self.sort_spill_reservation_bytes)?;
+        }
+    }
+
+    /// Hands what the bucket sort holds to the merge sort, when its input arrives in
+    /// reverse sort order (see [`BucketSorter::take_reversed_input`]). The reservation
+    /// of the batches is kept. Returns whether it did.
+    fn bucket_falls_back(&mut self) -> bool {
+        let Some(batches) = self.bucket.as_mut().and_then(|b| b.take_reversed_input())
+        else {
+            return false;
+        };
+        self.bucket = None;
+        self.in_mem_batches = batches;
+        true
+    }
+
+    /// Reserves memory for the bucket sort to hold `input`. The bucket sort spills
+    /// only part of what it holds, until the batch fits. The estimate is reconciled
+    /// with what the bucket sort holds once it is inserted. Returns false when the
+    /// merge sort takes over instead (see [`Self::bucket_falls_back`]).
+    fn reserve_memory_for_bucket_batch(&mut self, input: &RecordBatch) -> Result<bool> {
+        let Some(bucket) = self.bucket.as_ref() else {
+            return Ok(false);
+        };
+        let size = bucket.reservation_for(input)?;
+        let Err(e) = self.reservation.try_grow(size) else {
+            return Ok(true);
+        };
+        if self.bucket_falls_back() {
+            return Ok(false);
+        }
+        let Some(bucket) = self.bucket.as_mut() else {
+            return Err(Self::err_with_oom_context(e));
+        };
+        if !bucket.has_in_memory_data() {
+            return Err(Self::err_with_oom_context(e));
+        }
+        loop {
+            bucket.spill_part(&mut self.reservation, size)?;
+            if self.reservation.try_grow(size).is_ok() {
+                return Ok(true);
+            }
+            if !bucket.has_in_memory_data() {
+                return Err(Self::err_with_oom_context(e));
+            }
+        }
+    }
+
     async fn reserve_memory_for_batch_and_maybe_spill(
         &mut self,
         input: &RecordBatch,
     ) -> Result<()> {
+        if self.bucket.is_some() && self.reserve_memory_for_bucket_batch(input)? {
+            return Ok(());
+        }
         let size = get_reserved_bytes_for_next_record_batch(
             input,
             self.in_mem_batches_counter.as_mut(),
@@ -1059,7 +1289,7 @@ fn get_reserved_bytes_for_next_record_batch(
 /// views. Every sorted run is charged for those buffers in full, so buffered
 /// batches that share them must be charged for them each, too. Otherwise the
 /// sorter buffers more batches than the merge of their sorted runs can hold.
-fn sorted_copy_keeps_buffers(data_type: &DataType) -> bool {
+pub(crate) fn sorted_copy_keeps_buffers(data_type: &DataType) -> bool {
     match data_type {
         DataType::Utf8View
         | DataType::BinaryView
@@ -1655,6 +1885,18 @@ impl ExecutionPlan for SortExec {
                     &self.metrics_set,
                     context.runtime_env(),
                 )?;
+                if execution_options.sort_bucket_sort_enabled {
+                    sorter = sorter.with_bucket_sort(
+                        BucketSortOptions {
+                            bucket_count: execution_options.sort_bucket_count,
+                            target_bucket_bytes: execution_options
+                                .sort_bucket_target_bytes,
+                            sample_rows: execution_options.sort_bucket_sample_rows,
+                            mode: execution_options.sort_bucket_mode.parse()?,
+                        },
+                        &self.metrics_set,
+                    )?;
+                }
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
@@ -2681,7 +2923,9 @@ mod tests {
     #[tokio::test]
     async fn test_sort_spill() -> Result<()> {
         // trigger spill w/ 100 batches
-        let session_config = SessionConfig::new();
+        // Checks the spills of the merge sort, not the bucket sort's
+        let session_config = SessionConfig::new()
+            .set_bool("datafusion.execution.sort_bucket_sort_enabled", false);
         let sort_spill_reservation_bytes = session_config
             .options()
             .execution
@@ -2828,7 +3072,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_sort_spill_utf8_strings() -> Result<()> {
+        // Checks the spills of the merge sort, not the bucket sort's
         let session_config = SessionConfig::new()
+            .set_bool("datafusion.execution.sort_bucket_sort_enabled", false)
             .with_batch_size(100)
             .with_sort_in_place_threshold_bytes(20 * 1024)
             .with_sort_spill_reservation_bytes(100 * 1024);
@@ -2922,7 +3168,9 @@ mod tests {
         ];
 
         for (fetch, expect_spillage) in test_options {
-            let session_config = SessionConfig::new();
+            // Checks the spills of the merge sort, not the bucket sort's
+            let session_config = SessionConfig::new()
+                .set_bool("datafusion.execution.sort_bucket_sort_enabled", false);
             let sort_spill_reservation_bytes = session_config
                 .options()
                 .execution
