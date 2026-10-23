@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::strings::sub_view;
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, AsArray, DictionaryArray, GenericStringArray, Int64Array,
-    OffsetSizeTrait, PrimitiveBuilder, StringArrayType, StringViewArray, UInt64Array,
+    OffsetSizeTrait, PrimitiveArray, StringArrayType, StringViewArray,
 };
 use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::compute::take;
@@ -205,63 +204,16 @@ fn dictionary_substr<K: ArrowDictionaryKeyType>(
     dictionary: &DictionaryArray<K>,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
-    let start_array = as_int64_array(&args[0])?;
-    let count_array = args.get(1).map(|a| as_int64_array(a)).transpose()?;
-
-    let mut combinations = HashMap::new();
-    let mut value_indices = Vec::new();
-    let mut starts = Vec::new();
-    let mut counts = count_array.map(|_| Vec::new());
-    let mut keys = PrimitiveBuilder::<K>::with_capacity(dictionary.len());
-
-    for i in 0..dictionary.len() {
-        let Some(value_index) = dictionary.key(i) else {
-            keys.append_null();
-            continue;
-        };
-        if dictionary.values().is_null(value_index)
-            || start_array.is_null(i)
-            || count_array.is_some_and(|a| a.is_null(i))
-        {
-            keys.append_null();
-            continue;
-        }
-
-        let start = start_array.value(i);
-        let count = count_array.map(|a| a.value(i));
-        let combination = (value_index, start, count);
-        let next_key = combinations.len();
-        let key = *combinations.entry(combination).or_insert_with(|| {
-            value_indices.push(value_index as u64);
-            starts.push(start);
-            if let (Some(counts), Some(count)) = (&mut counts, count) {
-                counts.push(count);
-            }
-            next_key
-        });
-        let key = K::Native::from_usize(key).ok_or_else(|| {
-            datafusion_common::DataFusionError::Execution(format!(
-                "substr result has too many dictionary values for key type {}",
-                K::DATA_TYPE
-            ))
-        })?;
-        keys.append_value(key);
-    }
-
-    let values = take(
-        dictionary.values().as_ref(),
-        &UInt64Array::from(value_indices),
-        None,
-    )?;
-    let mut distinct_args = vec![values, Arc::new(Int64Array::from(starts)) as ArrayRef];
-    if let Some(counts) = counts {
-        distinct_args.push(Arc::new(Int64Array::from(counts)));
-    }
-    let values = substr(&distinct_args)?;
-    Ok(Arc::new(DictionaryArray::<K>::try_new(
-        keys.finish(),
-        values,
-    )?))
+    // Only wide key types reach here, so one key per row always fits.
+    let decoded = take(dictionary.values().as_ref(), dictionary.keys(), None)?;
+    let mut row_args = vec![decoded];
+    row_args.extend(args.iter().cloned());
+    let values = substr(&row_args)?;
+    let keys = (0..values.len())
+        .map(|i| K::Native::from_usize(i).unwrap())
+        .collect::<Vec<_>>();
+    let keys = PrimitiveArray::<K>::new(keys.into(), values.nulls().cloned());
+    Ok(Arc::new(DictionaryArray::<K>::try_new(keys, values)?))
 }
 
 /// Convert the given `start` and `count` to valid byte indices within `input` string.
