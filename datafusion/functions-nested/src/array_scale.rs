@@ -205,15 +205,8 @@ fn general_array_scale<O: OffsetSizeTrait>(
     // Preserve the inner field from the input array (including any user
     // metadata). After `coerce_types` the inner type is Float64, but the
     // input may still carry field-level annotations worth keeping.
-    let field = match list_array.data_type() {
-        List(f) | LargeList(f) => Arc::clone(f),
-        other => {
-            return internal_err!("array_scale unexpected list type: {other}");
-        }
-    };
-
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        field,
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::new(new_offsets.into()),
         values_array,
         row_nulls,

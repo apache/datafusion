@@ -36,8 +36,10 @@
 //! ```
 //!
 //! And replaces the `FilterExec → BoundedWindowAggExec` pipeline with
-//! `BoundedWindowAggExec → PartitionedTopKExec(fetch=K)`, removing the
-//! `FilterExec` and inserting `PartitionedTopKExec` under the window.
+//! `PartitionedTopKExec(fetch=K)`, removing the `FilterExec`. When the window
+//! node holds a single ranking expression the operator emits that expression's
+//! column itself and the `BoundedWindowAggExec` is removed too; with two or
+//! more it is kept above the operator to compute its columns.
 //!
 //! The appropriate [`WindowFnKind`] is forwarded to `PartitionedTopKExec`.
 //! `RANK` and `DENSE_RANK` require a non-empty `ORDER BY` clause (otherwise
@@ -56,6 +58,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
+use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
+use datafusion_functions_window::row_number::row_number_udwf;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
@@ -85,15 +89,26 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 ///
 /// ```text
 /// [optional ProjectionExec]
-///   BoundedWindowAggExec(<ranking fn> PARTITION BY ... ORDER BY ...)
+///   PartitionedTopKExec(fn=<row_number|rank|dense_rank>, partition_keys, order_keys, fetch=K, emit=[<ranking fn> PARTITION BY ... ORDER BY ...])
+/// ```
+///
+/// or, when the window node holds two or more window expressions and so still
+/// has columns to compute:
+///
+/// ```text
+/// [optional ProjectionExec]
+///   BoundedWindowAggExec(<ranking fns> PARTITION BY ... ORDER BY ...)
 ///     PartitionedTopKExec(fn=<row_number|rank|dense_rank>, partition_keys, order_keys, fetch=K)
 /// ```
 ///
-/// The `FilterExec` is removed entirely. The child of `BoundedWindowAggExec` is now
-/// `PartitionedTopKExec`, which maintains per-partition top-K state (a
-/// heap for `ROW_NUMBER`, a heap plus boundary ties for `RANK`, a
-/// K-bounded distinct-ob map for `DENSE_RANK`) instead of sorting the
-/// whole dataset.
+/// The `FilterExec` is removed entirely, and `PartitionedTopKExec` maintains
+/// per-partition top-K state (a heap for `ROW_NUMBER`, a heap plus boundary
+/// ties for `RANK`, a K-bounded distinct-ob map for `DENSE_RANK`) instead of
+/// sorting the whole dataset. In the first shape it also appends the ranking
+/// column, which it can derive from the retained rows as it emits them, so
+/// nothing is left for the window node to do and it is removed as well. The
+/// column keeps the window expression's name, not the query's alias (`rn`):
+/// the alias is applied by the `ProjectionExec` above.
 ///
 /// # Supported Predicates
 ///
@@ -233,7 +248,21 @@ impl WindowTopN {
             return None;
         }
 
-        let partitioned_topk = PartitionedTopKExec::try_new(
+        // The operator can emit the ranking column itself, which makes the
+        // `BoundedWindowAggExec` above it redundant — see step 7. All three
+        // ranking functions are derivable from the retained set as it is
+        // emitted (`PartitionedTopKExec` documents how per policy), so the only
+        // condition is that there is exactly one window expression: the
+        // operator appends a single column, and it has to reproduce the whole
+        // of the window node's output schema. With two or more the window node
+        // stays and computes them as before.
+        let ranking_field = if window_exprs.len() == 1 {
+            Some(matched_expr.field().ok()?)
+        } else {
+            None
+        };
+
+        let mut partitioned_topk = PartitionedTopKExec::try_new(
             Arc::clone(window_exec_typed.input()),
             expr,
             partition_prefix_len,
@@ -241,11 +270,25 @@ impl WindowTopN {
             fn_kind,
         )
         .ok()?;
-
-        // Step 7: Rebuild window with PartitionedTopKExec as its child
-        let mut result =
-            replace_children_if_necessary(window_exec, vec![Arc::new(partitioned_topk)])
+        if let Some(field) = &ranking_field {
+            partitioned_topk = partitioned_topk
+                .with_ranking_field(Arc::clone(field))
                 .ok()?;
+        }
+
+        // Step 7: Rebuild the pipeline above the operator.
+        //
+        // When the operator emits the ranking column itself, the
+        // `BoundedWindowAggExec` has nothing left to compute: it would
+        // re-derive, over the retained rows, exactly the values already in
+        // that column. Its output schema is the input's fields followed by
+        // its window expressions' fields, which is what the operator now
+        // produces, so the nodes above it keep referencing the same column
+        // indices. Drop it.
+        let mut result: Arc<dyn ExecutionPlan> = Arc::new(partitioned_topk);
+        if ranking_field.is_none() {
+            result = replace_children_if_necessary(window_exec, vec![result]).ok()?;
+        }
 
         // Step 8: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
         for node in intermediates.into_iter().rev() {
@@ -362,23 +405,32 @@ fn scalar_to_usize(value: &ScalarValue) -> Option<usize> {
 
 /// Identify which supported ranking window function `expr` is.
 ///
-/// Downcasts through `StandardWindowExpr` → `WindowUDFExpr` and checks
-/// the UDF name. Returns:
-/// - `Some(WindowFnKind::RowNumber)` for `"row_number"`
-/// - `Some(WindowFnKind::Rank)` for `"rank"`
-/// - `Some(WindowFnKind::DenseRank)` for `"dense_rank"`
+/// Downcasts through `StandardWindowExpr` → `WindowUDFExpr` and compares
+/// the UDF with the built-in one. Returns:
+/// - `Some(WindowFnKind::RowNumber)` for the built-in `row_number`
+/// - `Some(WindowFnKind::Rank)` for the built-in `rank`
+/// - `Some(WindowFnKind::DenseRank)` for the built-in `dense_rank`
 /// - `None` for everything else
+///
+/// The comparison is `WindowUDF` equality rather than the name: a user-defined
+/// function registered as `row_number` (say) can compute anything, and the
+/// rewrite both prunes its input and, with a single window expression, drops
+/// its evaluator.
 fn supported_window_fn(
     expr: &Arc<dyn datafusion_physical_expr::window::WindowExpr>,
 ) -> Option<WindowFnKind> {
     let swe = expr.as_any().downcast_ref::<StandardWindowExpr>()?;
     let swfe = swe.get_standard_func_expr();
     let udf = swfe.as_any().downcast_ref::<WindowUDFExpr>()?;
-    match udf.fun().name() {
-        "row_number" => Some(WindowFnKind::RowNumber),
-        "rank" => Some(WindowFnKind::Rank),
-        "dense_rank" => Some(WindowFnKind::DenseRank),
-        _ => None,
+    let fun = udf.fun();
+    if fun == &row_number_udwf() {
+        Some(WindowFnKind::RowNumber)
+    } else if fun == &rank_udwf() {
+        Some(WindowFnKind::Rank)
+    } else if fun == &dense_rank_udwf() {
+        Some(WindowFnKind::DenseRank)
+    } else {
+        None
     }
 }
 

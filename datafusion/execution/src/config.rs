@@ -569,9 +569,10 @@ impl SessionConfig {
     ///
     /// [`options`]: Self::options
     pub fn to_props(&self) -> HashMap<String, String> {
-        let mut map = HashMap::new();
+        let entries = self.options.entries();
+        let mut map = HashMap::with_capacity(entries.len());
         // copy configs from config_options
-        for entry in self.options.entries() {
+        for entry in entries {
             map.insert(entry.key, entry.value.unwrap_or_default());
         }
 
@@ -679,6 +680,39 @@ impl SessionConfig {
         T: Send + Sync + 'static,
     {
         self.extensions.get_arc::<T>()
+    }
+
+    /// Change the extension of type `T` in place, and return what `f` returns.
+    ///
+    /// If there is no extension of type `T`, `f` gets `T::default()`, which is
+    /// then attached. If the extension is shared with another config, it is
+    /// cloned first, so the other config does not change.
+    ///
+    /// Use this, not [`with_extension`](Self::with_extension), when more than
+    /// one part of an application adds to the same extension. `with_extension`
+    /// replaces the extension, so it discards what other parts added.
+    ///
+    /// # Example
+    /// ```
+    /// use datafusion_execution::config::SessionConfig;
+    ///
+    /// #[derive(Clone, Default)]
+    /// struct Names(Vec<&'static str>);
+    ///
+    /// let mut cfg = SessionConfig::default();
+    /// cfg.update_extension(|names: &mut Names| names.0.push("a"));
+    /// cfg.update_extension(|names: &mut Names| names.0.push("b"));
+    ///
+    /// assert_eq!(cfg.get_extension::<Names>().unwrap().0, ["a", "b"]);
+    /// ```
+    pub fn update_extension<T, R>(&mut self, f: impl FnOnce(&mut T) -> R) -> R
+    where
+        T: Clone + Default + Send + Sync + 'static,
+    {
+        let mut ext = self.get_extension::<T>().unwrap_or_default();
+        let result = f(Arc::make_mut(&mut ext));
+        self.set_extension(ext);
+        result
     }
 }
 

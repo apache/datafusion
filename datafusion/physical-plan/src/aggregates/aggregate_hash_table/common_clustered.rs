@@ -1,0 +1,440 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Common utilities for aggregate tables with input clustered by group keys.
+
+use std::marker::PhantomData;
+use std::sync::Arc;
+
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
+use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_expr::{AggregateMetrics, EmitTo};
+
+use crate::PhysicalExpr;
+use crate::aggregates::group_values::{
+    AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
+    GroupByMetrics, GroupValues, new_group_values,
+};
+use crate::aggregates::order::{GroupClustering, GroupClusteringMode};
+use crate::aggregates::{
+    AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
+    evaluate_group_by,
+};
+
+use super::AggregateTableMetrics;
+use super::common::{
+    AggregateAccumulator, AggregateBatchFn, AggregateHashTable, EvaluatedAggregateBatch,
+    MaterializeAccumulatorFn, create_group_accumulator,
+};
+
+#[derive(Clone)]
+pub(in crate::aggregates) struct ClusteredAggregateTableMetrics {
+    pub(super) group_by: GroupByMetrics,
+    pub(super) aggregate_arguments: AggregateArgumentMetrics,
+    pub(super) accumulator: Arc<AggregateAccumulatorMetrics>,
+    pub(super) submetrics: Vec<Arc<dyn AggregateMetrics>>,
+}
+
+impl ClusteredAggregateTableMetrics {
+    pub(in crate::aggregates) fn new(agg: &AggregateExec, partition: usize) -> Self {
+        let metrics = AggregateTableMetrics::new(agg, partition);
+        Self {
+            group_by: metrics.group_by,
+            aggregate_arguments: metrics.aggregate_arguments,
+            accumulator: metrics.accumulator,
+            submetrics: metrics.submetrics,
+        }
+    }
+
+    pub(in crate::aggregates) fn from_hash_table<AggrMode>(
+        table: &AggregateHashTable<AggrMode>,
+    ) -> Self {
+        Self {
+            group_by: table.group_by_metrics.clone(),
+            aggregate_arguments: table.aggregate_argument_metrics.clone(),
+            accumulator: Arc::clone(&table.aggregate_accumulator_metrics),
+            submetrics: table.aggregate_submetrics.clone(),
+        }
+    }
+}
+
+/// Aggregate table shared by the clustered single, partial and final paths.
+///
+/// # Group clustering optimization
+///
+/// The table consumes input batches while [`GroupClustering`] tracks which groups
+/// are proven complete. Completed groups can be emitted before the input stream
+/// ends, so completed groups no longer occupy the table.
+///
+/// # Single, partial and final variant difference
+///
+/// The partial and final aggregate tables implement the two stages of grouped
+/// aggregation, while the single aggregate table implements both stages in one
+/// table. See
+/// [`ClusteredPartialAggregateStream`](crate::aggregates::clustered_partial_stream::ClusteredPartialAggregateStream)
+/// for the high-level plan shape.
+///
+/// Example: `AVG(v) FILTER (WHERE v>0) GROUP BY k`
+///
+/// Partial table ([`AggregateMode::Partial`], with optional filter from query):
+/// - Input rows: `k, v`
+/// - Table stores: `k, sum(v), count(v)`
+/// - Output schema: `k, sum(v), count(v)`
+///
+/// Final table ([`AggregateMode::Final`], no filters):
+/// - Input rows: `k, sum(v), count(v)`
+/// - Table stores: `k, sum(v), count(v)`
+/// - Output schema: `k, avg(v)`
+///
+/// Single table ([`AggregateMode::Single`], with optional filter from query):
+/// - Input rows: `k, v`
+/// - Table stores: `k, sum(v), count(v)`
+/// - Output schema: `k, avg(v)`
+///
+/// # Marker Type
+///
+/// `AggrMode` selects the aggregate semantics. For example,
+/// `ClusteredAggregateTable::<PartialMarker>::new(...)` consumes raw rows
+/// and emits partial states, while
+/// `ClusteredAggregateTable::<FinalMarker>::new_with_group_clustering(...)`
+/// consumes partial states and emits final values.
+///
+/// Shared methods live on `impl<T>`; single/partial/final behavior lives on
+/// marker-specific impls.
+pub(in crate::aggregates) struct ClusteredAggregateTable<AggrMode> {
+    /// Output schema: group columns followed by aggregate state or final values.
+    pub(super) output_schema: SchemaRef,
+
+    /// Intermediate-state schema used when memory pressure requires the table
+    /// to pass through or spill its current state.
+    pub(super) state_schema: SchemaRef,
+
+    /// Grouping and accumulator-specific timing metrics.
+    pub(super) group_by_metrics: GroupByMetrics,
+
+    /// Per-aggregate timing metrics for evaluating aggregate arguments.
+    pub(super) aggregate_argument_metrics: AggregateArgumentMetrics,
+
+    /// Per-aggregate timing metrics for accumulator operations.
+    pub(super) aggregate_accumulator_metrics: Arc<AggregateAccumulatorMetrics>,
+
+    /// Optional internal metrics owned by each aggregate expression.
+    pub(super) aggregate_submetrics: Vec<Arc<dyn AggregateMetrics>>,
+
+    /// Group keys, completion state, and accumulator states.
+    pub(super) buffer: ClusteredAggregateTableBuffer,
+
+    _mode: PhantomData<AggrMode>,
+}
+
+/// Buffer for the clustered aggregate table's group keys and accumulator states.
+///
+/// It accumulates input during aggregation and emits output rows as soon as
+/// groups are known to be complete.
+///
+/// [`GroupClustering`] tracks when and how to do early emit.
+/// [`GroupValues`] stores the physical group-key layout, while
+/// [`datafusion_expr::GroupsAccumulator`] stores per-group aggregate state.
+pub(super) struct ClusteredAggregateTableBuffer {
+    /// GROUP BY expressions evaluated against input batches.
+    pub(super) group_by: Arc<PhysicalGroupBy>,
+
+    /// Tracks which groups are complete and can be emitted safely.
+    pub(super) group_clustering: GroupClustering,
+
+    /// Interned group keys, in the same group-id order used by accumulators.
+    pub(super) group_values: Box<dyn GroupValues>,
+
+    /// Scratch group id vector for the current input batch.
+    pub(super) group_indices: Vec<usize>,
+
+    /// One item per aggregate expression.
+    ///
+    /// Example: `COUNT(x), SUM(y)` creates two items. Each item owns the input
+    /// expressions, optional filter, and accumulator state for all groups.
+    pub(super) accumulators: Vec<AggregateAccumulator>,
+}
+
+/// Methods shared by all aggregate modes
+impl<AggrMode> ClusteredAggregateTable<AggrMode> {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "keeps clustered single, partial and final table construction explicit"
+    )]
+    pub(super) fn new_for_mode(
+        agg: &AggregateExec,
+        input_schema: &SchemaRef,
+        output_schema: SchemaRef,
+        state_schema: SchemaRef,
+        group_clustering_mode: &GroupClusteringMode,
+        aggregate_mode: &AggregateMode,
+        filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        metrics: ClusteredAggregateTableMetrics,
+    ) -> Result<Self> {
+        let group_clustering = GroupClustering::try_new(group_clustering_mode)?;
+        let group_schema = agg.group_by().group_schema(input_schema)?;
+        let group_values = new_group_values(group_schema, &group_clustering)?;
+        let aggregate_arguments = aggregate_expressions(
+            agg.aggr_expr(),
+            aggregate_mode,
+            agg.group_by().num_group_exprs(),
+        )?;
+        let accumulators = agg
+            .aggr_expr()
+            .iter()
+            .zip(aggregate_arguments)
+            .zip(filters)
+            .zip(metrics.submetrics.iter())
+            .map(|(((agg_expr, arguments), filter), submetrics)| {
+                let accumulator =
+                    create_group_accumulator(agg_expr, Arc::clone(submetrics))?;
+                Ok(AggregateAccumulator::new(
+                    Arc::clone(agg_expr),
+                    arguments,
+                    filter,
+                    accumulator,
+                    Arc::clone(submetrics),
+                ))
+            })
+            .collect::<Result<_>>()?;
+
+        Ok(Self {
+            output_schema,
+            state_schema,
+            group_by_metrics: metrics.group_by,
+            aggregate_argument_metrics: metrics.aggregate_arguments,
+            aggregate_accumulator_metrics: metrics.accumulator,
+            aggregate_submetrics: metrics.submetrics,
+            buffer: ClusteredAggregateTableBuffer {
+                group_by: Arc::clone(agg.group_by()),
+                group_clustering,
+                group_values,
+                group_indices: vec![],
+                accumulators,
+            },
+            _mode: PhantomData,
+        })
+    }
+
+    /// Evaluates all group by keys and accumulator args.
+    ///
+    /// e.g., `select k+1, sum(v*v) from t group by (k+1)`, this function
+    /// evaluates `k+1`, `v*v`.
+    pub(super) fn evaluate_batch(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<EvaluatedAggregateBatch> {
+        let grouping_set_args =
+            self.group_by_metrics.time_group_key_preparation(|| {
+                evaluate_group_by(&self.buffer.group_by, batch)
+            })?;
+
+        let accumulator_args = self.group_by_metrics.time_aggregate_arguments(|| {
+            self.buffer
+                .accumulators
+                .iter_mut()
+                .enumerate()
+                .map(|(idx, acc)| {
+                    self.aggregate_argument_metrics
+                        .time(idx, || acc.evaluate_compacted_args(batch))
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
+
+        Ok(EvaluatedAggregateBatch {
+            grouping_set_args,
+            accumulator_args,
+        })
+    }
+
+    /// Called after the input stream is exhausted and the last batch has been
+    /// aggregated.
+    ///
+    /// Updates the internal [`GroupClustering`] so it can continue emitting until
+    /// the buffer is empty.
+    pub(in crate::aggregates) fn input_done(&mut self) {
+        self.buffer.group_clustering.input_done();
+    }
+
+    /// Returns the completion state used to decide how memory pressure is handled.
+    pub(in crate::aggregates) fn group_clustering(&self) -> &GroupClustering {
+        &self.buffer.group_clustering
+    }
+
+    /// Number of groups currently buffered.
+    pub(in crate::aggregates) fn num_groups(&self) -> usize {
+        self.buffer.group_values.len()
+    }
+
+    /// Check if there is zero groups accumulated so far.
+    pub(in crate::aggregates) fn is_empty(&self) -> bool {
+        self.num_groups() == 0
+    }
+
+    /// All internal buffer's memory size.
+    pub(in crate::aggregates) fn memory_size(&self) -> usize {
+        self.buffer
+            .accumulators
+            .iter()
+            .map(|acc| acc.size())
+            .sum::<usize>()
+            + self.buffer.group_values.size()
+            + self.buffer.group_clustering.size()
+            + self.buffer.group_indices.allocated_size()
+    }
+
+    pub(in crate::aggregates) fn metrics(&self) -> ClusteredAggregateTableMetrics {
+        ClusteredAggregateTableMetrics {
+            group_by: self.group_by_metrics.clone(),
+            aggregate_arguments: self.aggregate_argument_metrics.clone(),
+            accumulator: Arc::clone(&self.aggregate_accumulator_metrics),
+            submetrics: self.aggregate_submetrics.clone(),
+        }
+    }
+
+    /// Takes every intermediate aggregate state and resets the table so it can
+    /// continue with a new clustered input segment.
+    ///
+    /// Unlike normal group-completion emission, this operation is allowed to take the
+    /// active (incomplete) groups. Partial aggregation can pass those states to
+    /// its final stage, while single and final aggregation sort and spill them
+    /// before replay.
+    pub(in crate::aggregates) fn take_state_batch(
+        &mut self,
+    ) -> Result<Option<RecordBatch>> {
+        if self.buffer.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        let output = self.group_by_metrics.time_emitting(|| {
+            let mut output = self.buffer.group_values.emit(EmitTo::All)?;
+            for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
+                output.extend(accumulator_metrics.time(
+                    idx,
+                    AccumulatorPhase::State,
+                    || acc.state(EmitTo::All),
+                )?);
+            }
+            Ok::<_, datafusion_common::DataFusionError>(output)
+        })?;
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.state_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+
+        // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
+        // key/index buffers too so the memory reservation can be released
+        // before the batch is passed downstream or sorted for spilling.
+        self.buffer.group_values.clear_shrink(0);
+        self.buffer.group_indices.clear();
+        self.buffer.group_indices.shrink_to_fit();
+        self.buffer.group_clustering.reset();
+
+        Ok(Some(batch))
+    }
+
+    /// Aggregates one evaluated input batch after selecting the mode-specific
+    /// accumulator operation.
+    ///
+    /// Each aggregation mode chooses a different `aggregate_fn` according to its
+    /// semantics. For example, partial aggregation takes raw inputs and updates
+    /// stored partial states, so it uses
+    /// [`datafusion_expr::GroupsAccumulator::update_batch`].
+    pub(super) fn aggregate_evaluated_batch(
+        &mut self,
+        evaluated_batch: &EvaluatedAggregateBatch,
+        aggregate_fn: AggregateBatchFn,
+        accumulator_phase: AccumulatorPhase,
+    ) -> Result<()> {
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        let group_by_metrics = self.group_by_metrics.clone();
+        for group_values in &evaluated_batch.grouping_set_args {
+            let total_num_groups = group_by_metrics.time_group_key_preparation(|| {
+                let starting_num_groups = self.buffer.group_values.len();
+                self.buffer
+                    .group_values
+                    .intern(group_values, &mut self.buffer.group_indices)?;
+                let total_num_groups = self.buffer.group_values.len();
+                if total_num_groups > starting_num_groups {
+                    self.buffer.group_clustering.new_groups(
+                        group_values,
+                        &self.buffer.group_indices,
+                        total_num_groups,
+                    )?;
+                }
+                Ok::<_, datafusion_common::DataFusionError>(total_num_groups)
+            })?;
+
+            group_by_metrics.time_aggregation(|| {
+                for (idx, (acc, values)) in self
+                    .buffer
+                    .accumulators
+                    .iter_mut()
+                    .zip(evaluated_batch.accumulator_args.iter())
+                    .enumerate()
+                {
+                    accumulator_metrics.time(idx, accumulator_phase, || {
+                        aggregate_fn(
+                            acc,
+                            values,
+                            &self.buffer.group_indices,
+                            total_num_groups,
+                        )
+                    })?;
+                }
+                Ok::<(), datafusion_common::DataFusionError>(())
+            })?;
+        }
+
+        Ok(())
+    }
+
+    /// Removes the selected groups once and materializes their output columns.
+    /// The caller chooses the completed prefix.
+    pub(super) fn materialize_groups(
+        &mut self,
+        emit_to: EmitTo,
+        materialize_accumulator_fn: MaterializeAccumulatorFn,
+        accumulator_phase: AccumulatorPhase,
+    ) -> Result<RecordBatch> {
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        let output = self.group_by_metrics.time_emitting(|| {
+            let mut output = self.buffer.group_values.emit(emit_to)?;
+            // `EmitTo::All` is only used after `input_done`, when the completion
+            // state no longer tracks group indexes.
+            if let EmitTo::First(n) = emit_to {
+                self.buffer.group_clustering.remove_groups(n);
+            }
+
+            for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
+                output.extend(accumulator_metrics.time(
+                    idx,
+                    accumulator_phase,
+                    || materialize_accumulator_fn(acc, emit_to),
+                )?);
+            }
+            Ok::<_, datafusion_common::DataFusionError>(output)
+        })?;
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+
+        Ok(batch)
+    }
+}

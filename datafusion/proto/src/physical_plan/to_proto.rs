@@ -284,7 +284,15 @@ pub fn serialize_physical_expr_with_converter(
         proto_converter,
     };
     let ctx = datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx::new(&encoder);
-    if let Some(node) = expr.try_to_proto(&ctx)? {
+    if let Some(mut node) = expr.try_to_proto(&ctx)? {
+        // Stamp the expression's identity here, at the common boundary, so
+        // a hook that builds its node with a helper such as
+        // `extension_expr_node` (which cannot see the id) keeps the same
+        // dedup behaviour as the downcast path below. A hook that set its
+        // own `expr_id` keeps it.
+        if node.expr_id.is_none() {
+            node.expr_id = expr_id;
+        }
         return Ok(node);
     }
 
@@ -332,7 +340,15 @@ pub fn serialize_physical_expr_with_converter(
                 Ok(protobuf::PhysicalExprNode {
                     expr_id,
                     expr_type: Some(protobuf::physical_expr_node::ExprType::Extension(
-                        protobuf::PhysicalExtensionExprNode { expr: buf, inputs },
+                        protobuf::PhysicalExtensionExprNode {
+                            expr: buf,
+                            inputs,
+                            // The codec *is* the discriminator on this path,
+                            // so no name is written. Expressions that want
+                            // registry decoding write their own node from
+                            // `try_to_proto`.
+                            expr_name: None,
+                        },
                     )),
                 })
             }

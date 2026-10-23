@@ -357,7 +357,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a, max(d.seq)@2 as max(d.seq)]
-03)----AggregateExec: mode=SinglePartitioned, gby=[b@2 as b], aggr=[max(d.a), max(d.seq)], ordering_mode=Sorted
+03)----AggregateExec: mode=SinglePartitioned, gby=[b@2 as b], aggr=[max(d.a), max(d.seq)], group_clustering_mode=Full
 04)------ProjectionExec: expr=[row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as seq, a@0 as a, b@1 as b]
 05)--------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 06)----------SortExec: expr=[b@1 ASC NULLS LAST, a@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -3481,6 +3481,181 @@ SELECT
   ORDER BY C3
   LIMIT 5
 
+# A window that references a named window inherits its PARTITION BY and ORDER BY
+statement ok
+CREATE TABLE named_window_prices(ticker VARCHAR, ts INT, price DOUBLE) AS VALUES
+  ('BTC', 1, 100.0), ('BTC', 2, 105.0), ('BTC', 3, 102.0),
+  ('DOGE', 1, 0.1), ('DOGE', 2, 0.2), ('DOGE', 3, 0.15);
+
+# Adding a frame to a named window keeps its PARTITION BY and ORDER BY
+query TIRRR
+SELECT ticker, ts, price,
+  MAX(price) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS named_plus_frame,
+  MAX(price) OVER (PARTITION BY ticker ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS inline
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ticker, ts
+----
+BTC 1 100 100 100
+BTC 2 105 105 105
+BTC 3 102 105 105
+DOGE 1 0.1 0.1 0.1
+DOGE 2 0.2 0.2 0.2
+DOGE 3 0.15 0.2 0.2
+
+# Adding an ORDER BY to a named window that only partitions
+query TII
+SELECT ticker, ts,
+  ROW_NUMBER() OVER (w ORDER BY ts DESC) AS rn
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker)
+ORDER BY ticker, ts
+----
+BTC 1 3
+BTC 2 2
+BTC 3 1
+DOGE 1 3
+DOGE 2 2
+DOGE 3 1
+
+# A window definition can reference an earlier one
+query TIR
+SELECT ticker, ts,
+  SUM(price) OVER w2 AS running
+FROM named_window_prices
+WINDOW w1 AS (PARTITION BY ticker ORDER BY ts),
+  w2 AS (w1 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+ORDER BY ticker, ts
+----
+BTC 1 100
+BTC 2 205
+BTC 3 307
+DOGE 1 0.1
+DOGE 2 0.3
+DOGE 3 0.45
+
+# Referencing a named window inside parentheses without adding anything
+query TII
+SELECT ticker, ts, ROW_NUMBER() OVER (w) AS rn
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ticker, ts
+----
+BTC 1 1
+BTC 2 2
+BTC 3 3
+DOGE 1 1
+DOGE 2 2
+DOGE 3 3
+
+statement error DataFusion error: Error during planning: The window w is not defined!
+SELECT MAX(price) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM named_window_prices
+
+statement error DataFusion error: Error during planning: Cannot override PARTITION BY clause of window w
+SELECT MAX(price) OVER (w PARTITION BY ts)
+FROM named_window_prices
+WINDOW w AS (ORDER BY ts)
+
+statement error DataFusion error: Error during planning: Cannot override ORDER BY clause of window w
+SELECT MAX(price) OVER (w ORDER BY price)
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+
+statement error DataFusion error: Error during planning: Cannot copy window w because it has a frame clause
+SELECT MAX(price) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker ORDER BY ts ROWS UNBOUNDED PRECEDING)
+
+# A window definition cannot reference a later one
+statement error DataFusion error: Error during planning: The window w2 is not defined!
+SELECT SUM(price) OVER w1
+FROM named_window_prices
+WINDOW w1 AS (w2 ROWS UNBOUNDED PRECEDING),
+  w2 AS (PARTITION BY ticker ORDER BY ts)
+
+# Named windows are resolved in QUALIFY
+query TIR
+SELECT ticker, ts, price
+FROM named_window_prices
+QUALIFY MAX(price) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) = price
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ticker, ts
+----
+BTC 1 100
+BTC 2 105
+DOGE 1 0.1
+DOGE 2 0.2
+
+query TI
+SELECT ticker, ts
+FROM named_window_prices
+QUALIFY ROW_NUMBER() OVER w = 1
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ticker
+----
+BTC 1
+DOGE 1
+
+# Named windows are resolved in ORDER BY
+query TI
+SELECT ticker, ts
+FROM named_window_prices
+WINDOW w AS (PARTITION BY ticker ORDER BY ts)
+ORDER BY ROW_NUMBER() OVER (w ROWS UNBOUNDED PRECEDING) DESC, ticker
+----
+BTC 3
+DOGE 3
+BTC 2
+DOGE 2
+BTC 1
+DOGE 1
+
+# A subquery resolves window names against its own WINDOW clause
+query I
+SELECT (SELECT MAX(rn) FROM (
+  SELECT ROW_NUMBER() OVER (w ROWS UNBOUNDED PRECEDING) AS rn
+  FROM named_window_prices
+  WINDOW w AS (PARTITION BY ticker ORDER BY ts)))
+FROM named_window_prices
+WINDOW w AS (ORDER BY ts)
+LIMIT 1
+----
+3
+
+statement error DataFusion error: Error during planning: The window w is not defined!
+SELECT (SELECT MAX(rn) FROM (
+  SELECT ROW_NUMBER() OVER w AS rn FROM named_window_prices))
+FROM named_window_prices
+WINDOW w AS (ORDER BY ts)
+
+# A named window in HAVING is rejected like an inline one
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING
+SELECT ticker, price FROM named_window_prices GROUP BY ticker, price
+HAVING MAX(price) OVER (PARTITION BY ticker) > 1
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING
+SELECT ticker, price FROM named_window_prices GROUP BY ticker, price
+HAVING MAX(price) OVER w > 1
+WINDOW w AS (PARTITION BY ticker)
+
+statement error DataFusion error: Error during planning: The window no_such_window is not defined!
+SELECT ticker, price FROM named_window_prices GROUP BY ticker, price
+HAVING MAX(price) OVER no_such_window > 1
+
+# A named window in WHERE is rejected like an inline one
+statement error
+SELECT ticker FROM named_window_prices
+WHERE MAX(price) OVER (PARTITION BY ticker) > 1
+
+statement error
+SELECT ticker FROM named_window_prices
+WHERE MAX(price) OVER w > 1
+WINDOW w AS (PARTITION BY ticker)
+
+statement ok
+DROP TABLE named_window_prices;
+
 # Create a source where there is multiple orderings.
 statement ok
 CREATE EXTERNAL TABLE multiple_ordered_table (
@@ -4821,6 +4996,107 @@ NULL 1
 statement ok
 DROP TABLE t;
 
+# Test for ignore nulls in LAST_VALUE, FIRST_VALUE and NTH_VALUE over partitions that span many
+# batches, with runs of NULLs that cross several words of the validity bitmap. Partition 0
+# alternates NULLs, partition 1 has runs of 497 NULLs, partition 2 is all NULLs and partition 3
+# has none. `v` increases with `i` in every partition, so the last (first) non-NULL value of a
+# frame is also its maximum (minimum), which `max` (`min`) computes independently.
+statement ok
+set datafusion.execution.batch_size = 100;
+
+statement ok
+CREATE TABLE ignore_nulls_t AS
+SELECT i % 4 AS p, i,
+  CASE i % 4
+    WHEN 0 THEN CASE WHEN (i / 4) % 2 = 0 THEN i END
+    WHEN 1 THEN CASE WHEN (i / 4) % 500 < 3 THEN i END
+    WHEN 3 THEN i
+  END AS v
+FROM (SELECT value AS i FROM generate_series(1, 30000));
+
+query IIII
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END),
+  count(fv), sum(CASE WHEN fv IS DISTINCT FROM mn THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(v) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS lv,
+  max(v) OVER (PARTITION BY p ORDER BY i) AS mx,
+  FIRST_VALUE(v) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS fv,
+  min(v) OVER (PARTITION BY p ORDER BY i) AS mn
+FROM ignore_nulls_t);
+----
+22499 0 22499 0
+
+query IIII
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END),
+  count(fv), sum(CASE WHEN fv IS DISTINCT FROM mn THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(v) IGNORE NULLS OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS lv,
+  max(v) OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS mx,
+  FIRST_VALUE(v) IGNORE NULLS OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS fv,
+  min(v) OVER (
+    PARTITION BY p ORDER BY i ROWS BETWEEN 1000 PRECEDING AND CURRENT ROW) AS mn
+FROM ignore_nulls_t);
+----
+22499 0 22499 0
+
+query IIII
+SELECT count(n1), sum(CASE WHEN n1 IS DISTINCT FROM mn THEN 1 ELSE 0 END),
+  count(nl), sum(CASE WHEN nl IS DISTINCT FROM mx THEN 1 ELSE 0 END)
+FROM (SELECT
+  NTH_VALUE(v, 1) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS n1,
+  min(v) OVER (PARTITION BY p ORDER BY i) AS mn,
+  NTH_VALUE(v, -1) IGNORE NULLS OVER (PARTITION BY p ORDER BY i) AS nl,
+  max(v) OVER (PARTITION BY p ORDER BY i) AS mx
+FROM ignore_nulls_t);
+----
+22499 0 22499 0
+
+# NTH_VALUE(v, -65) over a sliding frame whose valid rows span two bitmap words. Once full, the
+# frame holds exactly 65 valid rows in partition 0, more in partition 3 and fewer in partitions 1
+# and 2. The expected value is the valid row whose running count is 64 less than the current
+# row's, if the frame holds at least 65 valid rows.
+query III
+WITH r AS (SELECT p, v,
+  count(v) OVER (PARTITION BY p ORDER BY i) AS c,
+  count(v) OVER (PARTITION BY p ORDER BY i ROWS BETWEEN 129 PRECEDING AND CURRENT ROW) AS fc,
+  NTH_VALUE(v, -65) IGNORE NULLS
+    OVER (PARTITION BY p ORDER BY i ROWS BETWEEN 129 PRECEDING AND CURRENT ROW) AS nv
+FROM ignore_nulls_t)
+SELECT count(r.nv), sum(CASE WHEN r.fc = 65 THEN 1 ELSE 0 END),
+  sum(CASE WHEN r.nv IS DISTINCT FROM CASE WHEN r.fc >= 65 THEN e.v END THEN 1 ELSE 0 END)
+FROM r LEFT JOIN r e ON e.p = r.p AND e.v IS NOT NULL AND e.c = r.c - 64;
+----
+14807 7372 0
+
+query II
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(v) IGNORE NULLS OVER (PARTITION BY p ORDER BY i
+    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS lv,
+  max(v) OVER (PARTITION BY p ORDER BY i
+    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS mx
+FROM ignore_nulls_t);
+----
+22500 0
+
+# With peers in a RANGE frame, the last non-NULL value comes from the last peer group that has
+# one. All non-NULL values of a peer group are equal here, so it is still the frame's maximum.
+query II
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END)
+FROM (SELECT
+  LAST_VALUE(CASE WHEN v IS NOT NULL THEN i / 28 END) IGNORE NULLS
+    OVER (PARTITION BY p ORDER BY i / 28) AS lv,
+  max(CASE WHEN v IS NOT NULL THEN i / 28 END) OVER (PARTITION BY p ORDER BY i / 28) AS mx
+FROM ignore_nulls_t);
+----
+22500 0
+
+statement ok
+DROP TABLE ignore_nulls_t;
+
 
 # Test for ignore nulls in nth_VALUE without null values
 statement ok
@@ -5397,7 +5673,7 @@ logical_plan
 01)Sort: t1.c1 ASC NULLS LAST, t1.c2 ASC NULLS LAST, rank ASC NULLS LAST
 02)--Projection: t1.c1, t1.c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank
 03)----WindowAggr: windowExpr=[[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-04)------Filter: t1.c1 = Int32(2) OR t1.c1 = Int32(3)
+04)------Filter: t1.c1 IN ([Int32(2), Int32(3)])
 05)--------TableScan: t1 projection=[c1, c2]
 physical_plan
 01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank@2 ASC NULLS LAST]
@@ -5405,7 +5681,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
 05)--------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-06)----------FilterExec: c1@0 = 2 OR c1@0 = 3
+06)----------FilterExec: c1@0 IN (SET) ([2, 3])
 07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -6736,6 +7012,55 @@ ORDER BY i;
 3 1
 4 NULL
 
+# bit_xor over a sliding window must yield NULL when the frame has no non-NULL
+# values, matching the result over the whole partition (apache/datafusion#26470).
+# Before the fix the sliding result was 0 on the NULL row.
+query III
+SELECT x,
+  bit_xor(x) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND CURRENT ROW) AS sliding,
+  bit_xor(x) OVER (PARTITION BY i) AS whole
+FROM (VALUES (1, 5), (2, CAST(NULL AS INT)), (3, 6)) t(i, x)
+ORDER BY i;
+----
+5 5 5
+NULL NULL NULL
+6 6 6
+
+# Narrow sliding frame that drains to empty each row.
+query II
+SELECT i, bit_xor(v) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)
+FROM (VALUES(1,CAST(NULL AS INT)),(2,1),(3,CAST(NULL AS INT)),(4,CAST(NULL AS INT))) t(i,v)
+ORDER BY i;
+----
+1 NULL
+2 NULL
+3 1
+4 NULL
+
+# All-NULL input — every frame is empty.
+query II
+SELECT i, bit_xor(v) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM (VALUES(1,CAST(NULL AS INT)),(2,CAST(NULL AS INT))) t(i,v)
+ORDER BY i;
+----
+1 NULL
+2 NULL
+
+# A legitimate 0 must not be turned into NULL, and NULL must follow it.
+# Row 2's frame is [5, 5], whose XOR is genuinely 0. Row 4's frame is
+# [NULL, NULL] and must be NULL even though the accumulated value was already 0.
+# Row 5 shows the accumulator recovering once a non-NULL value re-enters.
+query II
+SELECT i, bit_xor(v) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES(1,5),(2,5),(3,CAST(NULL AS INT)),(4,CAST(NULL AS INT)),(5,3)) t(i,v)
+ORDER BY i;
+----
+1 5
+2 0
+3 5
+4 NULL
+5 3
+
 # Covariance/correlation sliding-window regression test. Verifies correct
 # results across row removals and a NULL-gap empty-frame transition.
 query IRRR
@@ -7345,3 +7670,80 @@ SELECT a FROM window_in_filter_t LIMIT count(*);
 
 statement ok
 DROP TABLE window_in_filter_t;
+
+# RANGE frames ending in `N PRECEDING`: for a row whose ORDER BY value is NULL
+# the frame is its NULL peer group, so the result must not depend on how the
+# NULL peers are split across input batches.
+statement ok
+CREATE TABLE range_null_peers(id INT, x INT, v INT) AS VALUES
+  (1, 1, 10), (2, 2, 20), (3, NULL, 30), (4, NULL, 40), (5, NULL, 50);
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+query IIIII
+SELECT id,
+  sum(v) OVER (ORDER BY x RANGE BETWEEN 5 PRECEDING AND 1 PRECEDING),
+  count(*) OVER (ORDER BY x RANGE BETWEEN 5 PRECEDING AND 1 PRECEDING),
+  max(v) OVER (ORDER BY x RANGE BETWEEN 5 PRECEDING AND 1 PRECEDING),
+  sum(v) OVER (ORDER BY x RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+FROM range_null_peers ORDER BY id;
+----
+1 NULL 0 NULL NULL
+2 10 1 10 10
+3 120 3 50 150
+4 120 3 50 150
+5 120 3 50 150
+
+query III
+SELECT id,
+  sum(v) OVER (ORDER BY x NULLS FIRST RANGE BETWEEN 5 PRECEDING AND 1 PRECEDING),
+  sum(v) OVER (ORDER BY x DESC RANGE BETWEEN 5 PRECEDING AND 1 PRECEDING)
+FROM range_null_peers ORDER BY id;
+----
+1 NULL 20
+2 10 NULL
+3 120 120
+4 120 120
+5 120 120
+
+# The FOLLOWING frames are reversed to `5 PRECEDING AND 1 PRECEDING` so they can
+# reuse the sort of the first window
+query IIII
+SELECT id,
+  count(*) OVER (ORDER BY x DESC NULLS LAST, id),
+  sum(v) OVER (ORDER BY x ASC NULLS FIRST RANGE BETWEEN 1 FOLLOWING AND 5 FOLLOWING),
+  nth_value(1, 3) OVER (ORDER BY x ASC NULLS FIRST RANGE BETWEEN 1 FOLLOWING AND 5 FOLLOWING)
+FROM range_null_peers ORDER BY id;
+----
+1 2 20 NULL
+2 1 NULL NULL
+3 3 120 1
+4 4 120 1
+5 5 120 1
+
+# NaN sorts as a single peer group too, and `NaN - 1` is NaN
+statement ok
+CREATE TABLE range_nan_peers(id INT, x DOUBLE) AS VALUES
+  (1, 1.0), (2, 'NaN'), (3, 'NaN'), (4, 'NaN'), (5, 2.0);
+
+query III
+SELECT id,
+  count(*) OVER (ORDER BY x RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+  count(*) OVER (ORDER BY x DESC RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+FROM range_nan_peers ORDER BY id;
+----
+1 0 4
+2 5 3
+3 5 3
+4 5 3
+5 1 3
+
+statement ok
+reset datafusion.execution.batch_size;
+
+statement ok
+DROP TABLE range_null_peers;
+
+statement ok
+DROP TABLE range_nan_peers;

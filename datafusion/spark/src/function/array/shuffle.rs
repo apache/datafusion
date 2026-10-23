@@ -141,17 +141,17 @@ fn extract_seed(seed_arg: &ColumnarValue) -> Result<Option<u64>> {
 fn array_shuffle_with_seed(arg: &[ArrayRef], seed: Option<u64>) -> Result<ArrayRef> {
     let [input_array] = take_function_args("shuffle", arg)?;
     match &input_array.data_type() {
-        List(field) => {
+        List(_) => {
             let array = as_list_array(input_array)?;
-            general_array_shuffle::<i32>(array, field, seed)
+            general_array_shuffle::<i32>(array, seed)
         }
-        LargeList(field) => {
+        LargeList(_) => {
             let array = as_large_list_array(input_array)?;
-            general_array_shuffle::<i64>(array, field, seed)
+            general_array_shuffle::<i64>(array, seed)
         }
-        FixedSizeList(field, _) => {
+        FixedSizeList(_, _) => {
             let array = as_fixed_size_list_array(input_array)?;
-            fixed_size_array_shuffle(array, field, seed)
+            fixed_size_array_shuffle(array, seed)
         }
         Null => Ok(Arc::clone(input_array)),
         array_type => exec_err!(
@@ -163,7 +163,6 @@ fn array_shuffle_with_seed(arg: &[ArrayRef], seed: Option<u64>) -> Result<ArrayR
 
 fn general_array_shuffle<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
-    field: &FieldRef,
     seed: Option<u64>,
 ) -> Result<ArrayRef> {
     let values = array.values();
@@ -171,8 +170,9 @@ fn general_array_shuffle<O: OffsetSizeTrait>(
     // Each null row emits one placeholder child value.
     let capacity =
         Capacities::Array(offset_span_len(array.offsets()) + array.null_count());
-    let mut offsets = vec![O::usize_as(0)];
-    let mut nulls = vec![];
+    let mut offsets = Vec::with_capacity(array.len() + 1);
+    offsets.push(O::usize_as(0));
+    let mut nulls = Vec::with_capacity(array.len());
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], false, capacity);
     let mut rng = if let Some(s) = seed {
@@ -182,13 +182,13 @@ fn general_array_shuffle<O: OffsetSizeTrait>(
         let seed = rng().random::<u64>();
         StdRng::seed_from_u64(seed)
     };
+    let mut indices: Vec<usize> = Vec::new();
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         // skip the null value
         if array.is_null(row_index) {
             nulls.push(false);
-            offsets.push(offsets[row_index] + O::one());
-            mutable.try_extend(0, 0, 1)?;
+            offsets.push(offsets[row_index]);
             continue;
         }
         nulls.push(true);
@@ -197,8 +197,8 @@ fn general_array_shuffle<O: OffsetSizeTrait>(
         let length = (end - start).to_usize().unwrap();
 
         // Create indices and shuffle them
-        let mut indices: Vec<usize> =
-            (start.to_usize().unwrap()..end.to_usize().unwrap()).collect();
+        indices.clear();
+        indices.extend(start.to_usize().unwrap()..end.to_usize().unwrap());
         indices.shuffle(&mut rng);
 
         // Add shuffled elements
@@ -211,7 +211,7 @@ fn general_array_shuffle<O: OffsetSizeTrait>(
 
     let data = mutable.freeze();
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::clone(field),
+        Arc::clone(array.value_field()),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
         Some(nulls.into()),
@@ -220,13 +220,12 @@ fn general_array_shuffle<O: OffsetSizeTrait>(
 
 fn fixed_size_array_shuffle(
     array: &FixedSizeListArray,
-    field: &FieldRef,
     seed: Option<u64>,
 ) -> Result<ArrayRef> {
     let values = array.values();
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
-    let mut nulls = vec![];
+    let mut nulls = Vec::with_capacity(array.len());
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], false, capacity);
     let value_length = array.value_length() as usize;
@@ -237,6 +236,7 @@ fn fixed_size_array_shuffle(
         let seed = rng().random::<u64>();
         StdRng::seed_from_u64(seed)
     };
+    let mut indices: Vec<usize> = Vec::with_capacity(value_length);
 
     for row_index in 0..array.len() {
         // skip the null value
@@ -251,7 +251,8 @@ fn fixed_size_array_shuffle(
         let end = start + value_length;
 
         // Create indices and shuffle them
-        let mut indices: Vec<usize> = (start..end).collect();
+        indices.clear();
+        indices.extend(start..end);
         indices.shuffle(&mut rng);
 
         // Add shuffled elements
@@ -262,7 +263,7 @@ fn fixed_size_array_shuffle(
 
     let data = mutable.freeze();
     Ok(Arc::new(FixedSizeListArray::try_new(
-        Arc::clone(field),
+        Arc::clone(array.value_field()),
         array.value_length(),
         arrow::array::make_array(data),
         Some(nulls.into()),
@@ -272,8 +273,45 @@ fn fixed_size_array_shuffle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{Int32Array, ListArray};
+    use arrow::buffer::NullBuffer;
     use arrow::datatypes::Field;
     use datafusion_expr::ReturnFieldArgs;
+
+    #[test]
+    fn test_shuffle_null_lists() -> Result<()> {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let input = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::new(vec![0, 0, 0, 1, 1].into()),
+            Arc::new(Int32Array::from(vec![42])),
+            Some(NullBuffer::from(vec![false, true, true, false])),
+        );
+        let empty_child = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::new(vec![0, 0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            Some(NullBuffer::from(vec![false, true])),
+        );
+
+        for (list, expected_values_len) in
+            [(empty_child, 0), (input.clone(), 1), (input.slice(3, 1), 0)]
+        {
+            for data_type in [list.data_type().clone(), LargeList(Arc::clone(&field))] {
+                let array = arrow::compute::cast(&list, &data_type)?;
+                let result = array_shuffle_with_seed(&[Arc::clone(&array)], Some(0))?;
+                assert_eq!(result.as_ref(), array.as_ref());
+                // Null rows need no placeholder child value.
+                let values_len = match data_type {
+                    List(_) => as_list_array(&result)?.values().len(),
+                    LargeList(_) => as_large_list_array(&result)?.values().len(),
+                    _ => unreachable!(),
+                };
+                assert_eq!(values_len, expected_values_len);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_shuffle_nullability() {

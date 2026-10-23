@@ -32,6 +32,7 @@ members = [
     "datafusion/expr-common",
     "datafusion/execution",
     "datafusion/ffi",
+    "datafusion/ffi/integration-tests",
     "datafusion/functions",
     "datafusion/functions-aggregate",
     "datafusion/functions-aggregate-common",
@@ -68,7 +69,6 @@ members = [
     "datafusion/doc",
     "xtask",
 ]
-exclude = ["dev/depcheck"]
 resolver = "2"
 
 [workspace.package]
@@ -371,7 +371,7 @@ unused_qualifications = "deny"
 # `CARGO_PROFILE_DEV_DEBUG=2 cargo build` when you need to step through code in a
 # debugger.
 [profile.dev]
-debug = "line-tables-only"
+#debug = "line-tables-only"
 
 [profile.release]
 codegen-units = 1
@@ -408,3 +408,8 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# Execute benchmark tests with debug checks, without release-mode build costs.
+[profile.ci-bench]
+inherits = "ci"
+opt-level = 1
