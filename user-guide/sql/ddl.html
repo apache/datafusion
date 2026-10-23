@@ -601,9 +601,8 @@ scanning a subset of the file.</p>
 <p>It is also possible to use compressed files, such as <code class="docutils literal notranslate"><span class="pre">.csv.gz</span></code>:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
-<span class="n">COMPRESSION</span><span class="w"> </span><span class="k">TYPE</span><span class="w"> </span><span class="n">GZIP</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_simple.csv.gz&#39;</span>
-<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;format.compression&#39;</span><span class="w"> </span><span class="s1">&#39;gzip&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>

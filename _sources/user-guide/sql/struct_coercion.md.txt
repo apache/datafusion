@@ -61,8 +61,8 @@ SELECT [{x: 1, y: 2}, {y: 3, x: 4}];
 When constructing arrays from table columns with different struct schemas:
 
 ```sql
-CREATE TABLE t_left (s struct(x int, y int)) AS VALUES ({x: 1, y: 2});
-CREATE TABLE t_right (s struct(y int, x int)) AS VALUES ({y: 3, x: 4});
+CREATE TABLE t_left (s struct<x int, y int>) AS VALUES ({x: 1, y: 2});
+CREATE TABLE t_right (s struct<y int, x int>) AS VALUES ({y: 3, x: 4});
 
 -- Dynamically constructs unified array schema
 SELECT [t_left.s, t_right.s] FROM t_left JOIN t_right;
@@ -123,8 +123,8 @@ CREATE TABLE t AS VALUES ({a: 1, b: 2}), ({b: 3, a: 4});
 When joining tables where the JOIN condition involves structs with different field orders:
 
 ```sql
-CREATE TABLE orders (customer struct(name varchar, id int));
-CREATE TABLE customers (info struct(id int, name varchar));
+CREATE TABLE orders (customer struct<name varchar, id int>);
+CREATE TABLE customers (info struct<id int, name varchar>);
 
 -- Join matches struct fields by name
 SELECT * FROM orders
@@ -175,8 +175,8 @@ When structs have different field sets, missing fields are filled with **NULL** 
 -- Unified schema includes all fields: a, b, c
 
 SELECT [
-  CAST({a: 1, b: 2} AS STRUCT(a INT, b INT, c INT)),
-  CAST({b: 3, c: 4} AS STRUCT(a INT, b INT, c INT))
+  CAST({a: 1, b: 2} AS STRUCT<a INT, b INT, c INT>),
+  CAST({b: 3, c: 4} AS STRUCT<a INT, b INT, c INT>)
 ];
 
 -- Result:
@@ -203,8 +203,8 @@ To handle partial field overlap, explicitly cast structs to a unified schema:
 
 ```sql
 SELECT [
-  CAST(t_left.s AS STRUCT(x INT, y INT, z INT)),
-  CAST(t_right.s AS STRUCT(x INT, y INT, z INT))
+  CAST(t_left.s AS STRUCT<x INT, y INT, z INT>),
+  CAST(t_right.s AS STRUCT<x INT, y INT, z INT>)
 ] FROM t_left JOIN t_right;
 ```
 
@@ -263,7 +263,7 @@ If you need precise control over struct field order and types, use explicit `CAS
 
 ```sql
 -- Guarantee specific field order and types
-SELECT CAST({b: 3, a: 4} AS STRUCT(a INT, b INT));
+SELECT CAST({b: 3, a: 4} AS STRUCT<a INT, b INT>);
 -- Result: {"a": 4, "b": 3}
 ```
 
@@ -275,7 +275,7 @@ When joining or combining structs, define target schemas explicitly:
 
 ```sql
 -- Good: explicit schema definition
-SELECT CAST(data AS STRUCT(id INT, name VARCHAR, active BOOLEAN))
+SELECT CAST(data AS STRUCT<id INT, name VARCHAR, active BOOLEAN>)
 FROM external_source;
 ```
 
@@ -308,8 +308,8 @@ When combining structs with partial field overlap, use explicit CAST:
 ```sql
 -- Instead of relying on implicit coercion
 SELECT [
-  CAST(left_struct AS STRUCT(x INT, y INT, z INT)),
-  CAST(right_struct AS STRUCT(x INT, y INT, z INT))
+  CAST(left_struct AS STRUCT<x INT, y INT, z INT>),
+  CAST(right_struct AS STRUCT<x INT, y INT, z INT>)
 ];
 ```
 
@@ -338,8 +338,8 @@ FROM customers c;
 ```sql
 -- Use explicit CAST to handle missing fields
 SELECT [
-  CAST(struct1 AS STRUCT(a INT, b INT, c INT)),
-  CAST(struct2 AS STRUCT(a INT, b INT, c INT))
+  CAST(struct1 AS STRUCT<a INT, b INT, c INT>),
+  CAST(struct2 AS STRUCT<a INT, b INT, c INT>)
 ];
 ```
 
