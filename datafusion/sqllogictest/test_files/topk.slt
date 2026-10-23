@@ -396,3 +396,181 @@ set datafusion.explain.physical_plan_only = false
 
 statement ok
 set datafusion.execution.batch_size = 8192
+
+#####################################
+## TopK with nested sort keys containing NULL elements
+## The dynamic filter must not drop rows that sort before the current
+## threshold (nested comparisons do not follow the sort's NULL ordering).
+#####################################
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+create table nested_list (l int[]) as values (make_array(1, NULL));
+
+statement ok
+insert into nested_list values (make_array(1, 2));
+
+query ?
+select l from nested_list order by l;
+----
+[1, 2]
+[1, NULL]
+
+query ?
+select l from nested_list order by l limit 1;
+----
+[1, 2]
+
+query ?
+select l from nested_list order by l nulls first limit 1;
+----
+[1, NULL]
+
+statement ok
+create table nested_list_desc (l int[]) as values (make_array(1, 2));
+
+statement ok
+insert into nested_list_desc values (make_array(1, NULL));
+
+query ?
+select l from nested_list_desc order by l desc limit 1;
+----
+[1, NULL]
+
+statement ok
+create table nested_struct as
+select named_struct('a', 1, 'b', NULL::int) x
+union all
+select named_struct('a', 1, 'b', 2);
+
+query ?
+select x from nested_struct order by x limit 1;
+----
+{a: 1, b: 2}
+
+# Nested key after a flat key: rows tied on the flat prefix must be kept
+statement ok
+create table nested_second (a int, l int[]) as values (1, make_array(1, NULL));
+
+statement ok
+insert into nested_second values (2, make_array(0)), (1, make_array(1, 2));
+
+query I?
+select a, l from nested_second order by a, l limit 1;
+----
+1 [1, 2]
+
+# Nested key followed by a flat key
+statement ok
+create table nested_first (l int[], b int) as values (make_array(1, NULL), 1);
+
+statement ok
+insert into nested_first values (make_array(1, 2), 5);
+
+query ?I
+select l, b from nested_first order by l, b limit 1;
+----
+[1, 2] 5
+
+# NULL flat-prefix threshold followed by a better nested value tied on that NULL.
+# The first batch fills the heap with a NULL `a`, so rows with a NULL `a` must
+# still pass the filter under both NULLS FIRST and NULLS LAST.
+statement ok
+create table nested_null_prefix (a int, l int[]) as values
+  (NULL, make_array(1, NULL)),
+  (NULL, make_array(1, NULL));
+
+statement ok
+insert into nested_null_prefix values (NULL, make_array(1, 2)), (7, make_array(0));
+
+query I?
+select a, l from nested_null_prefix order by a nulls first, l nulls last;
+----
+NULL [1, 2]
+NULL [1, NULL]
+NULL [1, NULL]
+7 [0]
+
+query I?
+select a, l from nested_null_prefix order by a nulls first, l nulls last limit 2;
+----
+NULL [1, 2]
+NULL [1, NULL]
+
+query I?
+select a, l from nested_null_prefix order by a nulls last, l nulls last;
+----
+7 [0]
+NULL [1, 2]
+NULL [1, NULL]
+NULL [1, NULL]
+
+query I?
+select a, l from nested_null_prefix order by a nulls last, l nulls last limit 2;
+----
+7 [0]
+NULL [1, 2]
+
+# The threshold moves through [1, NULL], [1, 9] and [1, 8] across batches.
+statement ok
+create table nested_progress (l int[]) as values (make_array(1, NULL)), (make_array(1, 9));
+
+statement ok
+insert into nested_progress values (make_array(1, 8));
+
+statement ok
+insert into nested_progress values (make_array(1, 7));
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# Each insert stays a separate batch (partition_sizes=[3]) feeding the TopK
+query TT
+explain select l from nested_progress order by l asc nulls last limit 2;
+----
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[l@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: partitions=1, partition_sizes=[3]
+
+statement ok
+set datafusion.explain.physical_plan_only = false;
+
+query ?
+select l from nested_progress order by l asc nulls last;
+----
+[1, 7]
+[1, 8]
+[1, 9]
+[1, NULL]
+
+query ?
+select l from nested_progress order by l asc nulls last limit 2;
+----
+[1, 7]
+[1, 8]
+
+statement ok
+drop table nested_list;
+
+statement ok
+drop table nested_list_desc;
+
+statement ok
+drop table nested_struct;
+
+statement ok
+drop table nested_second;
+
+statement ok
+drop table nested_first;
+
+statement ok
+drop table nested_null_prefix;
+
+statement ok
+drop table nested_progress;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
