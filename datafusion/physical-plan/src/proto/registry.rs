@@ -122,9 +122,9 @@ type ExecutionPlanDecoder =
 /// decode. The name is scoped to `dyn ExecutionPlan`, so an expression or a
 /// data source may use the same name in the same registry.
 ///
-/// The application that owns the session builds the registry and attaches it
-/// once with `SessionConfig::with_extension`; a library exposes a function
-/// that fills a registry it is handed. See [`ProtoDecoderRegistry`].
+/// Add to the session's registry with `SessionConfig::update_extension`, so
+/// that the decoders other libraries added stay registered. See
+/// [`ProtoDecoderRegistry`].
 ///
 /// A built-in plan is not an extension and cannot be registered:
 ///
@@ -207,6 +207,40 @@ mod tests {
     use crate::proto_test_util::registry_test_plan::{
         OtherRegisteredExec, RegisteredExec, RegisteredExecClone, UnnamedExec,
     };
+
+    /// Two libraries add to one session's registry, and neither discards the
+    /// other's decoders. A config cloned before the second one adds is not
+    /// changed.
+    #[test]
+    fn libraries_add_to_one_session_registry() -> Result<()> {
+        use datafusion_execution::config::SessionConfig;
+
+        let mut config = SessionConfig::new();
+        config.update_extension(|registry: &mut ProtoDecoderRegistry| {
+            register_execution_plan::<RegisteredExec>(registry)
+        })?;
+        let before = config.clone();
+        config.update_extension(|registry: &mut ProtoDecoderRegistry| {
+            register_execution_plan::<OtherRegisteredExec>(registry)
+        })?;
+
+        let names = |config: &SessionConfig| {
+            let registry = config.get_extension::<ProtoDecoderRegistry>().unwrap();
+            let mut names: Vec<String> = execution_plan_names(&registry)
+                .map(str::to_string)
+                .collect();
+            names.sort();
+            names
+        };
+        let mut expected = vec![
+            RegisteredExec::NAME.to_string(),
+            OtherRegisteredExec::NAME.to_string(),
+        ];
+        expected.sort();
+        assert_eq!(names(&config), expected);
+        assert_eq!(names(&before), [RegisteredExec::NAME]);
+        Ok(())
+    }
 
     #[test]
     fn register_is_idempotent_for_the_same_type() -> Result<()> {

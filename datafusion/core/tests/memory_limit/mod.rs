@@ -493,6 +493,10 @@ async fn topk_reserves_shared_input_buffers_once() -> Result<()> {
 /// the buffered slices are sorted: coalesced into runs for a single sort key,
 /// and one run per slice otherwise. The in-place threshold is below the slice
 /// size, so that coalescing keeps the slices as separate runs.
+///
+/// Skipped under `force_hash_collisions`, where the 100,000 colliding group
+/// keys make the aggregate quadratic and the test take many minutes.
+#[cfg(not(feature = "force_hash_collisions"))]
 #[tokio::test]
 async fn sort_after_group_by_reserves_shared_output_once() {
     for order_by in ["group_key", "s desc, group_key"] {

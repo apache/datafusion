@@ -20,7 +20,7 @@
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::cast::{as_float64_array, as_uint64_array};
-use datafusion_common::{HashMap, Result, ScalarValue};
+use datafusion_common::{HashMap, Result, ScalarValue, not_impl_err};
 use datafusion_doc::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -469,7 +469,13 @@ impl AggregateUDFImpl for Regr {
         self.regr_type != RegrType::Count
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!(
+                "{}(DISTINCT) aggregations are not available",
+                self.func_name.to_uppercase()
+            );
+        }
         Ok(Box::new(RegrAccumulator::try_new(&self.regr_type)?))
     }
 
@@ -516,9 +522,9 @@ impl AggregateUDFImpl for Regr {
     }
 
     fn distinct_handling(&self) -> DistinctHandling {
-        // Duplicate-sensitive, but the accumulator does not read
-        // `is_distinct` and today silently returns the non-distinct answer.
-        // The tag records the intent; enforcement is a follow-up change.
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`. It only
+        // works when the planner removes it first (`SingleDistinctToGroupBy`
+        // for a single distinct field, e.g. `regr_slope(DISTINCT x, x)`).
         DistinctHandling::Unsupported
     }
 }

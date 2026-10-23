@@ -44,8 +44,8 @@ use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
     check_aggregate_and_window_nesting, check_no_window_functions,
     enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
-    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    merge_schema, passthrough_field_index, split_conjunction,
+    find_out_reference_exprs, get_unnested_list_field, grouping_set_expr_count,
+    grouping_set_to_exprlist, merge_schema, passthrough_field_index, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -111,7 +111,8 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Visiting and Rewriting `LogicalPlan`s
 ///
 /// Using the [`tree_node`] API, you can recursively walk all nodes in a
-/// `LogicalPlan`. For example, to find all column references in a plan:
+/// `LogicalPlan`. [`TreeNode::apply`] visits a node before its inputs. For
+/// example, to find table names and expressions in a plan:
 ///
 /// ```
 /// # use std::collections::HashSet;
@@ -134,17 +135,22 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 ///  .project(vec![col("name"), col("salary")])?
 ///  .build()?;
 ///
-/// // use apply to walk the plan and collect all expressions
+/// // use apply to walk the plan and collect table names and expressions
+/// let mut table_names = HashSet::new();
 /// let mut expressions = HashSet::new();
 /// plan.apply(|node| {
+///   if let LogicalPlan::TableScan(scan) = node {
+///     table_names.insert(scan.table_name.to_string());
+///   }
 ///   // collect all expressions in the plan
 ///   node.apply_expressions(|expr| {
 ///    expressions.insert(expr.clone());
 ///    Ok(TreeNodeRecursion::Continue) // control walk of expressions
 ///   })?;
 ///   Ok(TreeNodeRecursion::Continue) // control walk of plan nodes
-/// }).unwrap();
+/// })?;
 ///
+/// assert_eq!(table_names, HashSet::from(["employee".to_string()]));
 /// // we found the expression in projection and filter
 /// assert_eq!(expressions.len(), 3);
 /// println!("Found expressions: {:?}", expressions);
@@ -159,6 +165,11 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Ok(())
 /// # }
 /// ```
+///
+/// [`TreeNode::apply`] and [`TreeNode::rewrite`] traverse plan inputs, but do
+/// not visit subqueries embedded in expressions. Use
+/// [`LogicalPlan::apply_with_subqueries`] and
+/// [`LogicalPlan::rewrite_with_subqueries`] to include those subqueries.
 ///
 /// You can also rewrite plans using the [`tree_node`] API. For example, to
 /// replace the filter predicate in a plan:
@@ -211,6 +222,56 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Ok(())
 /// # }
 /// ```
+///
+/// For more control over traversal, implement a [`TreeNodeRewriter`] and use
+/// [`TreeNode::rewrite`]. Its `f_down` method runs before rewriting inputs and
+/// `f_up` runs after them. The following example removes Filter nodes in
+/// `f_up` by replacing each with its already rewritten input. This changes
+/// query semantics and is only an illustration of the API.
+///
+/// ```
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_expr::{col, lit, LogicalPlan, table_scan};
+/// # use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+/// # use datafusion_common::Result;
+/// # fn main() -> Result<()> {
+/// # let schema = Schema::new(vec![
+/// #     Field::new("name", DataType::Utf8, false),
+/// #     Field::new("salary", DataType::Int32, false),
+/// # ]);
+/// let plan = table_scan(Some("employee"), &schema, None)?
+///     .filter(col("salary").gt(lit(1000)))?
+///     .project(vec![col("name"), col("salary")])?
+///     .build()?;
+///
+/// struct RemoveFilters;
+///
+/// impl TreeNodeRewriter for RemoveFilters {
+///     type Node = LogicalPlan;
+///
+///     fn f_up(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+///         match node {
+///             LogicalPlan::Filter(filter) => {
+///                 Ok(Transformed::yes(filter.input.as_ref().clone()))
+///             }
+///             _ => Ok(Transformed::no(node)),
+///         }
+///     }
+/// }
+///
+/// let rewritten = plan.rewrite(&mut RemoveFilters)?;
+/// assert!(rewritten.transformed);
+/// assert_eq!(rewritten.data.display_indent().to_string(),
+///     "Projection: employee.name, employee.salary\n  TableScan: employee");
+/// # Ok(())
+/// # }
+/// ```
+///
+/// See the [plan walking example] for a complete walkthrough, including
+/// collecting tables and filter predicates from subqueries.
+///
+/// [`TreeNodeRewriter`]: datafusion_common::tree_node::TreeNodeRewriter
+/// [plan walking example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/plan_walk.rs
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
@@ -5261,8 +5322,47 @@ impl Unnest {
 
         let metadata = input_schema.metadata().clone();
         let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
-        // We can use the existing functional dependencies:
-        let deps = input_schema.functional_dependencies().clone();
+        let list_indices: HashSet<_> =
+            list_columns.iter().map(|(index, _)| *index).collect();
+        // Struct unnest may replace one input column with several output columns,
+        // so remap dependencies using the input index of each output column.
+        let remap_indices = |indices: &[usize], exclude_lists: bool| {
+            dependency_indices
+                .iter()
+                .enumerate()
+                .filter_map(|(output_index, input_index)| {
+                    (indices.contains(input_index)
+                        && (!exclude_lists || !list_indices.contains(input_index)))
+                    .then_some(output_index)
+                })
+                .collect()
+        };
+        let deps = FunctionalDependencies::new(
+            input_schema
+                .functional_dependencies()
+                .iter()
+                // A list input no longer determines the rows produced by unnest.
+                // A struct input is also unsafe as a source: a null struct and
+                // a non-null struct with all-null fields have the same outputs.
+                .filter(|dep| {
+                    dep.source_indices.iter().all(|index| {
+                        !list_indices.contains(index) && !struct_columns.contains(index)
+                    })
+                })
+                .map(|dep| FunctionalDependence {
+                    source_indices: remap_indices(&dep.source_indices, false),
+                    // The unnested values are not determined by the input key.
+                    target_indices: remap_indices(&dep.target_indices, true),
+                    // One input row can produce multiple output rows.
+                    mode: if list_indices.is_empty() {
+                        dep.mode
+                    } else {
+                        Dependency::Multi
+                    },
+                    ..dep.clone()
+                })
+                .collect(),
+        );
         let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
 
         Ok(Unnest {
@@ -5299,13 +5399,15 @@ fn get_unnested_columns(
         | DataType::LargeList(_)
         | DataType::ListView(_)
         | DataType::LargeListView(_) => {
-            let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
-            let new_field = Arc::new(Field::new(
-                col_name, data_type,
-                // Unnesting may produce NULLs even if the list is not null.
-                // For example: unnest([1], []) -> 1, null
-                true,
-            ));
+            let field = get_unnested_list_field(data_type, depth)?;
+            let new_field = Arc::new(
+                field
+                    .clone()
+                    .with_name(col_name)
+                    // Unnesting may produce NULLs even if the list is not null.
+                    // For example: unnest([1], []) -> 1, null
+                    .with_nullable(true),
+            );
             let column = Column::from_name(col_name);
             // let column = Column::from((None, &new_field));
             qualified_columns.push((column, new_field));
@@ -5330,29 +5432,6 @@ fn get_unnested_columns(
     Ok(qualified_columns)
 }
 
-// Get the data type of a multi-dimensional type after unnesting it
-// with a given depth
-fn get_unnested_list_datatype_recursive(
-    data_type: &DataType,
-    depth: usize,
-) -> Result<DataType> {
-    match data_type {
-        DataType::List(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field)
-        | DataType::ListView(field)
-        | DataType::LargeListView(field) => {
-            if depth == 1 {
-                return Ok(field.data_type().clone());
-            }
-            return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
-        }
-        _ => {}
-    }
-
-    internal_err!("trying to unnest on invalid data type {data_type}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5368,7 +5447,7 @@ mod tests {
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
-    use datafusion_common::{Constraint, not_impl_err};
+    use datafusion_common::{Constraint, RecursionUnnestOption, not_impl_err};
     use insta::{assert_debug_snapshot, assert_snapshot};
     use std::hash::DefaultHasher;
 
@@ -5446,6 +5525,80 @@ mod tests {
             Field::new("state", DataType::Utf8, false),
             Field::new("salary", DataType::Int32, false),
         ])
+    }
+
+    #[test]
+    fn unnest_remaps_functional_dependencies() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new_struct(
+                "s",
+                vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
+                ],
+                true,
+            ),
+            Field::new("k", DataType::Int32, false),
+            Field::new_list(
+                "xs",
+                Field::new_list(
+                    "item",
+                    Field::new_list_field(DataType::Int32, true),
+                    true,
+                ),
+                true,
+            ),
+            Field::new("payload", DataType::Utf8, true),
+        ]));
+        let constraints = Constraints::new_unverified(vec![
+            Constraint::PrimaryKey(vec![1]),
+            Constraint::Unique(vec![0]),
+            Constraint::Unique(vec![2]),
+        ]);
+        let source: Arc<dyn TableSource> =
+            Arc::new(LogicalTableSource::new(schema).with_constraints(constraints));
+
+        // Expanding a struct preserves row count and remaps keys and targets,
+        // but a dependency sourced from the struct itself cannot be kept.
+        let struct_only = LogicalPlanBuilder::scan("t", Arc::clone(&source), None)?
+            .unnest_column("s")?
+            .build()?;
+        assert_eq!(
+            struct_only.schema().functional_dependencies(),
+            &FunctionalDependencies::new(vec![
+                FunctionalDependence::new(vec![2], vec![0, 1, 2, 3, 4], false)
+                    .with_mode(Dependency::Single),
+                FunctionalDependence::new(vec![3], vec![0, 1, 2, 3, 4], true)
+                    .with_mode(Dependency::Single),
+            ])
+        );
+
+        // The two recursion outputs both replace the same list input. Neither
+        // is determined by k, and a list-sourced dependency is no longer valid.
+        let options = UnnestOptions::default()
+            .with_recursions(RecursionUnnestOption {
+                input_column: "xs".into(),
+                output_column: "xs_depth_1".into(),
+                depth: 1,
+            })
+            .with_recursions(RecursionUnnestOption {
+                input_column: "xs".into(),
+                output_column: "xs_depth_2".into(),
+                depth: 2,
+            });
+        let plan = LogicalPlanBuilder::scan("t", source, None)?
+            .unnest_columns_with_options(vec!["s".into(), "xs".into()], options)?
+            .build()?;
+        assert_eq!(plan.schema().fields().len(), 6);
+        assert_eq!(
+            plan.schema().functional_dependencies(),
+            &FunctionalDependencies::new(vec![
+                FunctionalDependence::new(vec![2], vec![0, 1, 2, 5], false,)
+                    .with_mode(Dependency::Multi)
+            ])
+        );
+
+        Ok(())
     }
 
     #[test]
