@@ -4003,3 +4003,76 @@ DROP TABLE unnest_outer;
 
 statement ok
 DROP TABLE unnest_inner;
+
+# An aggregate over a correlated scalar aggregate stays correlated.
+# https://github.com/apache/datafusion/issues/26508
+statement ok
+CREATE TABLE nested_agg_outer(k INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE nested_agg_inner(id INT, v INT) AS VALUES (1, 10);
+
+# Errors rather than returning wrong rows. Expected `(1, 1), (2, 1)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT o.k, (SELECT count(*) FROM (SELECT max(i.v) FROM nested_agg_inner AS i WHERE i.id = o.k)) FROM nested_agg_outer AS o ORDER BY o.k;
+
+# Errors rather than returning wrong rows. Expected `(1, 1), (2, 0)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT o.k, (SELECT max(n) FROM (SELECT count(*) AS n FROM nested_agg_inner AS i WHERE i.id = o.k)) FROM nested_agg_outer AS o ORDER BY o.k;
+
+# IN. Errors rather than returning wrong rows. Expected `2`.
+query error Physical plan does not support logical expression InSubquery
+SELECT o.k FROM nested_agg_outer AS o WHERE 0 IN (SELECT max(n) FROM (SELECT count(*) AS n FROM nested_agg_inner AS i WHERE i.id = o.k)) ORDER BY o.k;
+
+# LATERAL. Errors rather than returning wrong rows. Expected `(1, 1), (2, 0)`.
+query error Physical plan does not support logical expression OuterReferenceColumn
+SELECT o.k, s.m FROM nested_agg_outer AS o LEFT JOIN LATERAL (SELECT max(n) AS m FROM (SELECT count(*) AS n FROM nested_agg_inner AS i WHERE i.id = o.k)) AS s ON true ORDER BY o.k;
+
+# EXISTS. Errors rather than returning wrong rows. Expected `1, 2`.
+query error Physical plan does not support logical expression Exists
+SELECT o.k FROM nested_agg_outer AS o WHERE EXISTS (SELECT max(n) FROM (SELECT count(*) AS n FROM nested_agg_inner AS i WHERE i.id = o.k)) ORDER BY o.k;
+
+# A projection between the aggregates. Errors rather than returning wrong rows. Expected `(1, 2), (2, 1)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT o.k, (SELECT max(n2) FROM (SELECT n + 1 AS n2 FROM (SELECT count(*) AS n FROM nested_agg_inner AS i WHERE i.id = o.k))) FROM nested_agg_outer AS o ORDER BY o.k;
+
+# A filter between the aggregates. Errors rather than returning wrong rows.
+# Expected `(1, 1), (2, 1)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT o.k, (SELECT count(*) FROM (SELECT count(*) AS n FROM nested_agg_inner AS i WHERE i.id = o.k) WHERE n >= 0) FROM nested_agg_outer AS o ORDER BY o.k;
+
+# A GROUP BY-only aggregate over the scalar aggregate.
+# Errors rather than returning wrong rows. Expected `(1, 1), (2, 1)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT o.k, (SELECT count(*) FROM (SELECT n FROM (SELECT count(*) AS n FROM nested_agg_inner AS i WHERE i.id = o.k) GROUP BY n)) FROM nested_agg_outer AS o ORDER BY o.k;
+
+# A grouped aggregate over the scalar aggregate.
+# Errors rather than returning wrong rows. Expected `(1, 1), (2, 1)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT o.k, (SELECT max(c) FROM (SELECT n, count(*) AS c FROM (SELECT count(*) AS n FROM nested_agg_inner AS i WHERE i.id = o.k) GROUP BY n)) FROM nested_agg_outer AS o ORDER BY o.k;
+
+# Returned the right rows before, but is blocked too, since telling it apart
+# needs the outer aggregate evaluated on the inner one's empty input row.
+# Expected `(1, 10), (2, NULL)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT o.k, (SELECT max(m) FROM (SELECT max(i.v) AS m FROM nested_agg_inner AS i WHERE i.id = o.k)) FROM nested_agg_outer AS o ORDER BY o.k;
+
+# A projection over the scalar aggregate is still pulled up.
+query II
+SELECT o.k, (SELECT n + 1 FROM (SELECT count(*) AS n FROM nested_agg_inner AS i WHERE i.id = o.k)) FROM nested_agg_outer AS o ORDER BY o.k;
+----
+1 2
+2 1
+
+# An aggregate over a grouped aggregate is still pulled up.
+query II
+SELECT o.k, (SELECT max(c) FROM (SELECT i.id, count(*) AS c FROM nested_agg_inner AS i WHERE i.id = o.k GROUP BY i.id)) FROM nested_agg_outer AS o ORDER BY o.k;
+----
+1 1
+2 NULL
+
+statement ok
+DROP TABLE nested_agg_outer;
+
+statement ok
+DROP TABLE nested_agg_inner;
