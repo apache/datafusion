@@ -68,6 +68,14 @@ pub struct SubstrFunc {
     aliases: Vec<String>,
 }
 
+/// Whether `key_type` can index one dictionary value per row of any batch.
+fn is_wide_key(key_type: &DataType) -> bool {
+    matches!(
+        key_type,
+        DataType::Int32 | DataType::UInt32 | DataType::Int64 | DataType::UInt64
+    )
+}
+
 impl Default for SubstrFunc {
     fn default() -> Self {
         Self::new()
@@ -116,10 +124,25 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        Ok(match &arg_types[0] {
+            DataType::Dictionary(key_type, value_type) if !is_wide_key(key_type) => {
+                value_type.as_ref().clone()
+            }
+            other => other.clone(),
+        })
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if let DataType::Dictionary(key_type, value_type) = args.args[0].data_type()
+            && !is_wide_key(&key_type)
+        {
+            // Per-row start/length can produce more distinct values than a
+            // narrow key type can index, so decode instead.
+            let mut args = args.args;
+            args[0] = args[0].cast_to(&value_type, None)?;
+            return make_scalar_function(substr, vec![])(&args);
+        }
+
         if let ColumnarValue::Array(array) = &args.args[0]
             && matches!(array.data_type(), DataType::Dictionary(_, _))
             && args.args[1..]
