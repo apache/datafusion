@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::PhysicalOptimizerRule;
+use crate::row_bound::RowBound;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -12,13 +13,11 @@ use datafusion_physical_expr::window::{
     StandardWindowFunctionExpr, WindowExpr,
 };
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use std::cmp;
 use std::sync::Arc;
 
 /// This rule inspects [`ExecutionPlan`]'s attempting to find fetch limits that were not pushed
@@ -192,24 +191,16 @@ fn apply_limit(
     };
     let fetch = match node.fetch() {
         None => fetch,
-        Some(existing) => cmp::min(existing, fetch),
+        Some(existing) => existing.min(fetch),
     };
     Some(Transformed::complete(node.with_fetch(Some(fetch)).unwrap()))
 }
 
 fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
-    if let Some(limit) = node.downcast_ref::<GlobalLimitExec>() {
-        ctx.reset_limit(
-            limit
-                .fetch()
-                .map(|fetch| fetch.saturating_add(limit.skip())),
-        );
-        return true;
-    }
     // In distributed execution, GlobalLimitExec becomes LocalLimitExec
     // per partition. Handle it the same way (LocalLimitExec has no skip).
-    if let Some(limit) = node.downcast_ref::<LocalLimitExec>() {
-        ctx.reset_limit(Some(limit.fetch()));
+    if let Some(limit) = RowBound::of_limit_node(node) {
+        ctx.reset_limit(limit.input_rows());
         return true;
     }
     if let Some(limit) = node.downcast_ref::<SortPreservingMergeExec>() {
@@ -271,6 +262,7 @@ mod tests {
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use datafusion_physical_plan::InputOrderMode;
     use datafusion_physical_plan::displayable;
+    use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
     use datafusion_physical_plan::windows::{
         BoundedWindowAggExec, create_udwf_window_expr,
