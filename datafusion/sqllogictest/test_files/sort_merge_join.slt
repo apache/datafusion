@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -970,6 +970,64 @@ WHERE t1_sorted.data < 0
 )
 ----
 100
+
+# Regression test for #26001: outer SMJ with a join filter must not fail
+# when the NULL-padded side has NOT NULL columns. target_partitions = 2
+# is needed to reproduce; with 1 partition the bug does not trigger.
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE TABLE a (k INT NOT NULL, v INT NOT NULL) AS VALUES (1, 10), (2, 20), (3, 30);
+
+statement ok
+CREATE TABLE b (k INT NOT NULL, w INT NOT NULL) AS VALUES (1, 100), (3, 300);
+
+statement ok
+CREATE TABLE c (k INT NOT NULL, w INT NOT NULL) AS VALUES (1, 100), (2, 200), (3, 300);
+
+query IIII
+SELECT * FROM a LEFT JOIN b ON a.k = b.k AND a.v < b.w ORDER BY a.k
+----
+1 10 1 100
+2 20 NULL NULL
+3 30 3 300
+
+query IIII
+SELECT * FROM a FULL JOIN b ON a.k = b.k AND a.v < b.w ORDER BY a.k
+----
+1 10 1 100
+2 20 NULL NULL
+3 30 3 300
+
+query IIII
+SELECT * FROM b RIGHT JOIN c ON b.k = c.k AND b.w <= c.w ORDER BY c.k
+----
+1 100 1 100
+NULL NULL 2 200
+3 300 3 300
+
+# NULL-padded rows reach the filter; their zero-valued slots must not
+# cause divide-by-zero errors
+query IIII
+SELECT * FROM a LEFT JOIN b ON a.k = b.k AND a.v / b.w < 1 ORDER BY a.k
+----
+1 10 1 100
+2 20 NULL NULL
+3 30 3 300
+
+statement ok
+DROP TABLE a;
+
+statement ok
+DROP TABLE b;
+
+statement ok
+DROP TABLE c;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
 
 # Config reset
 statement ok

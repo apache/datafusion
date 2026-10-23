@@ -184,7 +184,7 @@ impl<K: Eq + Hash + Clone, V> LruQueue<K, V> {
                     n_strong.lock().prev = Some(Weak::clone(p));
                     p_strong.lock().next = Some(Weak::clone(n));
                 }
-            };
+            }
             Some(old_value)
         } else {
             None

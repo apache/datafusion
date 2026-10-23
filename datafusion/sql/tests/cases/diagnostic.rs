@@ -150,7 +150,7 @@ fn get_spans(query: &'static str) -> HashMap<String, Span> {
     let mut stack: Vec<(String, usize)> = vec![];
     for c in re.captures_iter(query) {
         let m = c.get(0).unwrap();
-        let tags = c.get(1).unwrap().as_str().split("+").collect::<Vec<_>>();
+        let tags = c.get(1).unwrap().as_str().split('+').collect::<Vec<_>>();
 
         for tag in tags {
             if stack.last().map(|(top_tag, _)| top_tag.as_str()) == Some(tag) {
@@ -705,6 +705,89 @@ fn test_nested_window_function() -> Result<()> {
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"Window function calls cannot be nested");
+    assert_eq!(diag.span, Some(spans["a"]));
+    Ok(())
+}
+
+#[test]
+fn test_window_function_in_where() -> Result<()> {
+    // https://github.com/apache/datafusion/issues/4610
+    //
+    // The span is taken from the SQL text and covers the window function call.
+    // sqlparser's span for a function call ends at its last argument, so the
+    // `) OVER ()` part is not included.
+    let query = "SELECT id FROM person WHERE /*a*/sum(age/*a*/) OVER () > 0";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls are not allowed in WHERE");
+    assert_eq!(diag.span, Some(spans["a"]));
+    assert_snapshot!(
+        diag.helps[0].message,
+        @"Move the condition that uses this window function to a QUALIFY clause, which is evaluated after window functions are computed"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_window_function_in_where_after_subquery() -> Result<()> {
+    // A window function inside a subquery is legal and must not be the one the
+    // span points at
+    let query = "SELECT id FROM person WHERE id IN (SELECT id FROM person QUALIFY sum(age) OVER () > 0) AND /*a*/sum(age/*a*/) OVER () > 0";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls are not allowed in WHERE");
+    assert_eq!(diag.span, Some(spans["a"]));
+    Ok(())
+}
+
+#[test]
+fn test_window_function_in_having() -> Result<()> {
+    // https://github.com/apache/datafusion/issues/4610
+    let query = "SELECT first_name FROM person GROUP BY first_name HAVING /*a*/sum(sum(age/*a*/)) OVER () > 0";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls are not allowed in HAVING");
+    assert_eq!(diag.span, Some(spans["a"]));
+    Ok(())
+}
+
+#[test]
+fn test_window_function_in_join_on() -> Result<()> {
+    let query = "SELECT p.id FROM person p JOIN person q ON p.id = q.id AND /*a*/sum(p.age/*a*/) OVER () > 0";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls are not allowed in JOIN ON");
+    assert_eq!(diag.span, Some(spans["a"]));
+    assert_snapshot!(
+        diag.helps[0].message,
+        @"Compute the window function in a subquery and join on its result"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_window_function_in_group_by() -> Result<()> {
+    let query =
+        "SELECT first_name FROM person GROUP BY first_name, /*a*/sum(age/*a*/) OVER ()";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls are not allowed in GROUP BY");
+    assert_eq!(diag.span, Some(spans["a"]));
+    assert_snapshot!(
+        diag.helps[0].message,
+        @"Compute the window function in a subquery and group by its result"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_window_function_alias_in_having() -> Result<()> {
+    // An alias of a window function is resolved before the check; the span
+    // points at the alias
+    let query = "SELECT first_name, sum(sum(age)) OVER () AS total FROM person GROUP BY first_name HAVING /*a*/total/*a*/ > 0";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls are not allowed in HAVING");
     assert_eq!(diag.span, Some(spans["a"]));
     Ok(())
 }

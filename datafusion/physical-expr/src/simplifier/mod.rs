@@ -94,12 +94,18 @@ impl<'a> PhysicalExprSimplifier<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ScalarFunctionExpr;
     use crate::expressions::{
         BinaryExpr, CastExpr, Literal, NotExpr, TryCastExpr, col, in_list, lit,
     };
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::Operator;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::{
+        Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    };
+    use datafusion_expr_common::columnar_value::ColumnarValue;
+    use datafusion_functions::regex::regexp_like;
 
     fn test_schema() -> Schema {
         Schema::new(vec![
@@ -513,6 +519,101 @@ mod tests {
         let result = simplifier.simplify(expr).unwrap();
         let literal = as_literal(&result);
         assert_eq!(literal.value(), &ScalarValue::Boolean(Some(false)));
+    }
+
+    #[test]
+    fn test_constant_regex_respects_planning_budget() {
+        let schema = Schema::empty();
+        let simplifier = PhysicalExprSimplifier::new(&schema);
+
+        let ordinary: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            lit("aaaaa"),
+            Operator::RegexMatch,
+            lit("^a+$"),
+        ));
+        let result = simplifier.simplify(ordinary).unwrap();
+        assert_eq!(
+            as_literal(&result).value(),
+            &ScalarValue::Boolean(Some(true))
+        );
+
+        // This pattern is valid under the runtime limit, but is deliberately
+        // too large for constant evaluation during physical simplification.
+        let pattern = "a{5}{5}{5}{5}{5}{5}";
+        let binary: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            lit("aaaaa"),
+            Operator::RegexMatch,
+            lit(pattern),
+        ));
+        let result = simplifier.simplify(Arc::clone(&binary)).unwrap();
+        assert_eq!(&result, &binary);
+
+        // A regexp_like call with non-operator flags exercises the physical
+        // scalar-UDF path used after literal substitution.
+        let function = Arc::new(
+            ScalarFunctionExpr::try_new(
+                regexp_like(),
+                vec![lit("aaaaa"), lit(pattern), lit("m")],
+                &schema,
+                Arc::new(ConfigOptions::default()),
+            )
+            .unwrap(),
+        ) as Arc<dyn PhysicalExpr>;
+        let result = simplifier.simplify(Arc::clone(&function)).unwrap();
+        assert_eq!(&result, &function);
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct PanickingConstHook {
+            signature: Signature,
+        }
+
+        impl ScalarUDFImpl for PanickingConstHook {
+            fn name(&self) -> &str {
+                "panicking_const_hook"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Boolean)
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                panic!("non-constant UDF must not be evaluated during planning")
+            }
+
+            fn should_evaluate_const(&self, _args: &[&ScalarValue]) -> bool {
+                panic!("constant-evaluation hook must only inspect literal arguments")
+            }
+        }
+
+        // Non-constant expressions must skip the UDF hook entirely. In
+        // particular, regexp_like(column, pattern) must not compile its
+        // pattern just to discover that the expression cannot be folded.
+        let input_schema = test_schema();
+        let non_constant = Arc::new(
+            ScalarFunctionExpr::try_new(
+                Arc::new(ScalarUDF::new_from_impl(PanickingConstHook {
+                    signature: Signature::exact(
+                        vec![DataType::Utf8, DataType::Utf8],
+                        Volatility::Immutable,
+                    ),
+                })),
+                vec![col("c3", &input_schema).unwrap(), lit(pattern)],
+                &input_schema,
+                Arc::new(ConfigOptions::default()),
+            )
+            .unwrap(),
+        ) as Arc<dyn PhysicalExpr>;
+        let result = PhysicalExprSimplifier::new(&input_schema)
+            .simplify(Arc::clone(&non_constant))
+            .unwrap();
+        assert_eq!(&result, &non_constant);
     }
 
     #[test]

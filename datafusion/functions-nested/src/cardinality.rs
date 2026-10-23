@@ -18,9 +18,8 @@
 //! [`ScalarUDFImpl`] definitions for cardinality function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{
-    Array, ArrayRef, GenericListArray, MapArray, OffsetSizeTrait, UInt64Array,
-};
+use arrow::array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt64Array};
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{
     DataType,
     DataType::{
@@ -129,7 +128,10 @@ fn cardinality_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         Map(_, _) => {
             let map_array = as_map_array(array)?;
-            generic_map_cardinality(map_array)
+            Ok(cardinality_from_offsets(
+                map_array.offsets(),
+                map_array.nulls(),
+            ))
         }
         arg_type => {
             exec_err!("cardinality does not support type {arg_type}")
@@ -137,17 +139,23 @@ fn cardinality_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn generic_map_cardinality(array: &MapArray) -> Result<ArrayRef> {
-    let result: UInt64Array = array
-        .iter()
-        .map(|opt_arr| opt_arr.map(|arr| arr.len() as u64))
-        .collect();
-    Ok(Arc::new(result))
+fn cardinality_from_offsets<O: OffsetSizeTrait>(
+    offsets: &OffsetBuffer<O>,
+    nulls: Option<&NullBuffer>,
+) -> ArrayRef {
+    let values = offsets.lengths().map(|len| len as u64).collect::<Vec<_>>();
+    Arc::new(UInt64Array::new(values.into(), nulls.cloned()))
 }
 
 fn generic_list_cardinality<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
 ) -> Result<ArrayRef> {
+    // Nested lists require recursive counting; for all other lists, we can
+    // compute the cardinality from offsets, which is much faster.
+    if !array.values().data_type().is_list() {
+        return Ok(cardinality_from_offsets(array.offsets(), array.nulls()));
+    }
+
     let result = array
         .iter()
         .map(|arr| match arr {
@@ -197,4 +205,71 @@ where
             datafusion_common::exec_datafusion_err!("cardinality overflowed u64")
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Int32Array, MapArray, StructArray};
+    use arrow::datatypes::Field;
+
+    fn check_slices(array: &dyn Array) -> Result<()> {
+        let expected = UInt64Array::from(vec![Some(1), Some(2), Some(0), None]);
+        // Slices retain nonzero offsets into the values and validity buffers.
+        for (offset, len) in [(0, 4), (1, 3), (2, 0)] {
+            let result = cardinality_inner(&[array.slice(offset, len)])?;
+            assert_eq!(result.as_ref(), &expected.slice(offset, len));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn cardinality_flat_list_offsets() -> Result<()> {
+        fn check<O: OffsetSizeTrait>() -> Result<()> {
+            let values = Arc::new(Int32Array::from(vec![
+                Some(1),
+                None,
+                Some(3),
+                Some(4),
+                Some(5),
+            ]));
+            let array = GenericListArray::<O>::new(
+                Arc::new(Field::new_list_field(DataType::Int32, true)),
+                OffsetBuffer::from_lengths([1, 2, 0, 2]),
+                values,
+                Some(NullBuffer::from(vec![true, true, true, false])),
+            );
+            check_slices(&array)
+        }
+        check::<i32>()?;
+        check::<i64>()
+    }
+
+    #[test]
+    fn cardinality_map_offsets() -> Result<()> {
+        let entries = StructArray::from(vec![
+            (
+                Arc::new(Field::new("key", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("value", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(3),
+                    Some(4),
+                    Some(5),
+                ])) as ArrayRef,
+            ),
+        ]);
+        let array = MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::from_lengths([1, 2, 0, 2]),
+            entries,
+            Some(NullBuffer::from(vec![true, true, true, false])),
+            false,
+        );
+        check_slices(&array)
+    }
 }

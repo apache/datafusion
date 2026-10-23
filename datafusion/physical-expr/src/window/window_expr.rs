@@ -254,7 +254,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                         published: false,
                     },
                 );
-            };
+            }
             let window_state = window_agg_state
                 .get_mut(partition_row)
                 .ok_or_else(|| exec_datafusion_err!("Cannot find state"))?;
@@ -350,7 +350,8 @@ pub trait AggregateWindowExpr: WindowExpr {
 
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
-        let mut row_wise_results: Vec<ScalarValue> = vec![];
+        let mut row_wise_results: Vec<ScalarValue> =
+            Vec::with_capacity(length.saturating_sub(idx));
         let is_causal = self.get_window_frame().is_causal();
         while idx < length {
             // Start search from the last_range. This squeezes searched range.
@@ -435,7 +436,7 @@ pub(crate) fn is_end_bound_safe(
     if sort_exprs.is_empty() {
         // Early return if no sort expressions are present:
         return Ok(false);
-    };
+    }
 
     match window_frame_ctx {
         WindowFrameContext::Rows(window_frame) => {
@@ -506,15 +507,10 @@ fn is_end_bound_safe_for_range(
     idx: usize,
 ) -> Result<bool> {
     match end_bound {
-        WindowFrameBound::Preceding(value) => {
-            let zero = ScalarValue::new_zero(&value.data_type())?;
-            if value.eq(&zero) {
-                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
-            } else {
-                Ok(true)
-            }
-        }
-        WindowFrameBound::CurrentRow => {
+        // A frame ending in `N PRECEDING` can only reach the end of the buffer
+        // when the current row's frame ends at its last peer, as for a NULL or
+        // NaN ORDER BY value, so it is safe once a row past its peers arrives.
+        WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow => {
             is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
         }
         WindowFrameBound::Following(delta) => {

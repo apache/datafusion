@@ -18,7 +18,7 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
-    DFSchema, DFSchemaRef, TableReference, exec_err, not_impl_err,
+    Column, DFSchema, DFSchemaRef, TableReference, exec_err, not_impl_err,
     substrait_datafusion_err, substrait_err,
 };
 use datafusion::logical_expr::expr::Sort;
@@ -424,6 +424,12 @@ impl NameTracker {
         }
     }
 
+    pub(super) fn reserve_schema(&mut self, schema: &DFSchema) {
+        for (qualifier, field) in schema.iter() {
+            self.insert(&Expr::Column(Column::from((qualifier, field))));
+        }
+    }
+
     /// Check if the expression would cause a conflict either in:
     /// 1. validate_unique_names (duplicate schema_name)
     /// 2. DFSchema::check_names (ambiguous reference)
@@ -505,7 +511,7 @@ pub async fn from_substrait_sorts(
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Vec<Sort>> {
-    let mut sorts: Vec<Sort> = vec![];
+    let mut sorts: Vec<Sort> = Vec::with_capacity(substrait_sorts.len());
     for s in substrait_sorts {
         let expr = consumer
             .consume_expression(s.expr.as_ref().unwrap(), input_schema)

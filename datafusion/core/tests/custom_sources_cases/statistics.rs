@@ -285,6 +285,128 @@ async fn sql_filter() -> Result<()> {
     Ok(())
 }
 
+fn string_filter_ctx(
+    data_type: DataType,
+    distinct_count: Precision<usize>,
+) -> Result<SessionContext> {
+    init_ctx(
+        Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(200),
+                distinct_count,
+                ..ColumnStatistics::new_unknown()
+            }],
+        },
+        Schema::new(vec![Field::new("c1", data_type, true)]),
+    )
+}
+
+async fn string_filter_rows(
+    ctx: &SessionContext,
+    predicate: &str,
+) -> Result<Precision<usize>> {
+    let plan = ctx
+        .sql(&format!("SELECT * FROM stats_table WHERE {predicate}"))
+        .await?
+        .create_physical_plan()
+        .await?;
+    Ok(StatisticsContext::new()
+        .compute(plan.as_ref(), &StatisticsArgs::new())?
+        .num_rows)
+}
+
+#[tokio::test]
+async fn sql_string_filter_selectivity() -> Result<()> {
+    // There are 800 non-null rows and 20 distinct strings. Equality estimates
+    // 40 matches, and negated predicates exclude nulls as well as matches.
+    // LIKE estimates distinguish unanchored patterns from patterns anchored
+    // at one or both ends; escaped wildcards are literal characters.
+    let cases = [
+        ("c1 = 'foo'", 40),
+        ("'foo' = c1", 40),
+        ("c1 != 'foo'", 760),
+        ("'foo' != c1", 760),
+        ("c1 LIKE 'foo'", 40),
+        ("c1 NOT LIKE 'foo'", 760),
+        ("c1 LIKE '%foo%'", 160),
+        ("c1 NOT LIKE '%foo%'", 640),
+        ("c1 LIKE 'foo%'", 80),
+        ("c1 NOT LIKE 'foo%'", 720),
+        ("c1 LIKE '%foo'", 80),
+        ("c1 NOT LIKE '%foo'", 720),
+        ("c1 LIKE 'f_o'", 40),
+        ("c1 NOT LIKE 'f_o'", 760),
+        (r"c1 LIKE 'foo\%'", 40),
+        (r"c1 NOT LIKE 'foo\%'", 760),
+        (r"c1 LIKE 'foo\%%'", 80),
+        (r"c1 NOT LIKE 'foo\%%'", 720),
+        (r"c1 LIKE 'foo\'", 40),
+        (r"c1 NOT LIKE 'foo\'", 760),
+        (r"c1 LIKE '%foo\'", 80),
+        (r"c1 NOT LIKE '%foo\'", 720),
+        // Case-sensitive NDV cannot estimate a case-insensitive equality.
+        ("c1 ILIKE 'foo'", 160),
+        ("c1 NOT ILIKE 'foo'", 640),
+    ];
+    for data_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+        let ctx = string_filter_ctx(data_type.clone(), Precision::Exact(20))?;
+        for (predicate, expected_rows) in cases {
+            assert_eq!(
+                string_filter_rows(&ctx, predicate).await?,
+                Precision::Inexact(expected_rows),
+                "{data_type:?}: {predicate}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_string_filter_without_distinct_count() -> Result<()> {
+    let ctx = string_filter_ctx(DataType::Utf8View, Precision::Absent)?;
+    // Without NDV, use the configured default (20%) over non-null rows.
+    for (predicate, expected_rows) in [
+        ("c1 = 'foo'", 160),
+        ("c1 != 'foo'", 640),
+        ("c1 LIKE 'foo'", 160),
+        ("c1 NOT LIKE 'foo'", 640),
+    ] {
+        assert_eq!(
+            string_filter_rows(&ctx, predicate).await?,
+            Precision::Inexact(expected_rows),
+            "{predicate}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_string_filter_custom_selectivity() -> Result<()> {
+    let ctx = string_filter_ctx(DataType::Utf8View, Precision::Absent)?;
+    ctx.sql("SET datafusion.optimizer.default_filter_selectivity = 40")
+        .await?
+        .collect()
+        .await?;
+
+    for (predicate, expected_rows) in [
+        ("c1 = 'foo'", 320),
+        ("c1 != 'foo'", 480),
+        ("c1 LIKE '%foo%'", 320),
+        ("c1 NOT LIKE '%foo%'", 480),
+        ("c1 LIKE 'foo%'", 160),
+        ("c1 NOT LIKE 'foo%'", 640),
+    ] {
+        assert_eq!(
+            string_filter_rows(&ctx, predicate).await?,
+            Precision::Inexact(expected_rows),
+            "{predicate}"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn sql_limit() -> Result<()> {
     let (stats, schema) = fully_defined();
@@ -296,7 +418,10 @@ async fn sql_limit() -> Result<()> {
     // and cap NDV at the new row count
     let limit_stats = StatisticsContext::new()
         .compute(physical_plan.as_ref(), &StatisticsArgs::new())?;
-    assert_eq!(limit_stats.num_rows, Precision::Exact(5));
+    // Each of the table's two partitions is limited to 5 rows before the global
+    // limit. How the 13 rows are split between the partitions is unknown, so the
+    // local limits' output is only an estimate, and so is the global count.
+    assert_eq!(limit_stats.num_rows, Precision::Inexact(5));
     // c1: NDV=2 stays at 2 (already below limit of 5)
     assert_eq!(
         limit_stats.column_statistics[0].distinct_count,

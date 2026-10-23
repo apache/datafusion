@@ -30,7 +30,7 @@ use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
 };
-use datafusion_sql::sqlparser::ast::TableFactor;
+use datafusion_sql::sqlparser::ast::{TableAlias, TableFactor};
 use insta::assert_snapshot;
 
 // ============================================================================
@@ -51,29 +51,54 @@ use insta::assert_snapshot;
 /// example planners below.
 fn plan_static_values_table(
     relation: TableFactor,
+    context: &dyn RelationPlannerContext,
     table_name: &str,
     column_name: &str,
     values: Vec<ScalarValue>,
 ) -> Result<RelationPlanning> {
-    match relation {
+    let alias = match &relation {
         TableFactor::Table { name, alias, .. }
             if name.to_string().eq_ignore_ascii_case(table_name) =>
         {
-            let rows = values
-                .into_iter()
-                .map(|v| vec![Expr::Literal(v, None)])
-                .collect::<Vec<_>>();
-
-            let plan = LogicalPlanBuilder::values(rows)?
-                .project(vec![col("column1").alias(column_name)])?
-                .build()?;
-
-            Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
-                plan, alias,
-            ))))
+            alias.clone()
         }
-        other => Ok(RelationPlanning::Original(Box::new(other))),
+        _ => return Ok(RelationPlanning::Original(Box::new(relation))),
+    };
+
+    if let TableFactor::Table {
+        name, args: None, ..
+    } = &relation
+    {
+        let table_ref = context.object_name_to_table_reference(name.clone())?;
+
+        // RelationPlanner extensions run before DataFusion resolves CTEs. A
+        // name-based planner should defer when a CTE with that name is visible,
+        // so SQL's normal lexical CTE precedence is preserved.
+        if context.get_cte(&table_ref).is_some() {
+            return Ok(RelationPlanning::Original(Box::new(relation)));
+        }
     }
+
+    plan_static_values(alias, column_name, values)
+}
+
+fn plan_static_values(
+    alias: Option<TableAlias>,
+    column_name: &str,
+    values: Vec<ScalarValue>,
+) -> Result<RelationPlanning> {
+    let rows = values
+        .into_iter()
+        .map(|v| vec![Expr::Literal(v, None)])
+        .collect::<Vec<_>>();
+
+    let plan = LogicalPlanBuilder::values(rows)?
+        .project(vec![col("column1").alias(column_name)])?
+        .build()?;
+
+    Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+        plan, alias,
+    ))))
 }
 
 /// Example planner that provides a virtual `numbers` table with values
@@ -85,10 +110,11 @@ impl RelationPlanner for NumbersPlanner {
     fn plan_relation(
         &self,
         relation: TableFactor,
-        _context: &mut dyn RelationPlannerContext,
+        context: &mut dyn RelationPlannerContext,
     ) -> Result<RelationPlanning> {
         plan_static_values_table(
             relation,
+            context,
             "numbers",
             "number",
             vec![
@@ -96,6 +122,28 @@ impl RelationPlanner for NumbersPlanner {
                 ScalarValue::Int64(Some(2)),
                 ScalarValue::Int64(Some(3)),
             ],
+        )
+    }
+}
+
+/// Example planner for a qualified virtual relation. This is kept separate
+/// from `NumbersPlanner` so CTE tests can verify that extension lookup matches
+/// DataFusion's existing qualified-name resolution.
+#[derive(Debug)]
+struct QualifiedNumbersPlanner;
+
+impl RelationPlanner for QualifiedNumbersPlanner {
+    fn plan_relation(
+        &self,
+        relation: TableFactor,
+        context: &mut dyn RelationPlannerContext,
+    ) -> Result<RelationPlanning> {
+        plan_static_values_table(
+            relation,
+            context,
+            "foo.bar",
+            "number",
+            vec![ScalarValue::Int64(Some(7))],
         )
     }
 }
@@ -109,10 +157,11 @@ impl RelationPlanner for ColorsPlanner {
     fn plan_relation(
         &self,
         relation: TableFactor,
-        _context: &mut dyn RelationPlannerContext,
+        context: &mut dyn RelationPlannerContext,
     ) -> Result<RelationPlanning> {
         plan_static_values_table(
             relation,
+            context,
             "colors",
             "color",
             vec![
@@ -133,14 +182,37 @@ impl RelationPlanner for AlternativeNumbersPlanner {
     fn plan_relation(
         &self,
         relation: TableFactor,
-        _context: &mut dyn RelationPlannerContext,
+        context: &mut dyn RelationPlannerContext,
     ) -> Result<RelationPlanning> {
         plan_static_values_table(
             relation,
+            context,
             "numbers",
             "number",
             vec![ScalarValue::Int64(Some(100)), ScalarValue::Int64(Some(200))],
         )
+    }
+}
+
+/// Example planner with a deliberately reserved `numbers` name. Unlike the
+/// ordinary name-based planners above, it intentionally does not defer to CTEs.
+#[derive(Debug)]
+struct ReservedNumbersPlanner;
+
+impl RelationPlanner for ReservedNumbersPlanner {
+    fn plan_relation(
+        &self,
+        relation: TableFactor,
+        _context: &mut dyn RelationPlannerContext,
+    ) -> Result<RelationPlanning> {
+        match relation {
+            TableFactor::Table { name, alias, .. }
+                if name.to_string().eq_ignore_ascii_case("numbers") =>
+            {
+                plan_static_values(alias, "number", vec![ScalarValue::Int64(Some(999))])
+            }
+            other => Ok(RelationPlanning::Original(Box::new(other))),
+        }
     }
 }
 
@@ -354,6 +426,145 @@ mod tests {
         | 2      |
         | 3      |
         +--------+
+        ");
+    }
+
+    // A name-based relation planner can defer to a visible CTE, preserving the
+    // same shadowing behavior as a catalog table with that name.
+    #[tokio::test]
+    async fn cte_takes_precedence_over_virtual_table() {
+        let ctx = ctx_with_numbers();
+
+        let result = execute_sql_to_string(
+            &ctx,
+            "WITH numbers AS (SELECT 42 AS number) SELECT * FROM numbers",
+        )
+        .await;
+
+        assert_snapshot!(result, @r"
+        +--------+
+        | number |
+        +--------+
+        | 42     |
+        +--------+
+        ");
+    }
+
+    // A derived query inherits CTEs from its outer query, so a name-based
+    // relation planner still defers to the visible CTE in the nested scope.
+    #[tokio::test]
+    async fn derived_query_inherits_outer_cte() {
+        let ctx = ctx_with_numbers();
+
+        let result = execute_sql_to_string(
+            &ctx,
+            "WITH numbers AS (SELECT 42 AS number) \
+             SELECT * FROM (SELECT * FROM numbers) nested",
+        )
+        .await;
+
+        assert_snapshot!(result, @r"
+        +--------+
+        | number |
+        +--------+
+        | 42     |
+        +--------+
+        ");
+    }
+
+    // Deferring a visible CTE continues through the planner chain. A later
+    // planner with a deliberately reserved name can still intercept it.
+    #[tokio::test]
+    async fn cte_defer_still_allows_reserved_planner() {
+        let ctx = SessionContext::new()
+            .with_planner(ReservedNumbersPlanner)
+            .with_planner(NumbersPlanner);
+
+        let result = execute_sql_to_string(
+            &ctx,
+            "WITH numbers AS (SELECT 42 AS number) SELECT * FROM numbers",
+        )
+        .await;
+
+        assert_snapshot!(result, @r"
+        +--------+
+        | number |
+        +--------+
+        | 999    |
+        +--------+
+        ");
+    }
+
+    // The extension lookup follows DataFusion's existing name matching. Both
+    // the extension and the default planner therefore resolve the same CTE for
+    // a quoted dotted name and a qualified reference with the same rendering.
+    #[tokio::test]
+    async fn cte_lookup_matches_default_qualified_name_resolution() {
+        let ctx = SessionContext::new().with_planner(QualifiedNumbersPlanner);
+
+        let result = execute_sql_to_string(
+            &ctx,
+            "WITH \"foo.bar\" AS (SELECT 42 AS number) SELECT * FROM foo.bar",
+        )
+        .await;
+
+        assert_snapshot!(result, @r"
+        +--------+
+        | number |
+        +--------+
+        | 42     |
+        +--------+
+        ");
+    }
+
+    // A CTE shadows an ordinary table reference, not a same-named table
+    // function call with arguments.
+    #[tokio::test]
+    async fn cte_does_not_shadow_same_named_table_function() {
+        let ctx = ctx_with_numbers();
+
+        let result = execute_sql_to_string(
+            &ctx,
+            "WITH numbers AS (SELECT 42 AS number) SELECT * FROM numbers(1)",
+        )
+        .await;
+
+        assert_snapshot!(result, @r"
+        +--------+
+        | number |
+        +--------+
+        | 1      |
+        | 2      |
+        | 3      |
+        +--------+
+        ");
+    }
+
+    // CTE visibility follows the query's lexical scope: the nested CTE wins
+    // inside the derived table but does not hide the outer virtual relation.
+    #[tokio::test]
+    async fn cte_visibility_is_scoped_to_nested_query() {
+        let ctx = ctx_with_numbers();
+
+        let result = execute_sql_to_string(
+            &ctx,
+            "SELECT 'cte' AS source, number \
+             FROM (WITH numbers AS (SELECT 42 AS number) SELECT * FROM numbers) nested \
+             UNION ALL \
+             SELECT 'virtual' AS source, number FROM numbers \
+             ORDER BY source, number",
+        )
+        .await;
+
+        assert_snapshot!(result, @r"
+        +---------+--------+
+        | source  | number |
+        +---------+--------+
+        | cte     | 42     |
+        | virtual | 1      |
+        | virtual | 2      |
+        | virtual | 3      |
+        +---------+--------+
         ");
     }
 

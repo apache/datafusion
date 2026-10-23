@@ -42,7 +42,7 @@ pub mod memory;
 pub mod morsel;
 pub mod projection;
 /// Protobuf conversions for [`FileRange`], [`PartitionedFile`] and
-/// [`FileGroup`](crate::file_groups::FileGroup), gated on the `proto` feature.
+/// [`FileGroup`], gated on the `proto` feature.
 #[cfg(feature = "proto")]
 mod proto;
 pub mod schema_adapter;
@@ -61,7 +61,7 @@ pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use arrow::datatypes::SchemaRef;
 use chrono::TimeZone;
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{ColumnStatistics, Result, TableReference};
 use datafusion_common::{ScalarValue, Statistics};
 use datafusion_physical_expr::LexOrdering;
@@ -88,9 +88,11 @@ pub type FileExtensions = datafusion_common::extensions::Extensions;
 pub type PartitionedFileStream =
     Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
 
-/// Only scan a subset of Row Groups from the Parquet file whose data "midpoint"
-/// lies within the [start, end) byte offsets. This option can be used to scan non-overlapping
-/// sections of a Parquet file in parallel.
+/// A `[start, end)` byte range of a file. Non-overlapping ranges can be scanned
+/// in parallel. For Parquet, [`RowGroupRangeAssignment`] picks the row groups a
+/// range reads.
+///
+/// [`RowGroupRangeAssignment`]: datafusion_common::parquet_config::RowGroupRangeAssignment
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct FileRange {
     /// Range start
@@ -413,8 +415,6 @@ impl From<ObjectMeta> for PartitionedFile {
 
 /// Generates test files with min-max statistics in different overlap patterns.
 ///
-/// Used by tests and benchmarks.
-///
 /// # Overlap Factors
 ///
 /// The `overlap_factor` parameter controls how much the value ranges in generated test files overlap:
@@ -450,6 +450,13 @@ impl From<ObjectMeta> for PartitionedFile {
 /// File 2: [40, 140]
 /// File 3: [60, 160]
 /// File 4: [80, 180]
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGroup> {
     let mut files = Vec::with_capacity(num_files);
     if num_files == 0 {
@@ -500,11 +507,22 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
     vec![FileGroup::new(files)]
 }
 
-// Helper function to verify that files within each group maintain sort order
-/// Used by tests and benchmarks
+/// Verifies that files within each group maintain sort order.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub fn verify_sort_integrity(file_groups: &[FileGroup]) -> bool {
     for group in file_groups {
-        let files = group.iter().collect::<Vec<_>>();
+        // Known-empty files contribute no rows and may not have min/max
+        // statistics, so they cannot violate the ordering.
+        let files = group
+            .iter()
+            .filter(|file| !file.statistics.as_deref().is_some_and(is_known_empty))
+            .collect::<Vec<_>>();
         for i in 1..files.len() {
             let prev_file = files[i - 1];
             let curr_file = files[i];

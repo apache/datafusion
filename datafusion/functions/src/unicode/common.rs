@@ -17,9 +17,9 @@
 
 //! Common utilities for implementing unicode functions
 
+use crate::strings::{MAX_INLINE_LEN, sub_view};
 use arrow::array::{
-    Array, ArrayRef, ByteView, GenericStringArray, Int64Array, OffsetSizeTrait,
-    StringViewArray, make_view,
+    Array, ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBuffer, ScalarBuffer};
@@ -126,21 +126,34 @@ pub(crate) enum StringCharLen {
 #[inline]
 fn left_right_byte_length(string: &str, n: i64) -> usize {
     let abs = n.unsigned_abs().min(usize::MAX as u64) as usize;
-    // For ASCII input every character is exactly one byte, so the byte offset of
-    // the n-th codepoint is just the (clamped) character count. This avoids the
-    // per-character `char_indices()` scan of the general path.
+    let bytes = string.as_bytes();
+    // ASCII bytes are never part of a multi-byte UTF-8 sequence, so if the
+    // `abs` bytes at the relevant end of the string are ASCII, they are exactly
+    // the `abs` characters at that end. Checking only those bytes is cheaper
+    // than either a `char_indices()` scan or checking the whole string.
     match n.cmp(&0) {
         Ordering::Equal => 0,
-        // `abs` chars trimmed from the end: keep the leading `len - abs`.
-        Ordering::Less if string.is_ascii() => string.len().saturating_sub(abs),
-        Ordering::Less => string
-            .char_indices()
-            .nth_back(abs - 1)
-            .map(|(index, _)| index)
-            .unwrap_or(0),
-        // First `abs` chars, but never past the end of the string.
-        Ordering::Greater if string.is_ascii() => abs.min(string.len()),
-        Ordering::Greater => byte_offset_of_char(string, abs),
+        // Byte offset of the `abs`-th character from the end.
+        Ordering::Less => {
+            let start = bytes.len().saturating_sub(abs);
+            if bytes[start..].is_ascii() {
+                start
+            } else {
+                string
+                    .char_indices()
+                    .nth_back(abs - 1)
+                    .map_or(0, |(index, _)| index)
+            }
+        }
+        // Byte offset of the `abs`-th character from the start.
+        Ordering::Greater => {
+            let end = abs.min(bytes.len());
+            if bytes[..end].is_ascii() {
+                end
+            } else {
+                byte_offset_of_char(string, abs)
+            }
+        }
     }
 }
 
@@ -204,26 +217,25 @@ fn general_left_right_view<F: LeftRightSlicer>(
             let n = n_array.value(idx);
 
             let range = F::slice(string, n);
-            let result_bytes = &string.as_bytes()[range.clone()];
-            if result_bytes.len() > 12 {
+            if range.len() > MAX_INLINE_LEN {
                 has_out_of_line = true;
             }
-
-            let byte_view = ByteView::from(views[idx]);
-            let new_offset = byte_view.offset + (range.start as u32);
-            make_view(result_bytes, byte_view.buffer_index, new_offset)
+            sub_view(views[idx], string.as_bytes(), range)
         })
         .collect::<Vec<u128>>();
 
     let views = ScalarBuffer::from(new_views);
     let data_buffers = if has_out_of_line {
-        string_view_array.data_buffers().to_vec()
+        Arc::clone(string_view_array.data_buffers())
     } else {
-        vec![]
+        Arc::from([])
     };
 
     // SAFETY:
-    // - Each view is produced by `make_view` with correct bytes and offset
+    // - Each view is produced by `sub_view` from the input view and a range
+    //   within the input string, as returned by `F::slice`
+    // - `F::slice` returns ranges that start and end on char boundaries (see
+    //   `left_right_byte_length`), so every result is valid UTF-8
     // - Out-of-line views reuse the original buffer index and adjusted offset
     unsafe {
         let array = StringViewArray::new_unchecked(views, data_buffers, new_nulls);

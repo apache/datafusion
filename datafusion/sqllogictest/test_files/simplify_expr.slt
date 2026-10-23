@@ -34,21 +34,17 @@ query TT
 explain select b from t where b ~ '.*'
 ----
 logical_plan
-01)Filter: t.b IS NOT NULL OR Boolean(NULL)
+01)Filter: t.b IS NOT NULL
 02)--TableScan: t projection=[b]
 physical_plan
-01)FilterExec: b@0 IS NOT NULL OR NULL
+01)FilterExec: b@0 IS NOT NULL
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select b from t where b !~ '.*'
 ----
-logical_plan
-01)Filter: t.b IS NULL AND Boolean(NULL)
-02)--TableScan: t projection=[b]
-physical_plan
-01)FilterExec: b@0 IS NULL AND NULL
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
 
 # `col ~ '.*'` is TRUE for any non-NULL string and NULL for a NULL input.
 # The `.*` -> IS NOT NULL simplification must preserve that NULL (returning
@@ -97,10 +93,10 @@ query TT
 explain select * from t where a = a;
 ----
 logical_plan
-01)Filter: t.a IS NOT NULL OR Boolean(NULL)
+01)Filter: t.a IS NOT NULL
 02)--TableScan: t projection=[a, b]
 physical_plan
-01)FilterExec: a@0 IS NOT NULL OR NULL
+01)FilterExec: a@0 IS NOT NULL
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
@@ -164,6 +160,60 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[column1@0 = 1 as opt1, column1@0 = 2 AND column1@0 != 2 as noopt1, column1@0 = 4 as opt2, column1@0 != 5 AND column1@0 = 5 as noopt2]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Dedup commutative AND/OR operands in join conditions
+# (canonicalization is disabled for joins, so `A = B` vs `B = A` must be
+# recognized directly). See https://github.com/apache/datafusion/issues/14943
+
+statement ok
+create table t1(a int) as values (1), (2);
+
+statement ok
+create table t2(b int) as values (1), (3);
+
+# `t1.a = t2.b OR t2.b = t1.a` simplifies to `t1.a = t2.b`, allowing a
+# HashJoin instead of a NestedLoopJoin
+query TT
+explain select * from t1 join t2 on t1.a = t2.b or t2.b = t1.a;
+----
+logical_plan
+01)Inner Join: t1.a = t2.b
+02)--TableScan: t1 projection=[a]
+03)--TableScan: t2 projection=[b]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, b@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+select * from t1 join t2 on t1.a = t2.b or t2.b = t1.a;
+----
+1 1
+
+# swapped commutative operands (`t1.a + t2.b` vs `t2.b + t1.a`) dedup within
+# a non-equi join filter
+query TT
+explain select * from t1 join t2 on t1.a > t2.b and (t1.a + t2.b > 1 or t2.b + t1.a > 1);
+----
+logical_plan
+01)Inner Join:  Filter: t1.a > t2.b AND t1.a + t2.b > Int32(1)
+02)--TableScan: t1 projection=[a]
+03)--TableScan: t2 projection=[b]
+physical_plan
+01)NestedLoopJoinExec: join_type=Inner, filter=a@0 > b@1 AND a@0 + b@1 > 1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+select * from t1 join t2 on t1.a > t2.b and (t1.a + t2.b > 1 or t2.b + t1.a > 1);
+----
+2 1
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t2;
 
 # Identity Date cast in a comparison predicate.
 # `cast(d AS date)` where `d` is already Date32 is an identity cast and should
@@ -449,3 +499,22 @@ select id from date_unwrap where cast(d64 as date) = DATE '1970-01-01' order by 
 
 statement ok
 drop table date_unwrap;
+
+# IN-list and array_has simplifications must preserve SQL NULL semantics.
+query BBB
+SELECT
+  i IN (1) AND i IN (2),
+  i NOT IN (1) OR i NOT IN (2),
+  array_has([i, 1], 2)
+FROM (VALUES (NULL::INT)) AS t(i);
+----
+NULL NULL false
+
+# Nullable IN-list items also prevent set-algebra rewrites.
+query BB
+SELECT
+  i IN (n, 1) AND i IN (2),
+  i NOT IN (n, 1) OR i NOT IN (2)
+FROM (VALUES (2, NULL::INT)) AS t(i, n);
+----
+NULL NULL

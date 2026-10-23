@@ -1,0 +1,17 @@
+# RANK top-2 with heavy ties: 10 distinct ORDER BY values, so a whole partition
+# slice ties at rank 1 and every tied row survives `rnk <= 2`. The tied set, not
+# the top-K bound, dominates the work.
+#
+# The cast is load-bearing. `v2` is Float64, so `v2 % 10` is float modulo and
+# stays near-unique — it produces no ties whatsoever. Truncating to an integer
+# first is what actually collapses the domain to 10 values.
+
+subgroup window_sorted
+
+template sql_benchmarks/h2o/window_sorted.benchmark.template
+QPAD=09
+FN=RANK
+PK_MOD=1000
+OB_EXPR=CAST(v2 AS BIGINT) % 10
+OB_BOUND=count(DISTINCT ob) = 10
+NAME=window_sorted_q09_rank_1k_partitions_heavy_ties

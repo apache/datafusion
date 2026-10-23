@@ -26,12 +26,11 @@ use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::EmitTo;
+use datafusion_expr::{EmitTo, GroupSelection};
 use half::f16;
 use hashbrown::hash_table::HashTable;
 #[cfg(not(feature = "force_hash_collisions"))]
 use std::hash::BuildHasher;
-use std::mem::size_of;
 use std::sync::Arc;
 
 /// A trait to allow hashing of floating point numbers
@@ -178,7 +177,7 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<(usize, u64)>() + self.values.allocated_size()
+        size_of::<Self>() + self.map.allocation_size() + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -239,11 +238,43 @@ where
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
+    fn values_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        selection.validate_num_groups(self.values.len())?;
+        let values: Vec<T::Native> =
+            selection.iter().map(|index| self.values[index]).collect();
+        let nulls = if let Some(null_group) = self.null_group {
+            let mut nulls = NullBufferBuilder::new(values.len());
+            for index in selection.iter() {
+                if index == null_group {
+                    nulls.append_null();
+                } else {
+                    nulls.append_non_null();
+                }
+            }
+            nulls.finish()
+        } else {
+            None
+        };
+        let array = PrimitiveArray::<T>::new(values.into(), nulls)
+            .with_data_type(self.data_type.clone());
+        Ok(vec![Arc::new(array)])
+    }
+
+    fn supports_values_preserving(&self) -> bool {
+        true
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         self.values.clear();
         self.values.shrink_to(num_rows);
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+
+        // Reset the null group index
+        self.null_group = None;
     }
 }
 
@@ -254,6 +285,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::DataType;
     use datafusion_expr::EmitTo;
+    use std::mem::size_of;
     use std::sync::Arc;
 
     /// Mirror of the `EmitTo::take_needed` regression test, applied to the
@@ -290,6 +322,117 @@ mod tests {
             gv.values.capacity(),
             capacity_before,
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_hash_table_allocation_accounting() {
+        let mut group_values = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+        let self_size = size_of::<GroupValuesPrimitive<Int32Type>>();
+
+        // 1. Initial state: the constructor calls HashTable::with_capacity(128),
+        //    so the map already has a nonzero retained allocation. Capture it
+        //    and verify that size() accounts for it correctly.
+        let initial_map_bytes = group_values.map.allocation_size();
+        assert!(group_values.map.capacity() >= 128);
+        assert!(initial_map_bytes > 0);
+        assert_eq!(
+            group_values.size(),
+            self_size + group_values.values.allocated_size() + initial_map_bytes,
+        );
+
+        // 2. Insert keys and observe table allocation growth
+        let num_distinct = 500_i32;
+        let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..num_distinct));
+        let mut groups = vec![];
+        group_values.intern(&[arr], &mut groups).unwrap();
+        assert_eq!(groups.len(), num_distinct as usize);
+
+        let table_bytes = group_values.map.allocation_size();
+        assert!(group_values.map.capacity() >= num_distinct as usize);
+        assert!(table_bytes > 0);
+
+        // Hashbrown's layout contains entry slots, control bytes, and trailing group bytes.
+        // It must strictly exceed the naive entry-only size
+        let entry_only_bytes = group_values.map.capacity() * size_of::<(usize, u64)>();
+        assert!(table_bytes > entry_only_bytes);
+
+        assert_eq!(
+            group_values.size(),
+            self_size + group_values.values.allocated_size() + table_bytes,
+        );
+
+        // 3. Partial emit (EmitTo::First)
+        let emit_count = 200;
+        let emitted = group_values.emit(EmitTo::First(emit_count)).unwrap();
+        assert_eq!(emitted[0].len(), emit_count);
+        assert_eq!(group_values.len(), (num_distinct as usize) - emit_count);
+
+        // Retained capacity is still charged until the table releases it
+        assert_eq!(group_values.map.allocation_size(), table_bytes);
+        assert_eq!(
+            group_values.size(),
+            self_size + group_values.values.allocated_size() + table_bytes,
+        );
+
+        // 4. Emit all (EmitTo::All)
+        let remaining_count = group_values.len();
+        let emitted_all = group_values.emit(EmitTo::All).unwrap();
+        assert_eq!(emitted_all[0].len(), remaining_count);
+        assert_eq!(group_values.len(), 0);
+
+        // Clear preserves table capacity
+        assert_eq!(group_values.map.allocation_size(), table_bytes);
+
+        // 5. clear_shrink: releases/shrinks map capacity
+        group_values.clear_shrink(16);
+        let shrunken_table_bytes = group_values.map.allocation_size();
+        assert!(shrunken_table_bytes < table_bytes);
+        assert_eq!(
+            group_values.size(),
+            self_size + group_values.values.allocated_size() + shrunken_table_bytes,
+        );
+
+        // 6. Reinsert new distinct values into the shrunken table
+        let new_arr: ArrayRef = Arc::new(Int32Array::from_iter_values(
+            num_distinct..(num_distinct * 2),
+        ));
+        group_values.intern(&[new_arr], &mut groups).unwrap();
+        assert_eq!(groups.len(), num_distinct as usize);
+        assert!(group_values.map.allocation_size() > shrunken_table_bytes);
+        assert_eq!(
+            group_values.size(),
+            self_size
+                + group_values.values.allocated_size()
+                + group_values.map.allocation_size(),
+        );
+    }
+
+    #[test]
+    fn clear_shrink_reset_null_group() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+
+        // Intern some values including a null
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+
+        assert_eq!(groups.len(), 3);
+
+        let null_group = groups[1];
+        assert_eq!(null_group, 1);
+
+        // Clear and shrink
+        gv.clear_shrink(0);
+
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+        assert_eq!(groups.len(), 1);
+
+        let new_null_group = groups[0];
+        assert_eq!(new_null_group, 0);
 
         Ok(())
     }

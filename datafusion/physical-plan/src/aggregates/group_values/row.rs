@@ -28,11 +28,10 @@ use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::normalize_float_zero;
-use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
-use datafusion_expr::EmitTo;
+use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_expr::{EmitTo, GroupSelection};
 use hashbrown::hash_table::HashTable;
 use log::debug;
-use std::mem::size_of;
 use std::sync::Arc;
 
 /// A [`GroupValues`] making use of [`Rows`]
@@ -60,9 +59,6 @@ pub struct GroupValuesRows {
     /// values: (hash, group_index)
     map: HashTable<(u64, usize)>,
 
-    /// The size of `map` in bytes
-    map_size: usize,
-
     /// The actual group by values, stored in arrow [`Row`] format.
     /// `group_values[i]` holds the group value for group_index `i`.
     ///
@@ -78,6 +74,9 @@ pub struct GroupValuesRows {
 
     /// reused buffer to store rows
     rows_buffer: Rows,
+
+    /// The initial `rows_buffer` size, used to determine if it should be recreated in `clear_shrink`.
+    initial_rows_buffer_size: usize,
 
     /// Random state for creating hashes
     random_state: RandomState,
@@ -98,21 +97,26 @@ impl GroupValuesRows {
 
         let map = HashTable::with_capacity(0);
 
-        let starting_rows_capacity = 1000;
-
-        let starting_data_capacity = 64 * starting_rows_capacity;
-        let rows_buffer =
-            row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
+        let rows_buffer = Self::new_rows_buffer(&row_converter);
+        let initial_rows_buffer_size = rows_buffer.size();
         Ok(Self {
             schema,
             row_converter,
             map,
-            map_size: 0,
             group_values: None,
             hashes_buffer: Default::default(),
             rows_buffer,
+            initial_rows_buffer_size,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
+    }
+
+    /// Create the reused `rows_buffer` with its initial capacities
+    fn new_rows_buffer(row_converter: &RowConverter) -> Rows {
+        let starting_rows_capacity = 1000;
+
+        let starting_data_capacity = 64 * starting_rows_capacity;
+        row_converter.empty_rows(starting_rows_capacity, starting_data_capacity)
     }
 }
 
@@ -168,10 +172,10 @@ impl GroupValues for GroupValuesRows {
                     group_values.push(group_rows.row(row));
 
                     // for hasher function, use precomputed hash value
-                    self.map.insert_accounted(
+                    self.map.insert_unique(
+                        target_hash,
                         (target_hash, group_idx),
                         |(hash, _group_index)| *hash,
-                        &mut self.map_size,
                     );
                     group_idx
                 }
@@ -185,11 +189,18 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn size(&self) -> usize {
-        let group_values_size = self.group_values.as_ref().map(|v| v.size()).unwrap_or(0);
-        self.row_converter.size()
+        let group_values_size = self
+            .group_values
+            .as_ref()
+            .map(|values| values.size() - size_of::<Rows>())
+            .unwrap_or_default();
+        // `size_of::<Self>()` already accounts for inline row descriptors.
+        // `HashTable::allocation_size` includes entries, control bytes, and group layout.
+        size_of::<Self>() + self.row_converter.size() - size_of::<RowConverter>()
             + group_values_size
-            + self.map_size
+            + self.map.allocation_size()
             + self.rows_buffer.size()
+            - size_of::<Rows>()
             + self.hashes_buffer.allocated_size()
     }
 
@@ -255,16 +266,53 @@ impl GroupValues for GroupValuesRows {
         Ok(output)
     }
 
+    fn values_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        let empty_rows;
+        let group_values = if let Some(group_values) = self.group_values.as_ref() {
+            group_values
+        } else {
+            empty_rows = self.row_converter.empty_rows(0, 0);
+            &empty_rows
+        };
+        selection.validate_num_groups(group_values.num_rows())?;
+        let rows = selection.iter().map(|index| group_values.row(index));
+        let mut output = self.row_converter.convert_rows(rows)?;
+
+        // TODO: Materialize dictionaries in group keys
+        // https://github.com/apache/datafusion/issues/7647
+        for (field, array) in self.schema.fields.iter().zip(&mut output) {
+            *array = encode_array_if_necessary(array, field.data_type())?;
+        }
+        Ok(output)
+    }
+
+    fn supports_values_preserving(&self) -> bool {
+        true
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
-        self.group_values = self.group_values.take().map(|mut rows| {
-            rows.clear();
-            rows
-        });
+        self.group_values = if num_rows == 0 {
+            None
+        } else {
+            self.group_values.take().map(|mut rows| {
+                // This only clear and do not shrink the capacity
+                rows.clear();
+                rows
+            })
+        };
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(num_rows);
+
+        if num_rows == 0 && self.rows_buffer.size() > self.initial_rows_buffer_size {
+            // `rows_buffer` only gets cleared between batches, so it keeps any
+            // capacity it grew to; recreate it to release that memory
+            self.rows_buffer = Self::new_rows_buffer(&self.row_converter);
+        }
     }
 }
 
@@ -293,10 +341,12 @@ pub(crate) fn encode_array_if_necessary(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(Arc::new(StructArray::try_new(
+            // A zero-field struct has no child to infer the length from.
+            Ok(Arc::new(StructArray::try_new_with_length(
                 expected_fields.clone(),
                 arrays,
                 struct_array.nulls().cloned(),
+                struct_array.len(),
             )?))
         }
         (DataType::List(expected_field), &DataType::List(_)) => {
@@ -410,5 +460,259 @@ pub(crate) fn encode_array_if_necessary(
         }
         (DataType::RunEndEncoded(_, _), _) => Ok(cast(array.as_ref(), expected)?),
         (_, _) => Ok(Arc::<dyn Array>::clone(array)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{AsArray, Int32Array, ListArray, StringArray};
+    use arrow::datatypes::{Field, Int32Type, Schema};
+    use std::mem::size_of;
+
+    fn expected_size(group_values: &GroupValuesRows) -> usize {
+        size_of::<GroupValuesRows>() + group_values.row_converter.size()
+            - size_of::<RowConverter>()
+            + group_values
+                .group_values
+                .as_ref()
+                .map(|values| values.size() - size_of::<Rows>())
+                .unwrap_or_default()
+            + group_values.map.allocation_size()
+            + group_values.rows_buffer.size()
+            - size_of::<Rows>()
+            + group_values.hashes_buffer.allocated_size()
+    }
+
+    fn int32_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::Int32,
+            true,
+        )]))
+    }
+
+    #[test]
+    fn size_retains_reusable_buffers_after_emit() -> Result<()> {
+        let mut group_values = GroupValuesRows::try_new(int32_schema())?;
+        let input: ArrayRef = Arc::new(Int32Array::from_iter_values(0..256));
+        group_values.intern(&[input], &mut vec![])?;
+
+        let rows_buffer_size = group_values.rows_buffer.size() - size_of::<Rows>();
+        let hashes_buffer_size = group_values.hashes_buffer.allocated_size();
+
+        let output = group_values.emit(EmitTo::First(1))?;
+        assert_eq!(output[0].len(), 1);
+        assert_eq!(group_values.len(), 255);
+        let size_after_emit = group_values.size();
+        assert_eq!(
+            group_values.rows_buffer.size() - size_of::<Rows>(),
+            rows_buffer_size
+        );
+        assert_eq!(
+            group_values.hashes_buffer.allocated_size(),
+            hashes_buffer_size
+        );
+
+        let input: ArrayRef = Arc::new(Int32Array::from_iter_values([256]));
+        group_values.intern(&[input], &mut vec![])?;
+        assert_eq!(group_values.len(), 256);
+        assert!(group_values.size() >= size_after_emit);
+        assert_eq!(
+            group_values.rows_buffer.size() - size_of::<Rows>(),
+            rows_buffer_size
+        );
+        assert_eq!(
+            group_values.hashes_buffer.allocated_size(),
+            hashes_buffer_size
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn preserving_nested_row_values() -> Result<()> {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::List(field),
+            true,
+        )]));
+        let mut group_values = GroupValuesRows::try_new(schema)?;
+        let input = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3)]),
+            Some(vec![Some(1), Some(2)]),
+        ])) as ArrayRef;
+        let mut groups = vec![];
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, vec![0, 1, 2, 0]);
+
+        let selection = GroupSelection::try_from_indices(&[2, 0, 1, 2], 3)?;
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(3)]),
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3)]),
+        ]);
+        for _ in 0..2 {
+            let actual = group_values.values_preserving(selection)?;
+            assert_eq!(actual[0].as_list::<i32>(), &expected);
+        }
+
+        let input = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(4)]),
+        ])) as ArrayRef;
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, vec![3]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_hash_table_allocation_accounting_multi_column() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let mut group_values = GroupValuesRows::try_new(schema)?;
+
+        // 1. Initial state: map is unallocated
+        assert_eq!(group_values.map.capacity(), 0);
+        assert_eq!(group_values.map.allocation_size(), 0);
+        assert_eq!(group_values.size(), expected_size(&group_values));
+
+        // 2. Insert multi-column keys and observe table allocation growth
+        let num_distinct = 500;
+        let col_a = Arc::new(Int32Array::from_iter_values(0..num_distinct)) as ArrayRef;
+        let col_b = Arc::new(StringArray::from_iter_values(
+            (0..num_distinct).map(|i| format!("key_string_{i}")),
+        )) as ArrayRef;
+
+        let mut groups = vec![];
+        group_values.intern(&[col_a, col_b], &mut groups)?;
+        assert_eq!(groups.len(), num_distinct as usize);
+
+        let table_bytes = group_values.map.allocation_size();
+        assert!(group_values.map.capacity() >= num_distinct as usize);
+        assert!(table_bytes > 0);
+
+        // Hashbrown's layout contains entry slots, control bytes, and trailing group bytes.
+        // It must strictly exceed the naive entry-only size: capacity * size_of::<(u64, usize)>().
+        let entry_only_bytes = group_values.map.capacity() * size_of::<(u64, usize)>();
+        assert!(
+            table_bytes > entry_only_bytes,
+            "allocation_size ({table_bytes}) must exceed entry-only capacity ({entry_only_bytes})"
+        );
+
+        // GroupValuesRows::size() should accurately account for the map's allocation_size
+        assert_eq!(group_values.size(), expected_size(&group_values));
+
+        // 3. Partial emit (EmitTo::First) - table retains entries and capacity
+        let emit_count = 200;
+        let emitted = group_values.emit(EmitTo::First(emit_count))?;
+        assert_eq!(emitted[0].len(), emit_count);
+        assert_eq!(group_values.len(), (num_distinct as usize) - emit_count);
+
+        // Retained capacity is still charged until the table releases it.
+        assert_eq!(group_values.map.allocation_size(), table_bytes);
+        assert_eq!(group_values.size(), expected_size(&group_values));
+
+        // 4. Emit all (EmitTo::All) - map is cleared but capacity remains allocated for reuse
+        let remaining_count = group_values.len();
+        let emitted_all = group_values.emit(EmitTo::All)?;
+        assert_eq!(emitted_all[0].len(), remaining_count);
+        assert_eq!(group_values.len(), 0);
+
+        // Clear preserves table capacity
+        assert_eq!(group_values.map.allocation_size(), table_bytes);
+
+        // 5. clear_shrink: releases/shrinks map capacity
+        group_values.clear_shrink(16);
+        let shrunken_table_bytes = group_values.map.allocation_size();
+        assert!(
+            shrunken_table_bytes < table_bytes,
+            "clear_shrink should shrink table from {table_bytes} to {shrunken_table_bytes}"
+        );
+        assert_eq!(group_values.size(), expected_size(&group_values));
+
+        // 6. Reinsert new distinct values into the shrunken table
+        let new_col_a =
+            Arc::new(Int32Array::from_iter_values(num_distinct..num_distinct * 2))
+                as ArrayRef;
+        let new_col_b = Arc::new(StringArray::from_iter_values(
+            (num_distinct..num_distinct * 2).map(|i| format!("key_string_{i}")),
+        )) as ArrayRef;
+        group_values.intern(&[new_col_a, new_col_b], &mut groups)?;
+        assert_eq!(groups.len(), num_distinct as usize);
+        assert!(group_values.map.allocation_size() > shrunken_table_bytes);
+        assert_eq!(group_values.size(), expected_size(&group_values));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_hash_table_allocation_accounting_nested_keys() -> Result<()> {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "nested",
+            DataType::List(field),
+            true,
+        )]));
+        let mut group_values = GroupValuesRows::try_new(schema)?;
+
+        assert_eq!(group_values.map.capacity(), 0);
+        assert_eq!(group_values.map.allocation_size(), 0);
+
+        let input = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+            (0..256).map(|i| Some(vec![Some(i), Some(i * 2)])),
+        )) as ArrayRef;
+        let mut groups = vec![];
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups.len(), 256);
+
+        let table_bytes = group_values.map.allocation_size();
+        assert!(table_bytes > 0);
+        assert_eq!(group_values.size(), expected_size(&group_values));
+
+        // Shrink to 0: table should completely deallocate
+        group_values.clear_shrink(0);
+        assert_eq!(group_values.map.capacity(), 0);
+        assert_eq!(group_values.map.allocation_size(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn clear_shrink_0_after_intern_should_return_to_original_size() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::List(field),
+            true,
+        )]));
+        let mut group_values = GroupValuesRows::try_new(schema).unwrap();
+        let initial_size = group_values.size();
+        let input = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3)]),
+            Some(vec![Some(1), Some(2)]),
+        ])) as ArrayRef;
+        let mut groups = vec![];
+        group_values.intern(&[input], &mut groups).unwrap();
+        assert_ne!(group_values.size(), initial_size, "should save some data");
+
+        // A large batch so any reused buffers grow as well
+        let input = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+            (0..10_000).map(|i| Some((0..20).map(move |j| Some(i * 20 + j)))),
+        )) as ArrayRef;
+        group_values.intern(&[input], &mut groups).unwrap();
+
+        group_values.clear_shrink(0);
+        assert_eq!(
+            group_values.size(),
+            initial_size,
+            "should release memory back to original size"
+        );
     }
 }

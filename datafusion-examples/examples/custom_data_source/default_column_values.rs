@@ -38,12 +38,12 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::{SessionConfig, lit};
-use datafusion_physical_expr_adapter::{
+use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
     replace_columns_with_literals,
 };
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::{SessionConfig, lit};
 use futures::StreamExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;

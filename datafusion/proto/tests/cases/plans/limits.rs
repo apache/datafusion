@@ -19,32 +19,22 @@
 //! execs, the coalescing execs, `BufferExec` and `CooperativeExec`.
 
 use super::{roundtrip_test, roundtrip_test_and_return};
-use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{
-    FileGroup, FileScanConfig, FileScanConfigBuilder, ParquetSource,
-};
-use datafusion::datasource::source::DataSourceExec;
-use datafusion::physical_expr::LexOrdering;
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_optimizer::limit_pushdown::LimitPushdown;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::buffer::BufferExec;
 #[expect(deprecated)]
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
-use datafusion::physical_plan::expressions::{PhysicalSortExpr, col};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
-use datafusion_common::config::ConfigOptions;
 use datafusion_proto::physical_plan::{
-    DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
 };
+use datafusion_proto::protobuf;
+use datafusion_proto::protobuf::PhysicalPlanNode;
 use std::sync::Arc;
 use std::vec;
 
@@ -74,108 +64,96 @@ fn roundtrip_global_skip_no_limit() -> Result<()> {
     )))
 }
 
-/// Sort key at index 1, so a decoder that misbinds column name vs index
-/// cannot pass.
-fn limit_test_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int64, false),
-        Field::new("b", DataType::Int64, false),
-    ]))
-}
-
-/// Non-default sort options, so a decode that falls back to defaults cannot
-/// pass.
-fn limit_required_ordering(schema: &Schema) -> Result<Option<LexOrdering>> {
-    Ok(LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("b", schema)?,
-        options: SortOptions {
-            descending: true,
-            nulls_first: false,
-        },
-    }]))
-}
-
+/// Plans written before 56.0.0 can carry a `required_ordering` on limit
+/// nodes. The decoder must accept them and ignore the field. The sort
+/// expression has no `expr`, so a decoder that still reads the field fails.
 #[test]
-fn roundtrip_limit_with_required_ordering() -> Result<()> {
-    let schema = limit_test_schema();
-    let required_ordering = limit_required_ordering(&schema)?;
+fn limit_decode_ignores_required_ordering() -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
+    let required_ordering = vec![protobuf::PhysicalSortExprNode {
+        expr: None,
+        asc: false,
+        nulls_first: true,
+    }];
+    let input = || Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
 
-    let mut global =
-        GlobalLimitExec::new(Arc::new(EmptyExec::new(Arc::clone(&schema))), 3, Some(25));
-    global.set_required_ordering(required_ordering.clone());
-    let decoded =
-        roundtrip_test_and_return(Arc::new(global), &ctx, &codec, &proto_converter)?;
+    let global: Arc<dyn ExecutionPlan> =
+        Arc::new(GlobalLimitExec::new(input(), 3, Some(25)));
+    let mut node = PhysicalPlanNode::try_from_physical_plan(global, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(limit)) =
+        &mut node.physical_plan_type
+    else {
+        panic!("expected GlobalLimitExecNode");
+    };
+    limit.required_ordering = required_ordering.clone();
+    let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
     let decoded = decoded
         .downcast_ref::<GlobalLimitExec>()
         .expect("expected GlobalLimitExec");
-    assert_eq!(decoded.required_ordering(), &required_ordering);
+    assert_eq!((decoded.skip(), decoded.fetch()), (3, Some(25)));
 
-    let mut local = LocalLimitExec::new(Arc::new(EmptyExec::new(schema)), 25);
-    local.set_required_ordering(required_ordering.clone());
-    let decoded =
-        roundtrip_test_and_return(Arc::new(local), &ctx, &codec, &proto_converter)?;
+    let local: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(input(), 25));
+    let mut node = PhysicalPlanNode::try_from_physical_plan(local, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::LocalLimit(limit)) =
+        &mut node.physical_plan_type
+    else {
+        panic!("expected LocalLimitExecNode");
+    };
+    limit.required_ordering = required_ordering;
+    let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
     let decoded = decoded
         .downcast_ref::<LocalLimitExec>()
         .expect("expected LocalLimitExec");
-    assert_eq!(decoded.required_ordering(), &required_ordering);
+    assert_eq!(decoded.fetch(), 25);
     Ok(())
 }
 
-/// A limit's `required_ordering` is the only record that an `ORDER BY ... LIMIT`
-/// whose sort node was optimized away is order-sensitive, so it must survive
-/// serde all the way into the scan's `preserve_order` flag.
+#[cfg(target_pointer_width = "64")]
 #[test]
-fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
-    let file_schema = limit_test_schema();
-    let make_scan = || {
-        let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
-        let scan_config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-                .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-                    "/path/to/file.parquet".to_string(),
-                    1024,
-                )])])
-                .build();
-        DataSourceExec::from_data_source(scan_config)
+fn local_limit_rejects_fetch_above_wire_range() {
+    let fetch = u32::MAX as usize + 1;
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+        fetch,
+    ));
+
+    let err =
+        PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
+            .unwrap_err();
+    assert_eq!(
+        err.strip_backtrace(),
+        format!(
+            "Error during planning: LocalLimitExec: fetch value {fetch} is out of range for the plan wire format"
+        )
+    );
+}
+
+#[cfg(target_pointer_width = "32")]
+#[test]
+fn global_limit_rejects_fetch_above_usize() -> Result<()> {
+    let codec = DefaultPhysicalExtensionCodec {};
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+        0,
+        Some(1),
+    ));
+    let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(limit)) =
+        &mut node.physical_plan_type
+    else {
+        panic!("expected GlobalLimitExecNode");
     };
-    let scan_after_limit_pushdown = |limit: GlobalLimitExec| -> Result<FileScanConfig> {
-        let ctx = SessionContext::new();
-        let codec = DefaultPhysicalExtensionCodec {};
-        let proto_converter = DefaultPhysicalProtoConverter {};
-        let decoded =
-            roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
+    limit.fetch = i64::from(u32::MAX) + 1;
 
-        // Child replacement must not erase the decoded ordering before pushdown.
-        let rebuilt = decoded.replace_children(
-            vec![make_scan()],
-            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-        )?;
-
-        let optimized =
-            LimitPushdown::new().optimize(rebuilt, &ConfigOptions::default())?;
-        let scan = optimized
-            .downcast_ref::<DataSourceExec>()
-            .expect("limit should be absorbed into the scan");
-        Ok(scan
-            .data_source()
-            .downcast_ref::<FileScanConfig>()
-            .expect("expected FileScanConfig")
-            .clone())
-    };
-
-    let mut limit = GlobalLimitExec::new(make_scan(), 0, Some(10));
-    limit.set_required_ordering(limit_required_ordering(&file_schema)?);
-    let scan_config = scan_after_limit_pushdown(limit)?;
-    assert_eq!(scan_config.limit, Some(10));
-    assert!(scan_config.preserve_order);
-
-    let scan_config =
-        scan_after_limit_pushdown(GlobalLimitExec::new(make_scan(), 0, Some(10)))?;
-    assert_eq!(scan_config.limit, Some(10));
-    assert!(!scan_config.preserve_order);
+    let ctx = SessionContext::new();
+    let err = node
+        .try_into_physical_plan(&ctx.task_ctx(), &codec)
+        .unwrap_err();
+    assert_eq!(
+        err.strip_backtrace(),
+        "Error during planning: GlobalLimitExec: fetch wire value 4294967296 is out of range for usize"
+    );
     Ok(())
 }
 
@@ -196,6 +174,23 @@ fn roundtrip_coalesce_batches_with_fetch() -> Result<()> {
         CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema)), 8096)
             .with_fetch(Some(10)),
     ))
+}
+
+#[test]
+#[expect(deprecated)]
+fn coalesce_batches_rejects_zero_batch_size_on_encode() {
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(CoalesceBatchesExec::new(
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+        0,
+    ));
+
+    let err =
+        PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
+            .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("CoalesceBatchesExec: target_batch_size must be greater than 0")
+    );
 }
 
 #[test]

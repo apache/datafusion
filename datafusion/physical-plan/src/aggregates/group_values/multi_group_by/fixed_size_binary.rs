@@ -27,6 +27,8 @@ use arrow::buffer::{Buffer, NullBuffer};
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, exec_datafusion_err};
+use datafusion_expr::GroupSelection;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// An implementation of [`GroupColumn`] for `FixedSizeBinary` values
@@ -139,7 +141,7 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -211,7 +213,7 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
     }
 
     fn size(&self) -> usize {
-        self.buffer.allocated_size() + self.nulls.allocated_size()
+        size_of::<Self>() + self.buffer.allocated_size() + self.nulls.allocated_size()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
@@ -223,6 +225,23 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
         } = *self;
 
         Self::build_array(byte_width, buffer, nulls.build(), len)
+    }
+
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.len)?;
+        let len = selection.len();
+        let mut values = Vec::with_capacity(len * self.byte_width);
+        let mut nulls = NullBufferBuilder::new(len);
+        for index in selection.iter() {
+            nulls.append(!self.nulls.is_null(index));
+            values.extend_from_slice(self.value(index));
+        }
+        Ok(Self::build_array(
+            self.byte_width,
+            values,
+            nulls.build(),
+            len,
+        ))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
@@ -242,6 +261,7 @@ mod tests {
 
     use crate::aggregates::group_values::multi_group_by::fixed_size_binary::FixedSizeBinaryGroupValueBuilder;
     use arrow::array::{ArrayRef, BooleanBufferBuilder, FixedSizeBinaryArray};
+    use datafusion_expr::GroupSelection;
 
     use super::GroupColumn;
 
@@ -276,7 +296,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &FixedSizeBinaryGroupValueBuilder,
+            |builder: &mut FixedSizeBinaryGroupValueBuilder,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -302,7 +322,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &FixedSizeBinaryGroupValueBuilder,
+            |builder: &mut FixedSizeBinaryGroupValueBuilder,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -322,7 +342,7 @@ mod tests {
     where
         A: FnMut(&mut FixedSizeBinaryGroupValueBuilder, &ArrayRef, &[usize]),
         E: FnMut(
-            &FixedSizeBinaryGroupValueBuilder,
+            &mut FixedSizeBinaryGroupValueBuilder,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -369,7 +389,7 @@ mod tests {
         // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1, 2, 3, 4, 5],
             &input_array,
             &[0, 1, 2, 3, 4, 5],
@@ -473,6 +493,33 @@ mod tests {
         let output = builder.take_n(2);
         assert_eq!(&output, &expected);
         assert_eq!(builder.len(), 0);
+    }
+
+    #[test]
+    fn test_fixed_size_binary_values_preserving() {
+        let mut builder = FixedSizeBinaryGroupValueBuilder::new(2);
+        let input = make_array(
+            vec![Some(b"aa".as_slice()), None, Some(b"bb".as_slice())],
+            2,
+        );
+        builder.vectorized_append(&input, &[0, 1, 2]).unwrap();
+
+        let output = builder
+            .values_preserving(
+                GroupSelection::try_from_indices(&[2, 0, 1, 2], 3).unwrap(),
+            )
+            .unwrap();
+        let expected = make_array(
+            vec![
+                Some(b"bb".as_slice()),
+                Some(b"aa".as_slice()),
+                None,
+                Some(b"bb".as_slice()),
+            ],
+            2,
+        );
+        assert_eq!(&output, &expected);
+        assert_eq!(builder.len(), 3);
     }
 
     #[test]

@@ -161,7 +161,7 @@ impl<T> Drop for DistributionSender<T> {
             // During the shutdown of a empty channel, both the sender and the receiver side will be dropped. However we
             // only want to decrement the "empty channels" counter once.
             //
-            // We are within a critical section here, so we we can safely assume that either the last sender or the
+            // We are within a critical section here, so we can safely assume that either the last sender or the
             // receiver (there's only one) will be dropped first.
             //
             // If the last sender is dropped first, `state.data` will still exists and the sender side decrements the
@@ -232,7 +232,7 @@ impl<T> Future for SendFuture<'_, T> {
                 this.gate.decr_empty_channels();
                 guard_channel_state.take_recv_wakers()
             } else {
-                Vec::with_capacity(0)
+                Vec::new()
             }
         };
 
@@ -316,10 +316,10 @@ impl<T> Future for RecvFuture<'_, T> {
                         if this.gate.empty_channels.load(Ordering::SeqCst) > 0 {
                             guard.take().unwrap_or_default()
                         } else {
-                            Vec::with_capacity(0)
+                            Vec::new()
                         }
                     } else {
-                        Vec::with_capacity(0)
+                        Vec::new()
                     };
 
                     drop(guard_channel_state);
@@ -439,7 +439,7 @@ impl Gate {
 
                 wake
             } else {
-                Vec::with_capacity(0)
+                Vec::new()
             }
         };
 

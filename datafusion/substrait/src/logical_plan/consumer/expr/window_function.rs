@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::aggregate_function::validate_aggregation_phase;
 use crate::logical_plan::consumer::{
     SubstraitConsumer, from_substrait_func_args, from_substrait_rex_vec,
     from_substrait_sorts, substrait_fun_name,
@@ -27,6 +28,7 @@ use datafusion::logical_expr::expr::WindowFunctionParams;
 use datafusion::logical_expr::{
     Expr, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, expr,
 };
+use substrait::proto::aggregate_function::AggregationInvocation;
 use substrait::proto::expression::WindowFunction;
 use substrait::proto::expression::window_function::{Bound, BoundsType};
 use substrait::proto::expression::{
@@ -38,6 +40,7 @@ pub async fn from_window_function(
     window: &WindowFunction,
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Expr> {
+    validate_aggregation_phase(window.phase)?;
     let Some(fn_signature) = consumer
         .get_extensions()
         .functions
@@ -84,8 +87,8 @@ pub async fn from_window_function(
     };
     let window_frame = datafusion::logical_expr::WindowFrame::new_bounds(
         bound_units,
-        from_substrait_bound(&window.lower_bound, true)?,
-        from_substrait_bound(&window.upper_bound, false)?,
+        from_substrait_bound(window.lower_bound.as_ref(), true)?,
+        from_substrait_bound(window.upper_bound.as_ref(), false)?,
     );
 
     window_frame.regularize_order_bys(&mut order_by)?;
@@ -98,6 +101,16 @@ pub async fn from_window_function(
     } else {
         from_substrait_func_args(consumer, &window.arguments, input_schema).await?
     };
+    let distinct =
+        match AggregationInvocation::try_from(window.invocation).map_err(|e| {
+            plan_datafusion_err!(
+                "Invalid window aggregation invocation {}: {e}",
+                window.invocation
+            )
+        })? {
+            AggregationInvocation::Unspecified | AggregationInvocation::All => false,
+            AggregationInvocation::Distinct => true,
+        };
 
     Ok(Expr::from(expr::WindowFunction {
         fun,
@@ -113,13 +126,13 @@ pub async fn from_window_function(
             window_frame,
             filter: None,
             null_treatment: None,
-            distinct: false,
+            distinct,
         },
     }))
 }
 
 fn from_substrait_bound(
-    bound: &Option<Bound>,
+    bound: Option<&Bound>,
     is_lower: bool,
 ) -> datafusion::common::Result<WindowFrameBound> {
     match bound {

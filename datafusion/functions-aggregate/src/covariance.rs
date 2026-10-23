@@ -20,7 +20,8 @@
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_float64_array, as_uint64_array};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, not_impl_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -117,7 +118,10 @@ impl AggregateUDFImpl for CovarianceSample {
         .collect())
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!("COVAR_SAMP(DISTINCT) aggregations are not available");
+        }
         Ok(Box::new(CovarianceAccumulator::try_new(StatsType::Sample)?))
     }
 
@@ -128,18 +132,25 @@ impl AggregateUDFImpl for CovarianceSample {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`. It only
+        // works when the planner removes it first (`SingleDistinctToGroupBy`
+        // for a single distinct field, e.g. `covar_samp(DISTINCT x, x)`).
+        DistinctHandling::Unsupported
+    }
 }
 
 #[user_doc(
     doc_section(label = "Statistical Functions"),
-    description = "Returns the sample covariance of a set of number pairs.",
-    syntax_example = "covar_samp(expression1, expression2)",
+    description = "Returns the population covariance of a set of number pairs.",
+    syntax_example = "covar_pop(expression1, expression2)",
     sql_example = r#"```sql
-> SELECT covar_samp(column1, column2) FROM table_name;
+> SELECT covar_pop(column1, column2) FROM table_name;
 +-----------------------------------+
-| covar_samp(column1, column2)      |
+| covar_pop(column1, column2)       |
 +-----------------------------------+
-| 8.25                              |
+| 7.63333333333                     |
 +-----------------------------------+
 ```"#,
     standard_argument(name = "expression1", prefix = "First"),
@@ -197,7 +208,10 @@ impl AggregateUDFImpl for CovariancePopulation {
         .collect())
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!("COVAR_POP(DISTINCT) aggregations are not available");
+        }
         Ok(Box::new(CovarianceAccumulator::try_new(
             StatsType::Population,
         )?))
@@ -205,6 +219,13 @@ impl AggregateUDFImpl for CovariancePopulation {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`. It only
+        // works when the planner removes it first (`SingleDistinctToGroupBy`
+        // for a single distinct field, e.g. `covar_pop(DISTINCT x, x)`).
+        DistinctHandling::Unsupported
     }
 }
 

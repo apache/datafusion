@@ -36,9 +36,12 @@ use std::sync::Arc;
 mod aggregates;
 mod dispatch;
 mod dynamic_filters;
+mod expr_registry;
 mod exprs;
+mod extensions;
 mod filters;
 mod joins;
+mod lazy_memory;
 mod leaves;
 mod limits;
 mod misc;
@@ -85,6 +88,23 @@ fn roundtrip_test_and_return(
         proto_converter,
     )?;
 
+    pretty_assertions::assert_eq!(
+        format!("{exec_plan:?}"),
+        format!("{result_exec_plan:?}")
+    );
+    Ok(result_exec_plan)
+}
+
+/// Round-trip through the public JSON APIs and return the decoded plan for field assertions.
+#[cfg(feature = "json")]
+fn roundtrip_test_json_and_return(
+    exec_plan: Arc<dyn ExecutionPlan>,
+    ctx: &SessionContext,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    use datafusion_proto::bytes::{physical_plan_from_json, physical_plan_to_json};
+
+    let json = physical_plan_to_json(Arc::clone(&exec_plan))?;
+    let result_exec_plan = physical_plan_from_json(&json, ctx.task_ctx().as_ref())?;
     pretty_assertions::assert_eq!(
         format!("{exec_plan:?}"),
         format!("{result_exec_plan:?}")

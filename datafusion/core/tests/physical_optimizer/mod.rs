@@ -20,6 +20,7 @@
 #[expect(clippy::needless_pass_by_value)]
 mod aggregate_statistics;
 mod combine_partial_final_agg;
+mod eliminate_constant_join;
 #[expect(clippy::needless_pass_by_value)]
 mod enforce_distribution;
 mod enforce_sorting;
@@ -38,6 +39,7 @@ mod replace_with_order_preserving_variants;
 mod sanity_checker;
 #[expect(clippy::needless_pass_by_value)]
 mod test_utils;
+mod update_aggr_exprs;
 mod window_optimize;
 mod window_topn;
 

@@ -17,7 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for array_normalize function.
 
-use crate::utils::make_scalar_function;
+use crate::utils::{make_scalar_function, needs_norm_scale, norm_scale};
 use arrow::array::{
     Array, ArrayRef, Float64Array, GenericListArray, NullBufferBuilder, OffsetSizeTrait,
 };
@@ -28,7 +28,9 @@ use arrow::datatypes::{
     Field,
 };
 use datafusion_common::cast::{as_float64_array, as_generic_list_array};
-use datafusion_common::utils::{ListCoercion, coerced_type_with_base_type_only};
+use datafusion_common::utils::{
+    ListCoercion, coerced_type_with_base_type_only, offset_span_len,
+};
 use datafusion_common::{Result, internal_err, plan_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -141,9 +143,9 @@ fn array_normalize_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_generic_list_array::<O>(&arrays[0])?;
     let values = as_float64_array(list_array.values())?;
-    let offsets = list_array.value_offsets();
+    let offsets = list_array.offsets();
 
-    let mut new_values: Vec<f64> = Vec::with_capacity(values.len());
+    let mut new_values: Vec<f64> = Vec::with_capacity(offset_span_len(offsets));
     let mut new_offsets = Vec::<O>::with_capacity(list_array.len() + 1);
     new_offsets.push(O::zero());
     let mut nulls = NullBufferBuilder::new(list_array.len());
@@ -181,6 +183,22 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
             sq_sum += vals[i] * vals[i];
         }
 
+        // If a square may have overflowed or underflowed, recompute with scaled
+        // values. Dividing the scaled values by the scaled magnitude gives the
+        // same unit vector.
+        let scale = if needs_norm_scale(sq_sum, len) {
+            norm_scale(vals.iter().copied())
+        } else {
+            None
+        };
+        if let Some(scale) = scale {
+            sq_sum = 0.0;
+            for i in 0..len {
+                let scaled = vals[i] * scale;
+                sq_sum += scaled * scaled;
+            }
+        }
+
         // Zero magnitude: undefined normalization. Emit NULL row.
         if sq_sum == 0.0 {
             nulls.append_null();
@@ -189,8 +207,9 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
         }
 
         let mag = sq_sum.sqrt();
-        for i in 0..len {
-            new_values.push(vals[i] / mag);
+        match scale {
+            Some(scale) => new_values.extend(vals.iter().map(|v| v * scale / mag)),
+            None => new_values.extend(vals.iter().map(|v| v / mag)),
         }
         nulls.append_non_null();
         new_offsets.push(new_offsets[row] + O::usize_as(len));
@@ -205,4 +224,16 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
         values_array,
         nulls.finish(),
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            array_normalize_inner(std::slice::from_ref(input))
+        })
+    }
 }

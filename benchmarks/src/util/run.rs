@@ -193,6 +193,21 @@ impl BenchmarkRun {
         }
     }
 
+    /// Record the current case's peak pool reservation without adding an
+    /// iteration.
+    ///
+    /// For harnesses that time the query elsewhere: the Criterion SQL harness
+    /// leaves timings to Criterion and reports only the peak here, so the
+    /// case's `iterations` stay empty.
+    pub fn record_pool_peak(&mut self) {
+        let pool_peak_bytes = self.peak_recorder().map(PeakRecordingPool::peak_reserved);
+        if let Some(idx) = self.current_case {
+            self.queries[idx].pool_peak_bytes = pool_peak_bytes;
+        } else {
+            panic!("no cases existed yet");
+        }
+    }
+
     /// Print the names of failed queries, if any
     pub fn maybe_print_failures(&self) {
         let failed_queries: Vec<&str> = self
@@ -231,7 +246,7 @@ impl BenchmarkRun {
     pub fn maybe_write_json(&self, maybe_path: Option<impl AsRef<Path>>) -> Result<()> {
         if let Some(path) = maybe_path {
             std::fs::write(path, self.to_json())?;
-        };
+        }
         Ok(())
     }
 }
@@ -307,6 +322,22 @@ mod tests {
         run.mark_failed();
 
         assert_eq!(run.queries[0].pool_peak_bytes, Some(600));
+    }
+
+    #[test]
+    fn a_case_without_iterations_still_reports_its_peak() {
+        let pool = recording_pool(1024);
+        let mut run = BenchmarkRun::new();
+        run.set_memory_pool(&pool);
+
+        run.start_new_case("q1");
+        let reservation = MemoryConsumer::new("q1").register(&pool);
+        reservation.try_grow(600).unwrap();
+        drop(reservation);
+        run.record_pool_peak();
+
+        assert_eq!(run.queries[0].pool_peak_bytes, Some(600));
+        assert!(run.queries[0].iterations.is_empty());
     }
 
     #[test]

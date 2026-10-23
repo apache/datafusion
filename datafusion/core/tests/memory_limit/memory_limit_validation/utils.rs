@@ -70,15 +70,7 @@ where
             );
             if let Some(process) = sys.process(pid) {
                 let rss_bytes = process.memory();
-                max_rss_clone
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                        if rss_bytes as usize > current {
-                            Some(rss_bytes as usize)
-                        } else {
-                            None
-                        }
-                    })
-                    .ok();
+                max_rss_clone.fetch_max(rss_bytes as usize, Ordering::Relaxed);
             } else {
                 // Process no longer exists
                 break;

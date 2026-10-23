@@ -117,7 +117,7 @@ impl OutputRequirementExec {
         dist_requirement: Distribution,
         fetch: Option<usize>,
     ) -> Self {
-        let cache = Self::compute_properties(&input, &fetch);
+        let cache = Self::compute_properties(&input, fetch);
         Self {
             input,
             order_requirement: requirements,
@@ -134,7 +134,7 @@ impl OutputRequirementExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
-        fetch: &Option<usize>,
+        fetch: Option<usize>,
     ) -> PlanProperties {
         let boundedness = if fetch.is_some() {
             Boundedness::Bounded
@@ -295,8 +295,8 @@ impl ExecutionPlan for OutputRequirementExec {
 
         let mut requirements = self.required_input_ordering().swap_remove(0);
         if let Some(reqs) = requirements {
-            let mut updated_reqs = vec![];
             let (lexes, soft) = reqs.into_alternatives();
+            let mut updated_reqs = Vec::with_capacity(lexes.len());
             for lex in lexes.into_iter() {
                 let Some(updated_lex) = update_ordering_requirement(lex, proj_exprs)?
                 else {
@@ -313,7 +313,7 @@ impl ExecutionPlan for OutputRequirementExec {
                 Distribution::HashPartitioned(exprs)
                 | Distribution::KeyPartitioned(exprs),
             ) => {
-                let mut updated_exprs = vec![];
+                let mut updated_exprs = Vec::with_capacity(exprs.len());
                 for expr in exprs {
                     let Some(new_expr) = update_expr(expr, projection.expr(), false)?
                     else {

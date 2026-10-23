@@ -202,9 +202,9 @@ impl FFI_TableProvider {
         unsafe { &(*private_data).provider }
     }
 
-    fn runtime(&self) -> &Option<Handle> {
+    fn runtime(&self) -> Option<&Handle> {
         let private_data = self.private_data as *const ProviderPrivateData;
-        unsafe { &(*private_data).runtime }
+        unsafe { (*private_data).runtime.as_ref() }
     }
 }
 
@@ -292,7 +292,7 @@ unsafe extern "C" fn scan_fn_wrapper(
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
     let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
         (&provider.logical_codec.task_ctx_provider).try_into();
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let logical_codec: Arc<dyn LogicalExtensionCodec> = (&provider.logical_codec).into();
     let internal_provider = Arc::clone(provider.inner());
 
@@ -335,7 +335,7 @@ unsafe extern "C" fn insert_into_fn_wrapper(
     input: &FFI_ExecutionPlan,
     insert_op: FFI_InsertOp,
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let internal_provider = Arc::clone(provider.inner());
     let input = input.clone();
 
@@ -373,7 +373,7 @@ unsafe extern "C" fn delete_from_fn_wrapper(
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
     let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
         (&provider.logical_codec.task_ctx_provider).try_into();
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let logical_codec: Arc<dyn LogicalExtensionCodec> = (&provider.logical_codec).into();
     let internal_provider = Arc::clone(provider.inner());
 
@@ -411,7 +411,7 @@ unsafe extern "C" fn update_fn_wrapper(
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
     let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
         (&provider.logical_codec.task_ctx_provider).try_into();
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let logical_codec: Arc<dyn LogicalExtensionCodec> = (&provider.logical_codec).into();
     let internal_provider = Arc::clone(provider.inner());
 
@@ -473,7 +473,7 @@ unsafe extern "C" fn truncate_fn_wrapper(
     provider: &FFI_TableProvider,
     session: FFI_SessionRef,
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let internal_provider = Arc::clone(provider.inner());
 
     async move {
@@ -499,20 +499,21 @@ unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) {
     unsafe {
         debug_assert!(!provider.private_data.is_null());
         let private_data =
-            Box::from_raw(provider.private_data as *mut ProviderPrivateData);
+            Box::from_raw(provider.private_data.cast::<ProviderPrivateData>());
         drop(private_data);
         provider.private_data = std::ptr::null_mut();
     }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_TableProvider {
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let old_provider = Arc::clone(provider.inner());
 
     let private_data = Box::into_raw(Box::new(ProviderPrivateData {
         provider: old_provider,
         runtime,
-    })) as *mut c_void;
+    }))
+    .cast::<c_void>();
 
     FFI_TableProvider {
         schema: schema_fn_wrapper,
@@ -564,6 +565,16 @@ impl FFI_TableProvider {
         )
     }
 
+    /// Creates an [`FFI_TableProvider`] using a prebuilt FFI logical codec.
+    ///
+    /// If `provider` is already foreign, this re-exports its original FFI
+    /// handle rather than adding another wrapper layer. The handle still adopts
+    /// the `logical_codec` supplied here, so it is never silently discarded and
+    /// an imported provider can be rebound to a different session.
+    ///
+    /// `runtime` is only honored when a new wrapper is created. An
+    /// already-foreign handle keeps the runtime of the library that owns it,
+    /// because that value lives in private data this side cannot reach.
     pub fn new_with_ffi_codec(
         provider: Arc<dyn TableProvider>,
         can_support_pushdown_filters: bool,
@@ -571,7 +582,9 @@ impl FFI_TableProvider {
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
         if let Some(provider) = provider.downcast_ref::<ForeignTableProvider>() {
-            return provider.0.clone();
+            let mut provider = provider.0.clone();
+            provider.logical_codec = logical_codec;
+            return provider;
         }
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
@@ -589,7 +602,7 @@ impl FFI_TableProvider {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
             delete_from: delete_from_fn_wrapper,
             update: update_fn_wrapper,
@@ -1268,6 +1281,42 @@ mod tests {
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
         let foreign: Arc<dyn TableProvider> = (&ffi_provider).into();
         assert_eq!(foreign.statistics().as_ref(), Some(&original_stats));
+
+        Ok(())
+    }
+
+    /// Re-wrapping an imported provider with a rebuilt logical codec must adopt
+    /// that codec. See <https://github.com/apache/datafusion/issues/24722>.
+    #[test]
+    fn test_rebind_foreign_table_provider_adopts_logical_codec() -> Result<()> {
+        let (_ctx_a, provider_a) = crate::util::tests::test_session_and_ctx();
+        let (ctx_b, provider_b) = crate::util::tests::test_session_and_ctx();
+
+        let mut ffi_provider = FFI_TableProvider::new(
+            create_test_table_provider()?,
+            true,
+            None,
+            provider_a,
+            None,
+        );
+        ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
+
+        let imported: Arc<dyn TableProvider> = (&ffi_provider).into();
+        assert!(imported.downcast_ref::<ForeignTableProvider>().is_some());
+
+        // Rebuild the codec against session B and re-wrap.
+        let codec_b = FFI_LogicalExtensionCodec::new(
+            Arc::new(DefaultLogicalExtensionCodec {}),
+            None,
+            provider_b,
+        );
+        let rebound =
+            FFI_TableProvider::new_with_ffi_codec(imported, true, None, codec_b);
+
+        let task_ctx: Arc<TaskContext> = (&rebound.logical_codec.task_ctx_provider)
+            .try_into()
+            .expect("rebound provider's codec resolves");
+        assert_eq!(task_ctx.session_id(), ctx_b.task_ctx().session_id());
 
         Ok(())
     }

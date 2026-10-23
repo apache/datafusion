@@ -24,48 +24,86 @@ use datafusion_expr::EmitTo;
 mod full;
 mod partial;
 
-use crate::InputOrderMode;
-pub use full::GroupOrderingFull;
-pub use partial::GroupOrderingPartial;
+pub use full::GroupClusteringFull;
+pub use partial::GroupClusteringPartial;
 
-/// Ordering information for each group in the hash table
-#[derive(Debug)]
-pub enum GroupOrdering {
-    /// Groups are not ordered
+/// Describes how rows are clustered by grouping expressions within each input
+/// partition.
+///
+/// Input ordering is one way to establish clustering. Aggregate execution uses
+/// these guarantees to determine when groups are complete and can be emitted.
+/// This mode does not describe the sort order of the input or output.
+///
+/// For example, when grouping by `key`, both inputs have fully contiguous
+/// groups within the input partition:
+///
+/// ```text
+/// sorted:     A A B B C C
+/// not sorted: C C A A B B
+/// ```
+///
+/// In both cases, once the key changes, the previous key will not appear again,
+/// so its group is complete and can be emitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GroupClusteringMode {
+    /// No clustering guarantee is available to complete groups before the input ends.
     None,
-    /// Groups are ordered by some pre-set of the group keys
-    Partial(GroupOrderingPartial),
-    /// Groups are entirely contiguous,
-    Full(GroupOrderingFull),
+    /// Rows with the same values at these grouping-expression indices form one
+    /// contiguous range. When those values change, every group in the previous
+    /// range is complete and can be emitted.
+    ///
+    /// For example, with `GROUP BY (a, b)`, `Partial(vec![0])` means all rows
+    /// for each value of `a` are contiguous, while an `(a, b)` tuple may recur
+    /// within that range.
+    Partial(Vec<usize>),
+    /// Rows with the same complete grouping tuple form one contiguous range.
+    /// When the tuple changes, the previous group can be emitted.
+    Full,
 }
 
-impl GroupOrdering {
-    /// Create a `GroupOrdering` for the specified ordering
-    pub fn try_new(mode: &InputOrderMode) -> Result<Self> {
+/// Tracks when groups in the hash table are complete and can be emitted.
+#[derive(Debug)]
+pub enum GroupClustering {
+    /// No group can be known complete before the input ends.
+    None,
+    /// Rows are contiguous for a subset of the grouping keys.
+    /// When those key values change, all groups in the previous run
+    /// are complete and can be emitted.
+    Partial(GroupClusteringPartial),
+    /// Rows are contiguous for the complete grouping tuple.
+    /// When the tuple changes, the previous group can be emitted.
+    Full(GroupClusteringFull),
+}
+
+impl GroupClustering {
+    /// Create a `GroupClustering` for the specified group-clustering mode.
+    pub fn try_new(mode: &GroupClusteringMode) -> Result<Self> {
         match mode {
-            InputOrderMode::Linear => Ok(GroupOrdering::None),
-            InputOrderMode::PartiallySorted(order_indices) => {
-                GroupOrderingPartial::try_new(order_indices.clone())
-                    .map(GroupOrdering::Partial)
+            GroupClusteringMode::None => Ok(GroupClustering::None),
+            GroupClusteringMode::Partial(grouping_indices) => {
+                GroupClusteringPartial::try_new(grouping_indices.clone())
+                    .map(GroupClustering::Partial)
             }
-            InputOrderMode::Sorted => Ok(GroupOrdering::Full(GroupOrderingFull::new())),
+            GroupClusteringMode::Full => {
+                Ok(GroupClustering::Full(GroupClusteringFull::new()))
+            }
         }
     }
 
-    /// Returns how many groups can be emitted while respecting the current
-    /// ordering guarantees, or `None` if no data can be emitted.
+    /// Returns how many completed groups can be emitted, or `None` if no data
+    /// can be emitted.
     pub fn emit_to(&self) -> Option<EmitTo> {
         match self {
-            GroupOrdering::None => None,
-            GroupOrdering::Partial(partial) => partial.emit_to(),
-            GroupOrdering::Full(full) => full.emit_to(),
+            GroupClustering::None => None,
+            GroupClustering::Partial(partial) => partial.emit_to(),
+            GroupClustering::Full(full) => full.emit_to(),
         }
     }
 
     /// Returns the emit strategy to use under memory pressure (OOM).
     ///
     /// Returns the strategy that must be used when emitting up to `n` groups
-    /// while respecting the current ordering guarantees.
+    /// while respecting the configured group-clustering mode.
     ///
     /// Returns `None` if no data can be emitted.
     pub fn oom_emit_to(&self, n: usize) -> Option<EmitTo> {
@@ -74,8 +112,8 @@ impl GroupOrdering {
         }
 
         match self {
-            GroupOrdering::None => Some(EmitTo::First(n)),
-            GroupOrdering::Partial(_) | GroupOrdering::Full(_) => {
+            GroupClustering::None => Some(EmitTo::First(n)),
+            GroupClustering::Partial(_) | GroupClustering::Full(_) => {
                 self.emit_to().map(|emit_to| match emit_to {
                     EmitTo::First(max) => EmitTo::First(n.min(max)),
                     EmitTo::All => EmitTo::First(n),
@@ -87,23 +125,23 @@ impl GroupOrdering {
     /// Updates the state to indicate that the input is complete.
     pub fn input_done(&mut self) {
         match self {
-            GroupOrdering::None => {}
-            GroupOrdering::Partial(partial) => partial.input_done(),
-            GroupOrdering::Full(full) => full.input_done(),
+            GroupClustering::None => {}
+            GroupClustering::Partial(partial) => partial.input_done(),
+            GroupClustering::Full(full) => full.input_done(),
         }
     }
 
-    /// Resets the ordering state while preserving the configured ordering mode.
+    /// Resets the completion state while preserving the configured mode.
     ///
-    /// Ordered partial aggregation uses this after passing intermediate states
-    /// downstream, and ordered final aggregation uses it after spilling a run.
+    /// Clustered partial aggregation uses this after passing intermediate states
+    /// downstream, and clustered final aggregation uses it after spilling a run.
     /// In both cases the hash table is empty and can start tracking the next
-    /// input batch from a fresh ordering state.
+    /// input batch from a fresh completion state.
     pub fn reset(&mut self) {
         match self {
-            GroupOrdering::None => {}
-            GroupOrdering::Partial(partial) => partial.reset(),
-            GroupOrdering::Full(full) => full.reset(),
+            GroupClustering::None => {}
+            GroupClustering::Partial(partial) => partial.reset(),
+            GroupClustering::Full(full) => full.reset(),
         }
     }
 
@@ -111,9 +149,9 @@ impl GroupOrdering {
     /// existing indexes down by `n`.
     pub fn remove_groups(&mut self, n: usize) {
         match self {
-            GroupOrdering::None => {}
-            GroupOrdering::Partial(partial) => partial.remove_groups(n),
-            GroupOrdering::Full(full) => full.remove_groups(n),
+            GroupClustering::None => {}
+            GroupClustering::Partial(partial) => partial.remove_groups(n),
+            GroupClustering::Full(full) => full.remove_groups(n),
         }
     }
 
@@ -132,28 +170,31 @@ impl GroupOrdering {
         total_num_groups: usize,
     ) -> Result<()> {
         match self {
-            GroupOrdering::None => {}
-            GroupOrdering::Partial(partial) => {
+            GroupClustering::None => {}
+            GroupClustering::Partial(partial) => {
                 partial.new_groups(
                     batch_group_values,
                     group_indices,
                     total_num_groups,
                 )?;
             }
-            GroupOrdering::Full(full) => {
+            GroupClustering::Full(full) => {
                 full.new_groups(total_num_groups);
             }
-        };
+        }
         Ok(())
     }
 
-    /// Returns the size of memory used by the ordering state, in bytes.
+    /// Returns the size of memory used by the completion state, in bytes.
+    ///
+    /// Includes the enum descriptor once (covering the inline active variant)
+    /// and any heap allocations retained by that variant.
     pub fn size(&self) -> usize {
         size_of::<Self>()
             + match self {
-                GroupOrdering::None => 0,
-                GroupOrdering::Partial(partial) => partial.size(),
-                GroupOrdering::Full(full) => full.size(),
+                // These variants hold only inline state, already counted above.
+                GroupClustering::None | GroupClustering::Full(_) => 0,
+                GroupClustering::Partial(partial) => partial.heap_size(),
             }
     }
 }
@@ -164,55 +205,90 @@ mod tests {
 
     use std::sync::Arc;
 
-    use arrow::array::Int32Array;
+    use arrow::array::{Int32Array, StringArray};
+    use datafusion_common::ScalarValue;
 
     #[test]
-    fn test_oom_emit_to_none_ordering() {
-        let group_ordering = GroupOrdering::None;
-
-        assert_eq!(group_ordering.oom_emit_to(0), None);
-        assert_eq!(group_ordering.oom_emit_to(5), Some(EmitTo::First(5)));
+    fn test_size_inline_only() -> Result<()> {
+        let expected = size_of::<GroupClustering>();
+        assert_eq!(GroupClustering::None.size(), expected);
+        let group_clustering = GroupClustering::try_new(&GroupClusteringMode::Full)?;
+        assert_eq!(group_clustering.size(), expected);
+        Ok(())
     }
 
-    /// Creates a partially ordered grouping state with three groups.
+    #[test]
+    fn test_size_partial_retained_allocations() -> Result<()> {
+        // The direct partial constructor retains spare grouping-index capacity.
+        let mut grouping_indices = Vec::with_capacity(32);
+        grouping_indices.push(0);
+        let expected = size_of::<GroupClustering>()
+            + grouping_indices.capacity() * size_of::<usize>();
+        let mut group_clustering =
+            GroupClustering::Partial(GroupClusteringPartial::try_new(grouping_indices)?);
+        assert_eq!(group_clustering.size(), expected);
+
+        // A variable-width key checks both the scalar descriptor and its payload.
+        let key = "retained group key";
+        let batch_group_values: Vec<ArrayRef> =
+            vec![Arc::new(StringArray::from(vec!["a", key]))];
+        group_clustering.new_groups(&batch_group_values, &[0, 1], 2)?;
+        let in_progress = expected + ScalarValue::Utf8(Some(key.to_owned())).size();
+        assert_eq!(group_clustering.size(), in_progress);
+
+        // Completing drops the key, but retains grouping-index capacity.
+        group_clustering.input_done();
+        assert_eq!(group_clustering.size(), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_oom_emit_to_none_clustering() {
+        let group_clustering = GroupClustering::None;
+
+        assert_eq!(group_clustering.oom_emit_to(0), None);
+        assert_eq!(group_clustering.oom_emit_to(5), Some(EmitTo::First(5)));
+    }
+
+    /// Creates a partial group-clustering tracker with three groups.
     ///
-    /// `sort_key_values` controls whether a sort boundary exists in the batch:
+    /// `group_key_values` controls whether a run boundary exists in the batch:
     /// distinct values such as `[1, 2, 3]` create boundaries, while repeated
     /// values such as `[1, 1, 1]` do not.
-    fn partial_ordering(sort_key_values: Vec<i32>) -> Result<GroupOrdering> {
-        let mut group_ordering =
-            GroupOrdering::Partial(GroupOrderingPartial::try_new(vec![0])?);
+    fn partial_clustering(group_key_values: Vec<i32>) -> Result<GroupClustering> {
+        let mut group_clustering =
+            GroupClustering::Partial(GroupClusteringPartial::try_new(vec![0])?);
 
         let batch_group_values: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from(sort_key_values)),
+            Arc::new(Int32Array::from(group_key_values)),
             Arc::new(Int32Array::from(vec![10, 20, 30])),
         ];
         let group_indices = vec![0, 1, 2];
 
-        group_ordering.new_groups(&batch_group_values, &group_indices, 3)?;
+        group_clustering.new_groups(&batch_group_values, &group_indices, 3)?;
 
-        Ok(group_ordering)
+        Ok(group_clustering)
     }
 
     #[test]
     fn test_oom_emit_to_partial_clamps_to_boundary() -> Result<()> {
-        let group_ordering = partial_ordering(vec![1, 2, 3])?;
+        let group_clustering = partial_clustering(vec![1, 2, 3])?;
 
         // Can emit both `1` and `2` groups because we have seen `3`
-        assert_eq!(group_ordering.emit_to(), Some(EmitTo::First(2)));
-        assert_eq!(group_ordering.oom_emit_to(1), Some(EmitTo::First(1)));
-        assert_eq!(group_ordering.oom_emit_to(3), Some(EmitTo::First(2)));
+        assert_eq!(group_clustering.emit_to(), Some(EmitTo::First(2)));
+        assert_eq!(group_clustering.oom_emit_to(1), Some(EmitTo::First(1)));
+        assert_eq!(group_clustering.oom_emit_to(3), Some(EmitTo::First(2)));
 
         Ok(())
     }
 
     #[test]
     fn test_oom_emit_to_partial_without_boundary() -> Result<()> {
-        let group_ordering = partial_ordering(vec![1, 1, 1])?;
+        let group_clustering = partial_clustering(vec![1, 1, 1])?;
 
         // Can't emit the last `1` group as it may have more values
-        assert_eq!(group_ordering.emit_to(), None);
-        assert_eq!(group_ordering.oom_emit_to(3), None);
+        assert_eq!(group_clustering.emit_to(), None);
+        assert_eq!(group_clustering.oom_emit_to(3), None);
 
         Ok(())
     }

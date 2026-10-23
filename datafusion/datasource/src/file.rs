@@ -114,6 +114,21 @@ pub trait FileSource: Any + Send + Sync {
         None
     }
 
+    /// Returns the part of [`Self::filter`] that every output row is
+    /// guaranteed to satisfy.
+    ///
+    /// [`FileScanConfig`] derives equivalence properties (constants and equal
+    /// columns) from this filter. A filter that the source uses only to skip
+    /// data (for example, row group or page pruning with statistics) does not
+    /// remove every non-matching row, so it must not be returned here.
+    ///
+    /// Returns `None` by default.
+    ///
+    /// [`FileScanConfig`]: crate::file_scan_config::FileScanConfig
+    fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        None
+    }
+
     /// Return the projection that will be applied to the output stream on top
     /// of [`Self::table_schema`].
     ///

@@ -25,7 +25,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::{ListCoercion, offset_span, offset_span_len};
 use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
@@ -454,14 +454,6 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     element_array: &ArrayRef,
     arr_n: &[Option<i64>],
 ) -> Result<ArrayRef> {
-    let (DataType::List(list_field) | DataType::LargeList(list_field)) =
-        list_array.data_type()
-    else {
-        return exec_err!(
-            "Expected List or LargeList data type, got {:?}",
-            list_array.data_type()
-        );
-    };
     let original_data = list_array.values().to_data();
     // Build up the offsets for the final output array
     let mut offsets = Vec::<OffsetSize>::with_capacity(list_array.len() + 1);
@@ -470,7 +462,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data],
         false,
-        Capacities::Array(original_data.len()),
+        Capacities::Array(offset_span_len(list_array.offsets())),
     );
     let mut valid = NullBufferBuilder::new(list_array.len());
 
@@ -545,7 +537,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
 
     let new_values = make_array(mutable.freeze());
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        Arc::clone(list_field),
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::new(offsets.into()),
         new_values,
         valid.finish(),
@@ -566,19 +558,8 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         return Ok(Arc::new(list_array.clone()));
     }
 
-    let (DataType::List(list_field) | DataType::LargeList(list_field)) =
-        list_array.data_type()
-    else {
-        return exec_err!(
-            "Expected List or LargeList data type, got {:?}",
-            list_array.data_type()
-        );
-    };
-
     let list_offsets = list_array.offsets();
-    let first_offset = list_offsets[0].to_usize().unwrap();
-    let last_offset = list_offsets[list_offsets.len() - 1].to_usize().unwrap();
-    let values_range_len = last_offset - first_offset;
+    let (first_offset, values_range_len) = offset_span(list_offsets);
     let values_slice = list_array.values().slice(first_offset, values_range_len);
     let original_data = values_slice.to_data();
     let mut offsets = Vec::<OffsetSize>::with_capacity(list_array.len() + 1);
@@ -644,7 +625,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
 
     let new_values = make_array(mutable.freeze());
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        Arc::clone(list_field),
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::new(offsets.into()),
         new_values,
         nulls,
@@ -1168,5 +1149,14 @@ mod tests {
             }
             _ => panic!("Expected ColumnarValue::Array"),
         }
+    }
+
+    #[test]
+    fn test_sliced_capacity() -> datafusion_common::Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            let element: ArrayRef =
+                Arc::new(arrow::array::Float64Array::from(vec![3.0; input.len()]));
+            super::array_remove_internal(input, &element, &vec![Some(1); input.len()])
+        })
     }
 }
