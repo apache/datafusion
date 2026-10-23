@@ -854,6 +854,36 @@ fn build_join(
     if !pull_up.can_pull_up {
         return Ok(None);
     }
+    // Stopgap until a follow-up adds count-bug compensation for `IN`/`NOT IN`.
+    // Reject unless an outer row with no match gets the right answer anyway.
+    if !exists_sub_query {
+        let null_reads_as_false = match join_type {
+            JoinType::LeftSemi => true,
+            JoinType::LeftMark => !needs_null_aware_mark,
+            _ => false,
+        };
+        let count_bug_is_harmless = match rewrite(true) {
+            Ok((plan, pull_up)) => pull_up
+                .collected_count_expr_map
+                .get(&plan)
+                .filter(|m| !m.is_empty())
+                .is_none_or(|empty_input_values| {
+                    null_reads_as_false
+                        && empty_input_values
+                            .get(subquery.schema().field(0).name())
+                            .is_some_and(|value| {
+                                matches!(value, Expr::Literal(v, _) if v.is_null())
+                            })
+                }),
+            // Count-bug handling errors on some shapes it cannot compensate.
+            Err(_) => false,
+        };
+        if !count_bug_is_harmless {
+            return not_impl_err!(
+                "Correlated IN/NOT IN subquery with an aggregate and no GROUP BY is not supported: an outer row with no match gets no subquery row instead of the aggregate's value on empty input"
+            );
+        }
+    }
 
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(alias.to_string())?

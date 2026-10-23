@@ -2124,14 +2124,28 @@ WHERE t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id)
 ----
 11
 
-# correlated_not_in_groupless_count_agg_is_not_count_bug_compensated
-query I rowsort
+# correlated_in_groupless_count_agg_count_bug_not_implemented
+query error This feature is not implemented: Correlated IN/NOT IN subquery with an aggregate and no GROUP BY
+SELECT t1_id FROM t1
+WHERE 0 IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id)
+
+# correlated_not_in_groupless_count_agg_count_bug_not_implemented
+query error This feature is not implemented: Correlated IN/NOT IN subquery with an aggregate and no GROUP BY
 SELECT t1_id FROM t1
 WHERE t1_int NOT IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id)
-----
-22
-33
-44
+
+# correlated_in_groupless_count_agg_in_projection_count_bug_not_implemented
+query error This feature is not implemented: Correlated IN/NOT IN subquery with an aggregate and no GROUP BY
+SELECT t1_id, 0 IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id) FROM t1
+
+# correlated_not_in_groupless_max_agg_count_bug_not_implemented
+query error This feature is not implemented: Correlated IN/NOT IN subquery with an aggregate and no GROUP BY
+SELECT t1_id FROM t1
+WHERE t1_int + 2 NOT IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id)
+
+# correlated_in_groupless_max_agg_in_projection_count_bug_not_implemented
+query error This feature is not implemented: Correlated IN/NOT IN subquery with an aggregate and no GROUP BY
+SELECT t1_id, t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) FROM t1
 
 statement ok
 DROP TABLE limit_zero_outer;
