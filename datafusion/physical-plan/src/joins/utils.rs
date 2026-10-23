@@ -68,11 +68,11 @@ use arrow::datatypes::{
 use arrow_ord::ord::{DynComparator, make_comparator};
 use arrow_schema::{DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
-use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
     internal_datafusion_err, not_impl_err, plan_err,
@@ -2508,7 +2508,7 @@ pub(super) fn equal_rows_arr(
 }
 
 /// Same as [`equal_rows_arr`], but `left_arrays` must already have float
-/// `-0.0` rewritten to `+0.0` (see `normalize_float_zero`), so a comparator
+/// `-0.0` rewritten to `+0.0` (see `normalize_floats`), so a comparator
 /// built here skips that scan on the left side. Hash join keeps its build
 /// keys in that form, which saves rescanning the whole build side for every
 /// probe batch.
@@ -2778,15 +2778,15 @@ impl JoinKeyComparator {
                 // treats `-0.0` / `+0.0` as distinct. Normalize float arrays
                 // so SMJ / piecewise-merge equi-keys honor SQL equality;
                 // no-op (Arc::clone) for non-floats and for float arrays
-                // that contain no `-0.0`. `normalize_float_zero` preserves
+                // that contain no `-0.0`. `normalize_floats` preserves
                 // null positions, so the original null masks below remain
                 // valid. A left side that is already normalized is used as is.
                 let l_norm = if normalize_left {
-                    normalize_float_zero(l)
+                    normalize_floats(l)
                 } else {
                     Arc::clone(l)
                 };
-                let r_norm = normalize_float_zero(r);
+                let r_norm = normalize_floats(r);
                 let inner = make_comparator(l_norm.as_ref(), r_norm.as_ref(), *opts)?;
                 if null_equality == NullEquality::NullEqualsNothing {
                     let ln = l.logical_nulls().filter(|n| n.null_count() > 0);

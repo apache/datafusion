@@ -32,6 +32,7 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
 use datafusion_common::exec_datafusion_err;
+use datafusion_common::float_semantics::compare_floats;
 
 use half::f16;
 use std::cmp::Ordering;
@@ -550,7 +551,7 @@ macro_rules! compare_float {
         $(impl Comparable for Option<$t> {
             fn comp(&self, other: &Self) -> Ordering {
                 match (self, other) {
-                    (Some(me), Some(other)) => me.total_cmp(other),
+                    (Some(me), Some(other)) => compare_floats(*me, *other),
                     (Some(_), None) => Ordering::Greater,
                     (None, Some(_)) => Ordering::Less,
                     (None, None) => Ordering::Equal,
@@ -560,7 +561,7 @@ macro_rules! compare_float {
 
         $(impl Comparable for $t {
             fn comp(&self, other: &Self) -> Ordering {
-                self.total_cmp(other)
+                compare_floats(*self, *other)
             }
         })+
     };

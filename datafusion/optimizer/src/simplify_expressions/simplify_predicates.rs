@@ -28,7 +28,7 @@
 //! `false` so that later rules can prune the plan they filter.
 
 use super::utils::{is_false, is_null};
-use datafusion_common::utils::normalize_float_zero_scalar;
+use datafusion_common::float_semantics::normalize_float_scalar;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_expr::utils::{
     conjunction, disjunction, split_binary_owned, split_conjunction_owned,
@@ -422,7 +422,7 @@ fn op_and_literal(predicate: &Expr) -> Result<(Operator, &ScalarValue)> {
 fn normalize_literal(expr: &mut Expr) {
     if let Expr::Literal(value, _) = expr {
         let original = std::mem::replace(value, ScalarValue::Null);
-        *value = normalize_float_zero_scalar(original);
+        *value = normalize_float_scalar(original);
     }
 }
 

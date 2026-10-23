@@ -28,7 +28,8 @@ use arrow::datatypes::DataType::{LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::utils::{ListCoercion, normalize_float_zero, offset_span};
+use datafusion_common::float_semantics::normalize_floats;
+use datafusion_common::utils::{ListCoercion, offset_span};
 use datafusion_common::{
     Result, assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args,
 };
@@ -334,9 +335,9 @@ pub(crate) fn normalize_visible_values<OffsetSize: OffsetSizeTrait>(
 ) -> ArrayRef {
     let (first, len) = offset_span(array.offsets());
     if first == 0 && len == array.values().len() {
-        normalize_float_zero(array.values())
+        normalize_floats(array.values())
     } else {
-        normalize_float_zero(&array.values().slice(first, len))
+        normalize_floats(&array.values().slice(first, len))
     }
 }
 

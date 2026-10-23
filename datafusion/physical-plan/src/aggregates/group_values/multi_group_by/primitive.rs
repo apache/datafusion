@@ -98,9 +98,9 @@ where
             } else {
                 unsafe { *array_values.get_unchecked(rhs_row) }
             };
-            // `left` was already canonicalized on append; canonicalize the
+            // `left` was already normalized on append; normalize the
             // input so ±0 (and any future equivalence class) compares equal.
-            if left.is_eq(right.canonicalize()) {
+            if left.is_eq(right.normalize_key()) {
                 cmp_buf[i / 8] |= 1 << (i % 8);
             }
         }
@@ -141,7 +141,7 @@ where
                 continue;
             }
 
-            if !self.group_values[lhs_row].is_eq(array.value(rhs_row).canonicalize()) {
+            if !self.group_values[lhs_row].is_eq(array.value(rhs_row).normalize_key()) {
                 equal_to_results.set_bit(idx, false);
             }
         }
@@ -165,7 +165,7 @@ where
         }
 
         self.group_values[lhs_row]
-            .is_eq(array.as_primitive::<T>().value(rhs_row).canonicalize())
+            .is_eq(array.as_primitive::<T>().value(rhs_row).normalize_key())
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
@@ -177,11 +177,11 @@ where
             } else {
                 self.nulls.append_non_null();
                 self.group_values
-                    .push(array.as_primitive::<T>().value(row).canonicalize());
+                    .push(array.as_primitive::<T>().value(row).normalize_key());
             }
         } else {
             self.group_values
-                .push(array.as_primitive::<T>().value(row).canonicalize());
+                .push(array.as_primitive::<T>().value(row).normalize_key());
         }
 
         Ok(())
@@ -227,7 +227,7 @@ where
                         self.group_values.push(T::default_value());
                     } else {
                         self.nulls.append_non_null();
-                        self.group_values.push(arr.value(row).canonicalize());
+                        self.group_values.push(arr.value(row).normalize_key());
                     }
                 }
             }
@@ -235,7 +235,7 @@ where
             (true, Nulls::None) => {
                 self.nulls.append_n_non_nulls(rows.len());
                 for &row in rows {
-                    self.group_values.push(arr.value(row).canonicalize());
+                    self.group_values.push(arr.value(row).normalize_key());
                 }
             }
 
@@ -247,7 +247,7 @@ where
 
             (false, _) => {
                 for &row in rows {
-                    self.group_values.push(arr.value(row).canonicalize());
+                    self.group_values.push(arr.value(row).normalize_key());
                 }
             }
         }

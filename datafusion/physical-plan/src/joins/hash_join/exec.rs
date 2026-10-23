@@ -78,12 +78,12 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::memory::{
     RecordBatchMemoryCounter, estimate_memory_size, get_record_batch_memory_size,
 };
-use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
     plan_err, project_schema,
@@ -3443,7 +3443,7 @@ fn build_in_memory(
     // comparison does not rescan the build side. Arrays without `-0.0`, and
     // non-float keys, are shared rather than copied.
     let normalized_values: Vec<ArrayRef> =
-        left_values.iter().map(normalize_float_zero).collect();
+        left_values.iter().map(normalize_floats).collect();
 
     // Join keys that are plain columns share the buffers of `batch`, any other
     // expression evaluates to new arrays that are kept for the whole join.

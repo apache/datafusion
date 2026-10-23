@@ -18,7 +18,7 @@
 //! Utility functions for expression simplification
 
 use datafusion_common::cse::NormalizeEq;
-use datafusion_common::utils::normalize_float_zero_scalar;
+use datafusion_common::float_semantics::normalize_float_scalar;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     Case, Expr, Like, Operator,
@@ -239,8 +239,8 @@ pub fn is_eq_and_ne_with_different_literal(eq_expr: &Expr, ne_expr: &Expr) -> bo
                 Expr::Literal(right_value, right_metadata),
             ) => {
                 left_metadata != right_metadata
-                    || normalize_float_zero_scalar(left_value.clone())
-                        != normalize_float_zero_scalar(right_value.clone())
+                    || normalize_float_scalar(left_value.clone())
+                        != normalize_float_scalar(right_value.clone())
             }
             _ => left != right,
         }
