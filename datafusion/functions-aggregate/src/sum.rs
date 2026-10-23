@@ -397,6 +397,9 @@ impl AggregateUDFImpl for Sum {
         if lit_type == DataType::Null {
             return Ok(None);
         }
+        // `CAST(COUNT(arg) AS <lit type>)` is not valid for intervals, and for
+        // decimals it can overflow or change the SUM result type.
+        // See https://github.com/apache/datafusion/issues/25943
         if !(lit_type.is_integer() || lit_type.is_floating()) {
             return Ok(None);
         }
