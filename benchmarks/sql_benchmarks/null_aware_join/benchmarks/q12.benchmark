@@ -26,10 +26,10 @@ expect_plan HashJoinExec
 
 run
 -- Q12: uncorrelated multi-column NOT IN with 1% NULL in one outer element,
--- the mirror of Q11. The outer side is the build side, so each NULL-valued
--- build row is paired with every subquery row and kept as UNKNOWN only when
--- the other element matches: the cost grows with (NULL-valued outer rows) x
--- (subquery rows). Compare with Q10 and Q11.
+-- the mirror of Q11. The outer side is the build side, and `z`, NOT NULL on
+-- both sides, is a scope key: each NULL-valued build row is paired only with
+-- the subquery rows with the same `z`, so the cost grows with (NULL-valued
+-- outer rows) x (subquery rows per `z` value). Compare with Q10 and Q11.
 SELECT count(*)
 FROM small_outer o
 WHERE (o.id_n1, o.z) NOT IN (SELECT i.id_n0, i.z FROM small_inner i);
