@@ -4241,6 +4241,25 @@ SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON EXISTS (SELECT 1 FROM on_a
 1 1
 1 2
 
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON NOT EXISTS (SELECT 1 FROM on_alias_s WHERE on_alias_s.b = x.a);
+----
+2 1
+2 2
+
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON x.a IN (SELECT b FROM on_alias_s WHERE on_alias_s.b = x.a);
+----
+1 1
+1 2
+
+# The subquery is nested in an OR, so it is not a top-level conjunct
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON (EXISTS (SELECT 1 FROM on_alias_s WHERE on_alias_s.b = x.a) OR x.a = 99);
+----
+1 1
+1 2
+
 statement ok
 DROP TABLE on_alias_t;
 
