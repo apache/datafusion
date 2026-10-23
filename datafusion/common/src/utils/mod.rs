@@ -1356,14 +1356,8 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
             let offsets = OffsetBuffer::from_lengths(lengths);
             let values = make_array(mutable_array_data.freeze());
 
-            let field = match list.data_type() {
-                DataType::List(field) => field,
-                DataType::LargeList(field) => field,
-                _ => unreachable!(),
-            };
-
             return Ok(GenericListArray::try_new(
-                Arc::clone(field),
+                Arc::clone(list.value_field()),
                 offsets,
                 values,
                 list.nulls().cloned(),

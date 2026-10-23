@@ -132,6 +132,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
         self.match_window_definitions(&mut select.projection, &select.named_window)?;
+        self.match_window_definitions(&mut select.having, &select.named_window)?;
         self.match_window_definitions(&mut select.qualify, &select.named_window)?;
         self.match_window_definitions(&mut query_order_by, &select.named_window)?;
 

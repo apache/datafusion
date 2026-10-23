@@ -1654,6 +1654,52 @@ impl AggregateExec {
         &self.input
     }
 
+    /// Whether a candidate input keeps each group in one partition.
+    ///
+    /// Unlike co-partitioning, aggregation only needs equality groups to be
+    /// local. A final stage can inherit that guarantee from a partial stage
+    /// even when projecting the grouping expressions loses range metadata.
+    /// This check does not require the two stages to be combined.
+    pub fn input_keeps_groups_local(
+        &self,
+        input: &dyn ExecutionPlan,
+        allow_subset: bool,
+    ) -> bool {
+        if !matches!(
+            self.mode,
+            AggregateMode::Partial
+                | AggregateMode::SinglePartitioned
+                | AggregateMode::FinalPartitioned
+        ) || self.group_by().is_empty()
+            || self.group_by().has_grouping_set()
+        {
+            return false;
+        }
+
+        if input.output_partitioning().keeps_keys_local(
+            &self.group_by().input_exprs(),
+            input.equivalence_properties(),
+            allow_subset,
+        ) {
+            return true;
+        }
+
+        self.mode == AggregateMode::FinalPartitioned
+            && input
+                .downcast_ref::<AggregateExec>()
+                .is_some_and(|partial| {
+                    partial.mode == AggregateMode::Partial
+                        && datafusion_physical_expr::physical_exprs_equal(
+                            &partial.output_group_expr(),
+                            &self.group_by().input_exprs(),
+                        )
+                        && partial.input_keeps_groups_local(
+                            partial.input.as_ref(),
+                            allow_subset,
+                        )
+                })
+    }
+
     /// Get the input schema before any aggregates are applied
     pub fn input_schema(&self) -> SchemaRef {
         Arc::clone(&self.input_schema)

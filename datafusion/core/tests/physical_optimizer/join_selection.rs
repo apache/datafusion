@@ -477,10 +477,14 @@ async fn test_join_with_swap_semi() {
 /// which keeps the number of `NOT IN` value keys and the key order, and a
 /// filtered one (a decorrelated correlated `NOT IN`), whose filter sides are
 /// swapped with the inputs.
+///
+/// `PartitionMode::Partitioned` is deliberately not a case here: a null-aware
+/// `LeftAnti` cannot be constructed in that mode at all, so there is no input
+/// plan to optimize. See
+/// `HashJoinExec::null_aware_mode`/`NullAwareMode::try_new`.
 #[rstest]
 #[case::collect_left(PartitionMode::CollectLeft, 1, 1, false)]
 #[case::auto(PartitionMode::Auto, 1, 1, false)]
-#[case::partitioned(PartitionMode::Partitioned, 1, 1, false)]
 #[case::filter(PartitionMode::CollectLeft, 1, 1, true)]
 #[case::scope_key(PartitionMode::CollectLeft, 2, 1, false)]
 #[case::multi_column(PartitionMode::CollectLeft, 2, 2, false)]
