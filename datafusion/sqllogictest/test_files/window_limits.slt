@@ -862,3 +862,17 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
+
+# Huge FOLLOWING bound must not overflow LimitPushPastWindows (issue #26658)
+statement ok
+CREATE TABLE t_huge_following(a INT, x INT) AS VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5);
+
+query II
+SELECT a, sum(x) OVER (ORDER BY a ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING) s
+FROM t_huge_following ORDER BY a LIMIT 2;
+----
+1 15
+2 14
+
+statement ok
+DROP TABLE t_huge_following;

@@ -259,7 +259,7 @@ impl WindowFrameContext {
                 );
             }
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
-                std::cmp::min(idx + n as usize, length)
+                std::cmp::min(idx.saturating_add(n as usize), length)
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
@@ -284,7 +284,7 @@ impl WindowFrameContext {
             // UNBOUNDED FOLLOWING
             WindowFrameBound::Following(ScalarValue::UInt64(None)) => length,
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
-                std::cmp::min(idx + n as usize + 1, length)
+                std::cmp::min(idx.saturating_add(n as usize).saturating_add(1), length)
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
