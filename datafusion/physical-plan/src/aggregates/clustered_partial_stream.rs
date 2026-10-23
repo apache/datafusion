@@ -85,8 +85,9 @@ use crate::{SendableRecordBatchStream, metrics};
 /// only the current group remains active after completed groups are emitted, and
 /// memory usage does not grow with the total number of groups.
 ///
-/// If a memory reservation nevertheless fails, the stream returns the error
-/// directly, indicating an unexpected behavior.
+/// If the reservation after an input batch fails, `ClusteredPartialAggregateStream`
+/// still emits the completed groups, and returns the error only when no group is
+/// complete.
 ///
 /// ## Partial group clustering
 ///
@@ -321,12 +322,10 @@ impl Aggregating {
                     // Partial group clustering may have an unbounded active key range.
                     // The final stage can merge incomplete states emitted here.
                     if matches!(self.table.group_clustering(), GroupClustering::Full(_)) {
-                        return Err(oom);
+                        Some(self.table.take_completed_state_batch()?.ok_or(oom)?)
+                    } else {
+                        Some(self.table.take_state_batch()?.ok_or(oom)?)
                     }
-                    let Some(batch) = self.table.take_state_batch()? else {
-                        return Err(oom);
-                    };
-                    Some(batch)
                 }
                 Err(e) => return Err(e),
             };
@@ -417,5 +416,84 @@ impl Outputting {
         timer.done();
         emitter.emit(batch).await;
         Ok(next_stage)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aggregates::PhysicalGroupBy;
+    use crate::test::TestMemoryExec;
+    use arrow::array::Int64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
+    };
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_functions_aggregate::sum::sum_udaf;
+    use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
+
+    /// Runs a partial `SUM(k) GROUP BY k` over two batches sorted on `k` that
+    /// share a boundary key. Returns the output and the most memory the stream
+    /// held between batches.
+    async fn run(pool: Arc<dyn MemoryPool>) -> Result<(Vec<RecordBatch>, usize)> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let batches = [0..=256, 256..=512]
+            .into_iter()
+            .map(|keys| {
+                let k = Int64Array::from_iter_values(keys);
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k)])
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let input = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![
+                LexOrdering::new([PhysicalSortExpr::new_default(col("k", &schema)?)])
+                    .unwrap(),
+            ])?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".into())]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("k", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(input),
+            Arc::clone(&schema),
+        )?;
+        let context = Arc::new(
+            TaskContext::default().with_runtime(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(Arc::clone(&pool))
+                    .build_arc()?,
+            ),
+        );
+        let mut stream =
+            ClusteredPartialAggregateStream::new(&aggregate, &context, 0)?.into_stream();
+        // Each output batch is a single slice, so the stream releases it before
+        // handing it off and holds only the table.
+        let mut held = pool.reserved();
+        let mut output = vec![];
+        while let Some(batch) = stream.next().await.transpose()? {
+            held = held.max(pool.reserved());
+            output.push(batch);
+        }
+        Ok((output, held))
+    }
+
+    /// The limit fits the table with only the active group, but not the table
+    /// before the completed groups are emitted. The result must not change.
+    #[tokio::test]
+    async fn completed_groups_under_memory_pressure() -> Result<()> {
+        let (expected, held) = run(Arc::new(UnboundedMemoryPool::default())).await?;
+        let (actual, _) = run(Arc::new(GreedyMemoryPool::new(held))).await?;
+        assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
+        Ok(())
     }
 }

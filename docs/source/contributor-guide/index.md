@@ -240,6 +240,14 @@ According to Runs-On, spot instance termination is extremely rare for instances 
 
 We also use standard GitHub runners for some actions in the main repository; these are also runnable in forks.
 
+Small, short jobs run on `ubuntu-slim`, as ASF Infrastructure
+[recommends](https://infra.apache.org/services.html), because it starts quickly
+even when the shared `ubuntu-latest` pool is busy. Use it for any job that
+stays well within its limits: one vCPU, 5 GB of memory, 15 minutes, and no
+Docker engine, so no `container:` jobs or service containers. Slim has no Rust
+toolchain; jobs that need `cargo` install it with
+`.github/actions/setup-rustup`.
+
 #### Pull Requests from Forks
 
 DataFusion and its subprojects use substantial CI runner time. ASF Infrastructure

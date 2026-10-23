@@ -1751,7 +1751,7 @@ mod tests {
     use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
-    use datafusion_expr::test::function_stub::sum;
+    use datafusion_expr::test::function_stub::{count, sum};
     use insta::assert_snapshot;
 
     use super::*;
@@ -4864,9 +4864,11 @@ mod tests {
 
     /// `PushDownFilter` and `PushDownLeafProjections` must not undo each other
     /// for a filter next to a pure extraction projection
-    /// (<https://github.com/apache/datafusion/issues/14540>). Neither rule may
-    /// change the plan in the last optimizer pass. The source does not absorb
-    /// filters, so the `Filter` node stays in the plan.
+    /// (<https://github.com/apache/datafusion/issues/14540>). The source does
+    /// not absorb filters, so the `Filter` node stays in the plan. Also,
+    /// `PushDownLeafProjections` must not split a projection that
+    /// `OptimizeProjections` merges back. No rule may change the plan in the
+    /// last optimizer pass.
     #[test]
     fn filter_and_extraction_projection_reach_fixed_point() -> Result<()> {
         let scan = || {
@@ -4887,13 +4889,26 @@ mod tests {
             .project(vec![leaf_udf_expr(col("a")), col("b")])?
             .build()?;
 
-        for plan in [simple, two_filters] {
+        // No filter: the extraction projection cannot move below the scan.
+        let no_filter = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![leaf_udf_expr(col("a"))])?
+            .build()?;
+
+        // Leaf expression above an Aggregate: the Aggregate blocks movement.
+        let above_aggregate = LogicalPlanBuilder::from(test_table_scan_with_struct()?)
+            .aggregate(vec![col("user")], vec![count(lit(1))])?
+            .project(vec![
+                leaf_udf_expr(col("user")).is_not_null().alias("has_name"),
+                col("COUNT(Int32(1))"),
+            ])?
+            .build()?;
+
+        for plan in [simple, two_filters, no_filter, above_aggregate] {
             let passes = rules_that_changed_plan_per_pass(plan)?;
             let last = passes.last().unwrap();
             assert!(
-                !last.iter().any(|rule| rule == "push_down_filter"
-                    || rule == "push_down_leaf_projections"),
-                "pushdown rules changed the plan in the last pass: {passes:?}"
+                last.is_empty(),
+                "rules changed the plan in the last pass: {passes:?}"
             );
         }
         Ok(())

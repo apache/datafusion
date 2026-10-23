@@ -5922,3 +5922,22 @@ from narrow_decimal_multi_group group by 1, 2 order by 1, 2;
 
 statement ok
 drop table narrow_decimal_multi_group;
+
+# EliminateGroupByConstant must not requalify group expressions over a
+# struct field accessed through a subquery alias
+# https://github.com/apache/datafusion/pull/26356
+statement ok
+CREATE TABLE group_by_struct_requalify AS
+SELECT * FROM (VALUES (named_struct('a', 'x', 'b', 1)), (named_struct('a', 'y', 'b', 2))) AS v(s);
+
+query TIII
+SELECT m.s['a'] || '!' AS k1, m.s['b'] AS k2, m.s['b'] + 1 AS k3, count(*) AS n
+FROM (SELECT * FROM group_by_struct_requalify) m
+GROUP BY m.s['a'] || '!', m.s['b'], m.s['b'] + 1
+ORDER BY k2;
+----
+x! 1 2 1
+y! 2 3 1
+
+statement ok
+DROP TABLE group_by_struct_requalify;
