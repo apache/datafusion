@@ -816,12 +816,14 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn rewrite_f_down(&mut self, node: &Expr) {
-        if matches!(node, Expr::Alias(_)) {
+        // Window children do not need name-preserving aliases. Such aliases can
+        // make otherwise identical window sort keys compare unequal.
+        if matches!(node, Expr::Alias(_) | Expr::WindowFunction(_)) {
             self.alias_counter += 1;
         }
     }
     fn rewrite_f_up(&mut self, node: &Expr) {
-        if matches!(node, Expr::Alias(_)) {
+        if matches!(node, Expr::Alias(_) | Expr::WindowFunction(_)) {
             self.alias_counter -= 1
         }
     }
@@ -2163,8 +2165,37 @@ mod test {
             plan,
             @ "
         Projection: test.a, test.b, test.c, sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, sum(test.a + test.b * Int32(2)) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-          WindowAggr: windowExpr=[[sum(test.a + test.b) FILTER (WHERE __common_expr_2 AS test.c > Int32(0)) PARTITION BY [__common_expr_1 AS test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, sum((test.a + test.b) * Int32(2)) FILTER (WHERE __common_expr_2 AS test.c > Int32(0)) PARTITION BY [__common_expr_1 AS test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(test.a + test.b * Int32(2)) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+          WindowAggr: windowExpr=[[sum(test.a + test.b) FILTER (WHERE __common_expr_2) PARTITION BY [__common_expr_1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, sum((test.a + test.b) * Int32(2)) FILTER (WHERE __common_expr_2) PARTITION BY [__common_expr_1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(test.a + test.b * Int32(2)) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
             Projection: test.a * test.b AS __common_expr_1, test.c > Int32(0) AS __common_expr_2, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn test_window_order_by_rewrites_without_alias() -> Result<()> {
+        // https://github.com/apache/datafusion/issues/26620
+        // Both windows must use the same bare column for their common sort key.
+        let table_scan = test_table_scan()?;
+
+        let window_sum = |arg: Expr| {
+            Expr::from(WindowFunction::new(
+                WindowFunctionDefinition::AggregateUDF(sum_udaf()),
+                vec![arg],
+            ))
+            .order_by(vec![(col("a") + lit(1)).sort(true, false)])
+            .build()
+        };
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window_sum(col("b"))?, window_sum(col("c"))?])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ "
+        Projection: test.a, test.b, test.c, sum(test.b) ORDER BY [test.a + Int32(1) ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(test.c) ORDER BY [test.a + Int32(1) ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          WindowAggr: windowExpr=[[sum(test.b) ORDER BY [__common_expr_1 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(test.b) ORDER BY [test.a + Int32(1) ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(test.c) ORDER BY [__common_expr_1 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(test.c) ORDER BY [test.a + Int32(1) ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            Projection: test.a + Int32(1) AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
         "
         )
