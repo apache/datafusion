@@ -319,13 +319,12 @@ fn statistical_join_selection_subrule(
                     if can_swap_hash_join(hash_join)
                         && should_swap_join_order(left, right, context)?
                     {
-                        // Null-aware RightAnti only supports CollectLeft
-                        let partition_mode = if hash_join.null_aware {
-                            PartitionMode::CollectLeft
-                        } else {
-                            PartitionMode::Partitioned
-                        };
-                        hash_join.swap_inputs(partition_mode).map(Some)?
+                        // A null-aware join is never in `Partitioned` mode
+                        // (`NullAwareMode::try_new` rejects it), so the swap
+                        // keeps the mode this arm matched on.
+                        hash_join
+                            .swap_inputs(PartitionMode::Partitioned)
+                            .map(Some)?
                     } else {
                         None
                     }

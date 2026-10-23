@@ -45,12 +45,14 @@ jobs:
   # Test doc build
   linux-test-doc-build:
     name: Test doc build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rustup
       - name: Setup uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
       - name: Install doc dependencies

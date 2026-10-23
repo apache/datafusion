@@ -53,7 +53,19 @@
 //! that runs before the extraction projection exists, so row group pruning and
 //! source level filtering still happen.
 //!
+//! # Yields to [`OptimizeProjections`]
+//!
+//! When the extraction projection cannot move below the input of a projection
+//! (for example a `TableScan` or an `Aggregate`), [`PushDownLeafProjections`]
+//! leaves the projection unchanged. Splitting it in place would give a
+//! recovery projection over an extraction projection on the same input, and
+//! `OptimizeProjections` merges those two back into the original projection.
+//! The two rules would then undo each other on every optimizer pass. The split
+//! has no use there: the source absorbs the leaf expressions of the original
+//! projection just as well.
+//!
 //! [`PushDownFilter`]: crate::push_down_filter::PushDownFilter
+//! [`OptimizeProjections`]: crate::optimize_projections::OptimizeProjections
 
 use indexmap::{IndexMap, IndexSet};
 use std::collections::{BTreeSet, HashMap};
@@ -1150,18 +1162,33 @@ fn split_and_push_projection(
                 // Only pre-existing __datafusion_extracted aliases and columns, no new
                 // extractions from routing_extract. The original projection is
                 // already an extraction projection that couldn't be pushed
-                // further. Return None.
+                // further. Return None. This return also ends the recursion
+                // of the `try_push_input` call below, which comes back here
+                // with a pure extraction projection.
                 return Ok(None);
             }
-            // Build extraction projection in-place (couldn't push down)
+            // Build the extraction projection in place, then push it. It is a
+            // pure extraction projection, which can go through nodes that the
+            // original projection cannot.
             let input_arc = Arc::clone(input);
-            let extraction = build_extraction_projection_impl(
+            let extraction = LogicalPlan::Projection(build_extraction_projection_impl(
                 &extraction_pairs,
                 columns_needed,
                 &input_arc,
                 input_schema.as_ref(),
-            )?;
-            LogicalPlan::Projection(extraction)
+            )?);
+            match try_push_input(&extraction, alias_generator)? {
+                Some(pushed) => pushed,
+                // The extraction projection cannot move below `input`. Leave
+                // the original projection unchanged: the split would put the
+                // extraction projection on the same input, and
+                // `OptimizeProjections` merges the recovery and extraction
+                // projections back into the original projection. The rules
+                // would then undo each other in every optimizer pass. The
+                // source absorbs the leaf expressions of the original
+                // projection just as well.
+                None => return Ok(None),
+            }
         }
     };
 
@@ -1730,13 +1757,10 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name"))
-          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
-            TableScan: test projection=[user]
+        (same as after extraction)
 
         ## Optimized
-        Projection: leaf_udf(test.user, Utf8("name"))
-          TableScan: test projection=[user]
+        (same as after pushdown)
         "#)
     }
 
@@ -1760,13 +1784,10 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 IS NOT NULL AS has_name
-          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
-            TableScan: test projection=[user]
+        (same as after extraction)
 
         ## Optimized
-        Projection: leaf_udf(test.user, Utf8("name")) IS NOT NULL AS has_name
-          TableScan: test projection=[user]
+        (same as after pushdown)
         "#)
     }
 
@@ -1965,13 +1986,10 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS username
-          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
-            TableScan: test projection=[user]
+        (same as after extraction)
 
         ## Optimized
-        Projection: leaf_udf(test.user, Utf8("name")) AS username
-          TableScan: test projection=[user]
+        (same as after pushdown)
         "#)
     }
 
@@ -2031,13 +2049,10 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), __datafusion_extracted_1 AS name2
-          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
-            TableScan: test projection=[user]
+        (same as after extraction)
 
         ## Optimized
-        Projection: leaf_udf(test.user, Utf8("name")), leaf_udf(test.user, Utf8("name")) AS name2
-          TableScan: test projection=[user]
+        (same as after pushdown)
         "#)
     }
 
@@ -2245,13 +2260,10 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name"))
-          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
-            TableScan: test projection=[user]
+        (same as after extraction)
 
         ## Optimized
-        Projection: leaf_udf(test.user, Utf8("name"))
-          TableScan: test projection=[user]
+        (same as after pushdown)
         "#)
     }
 
@@ -2405,8 +2417,8 @@ mod tests {
     }
 
     /// Projection containing a MoveTowardsLeafNodes sub-expression above an
-    /// Aggregate. Aggregate blocks pushdown, so the (None, true) recovery
-    /// fallback path fires: in-place extraction + recovery projection.
+    /// Aggregate. The Aggregate blocks pushdown, so the extraction cannot move
+    /// and the original projection is kept unchanged.
     #[test]
     fn test_projection_with_leaf_expr_above_aggregate() -> Result<()> {
         use datafusion_expr::test::function_stub::count;
@@ -2432,15 +2444,10 @@ mod tests {
         (same as original)
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 IS NOT NULL AS has_name, COUNT(Int32(1))
-          Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user, COUNT(Int32(1))
-            Aggregate: groupBy=[[test.user]], aggr=[[COUNT(Int32(1))]]
-              TableScan: test projection=[user]
+        (same as after extraction)
 
         ## Optimized
-        Projection: leaf_udf(test.user, Utf8("name")) IS NOT NULL AS has_name, COUNT(Int32(1))
-          Aggregate: groupBy=[[test.user]], aggr=[[COUNT(Int32(1))]]
-            TableScan: test projection=[user]
+        (same as after pushdown)
         "#)
     }
 

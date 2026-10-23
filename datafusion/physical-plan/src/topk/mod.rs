@@ -34,11 +34,11 @@ use super::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
     RecordOutput,
 };
-use crate::spill::get_record_batch_memory_size;
 use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
 use arrow::array::{ArrayRef, RecordBatch, UInt32Array, UInt64Array};
 use arrow::datatypes::{FieldRef, Schema, SchemaRef};
+use datafusion_common::utils::memory::RecordBatchMemoryTracker;
 use datafusion_common::{
     HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
 };
@@ -631,6 +631,18 @@ impl TopK {
 
         let mut prev_sort_expr: Option<Arc<dyn PhysicalExpr>> = None;
         for (sort_expr, value) in sort_exprs.iter().zip(thresholds.iter()) {
+            // Comparisons on nested types (List, Struct, ...) order NULL elements
+            // with fixed default options rather than the sort's `nulls_first`, so
+            // `col < threshold` could drop rows that belong in the TopK. Stop at
+            // the first nested key: keep rows whose earlier keys equal the
+            // threshold and do not filter on this or any later key.
+            if value.data_type().is_nested() {
+                if let Some(prev) = prev_sort_expr.take() {
+                    filters.push(prev);
+                }
+                break;
+            }
+
             // Create the appropriate operator based on sort order
             let op = if sort_expr.options.descending {
                 // For descending sort, we want col > threshold (exclude smaller values)
@@ -1189,6 +1201,10 @@ struct RecordBatchStore {
     next_id: u32,
     /// storage
     batches: HashMap<u32, RecordBatchEntry>,
+    /// Counts the buffers of the stored batches. Stored input batches can be
+    /// zero-copy slices of one larger batch, which keep all of its buffers
+    /// alive, so each shared buffer is counted once.
+    batch_memory: RecordBatchMemoryTracker,
     /// total size of all record batches tracked by this store
     batches_size: usize,
     /// row count of all the batches
@@ -1200,6 +1216,7 @@ impl RecordBatchStore {
         Self {
             next_id: 0,
             batches: HashMap::new(),
+            batch_memory: RecordBatchMemoryTracker::new(),
             batches_size: 0,
             total_rows: 0,
         }
@@ -1246,7 +1263,7 @@ impl RecordBatchStore {
     pub fn insert(&mut self, entry: RecordBatchEntry) {
         // uses of 0 means that none of the rows in the batch were stored in the topk
         if entry.uses > 0 {
-            self.batches_size += get_record_batch_memory_size(&entry.batch);
+            self.batches_size += self.batch_memory.count_batch(&entry.batch);
             self.total_rows += entry.batch.num_rows();
             self.batches.insert(entry.id, entry);
         }
@@ -1284,6 +1301,7 @@ impl RecordBatchStore {
     /// Clear all values in this store, invalidating all previous batch ids
     fn clear(&mut self) {
         self.batches.clear();
+        self.batch_memory = RecordBatchMemoryTracker::new();
         self.batches_size = 0;
         self.total_rows = 0;
     }
@@ -1335,7 +1353,7 @@ impl RecordBatchStore {
             let old_entry = self.batches.remove(&id).unwrap();
             self.batches_size = self
                 .batches_size
-                .checked_sub(get_record_batch_memory_size(&old_entry.batch))
+                .checked_sub(self.batch_memory.uncount_batch(&old_entry.batch))
                 .unwrap();
 
             self.total_rows = self
@@ -3202,12 +3220,14 @@ impl PartitionedTopKDenseRank {
 mod tests {
     use super::*;
     use crate::metrics::MetricValue;
+    use crate::spill::get_record_batch_memory_size;
     use arrow::array::{
         AsArray, BooleanArray, Float64Array, Int32Array, StringArray,
         StringDictionaryBuilder,
     };
     use arrow::datatypes::{DataType, Field, Int32Type, Schema, UInt64Type};
     use arrow_schema::SortOptions;
+    use datafusion_common::utils::memory::RecordBatchMemoryCounter;
     use datafusion_common::{assert_batches_eq, exec_datafusion_err};
     use datafusion_execution::memory_pool::GreedyMemoryPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -5258,10 +5278,11 @@ mod tests {
         // 3. The store's two running totals are exact, not estimates.
         let rows: usize = store.batches.values().map(|e| e.batch.num_rows()).sum();
         assert_eq!(rows, store.total_rows, "{label}: store.total_rows drifted");
+        let mut counter = RecordBatchMemoryCounter::new();
         let bytes: usize = store
             .batches
             .values()
-            .map(|e| get_record_batch_memory_size(&e.batch))
+            .map(|e| counter.count_batch(&e.batch))
             .sum();
         assert_eq!(
             bytes, store.batches_size,
