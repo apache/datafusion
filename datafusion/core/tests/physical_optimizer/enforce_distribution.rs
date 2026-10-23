@@ -4760,7 +4760,7 @@ fn parallelization_multiple_files() -> Result<()> {
                                                                                         @r"
     SortRequiredExec: [a@0 ASC]
       FilterExec: c@2 = 0
-        DataSourceExec: file_groups={8 groups: [[x:0..25], [y:0..25], [x:25..50], [y:25..50], [x:50..75], [y:50..75], [x:75..100], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+        DataSourceExec: file_groups={8 groups: [[x:0..25], [x:25..50], [x:50..75], [x:75..100], [y:0..25], [y:25..50], [y:50..75], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
     let plan_8_sort = test_config_concurrency_8.to_plan(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_8_distrib, plan_8_sort);
