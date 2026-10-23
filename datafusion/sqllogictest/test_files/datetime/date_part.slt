@@ -1215,6 +1215,26 @@ SELECT extract(epoch from arrow_cast(NULL, 'Duration(Nanosecond)'))
 ----
 NULL
 
+# NULLs stay NULL and don't change the other rows of the batch
+query R
+SELECT extract(epoch from d) FROM (VALUES
+  (arrow_cast(2500000000, 'Duration(Nanosecond)')),
+  (NULL),
+  (arrow_cast(1500000000, 'Duration(Nanosecond)'))
+) AS t(d)
+----
+2.5
+NULL
+1.5
+
+query RRRR
+SELECT extract(epoch from arrow_cast(9223372036854775807, 'Duration(Nanosecond)')),
+       extract(epoch from arrow_cast(-9223372036854775807, 'Duration(Nanosecond)')),
+       extract(epoch from arrow_cast(9223372036854775807, 'Duration(Second)')),
+       extract(epoch from arrow_cast(-9223372036854775807, 'Duration(Second)'))
+----
+9223372036.854776 -9223372036.854776 9223372036854776000 -9223372036854776000
+
 query I
 SELECT extract(millisecond from arrow_cast(2, 'Duration(Second)'))
 ----
