@@ -2074,6 +2074,55 @@ set datafusion.explain.logical_plan_only = false;
 statement ok
 set datafusion.execution.target_partitions = 4;
 
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE outer_join_sort_left (id BIGINT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE outer_join_sort_right (a BIGINT, b BIGINT) AS VALUES (2, 2), (3, 3);
+
+query III
+SELECT * FROM outer_join_sort_left
+LEFT JOIN (
+  SELECT a, b FROM outer_join_sort_right WHERE b = coalesce(a, 0)
+) ON id = b
+ORDER BY coalesce(a, 0), id;
+----
+1 NULL NULL
+2 2 2
+
+query III
+SELECT * FROM outer_join_sort_left
+LEFT JOIN (
+  SELECT a, b FROM outer_join_sort_right WHERE b = coalesce(a, 0)
+) ON id = b
+ORDER BY coalesce(a, 0), id
+LIMIT 1;
+----
+1 NULL NULL
+
+query III
+SELECT * FROM outer_join_sort_left
+FULL OUTER JOIN (
+  SELECT a, b FROM outer_join_sort_right WHERE b = coalesce(a, 0)
+) ON id = b
+ORDER BY coalesce(a, 0), id;
+----
+1 NULL NULL
+2 2 2
+NULL 3 3
+
+statement ok
+DROP TABLE outer_join_sort_left;
+
+statement ok
+DROP TABLE outer_join_sort_right;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
 # Planning inner nested loop join
 # inputs are swapped due to inexact statistics + join reordering caused additional projection
 
