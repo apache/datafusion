@@ -18,7 +18,9 @@
 //! Tests for parquet schema handling
 use std::{collections::HashMap, fs, path::Path};
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef, LargeListArray, ListArray, StructArray};
+use arrow::buffer::OffsetBuffer;
+use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
 use tempfile::TempDir;
 
@@ -324,4 +326,131 @@ fn assert_metadata(batches: &[RecordBatch], expected_metadata: &HashMap<String, 
     for batch in batches {
         assert_eq!(batch.schema().metadata(), expected_metadata,);
     }
+}
+
+#[tokio::test]
+async fn schema_merge_marks_missing_nested_children_nullable() {
+    for kind in ["struct", "list", "large_list"] {
+        let dir = TempDir::new().unwrap();
+        for (name, id, with_y) in [("a.parquet", 1, true), ("b.parquet", 2, false)] {
+            let mut fields = vec![Arc::new(Field::new("x", DataType::Int32, false))];
+            let mut arrays: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![id]))];
+            if with_y {
+                fields.push(Arc::new(Field::new("y", DataType::Int32, false)));
+                arrays.push(Arc::new(Int32Array::from(vec![10])));
+            }
+            let s = StructArray::new(fields.into(), arrays, None);
+            let s: ArrayRef = match kind {
+                "struct" => Arc::new(s),
+                "list" => Arc::new(ListArray::new(
+                    Arc::new(Field::new("item", s.data_type().clone(), false)),
+                    OffsetBuffer::new(vec![0_i32, 1].into()),
+                    Arc::new(s),
+                    None,
+                )),
+                "large_list" => Arc::new(LargeListArray::new(
+                    Arc::new(Field::new("item", s.data_type().clone(), false)),
+                    OffsetBuffer::new(vec![0_i64, 1].into()),
+                    Arc::new(s),
+                    None,
+                )),
+                _ => unreachable!(),
+            };
+            write_nested_file(
+                &dir,
+                name,
+                vec![
+                    Field::new("id", DataType::Int32, false),
+                    Field::new("s", s.data_type().clone(), false),
+                ],
+                vec![Arc::new(Int32Array::from(vec![id])), s],
+                EnabledStatistics::Page,
+            );
+        }
+        for skip_metadata in [true, false] {
+            for pushdown in [true, false] {
+                let config = SessionConfig::new()
+                    .set_bool("datafusion.execution.parquet.pushdown_filters", pushdown);
+                let ctx = SessionContext::new_with_config(config);
+                ctx.register_parquet(
+                    "t",
+                    dir.path().to_str().unwrap(),
+                    ParquetReadOptions::default().skip_metadata(skip_metadata),
+                )
+                .await
+                .unwrap();
+                let df = ctx.table("t").await.unwrap();
+                let mut data_type = df
+                    .schema()
+                    .field_with_unqualified_name("s")
+                    .unwrap()
+                    .data_type();
+                if let DataType::List(item) | DataType::LargeList(item) = data_type {
+                    assert!(!item.is_nullable());
+                    data_type = item.data_type();
+                }
+                let DataType::Struct(fields) = data_type else {
+                    panic!("expected struct")
+                };
+                let child = if kind == "struct" {
+                    "s.y"
+                } else {
+                    "get_field(s[1], 'y')"
+                };
+                assert!(!fields[0].is_nullable());
+                assert!(fields[1].is_nullable());
+                let batches = ctx
+                    .sql(&format!("SELECT id, {child} AS y FROM t ORDER BY id"))
+                    .await
+                    .unwrap()
+                    .collect()
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    batches_to_sort_string(&batches).trim(),
+                    "+----+----+\n| id | y  |\n+----+----+\n| 1  | 10 |\n| 2  |    |\n+----+----+"
+                );
+                let batches = ctx
+                    .sql(&format!("SELECT id FROM t WHERE {child} IS NULL"))
+                    .await
+                    .unwrap()
+                    .collect()
+                    .await
+                    .unwrap();
+                assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+                assert_eq!(
+                    batches[0]
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .value(0),
+                    2
+                );
+            }
+        }
+    }
+}
+
+fn write_nested_file(
+    dir: &TempDir,
+    name: &str,
+    fields: Vec<Field>,
+    arrays: Vec<ArrayRef>,
+    statistics: EnabledStatistics,
+) {
+    let schema = Arc::new(Schema::new(fields));
+    let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(1))
+        .set_statistics_enabled(statistics)
+        .build();
+    let mut writer = ArrowWriter::try_new(
+        fs::File::create(dir.path().join(name)).unwrap(),
+        schema,
+        Some(props),
+    )
+    .unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
 }
