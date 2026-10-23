@@ -32,7 +32,7 @@ use std::fmt::Debug;
 /// This is a wrapper for handling different kinds of literal maps
 #[derive(Clone, Debug)]
 pub(super) struct BytesLikeIndexMap {
-    /// Map from non-null literal value the first occurrence index in the literals
+    /// Map from non-null literal value to the first occurrence index in the literals
     map: HashMap<Vec<u8>, u32>,
 }
 

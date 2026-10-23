@@ -118,3 +118,71 @@ query ?
 SELECT NVL2(NULL, NULL, NULL);
 ----
 NULL
+
+
+# issue 26024 - nvl2 result type should not depend on its first argument
+statement ok
+CREATE TABLE t AS SELECT
+  1 AS i, 1.5 AS f, 'a' AS s,
+  CAST(1.23 AS DECIMAL(5,2)) AS d1, CAST(4.56 AS DECIMAL(5,2)) AS d2,
+  TIMESTAMP '2024-01-01 10:00:00' AS ts1, TIMESTAMP '2024-01-02 10:00:00' AS ts2;
+
+query T
+SELECT arrow_typeof(CASE WHEN i IS NOT NULL THEN d1 ELSE d2 END) AS case_type FROM t;
+----
+Decimal128(5, 2)
+
+query RT
+SELECT nvl2(i, d1, d2) AS v, arrow_typeof(nvl2(i, d1, d2)) AS v_type FROM t;
+----
+1.23 Decimal128(5, 2)
+
+query RT
+SELECT nvl2(f, d1, d2) AS v, arrow_typeof(nvl2(f, d1, d2)) AS v_type FROM t;
+----
+1.23 Decimal128(5, 2)
+
+query RT
+SELECT nvl2(s, d1, d2) AS v, arrow_typeof(nvl2(s, d1, d2)) AS v_type FROM t;
+----
+1.23 Decimal128(5, 2)
+
+query PT
+SELECT nvl2(i, ts1, ts2) AS v, arrow_typeof(nvl2(i, ts1, ts2)) AS v_type FROM t;
+----
+2024-01-01T10:00:00 Timestamp(ns)
+
+query PT
+SELECT nvl2('a', ts1, ts2) AS v, arrow_typeof(nvl2('a', ts1, ts2)) AS v_type FROM t;
+----
+2024-01-01T10:00:00 Timestamp(ns)
+
+statement ok
+DROP TABLE t;
+
+# nvl2 should pick the same timezone as the equivalent CASE expression
+# when its branches have different timezones
+statement ok
+CREATE TABLE t_tz AS
+SELECT i, a, arrow_cast(a, 'Timestamp(Nanosecond, Some("+05:00"))') AS b
+FROM (SELECT 1 AS i,
+             arrow_cast(TIMESTAMP '2024-01-01 22:00:00', 'Timestamp(Nanosecond, Some("+00:00"))') AS a);
+
+query PTD
+SELECT CASE WHEN i IS NOT NULL THEN a ELSE b END AS v,
+       arrow_typeof(CASE WHEN i IS NOT NULL THEN a ELSE b END) AS v_type,
+       CAST(CASE WHEN i IS NOT NULL THEN a ELSE b END AS DATE) AS v_date
+FROM t_tz;
+----
+2024-01-02T03:00:00+05:00 Timestamp(ns, "+05:00") 2024-01-02
+
+query PTD
+SELECT nvl2(i, a, b) AS v,
+       arrow_typeof(nvl2(i, a, b)) AS v_type,
+       CAST(nvl2(i, a, b) AS DATE) AS v_date
+FROM t_tz;
+----
+2024-01-02T03:00:00+05:00 Timestamp(ns, "+05:00") 2024-01-02
+
+statement ok
+DROP TABLE t_tz;

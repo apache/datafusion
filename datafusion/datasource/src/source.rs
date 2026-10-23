@@ -223,6 +223,10 @@ pub trait DataSource: Any + Send + Sync + Debug {
     }
 
     /// Returns a variant of this `DataSource` that is aware of order-sensitivity.
+    #[deprecated(
+        since = "56.0.0",
+        note = "no longer called: a scan that advertises an output ordering always preserves it"
+    )]
     fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn DataSource>> {
         None
     }
@@ -582,18 +586,6 @@ impl ExecutionPlan for DataSourceExec {
             .try_map(|new_data_source| {
                 let new_exec = self.clone().with_data_source(new_data_source);
                 Ok(Arc::new(new_exec) as Arc<dyn ExecutionPlan>)
-            })
-    }
-
-    fn with_preserve_order(
-        &self,
-        preserve_order: bool,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.data_source
-            .with_preserve_order(preserve_order)
-            .map(|new_data_source| {
-                Arc::new(self.clone().with_data_source(new_data_source))
-                    as Arc<dyn ExecutionPlan>
             })
     }
 

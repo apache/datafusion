@@ -298,7 +298,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         None,
     )?;
     let inner_list = GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(list_array.value_type().clone(), true)),
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::new(inner_offsets.into()),
         inner_values,
         Some(NullBuffer::new(inner_nulls.finish())),

@@ -218,6 +218,21 @@ pub trait ExprPlanner: Debug + Send + Sync {
         Ok(PlannerResult::Original(args))
     }
 
+    /// Plan `<expr> AT TIME ZONE '<tz>'`.
+    ///
+    /// `args` is `[Utf8 literal tz, expr]`, the argument order of the
+    /// PostgreSQL function form `timezone(zone, expr)`.
+    ///
+    /// The result type depends on whether the type of `expr` *after type
+    /// coercion* has a timezone, and the SQL planner runs before type
+    /// coercion. So an implementation must return an expression that decides
+    /// later, such as the `timezone` function of `datafusion-functions`.
+    ///
+    /// Returns original expression arguments if not possible
+    fn plan_at_time_zone(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
+
     /// Plans a struct literal, such as  `{'field1' : expr1, 'field2' : expr2, ...}`
     ///
     /// This function takes a vector of expressions and a boolean flag
