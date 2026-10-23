@@ -1,0 +1,10 @@
+---
+source: datafusion/physical-plan/src/aggregates/memory_call_sequence_tests.rs
+expression: snapshot
+---
+ClusteredFinalAggregateStream[0] register can_spill=true
+ClusteredFinalAggregateStream[0] try_grow 5552
+ClusteredFinalAggregateStream[0] try_grow 544 -> refused
+ClusteredFinalAggregateStream[0] shrink 5552
+ClusteredFinalAggregateStream[0] unregister
+=> Err(Resources exhausted: Failed to allocate additional 544.0 B for ClusteredFinalAggregateStream[0] with 5.4 KB already allocated for this reservation - 448.0 B remain available for the total memory pool: greedy(used: 5.4 KB, pool_size: 5.9 KB))

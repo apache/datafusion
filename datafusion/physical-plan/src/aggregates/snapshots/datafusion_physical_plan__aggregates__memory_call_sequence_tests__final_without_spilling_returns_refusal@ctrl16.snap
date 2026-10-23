@@ -1,0 +1,12 @@
+---
+source: datafusion/physical-plan/src/aggregates/memory_call_sequence_tests.rs
+expression: snapshot
+---
+FinalHashAggregateStream[0] register can_spill=false
+FinalHashAggregateStream[0] try_grow 5496
+FinalHashAggregateStream[0] try_grow 9472 -> refused
+FinalHashAggregateStream[0] shrink 5496
+FinalHashAggregateStream[0] unregister
+=> Err(Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
+caused by
+Resources exhausted: Failed to allocate additional 9.2 KB for FinalHashAggregateStream[0] with 5.4 KB already allocated for this reservation - 504.0 B remain available for the total memory pool: greedy(used: 5.4 KB, pool_size: 5.9 KB))

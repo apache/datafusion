@@ -28,7 +28,8 @@
 //! the query outcome. Limits were chosen by experiment so that each test
 //! really takes its path, which the test also asserts through metrics or the
 //! output batch sizes. Byte counts follow the current accounting of the hash
-//! tables and arrays, so a change there shows up as a snapshot diff.
+//! tables and arrays, so a change there shows up as a snapshot diff. Some of
+//! them also depend on the target (see [`assert_snapshot_per_group_width`]).
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -52,6 +53,7 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use hashbrown::HashTable;
 use insta::assert_snapshot;
 
 use super::{AggregateExec, AggregateMode, GroupClusteringMode, PhysicalGroupBy};
@@ -448,6 +450,22 @@ fn case(
     }
 }
 
+/// Asserts `snapshot` against `snapshots/<module>__<name>@ctrl<width>.snap`.
+///
+/// A group hash table's [`HashTable::allocation_size`] includes one control
+/// byte per bucket plus hashbrown's SIMD group width, which is 16 with SSE2
+/// (x86_64) and 8 on aarch64. Whether a pool call includes the table depends
+/// on the stream's state, so the difference cannot be normalized away, and
+/// snapshots whose byte counts differ are kept once per width.
+fn assert_snapshot_per_group_width(name: &str, snapshot: &str) {
+    // Capacity 1 allocates 4 buckets of 16 bytes, then 4 + width control bytes.
+    let table = HashTable::<[u64; 2]>::with_capacity(1);
+    let width = table.allocation_size() - 4 * 16 - 4;
+    insta::with_settings!({ snapshot_suffix => format!("ctrl{width}") }, {
+        assert_snapshot!(name, snapshot);
+    });
+}
+
 /// Every key appears twice, in different spill runs.
 fn hash_input_repeated() -> Vec<Vec<(i64, i64)>> {
     vec![
@@ -494,49 +512,7 @@ async fn final_spills_twice_then_replays() -> Result<()> {
     .await?;
     assert_eq!(run.clustering, GroupClusteringMode::None);
     assert_eq!(run.spill_count(), 2);
-    assert_snapshot!(run.snapshot, @r"
-    FinalHashAggregateStream[0] register can_spill=true
-    FinalHashAggregateStream[0] try_grow 5488
-    FinalHashAggregateStream[0] try_grow 10496
-    FinalHashAggregateStream[0] try_grow 13824
-    FinalHashAggregateStream[0] try_grow 9216 -> refused
-    FinalHashAggregateStream[0] shrink 29704
-    FinalHashAggregateStream[0] try_grow 15880
-    FinalHashAggregateStream[0] try_grow 13824
-    FinalHashAggregateStream[0] try_grow 9216 -> refused
-    FinalHashAggregateStream[0] shrink 29704
-    FinalHashAggregateStream[0] shrink 104
-    FinalHashAggregateStream[0] try_grow 5552
-    FinalHashAggregateStream[0] try_grow 32768
-    FinalHashAggregateStream[0] try_grow 32768 -> refused
-    FinalHashAggregateStream[0] shrink 32768
-    FinalHashAggregateStream[0] try_grow 16384
-    FinalHashAggregateStream[0] try_grow 16384
-    FinalHashAggregateStream[0] shrink 16384
-    FinalHashAggregateStream[0] try_grow 3072
-    FinalHashAggregateStream[0] try_grow 208
-    FinalHashAggregateStream[0] shrink 2240
-    FinalHashAggregateStream[0] try_grow 3064
-    FinalHashAggregateStream[0] try_grow 208
-    FinalHashAggregateStream[0] shrink 3272
-    FinalHashAggregateStream[0] try_grow 3064
-    FinalHashAggregateStream[0] try_grow 208
-    FinalHashAggregateStream[0] shrink 3272
-    FinalHashAggregateStream[0] try_grow 3064
-    FinalHashAggregateStream[0] try_grow 208
-    FinalHashAggregateStream[0] shrink 3272
-    FinalHashAggregateStream[0] try_grow 3064
-    FinalHashAggregateStream[0] try_grow 208
-    FinalHashAggregateStream[0] shrink 3272
-    FinalHashAggregateStream[0] try_grow 3064
-    FinalHashAggregateStream[0] try_grow 208
-    FinalHashAggregateStream[0] shrink 3272
-    FinalHashAggregateStream[0] shrink 16384
-    FinalHashAggregateStream[0] shrink 6384
-    FinalHashAggregateStream[0] shrink 208
-    FinalHashAggregateStream[0] unregister
-    => Ok(768 rows in 7 batches)
-    ");
+    assert_snapshot_per_group_width("final_spills_twice_then_replays", &run.snapshot);
     Ok(())
 }
 
@@ -552,16 +528,10 @@ async fn final_without_spilling_returns_refusal() -> Result<()> {
     .await?;
     assert_eq!(run.spill_count(), 0);
     assert!(run.snapshot.contains("temporary files are not enabled"));
-    assert_snapshot!(run.snapshot, @r"
-    FinalHashAggregateStream[0] register can_spill=false
-    FinalHashAggregateStream[0] try_grow 5488
-    FinalHashAggregateStream[0] try_grow 9472 -> refused
-    FinalHashAggregateStream[0] shrink 5488
-    FinalHashAggregateStream[0] unregister
-    => Err(Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
-    caused by
-    Resources exhausted: Failed to allocate additional 9.2 KB for FinalHashAggregateStream[0] with 5.4 KB already allocated for this reservation - 512.0 B remain available for the total memory pool: greedy(used: 5.4 KB, pool_size: 5.9 KB))
-    ");
+    assert_snapshot_per_group_width(
+        "final_without_spilling_returns_refusal",
+        &run.snapshot,
+    );
     Ok(())
 }
 
@@ -577,49 +547,7 @@ async fn single_spills_twice_then_replays() -> Result<()> {
     .await?;
     assert_eq!(run.clustering, GroupClusteringMode::None);
     assert_eq!(run.spill_count(), 2);
-    assert_snapshot!(run.snapshot, @r"
-    SingleHashAggregateStream[0] register can_spill=true
-    SingleHashAggregateStream[0] try_grow 5488
-    SingleHashAggregateStream[0] try_grow 10496
-    SingleHashAggregateStream[0] try_grow 13824
-    SingleHashAggregateStream[0] try_grow 9216 -> refused
-    SingleHashAggregateStream[0] shrink 29704
-    SingleHashAggregateStream[0] try_grow 15880
-    SingleHashAggregateStream[0] try_grow 13824
-    SingleHashAggregateStream[0] try_grow 9216 -> refused
-    SingleHashAggregateStream[0] shrink 29704
-    SingleHashAggregateStream[0] shrink 104
-    SingleHashAggregateStream[0] try_grow 5552
-    SingleHashAggregateStream[0] try_grow 32768
-    SingleHashAggregateStream[0] try_grow 32768 -> refused
-    SingleHashAggregateStream[0] shrink 32768
-    SingleHashAggregateStream[0] try_grow 16384
-    SingleHashAggregateStream[0] try_grow 16384
-    SingleHashAggregateStream[0] shrink 16384
-    SingleHashAggregateStream[0] try_grow 3072
-    SingleHashAggregateStream[0] try_grow 208
-    SingleHashAggregateStream[0] shrink 2240
-    SingleHashAggregateStream[0] try_grow 3064
-    SingleHashAggregateStream[0] try_grow 208
-    SingleHashAggregateStream[0] shrink 3272
-    SingleHashAggregateStream[0] try_grow 3064
-    SingleHashAggregateStream[0] try_grow 208
-    SingleHashAggregateStream[0] shrink 3272
-    SingleHashAggregateStream[0] try_grow 3064
-    SingleHashAggregateStream[0] try_grow 208
-    SingleHashAggregateStream[0] shrink 3272
-    SingleHashAggregateStream[0] try_grow 3064
-    SingleHashAggregateStream[0] try_grow 208
-    SingleHashAggregateStream[0] shrink 3272
-    SingleHashAggregateStream[0] try_grow 3064
-    SingleHashAggregateStream[0] try_grow 208
-    SingleHashAggregateStream[0] shrink 3272
-    SingleHashAggregateStream[0] shrink 16384
-    SingleHashAggregateStream[0] shrink 6384
-    SingleHashAggregateStream[0] shrink 208
-    SingleHashAggregateStream[0] unregister
-    => Ok(768 rows in 7 batches)
-    ");
+    assert_snapshot_per_group_width("single_spills_twice_then_replays", &run.snapshot);
     Ok(())
 }
 
@@ -635,16 +563,10 @@ async fn single_without_spilling_returns_refusal() -> Result<()> {
     .await?;
     assert_eq!(run.spill_count(), 0);
     assert!(run.snapshot.contains("temporary files are not enabled"));
-    assert_snapshot!(run.snapshot, @r"
-    SingleHashAggregateStream[0] register can_spill=false
-    SingleHashAggregateStream[0] try_grow 5488
-    SingleHashAggregateStream[0] try_grow 9472 -> refused
-    SingleHashAggregateStream[0] shrink 5488
-    SingleHashAggregateStream[0] unregister
-    => Err(Single hash aggregate cannot spill because temporary files are not enabled in the DiskManager
-    caused by
-    Resources exhausted: Failed to allocate additional 9.2 KB for SingleHashAggregateStream[0] with 5.4 KB already allocated for this reservation - 512.0 B remain available for the total memory pool: greedy(used: 5.4 KB, pool_size: 5.9 KB))
-    ");
+    assert_snapshot_per_group_width(
+        "single_without_spilling_returns_refusal",
+        &run.snapshot,
+    );
     Ok(())
 }
 
@@ -666,43 +588,26 @@ async fn output_materialization_refused() -> Result<()> {
 
     let run = padded(AggregateMode::Final).run().await?;
     assert_eq!(run.spill_count(), 0);
-    assert_snapshot!(run.snapshot, @r"
-    FinalHashAggregateStream[0] register can_spill=true
-    FinalHashAggregateStream[0] try_grow 5488
-    FinalHashAggregateStream[0] try_grow 40192
-    FinalHashAggregateStream[0] try_grow 24168 -> refused
-    FinalHashAggregateStream[0] shrink 45680
-    FinalHashAggregateStream[0] unregister
-    => Err(Resources exhausted: Failed to allocate additional 23.6 KB for FinalHashAggregateStream[0] with 44.6 KB already allocated for this reservation - 4.2 KB remain available for the total memory pool: greedy(used: 44.6 KB, pool_size: 48.8 KB))
-    ");
+    assert_snapshot_per_group_width(
+        "output_materialization_refused_final",
+        &run.snapshot,
+    );
 
     let run = padded(AggregateMode::Single).run().await?;
     assert_eq!(run.spill_count(), 0);
     assert_eq!(run.output_batch_rows, vec![64; 4]);
-    assert_snapshot!(run.snapshot, @r"
-    SingleHashAggregateStream[0] register can_spill=true
-    SingleHashAggregateStream[0] try_grow 5488
-    SingleHashAggregateStream[0] try_grow 40192
-    SingleHashAggregateStream[0] try_grow 24168 -> refused
-    SingleHashAggregateStream[0] shrink 45680
-    SingleHashAggregateStream[0] unregister
-    => Ok(256 rows in 4 batches)
-    ");
+    assert_snapshot_per_group_width(
+        "output_materialization_refused_single",
+        &run.snapshot,
+    );
 
     let run = padded(AggregateMode::Partial).run().await?;
     assert_eq!(run.metric("early_emit_count"), 0);
     assert_eq!(run.output_batch_rows, vec![64; 4]);
-    assert_snapshot!(run.snapshot, @r"
-    PartialHashAggregateStream[0] register can_spill=true
-    PartialHashAggregateStream[0] try_grow 5488
-    PartialHashAggregateStream[0] try_grow 39168
-    PartialHashAggregateStream[0] try_grow 25192 -> refused
-    PartialHashAggregateStream[0] try_grow 25192 -> refused
-    PartialHashAggregateStream[0] try_grow 25192 -> refused
-    PartialHashAggregateStream[0] shrink 44656
-    PartialHashAggregateStream[0] unregister
-    => Ok(256 rows in 4 batches)
-    ");
+    assert_snapshot_per_group_width(
+        "output_materialization_refused_partial",
+        &run.snapshot,
+    );
     Ok(())
 }
 
@@ -959,35 +864,23 @@ async fn full_clustering_refusal_is_an_error() -> Result<()> {
 
     let run = one_group(AggregateMode::Partial).run().await?;
     assert_eq!(run.clustering, GroupClusteringMode::Full);
-    assert_snapshot!(run.snapshot, @r"
-    ClusteredPartialAggregateStream[0] register can_spill=false
-    ClusteredPartialAggregateStream[0] try_grow 5552
-    ClusteredPartialAggregateStream[0] try_grow 544 -> refused
-    ClusteredPartialAggregateStream[0] shrink 5552
-    ClusteredPartialAggregateStream[0] unregister
-    => Err(Resources exhausted: Failed to allocate additional 544.0 B for ClusteredPartialAggregateStream[0] with 5.4 KB already allocated for this reservation - 448.0 B remain available for the total memory pool: greedy(used: 5.4 KB, pool_size: 5.9 KB))
-    ");
+    assert_snapshot_per_group_width(
+        "full_clustering_refusal_is_an_error_partial",
+        &run.snapshot,
+    );
 
     let run = one_group(AggregateMode::Final).run().await?;
     assert_eq!(run.clustering, GroupClusteringMode::Full);
-    assert_snapshot!(run.snapshot, @r"
-    ClusteredFinalAggregateStream[0] register can_spill=true
-    ClusteredFinalAggregateStream[0] try_grow 5552
-    ClusteredFinalAggregateStream[0] try_grow 544 -> refused
-    ClusteredFinalAggregateStream[0] shrink 5552
-    ClusteredFinalAggregateStream[0] unregister
-    => Err(Resources exhausted: Failed to allocate additional 544.0 B for ClusteredFinalAggregateStream[0] with 5.4 KB already allocated for this reservation - 448.0 B remain available for the total memory pool: greedy(used: 5.4 KB, pool_size: 5.9 KB))
-    ");
+    assert_snapshot_per_group_width(
+        "full_clustering_refusal_is_an_error_final",
+        &run.snapshot,
+    );
 
     let run = one_group(AggregateMode::Single).run().await?;
     assert_eq!(run.clustering, GroupClusteringMode::Full);
-    assert_snapshot!(run.snapshot, @r"
-    ClusteredSingleAggregateStream[0] register can_spill=false
-    ClusteredSingleAggregateStream[0] try_grow 5552
-    ClusteredSingleAggregateStream[0] try_grow 544 -> refused
-    ClusteredSingleAggregateStream[0] shrink 5552
-    ClusteredSingleAggregateStream[0] unregister
-    => Err(Resources exhausted: Failed to allocate additional 544.0 B for ClusteredSingleAggregateStream[0] with 5.4 KB already allocated for this reservation - 448.0 B remain available for the total memory pool: greedy(used: 5.4 KB, pool_size: 5.9 KB))
-    ");
+    assert_snapshot_per_group_width(
+        "full_clustering_refusal_is_an_error_single",
+        &run.snapshot,
+    );
     Ok(())
 }

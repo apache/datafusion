@@ -1,0 +1,13 @@
+---
+source: datafusion/physical-plan/src/aggregates/memory_call_sequence_tests.rs
+expression: snapshot
+---
+PartialHashAggregateStream[0] register can_spill=true
+PartialHashAggregateStream[0] try_grow 5496
+PartialHashAggregateStream[0] try_grow 39168
+PartialHashAggregateStream[0] try_grow 25184 -> refused
+PartialHashAggregateStream[0] try_grow 25184 -> refused
+PartialHashAggregateStream[0] try_grow 25184 -> refused
+PartialHashAggregateStream[0] shrink 44664
+PartialHashAggregateStream[0] unregister
+=> Ok(256 rows in 4 batches)
