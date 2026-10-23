@@ -186,19 +186,17 @@ impl ScalarUDFImpl for NVLFunc {
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::DataType;
-    use datafusion_common::DataFusionError;
 
     #[test]
     fn rejects_wrong_argument_counts_through_public_udf() {
         let nvl = crate::core::nvl();
         for count in [0, 1, 3, 4, 8] {
             let error = nvl.coerce_types(&vec![DataType::Int64; count]).unwrap_err();
-            let DataFusionError::Execution(message) = error else {
-                panic!("Expected an execution error, got {error:?}");
-            };
             assert_eq!(
-                message,
-                format!("nvl function requires 2 arguments, got {count}")
+                error.strip_backtrace(),
+                format!(
+                    "Execution error: nvl function requires 2 arguments, got {count}"
+                )
             );
         }
         assert_eq!(
