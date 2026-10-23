@@ -2205,7 +2205,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let name = if variable == "all" {
             None
         } else {
-            // Whether this is actually a known variable is checked later at execution timne.
+            // No need to validate if the variable exists here; that is handled at execution time.
             Some(variable)
         };
 
