@@ -1758,3 +1758,76 @@ SELECT n, m FROM w;
 
 statement ok
 DROP TABLE dynamic_filter_recursive;
+
+# Hash join dynamic filters must remain shared with the probe scan across
+# recursive iterations (#26641). Each iteration looks up a different key, so
+# retaining a stale bound would also truncate the recursive result.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (SELECT value AS k FROM generate_series(1, 100))
+TO 'test_files/scratch/cte/hash_join_dynamic_filter.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE hash_join_dynamic_filter STORED AS PARQUET
+LOCATION 'test_files/scratch/cte/hash_join_dynamic_filter.parquet';
+
+query I
+WITH RECURSIVE w(n) AS (
+    SELECT 1
+    UNION ALL
+    SELECT t.k
+    FROM w JOIN hash_join_dynamic_filter t ON t.k = w.n + 1
+    WHERE w.n < 5
+)
+SELECT * FROM w ORDER BY n;
+----
+1
+2
+3
+4
+5
+
+statement ok
+SET datafusion.explain.analyze_categories = 'rows';
+
+# The probe scan should output four rows and prune the other 396, rather than
+# outputting all 400 rows across the four iterations.
+query TT
+EXPLAIN ANALYZE
+WITH RECURSIVE w(n) AS (
+    SELECT 1
+    UNION ALL
+    SELECT t.k
+    FROM w JOIN hash_join_dynamic_filter t ON t.k = w.n + 1
+    WHERE w.n < 5
+)
+SELECT * FROM w ORDER BY n;
+----
+Plan with Metrics
+01)SortExec: expr=[n@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=5, output_batches=1, spill_count=0, spilled_rows=0]
+02)--RecursiveQueryExec: name=w, is_distinct=false, metrics=[output_rows=5, output_batches=5]
+03)----ProjectionExec: expr=[1 as n], metrics=[output_rows=1, output_batches=1]
+04)------PlaceholderRowExec, metrics=[]
+05)----ProjectionExec: expr=[k@0 as n], metrics=[]
+06)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(w.n + Int64(1)@1, k@0)], projection=[k@2], metrics=[]
+07)--------ProjectionExec: expr=[n@0 as n, n@0 + 1 as w.n + Int64(1)], metrics=[]
+08)----------FilterExec: n@0 < 5, metrics=[]
+09)------------WorkTableExec: name=w, metrics=[]
+10)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte/hash_join_dynamic_filter.parquet]]}, projection=[k], output_ordering=[k@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ true ], dynamic_rg_pruning=eligible, metrics=[output_rows=4, output_batches=4, files_ranges_pruned_statistics=4 total → 4 matched, row_groups_pruned_statistics=4 total → 4 matched, row_groups_pruned_bloom_filter=4 total → 4 matched, page_index_pages_pruned=4 total → 4 matched, page_index_rows_pruned=400 total → 400 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=4, files_processed=4, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=4, pushdown_rows_pruned=396, predicate_cache_inner_records=400, predicate_cache_records=4, scan_efficiency_ratio=157.36% (1.14 K/727)]
+
+statement ok
+DROP TABLE hash_join_dynamic_filter;
+
+statement ok
+RESET datafusion.explain.analyze_categories;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
