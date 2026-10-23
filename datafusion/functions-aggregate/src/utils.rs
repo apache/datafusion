@@ -107,6 +107,7 @@ pub(crate) fn struct_to_rows(
                 .collect()
         })
         .collect()
+}
 /// State of the PercentileParam resolution.
 /// Either already resolved or still requiring a non-empty record batch.
 #[derive(Debug, Clone)]
