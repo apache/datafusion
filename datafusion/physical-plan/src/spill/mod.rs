@@ -18,6 +18,7 @@
 //! Defines the spilling functions
 
 pub(crate) mod in_progress_spill_file;
+mod offset_lengths;
 pub(crate) mod replayable_spill_input;
 pub(crate) mod spill_manager;
 pub mod spill_pool;
@@ -326,7 +327,9 @@ impl FramerState {
 /// Marks a length prefix in the IPC stream format, see `arrow_ipc`.
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
-/// Decodes the messages framed by [`MessageFramer`] without validating them.
+/// Decodes the messages framed by [`MessageFramer`] without validating them,
+/// and restores the offsets of compressed record batches, see
+/// [`offset_lengths`].
 ///
 /// DataFusion controls what it writes so it can trust its own IPC output.
 /// [`StreamDecoder::with_skip_validation`] would only skip validating the
@@ -388,6 +391,7 @@ impl MessageDecoder {
         let Some(batch) = message.header_as_record_batch() else {
             return Ok(None);
         };
+        let compressed = batch.compression().is_some();
         let batch = RecordBatchDecoder::try_new(
             body,
             batch,
@@ -397,7 +401,11 @@ impl MessageDecoder {
         )?
         .with_skip_validation(skip_validation)
         .read_record_batch()?;
-        Ok(Some(batch))
+        if compressed {
+            offset_lengths::lengths_to_offsets(batch).map(Some)
+        } else {
+            Ok(Some(batch))
+        }
     }
 }
 
@@ -716,6 +724,8 @@ impl Drop for AsyncIPCStreamWriter {
 /// Encodes Arrow IPC streams without performing I/O.
 struct IPCStreamEncoder {
     encoder: Option<StreamEncoder>,
+    /// Whether offsets are written as lengths, see [`offset_lengths`]
+    offsets_as_lengths: bool,
 }
 
 impl IPCStreamEncoder {
@@ -745,14 +755,28 @@ impl IPCStreamEncoder {
         let compression_type = Option::<CompressionType>::from(spill_compression);
         write_options = write_options.try_with_compression(compression_type)?;
 
+        // Lengths compress better than offsets, but take the same space
+        // uncompressed, and the reader only restores them for compressed batches
+        let offsets_as_lengths = compression_type.is_some()
+            && schema
+                .fields()
+                .iter()
+                .any(|field| offset_lengths::has_offsets(field.data_type()));
+
         let encoder = StreamEncoder::try_new_with_options(schema, write_options)?;
         Ok(Self {
             encoder: Some(encoder),
+            offsets_as_lengths,
         })
     }
 
     fn encode(&mut self, batch: &RecordBatch) -> Result<(usize, usize, Vec<Buffer>)> {
-        let buffers = self.encoder.as_mut().unwrap().encode(batch)?;
+        let encoder = self.encoder.as_mut().unwrap();
+        let buffers = if self.offsets_as_lengths {
+            encoder.encode(&offset_lengths::offsets_to_lengths(batch)?)?
+        } else {
+            encoder.encode(batch)?
+        };
         let bytes = buffers.iter().map(Buffer::len).sum();
         Ok((batch.num_rows(), bytes, buffers))
     }
@@ -1992,6 +2016,155 @@ mod tests {
             batch_count,
         )
         .await?;
+        Ok(())
+    }
+
+    /// A batch with every type whose offsets are spilled as lengths, at the
+    /// top level and nested, next to types that keep their offsets.
+    fn build_offsets_batch(n: usize) -> Result<RecordBatch> {
+        use arrow::array::{
+            FixedSizeListArray, LargeListArray, ListArray, MapArray, StructArray,
+        };
+        use arrow::buffer::{NullBuffer, OffsetBuffer};
+
+        let strings = |len: usize| -> ArrayRef {
+            Arc::new(StringArray::from_iter(
+                (0..len).map(|i| (i % 7 != 0).then(|| "x".repeat(i % 5))),
+            ))
+        };
+        let nulls = Some(NullBuffer::from_iter((0..n).map(|i| i % 11 != 0)));
+        let offsets = OffsetBuffer::<i32>::from_lengths((0..n).map(|i| i % 3));
+        let values = offsets.last() as usize;
+        let item = Arc::new(Field::new("item", DataType::Utf8, true));
+
+        let list = ListArray::new(
+            Arc::clone(&item),
+            offsets.clone(),
+            strings(values),
+            nulls.clone(),
+        );
+        let large_list = LargeListArray::new(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            OffsetBuffer::<i64>::from_lengths((0..n).map(|i| i % 3)),
+            Arc::new(Int32Array::from_iter_values(0..values as i32)),
+            None,
+        );
+        let keys = StringArray::from_iter_values((0..values).map(|i| format!("k{i}")));
+        let entries = StructArray::from(vec![
+            (
+                Arc::new(Field::new("key", DataType::Utf8, false)),
+                Arc::new(keys) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("value", DataType::Utf8, true)),
+                strings(values),
+            ),
+        ]);
+        let map = MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            offsets,
+            entries,
+            nulls.clone(),
+            false,
+        );
+        let fixed_size_list =
+            FixedSizeListArray::new(item, 2, strings(2 * n), nulls.clone());
+        let list: ArrayRef = Arc::new(list);
+        let r#struct = StructArray::new(
+            vec![
+                Field::new("s", DataType::Utf8, true),
+                Field::new("l", list.data_type().clone(), true),
+            ]
+            .into(),
+            vec![strings(n), Arc::clone(&list)],
+            nulls,
+        );
+
+        let utf8 = strings(n);
+        let dictionary =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        Ok(RecordBatch::try_from_iter(vec![
+            (
+                "int32",
+                Arc::new(Int32Array::from_iter_values(0..n as i32)) as _,
+            ),
+            ("large_utf8", cast(&utf8, &DataType::LargeUtf8)?),
+            ("binary", cast(&utf8, &DataType::Binary)?),
+            ("large_binary", cast(&utf8, &DataType::LargeBinary)?),
+            ("utf8_view", cast(&utf8, &DataType::Utf8View)?),
+            ("dictionary", cast(&utf8, &dictionary)?),
+            ("utf8", utf8),
+            ("list", list),
+            ("large_list", Arc::new(large_list)),
+            ("map", Arc::new(map)),
+            ("fixed_size_list", Arc::new(fixed_size_list)),
+            ("struct", Arc::new(r#struct)),
+        ])?)
+    }
+
+    /// Offsets spilled as lengths read back as the arrays that were written,
+    /// sliced or not, see [`offset_lengths`]. The two row slice has buffers
+    /// small enough that the IPC writer stores them uncompressed.
+    #[tokio::test]
+    async fn test_spill_offsets_as_lengths_round_trip() -> Result<()> {
+        let batch = build_offsets_batch(1000)?;
+        let batches = [
+            batch.clone(),
+            batch.slice(3, 500),
+            batch.slice(998, 2),
+            batch.slice(0, 0),
+        ];
+        for compression in [
+            SpillCompression::Uncompressed,
+            SpillCompression::Lz4Frame,
+            SpillCompression::Zstd,
+        ] {
+            let env = Arc::new(RuntimeEnv::default());
+            let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+            let spill_manager = SpillManager::new(env, metrics, batch.schema())
+                .with_compression_type(compression);
+            let spill_file = spill_manager
+                .spill_record_batch_and_finish(&batches, "Test")?
+                .unwrap();
+            let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
+            assert_eq!(collect(stream).await?, batches, "{compression}");
+        }
+        Ok(())
+    }
+
+    /// The lengths of similar values compress to almost nothing, unlike their
+    /// offsets: <https://github.com/apache/datafusion/issues/26627>
+    #[test]
+    fn test_spill_offsets_as_lengths_compress() -> Result<()> {
+        use arrow_ipc::writer::IpcWriteOptions;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let values = (0..8192).map(|i| format!("item-{}", i / 64));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from_iter_values(values))],
+        )?;
+
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema))
+            .with_compression_type(SpillCompression::Zstd);
+        spill_manager
+            .spill_record_batch_and_finish(std::slice::from_ref(&batch), "Test")?;
+        let spilled = spill_manager.metrics.spilled_bytes.value();
+
+        let options = IpcWriteOptions::default()
+            .try_with_compression(Some(CompressionType::ZSTD))?;
+        let mut ipc = vec![];
+        let mut writer = StreamWriter::try_new_with_options(&mut ipc, &schema, options)?;
+        writer.write(&batch)?;
+        writer.finish()?;
+        drop(writer);
+        assert!(
+            spilled * 4 < ipc.len(),
+            "spilled {spilled} bytes, against {} bytes of IPC",
+            ipc.len()
+        );
         Ok(())
     }
 
