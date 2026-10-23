@@ -2653,10 +2653,7 @@ mod tests {
     use crate::{
         test::{
             assert_is_pending,
-            exec::{
-                BarrierExec, BlockingExec, ErrorExec, MockExec,
-                assert_strong_count_converges_to_zero,
-            },
+            exec::{BarrierExec, BlockingExec, ErrorExec, MockExec},
         },
         {collect, expressions::col},
     };
@@ -4382,7 +4379,7 @@ mod tests {
 
         assert_is_pending(&mut fut);
         drop(fut);
-        assert_strong_count_converges_to_zero(refs).await;
+        assert_eq!(refs.strong_count(), 0);
 
         Ok(())
     }

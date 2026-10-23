@@ -589,10 +589,7 @@ mod tests {
     use super::*;
     use crate::{
         collect,
-        test::{
-            assert_is_pending,
-            exec::{BlockingExec, assert_strong_count_converges_to_zero},
-        },
+        test::{assert_is_pending, exec::BlockingExec},
     };
 
     use arrow::datatypes::{DataType, Field, Schema};
@@ -614,7 +611,7 @@ mod tests {
 
         assert_is_pending(&mut fut);
         drop(fut);
-        assert_strong_count_converges_to_zero(refs).await;
+        assert_eq!(refs.strong_count(), 0);
 
         Ok(())
     }

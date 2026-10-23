@@ -311,6 +311,9 @@ mod tests {
     use crate::projection::ProjectionExec;
 
     use crate::stream::RecordBatchStreamAdapter;
+    use crate::test::exec::BlockingExec;
+    use datafusion_common_runtime::SpawnedTask;
+    use datafusion_execution::TaskContext;
     use futures::stream;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -619,5 +622,31 @@ mod tests {
     async fn test_spawn_buffered_max_in_flight_batches() {
         spawn_buffered_max_in_flight_batches(1).await;
         spawn_buffered_max_in_flight_batches(2).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_spawn_buffered_drop_releases_idle_input() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let blocking_exec = BlockingExec::new(schema, 1);
+        let refs = blocking_exec.refs();
+        let input = blocking_exec.execute(0, Arc::new(TaskContext::default()))?;
+        drop(blocking_exec);
+
+        let buffered = spawn_buffered(input, 1);
+        // Occupies the only worker, so it can't poll the buffered task or drop its future
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let blocker = SpawnedTask::spawn(async move {
+            started_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        started_rx.recv().unwrap();
+
+        drop(buffered);
+        assert_eq!(refs.strong_count(), 0);
+
+        drop(release_tx);
+        blocker.join_unwind().await.unwrap();
+        Ok(())
     }
 }

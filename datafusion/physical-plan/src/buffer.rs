@@ -421,7 +421,7 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
 
         let memory_reservation = Arc::new(memory_reservation);
         let memory_reservation_clone = Arc::clone(&memory_reservation);
-        let task = SpawnedTask::spawn(async move {
+        let task = SpawnedTask::spawn_reclaimable(async move {
             loop {
                 // Select on both the input stream and the channel being closed.
                 // By down this, we abort polling the input as soon as the consumer channel is
@@ -698,6 +698,24 @@ mod tests {
         pull_ok_msg(&mut buffered).await?;
         assert_eq!(buffered.messages_queued(), 2);
         assert_eq!(pool.reserved(), 7);
+
+        drop(buffered);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn memory_gets_released_if_stream_drops_while_input_is_pending()
+    -> Result<(), Box<dyn Error>> {
+        let input = futures::stream::iter([1, 2, 3, 4])
+            .map(Ok)
+            .chain(futures::stream::pending());
+        let (pool, res) = memory_pool_and_reservation();
+
+        let buffered = MemoryBufferedStream::new(input, 10, res);
+        wait_for_buffering().await;
+        assert_eq!(buffered.messages_queued(), 4);
+        assert_eq!(pool.reserved(), 10);
 
         drop(buffered);
         assert_eq!(pool.reserved(), 0);

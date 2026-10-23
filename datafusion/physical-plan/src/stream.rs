@@ -108,15 +108,6 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         self.join_set.spawn_reclaimable(task);
     }
 
-    /// Same as [`Self::spawn_reclaimable`] but it spawns the task on the provided runtime
-    pub fn spawn_reclaimable_on<F>(&mut self, task: F, handle: &Handle)
-    where
-        F: Future<Output = Result<()>>,
-        F: Send + 'static,
-    {
-        self.join_set.spawn_reclaimable_on(task, handle);
-    }
-
     /// Spawn a blocking task that will be aborted if this builder (or the stream
     /// built from it) are dropped.
     ///
@@ -309,15 +300,6 @@ impl RecordBatchReceiverStreamBuilder {
         F: Send + 'static,
     {
         self.inner.spawn_reclaimable(task)
-    }
-
-    /// Same as [`Self::spawn_reclaimable`] but it spawns the task on the provided runtime.
-    pub fn spawn_reclaimable_on<F>(&mut self, task: F, handle: &Handle)
-    where
-        F: Future<Output = Result<()>>,
-        F: Send + 'static,
-    {
-        self.inner.spawn_reclaimable_on(task, handle)
     }
 
     /// Spawn a blocking task tied to the builder and stream.
@@ -854,9 +836,7 @@ impl RecordBatchStream for ReservationStream {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::test::exec::{
-        BlockingExec, MockExec, PanicExec, assert_strong_count_converges_to_zero,
-    };
+    use crate::test::exec::{BlockingExec, MockExec, PanicExec};
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::exec_err;
@@ -914,7 +894,7 @@ mod test {
 
         // Drop the stream, ensure the refs go to zero
         drop(stream);
-        assert_strong_count_converges_to_zero(refs).await;
+        assert_eq!(std::sync::Weak::strong_count(&refs), 0);
     }
 
     #[tokio::test]
