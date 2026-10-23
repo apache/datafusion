@@ -32,6 +32,7 @@ use crate::filter_pushdown::{
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
+use crate::joins::hash_join::not_in::{NullValueBuildRows, null_value_key_mask};
 use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
@@ -70,7 +71,7 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt64Array};
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, UInt64Array};
 use arrow::buffer::NullBuffer;
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
@@ -200,37 +201,6 @@ fn array_map_key_range(
     reservation.try_grow(mem_size)?;
 
     Ok(Some((min_val, max_val)))
-}
-
-/// The build rows with a NULL `NOT IN` value key (in any element of a
-/// multi-column key), used by correlated null-aware joins (see
-/// [`NullAwareMode`]).
-///
-/// Such rows make `NOT IN` UNKNOWN whenever *any* probe row in their
-/// correlation scope passes the join filter (unless another element is a
-/// definite mismatch), so every probe row must be tested against them.
-/// Restricting this lookup to the NULL-valued build rows keeps it
-/// proportional to the number of NULLs instead of enumerating every scope
-/// match of every probe row.
-pub(super) struct NullValueBuildRows {
-    /// Hash table keyed by the correlation scope values of the NULL-valued
-    /// build rows. Stored positions index into `scope_values`/`build_indices`,
-    /// not the full build batch. `None` when the join has no correlation
-    /// scope keys, so every probe row is in scope.
-    pub(super) scope_map: Option<Box<dyn JoinHashMapType>>,
-    /// Correlation scope key values of the NULL-valued build rows.
-    pub(super) scope_values: Vec<ArrayRef>,
-    /// Maps positions in `map`/`scope_values` back to row indices in the full
-    /// build batch.
-    pub(super) build_indices: UInt64Array,
-}
-
-/// Returns the rows where at least one of `value_keys` is NULL, or `None` when
-/// there is no such row.
-pub(super) fn null_value_key_mask(value_keys: &[ArrayRef]) -> Option<BooleanArray> {
-    let logical_nulls: Vec<_> = value_keys.iter().map(|v| v.logical_nulls()).collect();
-    let valid = NullBuffer::union_many(logical_nulls.iter().map(Option::as_ref))?;
-    (valid.null_count() > 0).then(|| BooleanArray::new(!valid.inner(), None))
 }
 
 /// Null-aware (`NOT IN`) semantics of a hash join, derived from
@@ -11208,6 +11178,89 @@ mod tests {
         let swapped = left_anti.swap_inputs(PartitionMode::CollectLeft)?;
         let swapped = swapped.downcast_ref::<HashJoinExec>().unwrap();
         Ok(Arc::new(swapped.builder().reset_state().build()?))
+    }
+
+    /// A correlated null-aware join whose build value keys are all NULL: under
+    /// `NullEqualsNothing` its full-key map is empty, but the UNKNOWN marks
+    /// still depend on each scope. `NULL NOT IN (5)` and `NULL NOT IN (7)` are
+    /// UNKNOWN; `NULL NOT IN (empty)`, in scope 3, is TRUE. The probe side
+    /// arrives in two batches.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_correlated_all_null_build_values(
+        batch_size: usize,
+    ) -> Result<()> {
+        fn table(id: Vec<Option<i32>>, g: Vec<Option<i32>>) -> RecordBatch {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, true),
+                Field::new("g", DataType::Int32, true),
+            ]));
+            RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int32Array::from(id)),
+                    Arc::new(Int32Array::from(g)),
+                ],
+            )
+            .unwrap()
+        }
+        let build = table(vec![None, None, None], vec![Some(1), Some(2), Some(3)]);
+        let probe = [
+            table(vec![Some(5)], vec![Some(1)]),
+            table(vec![Some(7)], vec![Some(2)]),
+        ];
+
+        let mut results = vec![];
+        for join_type in [JoinType::LeftAnti, JoinType::LeftMark] {
+            let task_ctx = prepare_task_ctx(batch_size, false);
+            let left = TestMemoryExec::try_new_exec(
+                &[vec![build.clone()]],
+                build.schema(),
+                None,
+            )?;
+            let right =
+                TestMemoryExec::try_new_exec(&[probe.to_vec()], probe[0].schema(), None)?;
+            let on = ["id", "g"]
+                .into_iter()
+                .map(|name| {
+                    Ok((
+                        Arc::new(Column::new_with_schema(name, &left.schema())?) as _,
+                        Arc::new(Column::new_with_schema(name, &right.schema())?) as _,
+                    ))
+                })
+                .collect::<Result<JoinOn>>()?;
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &join_type,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true,
+            )?;
+            let batches = common::collect(join.execute(0, task_ctx)?).await?;
+            results.push(batches_to_sort_string(&batches));
+        }
+
+        allow_duplicates! {
+            assert_snapshot!(results.join("\n"), @r"
+            +----+---+
+            | id | g |
+            +----+---+
+            |    | 3 |
+            +----+---+
+            +----+---+-------+
+            | id | g | mark  |
+            +----+---+-------+
+            |    | 1 |       |
+            |    | 2 |       |
+            |    | 3 | false |
+            +----+---+-------+
+            ");
+        }
+        Ok(())
     }
 
     /// Correlated null-aware `LeftAnti` whose two scope keys are Float64, with
