@@ -15,25 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::iter::repeat_n;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::temporal_conversions::as_datetime_with_timezone;
 use arrow::array::timezone::Tz;
-use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array};
-use arrow::compute::{DatePart, binary, date_part};
+use arrow::array::{
+    Array, ArrayRef, Float64Array, Int32Array, Int64Array, PrimitiveArray,
+};
+use arrow::compute::{DatePart, binary, cast, date_part};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    ArrowTimestampType, DataType, Field, FieldRef, IntervalUnit as ArrowIntervalUnit,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
+    ArrowPrimitiveType, ArrowTimestampType, DataType, Field, FieldRef, Int32Type,
+    Int64Type, IntervalUnit as ArrowIntervalUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use chrono::{Datelike, NaiveDate, Offset};
 use datafusion_common::types::{NativeType, logical_date};
+use num_traits::AsPrimitive;
 
 use crate::datetime::common::parse_tz;
 use datafusion_common::{
@@ -48,7 +50,7 @@ use datafusion_common::{
         as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
         as_timestamp_second_array,
     },
-    exec_err, internal_err, not_impl_err,
+    exec_err, internal_err,
     types::logical_string,
     utils::take_function_args,
 };
@@ -232,9 +234,12 @@ impl ScalarUDFImpl for DatePartFunc {
         let part_trim = part_normalization(&part);
 
         let arr = match DatePart::from_str(part_trim) {
-            Ok(DatePart::Second) => seconds_as_i32(array.as_ref(), Second)?,
-            Ok(DatePart::Millisecond) => seconds_as_i32(array.as_ref(), Millisecond)?,
-            Ok(DatePart::Microsecond) => seconds_as_i32(array.as_ref(), Microsecond)?,
+            Ok(part @ DatePart::Millisecond) => {
+                seconds_as_i32::<1_000>(array.as_ref(), part)?
+            }
+            Ok(part @ DatePart::Microsecond) => {
+                seconds_as_i32::<1_000_000>(array.as_ref(), part)?
+            }
             Ok(DatePart::Nanosecond) => seconds_ns(array.as_ref())?,
             Ok(part) => date_part(array.as_ref(), part)?,
             Err(_) if is_epoch(part_trim) => epoch(array.as_ref())?,
@@ -440,72 +445,6 @@ fn part_normalization(part: &str) -> &str {
         .unwrap_or(part)
 }
 
-/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
-/// result to a total number of seconds, milliseconds, microseconds or
-/// nanoseconds as an `Int32Array`
-fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
-    // Nanosecond is neither supported in Postgres nor DuckDB, to avoid dealing
-    // with overflow and precision issue we don't support nanosecond
-    if unit == Nanosecond {
-        return not_impl_err!("Date part {unit:?} not supported");
-    }
-
-    // Fast path with seconds - no need to compute nanoseconds
-    if unit == Second {
-        return Ok(date_part(array, DatePart::Second)?);
-    }
-
-    // Fast path for Date32 and Date64 - no seconds
-    if array.data_type() == &Date32 || array.data_type() == &Date64 {
-        return Ok(Arc::new(Int32Array::from_iter_values_with_nulls(
-            repeat_n(0, array.len()),
-            array.nulls().cloned(),
-        )));
-    }
-
-    let conversion_factor = match unit {
-        Second => 1_000_000_000,
-        Millisecond => 1_000_000,
-        Microsecond => 1_000,
-        Nanosecond => 1,
-    };
-
-    let second_factor = match unit {
-        Second => 1,
-        Millisecond => 1_000,
-        Microsecond => 1_000_000,
-        Nanosecond => 1_000_000_000,
-    };
-
-    let secs = date_part(array, DatePart::Second)?;
-    // This assumes array is primitive and not a dictionary
-    let secs = as_int32_array(secs.as_ref())?;
-    let subsecs = date_part(array, DatePart::Nanosecond)?;
-    let subsecs = as_int32_array(subsecs.as_ref())?;
-
-    // Special case where there are no nulls.
-    if subsecs.null_count() == 0 {
-        let r: Int32Array = binary(secs, subsecs, |secs, subsecs| {
-            secs * second_factor + (subsecs % 1_000_000_000) / conversion_factor
-        })?;
-        Ok(Arc::new(r))
-    } else {
-        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
-        // where the number of nanoseconds overflows.
-        let r: Int32Array = secs
-            .iter()
-            .zip(subsecs)
-            .map(|(secs, subsecs)| {
-                secs.map(|secs| {
-                    let subsecs = subsecs.unwrap_or(0);
-                    secs * second_factor + (subsecs % 1_000_000_000) / conversion_factor
-                })
-            })
-            .collect();
-        Ok(Arc::new(r))
-    }
-}
-
 fn epoch(array: &dyn Array) -> Result<ArrayRef> {
     const SECONDS_IN_A_DAY: f64 = 86400_f64;
     // Note: Month-to-second conversion uses 30 days as an approximation.
@@ -564,48 +503,82 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
     Ok(Arc::new(f))
 }
 
-/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
-/// result to a total number of nanoseconds as an Int64 array.
+/// Return the seconds of `array`, with their fraction, as a number of
+/// milliseconds or microseconds (`part`), as an Int32 array.
+fn seconds_as_i32<const PER_SECOND: i64>(
+    array: &dyn Array,
+    part: DatePart,
+) -> Result<ArrayRef> {
+    match array.data_type() {
+        // Fast path for Date32 and Date64 - no seconds
+        Date32 | Date64 => Ok(Arc::new(Int32Array::new(
+            vec![0; array.len()].into(),
+            array.nulls().cloned(),
+        ))),
+        // arrow's sub-second parts of intervals and durations already include
+        // the whole seconds
+        Interval(ArrowIntervalUnit::DayTime | ArrowIntervalUnit::MonthDayNano)
+        | Duration(_) => Ok(date_part(array, part)?),
+        _ => seconds_with_fraction::<Int32Type, PER_SECOND>(array, part),
+    }
+}
+
+/// Return the seconds of `array`, with their fraction, as a number of
+/// nanoseconds: the seconds of the minute for timestamps, times and intervals,
+/// and the total length for durations.
 ///
-/// This returns an Int64 rather than Int32 because  there 1 billion
+/// This returns an Int64 rather than Int32 because there are 1 billion
 /// `nanosecond`s in each second, so representing up to 60 seconds as
 /// nanoseconds can be values up to 60 billion, which does not fit in Int32.
 fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
-    // Fast path for Date32 and Date64 - no nanoseconds
-    if array.data_type() == &Date32 || array.data_type() == &Date64 {
-        return Ok(Arc::new(Int64Array::from_iter_values_with_nulls(
-            repeat_n(0, array.len()),
-            array.nulls().cloned(),
-        )));
-    }
+    let r: Int64Array = match array.data_type() {
+        // Fast path for Date32 and Date64 - no nanoseconds
+        Date32 | Date64 => {
+            Int64Array::new(vec![0; array.len()].into(), array.nulls().cloned())
+        }
+        // arrow's `date_part(Nanosecond)` computes these, but returns Int32,
+        // which overflows past about 2.1 seconds
+        Interval(ArrowIntervalUnit::DayTime) => as_interval_dt_array(array)?
+            .unary(|x| (x.milliseconds % 60_000) as i64 * 1_000_000),
+        Interval(ArrowIntervalUnit::MonthDayNano) => {
+            as_interval_mdn_array(array)?.unary(|x| x.nanoseconds % 60_000_000_000)
+        }
+        Duration(Nanosecond) => as_duration_nanosecond_array(array)?.reinterpret_cast(),
+        // arrow's cast returns NULL on overflow, like its `date_part`
+        Duration(_) => {
+            as_duration_nanosecond_array(&cast(array, &Duration(Nanosecond))?)?
+                .reinterpret_cast()
+        }
+        _ => {
+            return seconds_with_fraction::<Int64Type, 1_000_000_000>(
+                array,
+                DatePart::Nanosecond,
+            );
+        }
+    };
+    Ok(Arc::new(r))
+}
 
+/// Combine arrow's seconds of the minute with its fraction of the second in
+/// `part` units, for types where arrow returns them separately (timestamps
+/// and times).
+fn seconds_with_fraction<O, const PER_SECOND: i64>(
+    array: &dyn Array,
+    part: DatePart,
+) -> Result<ArrayRef>
+where
+    O: ArrowPrimitiveType,
+    i64: AsPrimitive<O::Native>,
+{
     let secs = date_part(array, DatePart::Second)?;
     // This assumes array is primitive and not a dictionary
     let secs = as_int32_array(secs.as_ref())?;
-    let subsecs = date_part(array, DatePart::Nanosecond)?;
-    let subsecs = as_int32_array(subsecs.as_ref())?;
-
-    // Special case where there are no nulls.
-    if subsecs.null_count() == 0 {
-        let r: Int64Array = binary(secs, subsecs, |secs, subsecs| {
-            (secs as i64) * 1_000_000_000 + (subsecs as i64)
-        })?;
-        Ok(Arc::new(r))
-    } else {
-        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
-        // where the number of nanoseconds overflows.
-        let r: Int64Array = secs
-            .iter()
-            .zip(subsecs)
-            .map(|(secs, subsecs)| {
-                secs.map(|secs| {
-                    let subsecs = subsecs.unwrap_or(0);
-                    (secs as i64) * 1_000_000_000 + (subsecs as i64)
-                })
-            })
-            .collect();
-        Ok(Arc::new(r))
-    }
+    let fraction = date_part(array, part)?;
+    let fraction = as_int32_array(fraction.as_ref())?;
+    let r: PrimitiveArray<O> = binary(secs, fraction, |secs, fraction| {
+        (secs as i64 * PER_SECOND + fraction as i64).as_()
+    })?;
+    Ok(Arc::new(r))
 }
 
 #[cfg(test)]
