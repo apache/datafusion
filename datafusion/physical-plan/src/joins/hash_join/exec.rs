@@ -32,9 +32,7 @@ use crate::filter_pushdown::{
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
-use crate::joins::hash_join::not_in::{
-    NotIn, NotInScope, NullValueBuildRows, null_value_key_mask,
-};
+use crate::joins::hash_join::not_in::{NotIn, NotInBuild};
 use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
@@ -73,8 +71,7 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, UInt64Array};
-use arrow::buffer::NullBuffer;
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -102,7 +99,7 @@ use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, l
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use datafusion_common::hash_utils::{RandomState, create_hashes};
+use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
@@ -214,15 +211,9 @@ struct JoinBuildData {
     /// Evaluated build-side key expressions, with float `-0.0` rewritten to
     /// `+0.0` so probe batches can compare against them without scanning the
     /// build side again. The dynamic filters (`bounds`, `membership`) and
-    /// `build_side_has_null` were computed from the original keys in
+    /// the `NOT IN` state were computed from the original keys in
     /// `collect_left_input`.
     values: Vec<ArrayRef>,
-    /// Logical nulls of the scalar key for uncorrelated null-aware `LeftMark`
-    /// and `LeftAnti`.
-    ///
-    /// Computed once while collecting the build side because dictionary
-    /// logical-null discovery can scan nested dictionary values.
-    null_aware_build_key_nulls: Option<NullBuffer>,
     /// Bounds computed from the build side; absent for an empty partition.
     bounds: Option<PartitionBounds>,
     /// IN-list values or a hash-table reference used for filter pushdown.
@@ -233,26 +224,13 @@ struct JoinBuildData {
 
 /// A build lease and mutable bookkeeping for one join execution.
 pub(super) struct JoinLeftData {
-    /// Hash table over correlated scope keys for correlated null-aware joins.
-    ///
-    /// Keys `..V` are the `NOT IN` value keys and keys `V..` the correlated
-    /// equality scope keys, where `V` is `null_aware_value_keys`. This map covers all build rows and is probed only
-    /// with NULL-valued probe rows; the complementary direction uses
-    /// `null_value_build_rows`. `None` when there are no scope keys.
-    null_aware_scope_map: Option<Box<dyn JoinHashMapType>>,
-    /// The build rows with a NULL value key (see [`NullValueBuildRows`]).
-    /// `None` when the build side has no NULL value keys.
-    null_value_build_rows: Option<NullValueBuildRows>,
+    /// The `NOT IN` state of a null-aware join, see [`NotInBuild`].
+    not_in: Option<NotInBuild>,
     /// Shared bitmap for visited left indices within this consuming join.
     visited_indices_bitmap: SharedBitmapBuilder,
-    /// Shared bitmap for NULL marks within this consuming join.
-    null_indices_bitmap: SharedBitmapBuilder,
     /// Tracks the final probe partition and what every partition observed.
     /// See [`ProbeCompletion`] for the completion invariant.
     probe_completion: ProbeCompletion,
-    /// Whether the subquery of an uncorrelated null-aware `RightAnti` join
-    /// contains a NULL key.
-    pub(super) build_side_has_null: bool,
     // Drop the reservation after the mutable state it also accounts for.
     build: Arc<JoinBuildData>,
 }
@@ -263,12 +241,9 @@ impl JoinLeftData {
         &self.build.map
     }
 
-    pub(super) fn null_aware_scope_map(&self) -> Option<&dyn JoinHashMapType> {
-        self.null_aware_scope_map.as_deref()
-    }
-
-    pub(super) fn null_value_build_rows(&self) -> Option<&NullValueBuildRows> {
-        self.null_value_build_rows.as_ref()
+    /// This build's `NOT IN` state, for a null-aware join.
+    pub(super) fn not_in(&self) -> Option<&NotInBuild> {
+        self.not_in.as_ref()
     }
 
     /// returns a reference to the build side batch
@@ -294,23 +269,15 @@ impl JoinLeftData {
     }
 
     /// Returns the build side key values, with float `-0.0` already rewritten
-    /// to `+0.0` for key comparison. The dynamic filters and
-    /// `build_side_has_null` were derived from the original keys instead.
+    /// to `+0.0` for key comparison. The dynamic filters and the `NOT IN`
+    /// state were derived from the original keys instead.
     pub(super) fn values(&self) -> &[ArrayRef] {
         &self.build.values
-    }
-
-    pub(super) fn null_aware_build_key_nulls(&self) -> Option<&NullBuffer> {
-        self.build.null_aware_build_key_nulls.as_ref()
     }
 
     /// returns a reference to the visited indices bitmap
     pub(super) fn visited_indices_bitmap(&self) -> &SharedBitmapBuilder {
         &self.visited_indices_bitmap
-    }
-
-    pub(super) fn null_indices_bitmap(&self) -> &SharedBitmapBuilder {
-        &self.null_indices_bitmap
     }
 
     /// returns a reference to the InList values for filter pushdown
@@ -2949,7 +2916,7 @@ fn is_perfect_hash_join_candidate(
     Ok(ArrayMap::is_supported_type(&data_type))
 }
 
-fn new_join_hashmap(
+pub(super) fn new_join_hashmap(
     num_rows: usize,
     reservation: &mut MemoryReservation,
     metrics: &BuildProbeJoinMetrics,
@@ -3234,15 +3201,6 @@ fn build_in_memory(
     array_map_created_count: &Count,
     prepared: bool,
 ) -> Result<JoinLeftData> {
-    // Correlated null-aware joins (see `NotIn`), multi-column value
-    // keys without scope keys included, pair NULL-valued rows with the other
-    // side to find UNKNOWN rows: they need the NULL-valued build rows and, with
-    // scope keys, the scope map. Of those, only the ones that decide build rows
-    // also need the per-build-row UNKNOWN bitmap.
-    let with_null_candidate_state = null_aware.is_some_and(NotIn::is_correlated);
-    let with_build_unknown_bitmap = null_aware.is_some_and(NotIn::marks_build_rows);
-    let null_aware_value_keys = null_aware.map_or(1, NotIn::value_keys);
-
     let is_phj_candidate = is_perfect_hash_join_candidate(on_left, schema)?;
 
     let (join_hash_map, batch, left_values) = if let Some((min_val, max_val)) =
@@ -3368,86 +3326,20 @@ fn build_in_memory(
         BooleanBufferBuilder::new(0)
     };
 
-    let null_indices_bitmap = if with_build_unknown_bitmap {
-        allocate_bitmap()?
-    } else {
-        BooleanBufferBuilder::new(0)
-    };
-
-    let (null_aware_scope_map, null_value_build_rows) = if with_null_candidate_state {
-        // Null-aware convention: `on_left[..V]` are the value keys and
-        // `on_left[V..]` the (possibly empty) correlation scope keys.
-        let scope_keys = &on_left[null_aware_value_keys..];
-        let scope_map = if scope_keys.is_empty() {
-            None
-        } else {
-            // Scope-only NULL marking uses a HashMap (the primary join map may
-            // use ArrayMap for full-key matches, but scope keys have arbitrary
-            // shape).
-            let mut scope_map = new_join_hashmap(num_rows, &mut reservation, metrics)?;
-
-            let mut hashes_buffer = vec![0; batch.num_rows()];
-            update_hash(
-                scope_keys,
+    let not_in = null_aware
+        .map(|not_in| {
+            NotInBuild::try_new(
+                not_in,
+                on_left,
                 &batch,
-                &mut *scope_map,
-                0,
+                &left_values,
+                &normalized_values,
                 random_state,
-                &mut hashes_buffer,
-                0,
-                true,
-                NullEquality::NullEqualsNothing,
-            )?;
-            Some(scope_map)
-        };
-
-        // Collect the NULL-valued build rows (see `NullValueBuildRows`).
-        let null_value_build_rows = if let Some(null_mask) =
-            null_value_key_mask(&left_values[..null_aware_value_keys])
-        {
-            let build_indices = UInt64Array::from_iter_values(
-                null_mask.values().set_indices().map(|i| i as u64),
-            );
-            let scope_values = normalized_values[null_aware_value_keys..]
-                .iter()
-                .map(|values| Ok(arrow::compute::filter(values.as_ref(), &null_mask)?))
-                .collect::<Result<Vec<_>>>()?;
-
-            // `scope_values` and `build_indices` are retained for the lifetime
-            // of the join, so charge them to the reservation like the maps and
-            // bitmaps above.
-            let retained_size = build_indices.get_array_memory_size()
-                + scope_values
-                    .iter()
-                    .map(|values| values.get_array_memory_size())
-                    .sum::<usize>();
-            reservation.try_grow(retained_size)?;
-            metrics.build_mem_used.add(retained_size);
-
-            let scope_map = if scope_values.is_empty() {
-                None
-            } else {
-                let null_rows = build_indices.len();
-                let mut map = new_join_hashmap(null_rows, &mut reservation, metrics)?;
-                let mut hashes_buffer = vec![0; null_rows];
-                create_hashes(&scope_values, random_state, &mut hashes_buffer)?;
-                map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
-                Some(map)
-            };
-
-            Some(NullValueBuildRows {
-                scope_map,
-                scope_values,
-                build_indices,
-            })
-        } else {
-            None
-        };
-
-        (scope_map, null_value_build_rows)
-    } else {
-        (None, None)
-    };
+                &mut reservation,
+                metrics,
+            )
+        })
+        .transpose()?;
 
     let map = Arc::new(join_hash_map);
 
@@ -3510,41 +3402,6 @@ fn build_in_memory(
         bounds = None;
     }
 
-    let build_has_null = matches!(
-        null_aware,
-        Some(NotIn::ProbeRows {
-            scope: NotInScope::Uncorrelated,
-        })
-    ) && !left_values.is_empty()
-        && left_values[0].logical_null_count() > 0;
-
-    let null_aware_build_key_nulls = if matches!(
-        null_aware,
-        Some(NotIn::BuildRows {
-            scope: NotInScope::Uncorrelated,
-            ..
-        })
-    ) {
-        left_values[0]
-            .logical_nulls()
-            .filter(|nulls| nulls.null_count() > 0)
-    } else {
-        None
-    };
-    if let Some(nulls) = &null_aware_build_key_nulls {
-        // `logical_nulls` reuses an array's physical null buffer when it can.
-        // Only charge newly materialized buffers, such as dictionary logical
-        // nulls, because the build batch's buffers were reserved above.
-        let reuses_input_buffer = left_values[0]
-            .nulls()
-            .is_some_and(|input| input.inner().ptr_eq(nulls.inner()));
-        if !reuses_input_buffer {
-            let retained_size = nulls.buffer().capacity();
-            reservation.try_grow(retained_size)?;
-            metrics.build_mem_used.add(retained_size);
-        }
-    }
-
     if prepared {
         batches.clear();
         // Prepared keys are direct columns. IN-list arrays share these batch
@@ -3563,17 +3420,13 @@ fn build_in_memory(
             map,
             batch,
             values: normalized_values,
-            null_aware_build_key_nulls,
             bounds,
             membership,
             reservation,
         }),
-        null_aware_scope_map,
-        null_value_build_rows,
+        not_in,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
-        null_indices_bitmap: Mutex::new(null_indices_bitmap),
         probe_completion: ProbeCompletion::new(probe_threads_count),
-        build_side_has_null: build_has_null,
     };
 
     Ok(data)
@@ -3582,7 +3435,7 @@ fn build_in_memory(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::joins::hash_join::not_in::NotInOutput;
+    use crate::joins::hash_join::not_in::{NotInOutput, NotInScope};
 
     fn assert_phj_used(metrics: &MetricsSet, use_phj: bool) {
         if use_phj {

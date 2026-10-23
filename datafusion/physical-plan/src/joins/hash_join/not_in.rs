@@ -15,25 +15,51 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Null-aware (`NOT IN`) hash join: the correlated marking pass, which
-//! records the rows whose `NOT IN` is UNKNOWN, and its helpers.
+//! `NOT IN` (null-aware) semantics of the hash join.
+//!
+//! `x NOT IN (subquery)` is `NOT (x IN (subquery))` under SQL three-valued
+//! logic: `x IN (..)` is TRUE when some subquery value equals `x`, UNKNOWN
+//! (NULL) when none does but a NULL on either side might, and FALSE
+//! otherwise. `NOT IN` keeps a row only where `IN` is FALSE.
+//!
+//! The regular hash join finds the equal pairs; what NULLs change in the
+//! rows a `NOT IN` emits is here. The join reaches it through:
+//! - [`NotIn::try_new`] when the plan is built or executed: is this join
+//!   legal, and which form is it;
+//! - [`NotInBuild::try_new`] once per build, from `collect_left_input`;
+//! - [`mark_null_candidates_for_probe_batch`] on each probe batch of a
+//!   correlated join;
+//! - [`NotInBuild::final_chunk`] on each chunk of build rows emitted after
+//!   the probe side is exhausted.
 
-use crate::hash_utils::create_hashes;
-use crate::joins::PartitionMode;
-use crate::joins::SharedBitmapBuilder;
-use crate::joins::hash_join::exec::JoinLeftData;
-use crate::joins::hash_join::stream::lookup_join_hashmap;
-use crate::joins::join_hash_map::ProbeOffset::AtRow;
-use crate::joins::utils::{JoinFilter, JoinHashMapType, apply_join_filter_to_indices};
+use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, UInt32Array, UInt64Array};
+use parking_lot::Mutex;
+
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, RecordBatch,
+    UInt32Array, UInt64Array,
+};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{filter, take};
-use arrow::record_batch::RecordBatch;
-use datafusion_common::hash_utils::RandomState;
+use arrow::util::bit_util;
+use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, plan_err};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_expr::{ColumnarValue, Operator};
+use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::datum::apply_cmp;
+
+use crate::joins::PartitionMode;
+use crate::joins::SharedBitmapBuilder;
+use crate::joins::hash_join::exec::{JoinLeftData, new_join_hashmap};
+use crate::joins::hash_join::probe_completion::ProbeSideSummary;
+use crate::joins::hash_join::stream::lookup_join_hashmap;
+use crate::joins::join_hash_map::JoinHashMapType;
+use crate::joins::join_hash_map::ProbeOffset::AtRow;
+use crate::joins::utils::{
+    BuildProbeJoinMetrics, JoinFilter, apply_join_filter_to_indices, update_hash,
+};
 
 /// Which `NOT IN` a null-aware join computes, derived from
 /// `HashJoinExec::null_aware`, the join type, the keys and the filter.
@@ -135,23 +161,6 @@ impl NotIn {
         }
     }
 
-    /// Whether UNKNOWN is decided per row.
-    pub(super) fn is_correlated(self) -> bool {
-        matches!(self.scope(), NotInScope::Correlated { .. })
-    }
-
-    /// Whether this join records UNKNOWN per build row in the shared
-    /// null-indices bitmap: a correlated [`NotIn::BuildRows`].
-    pub(super) fn marks_build_rows(self) -> bool {
-        matches!(
-            self,
-            Self::BuildRows {
-                scope: NotInScope::Correlated { .. },
-                ..
-            }
-        )
-    }
-
     /// Number of leading keys that are `NOT IN` value keys; the keys after
     /// them are correlation scope keys.
     pub(super) fn value_keys(self) -> usize {
@@ -162,9 +171,313 @@ impl NotIn {
     }
 }
 
+/// What a build side keeps for its `NOT IN`, one variant per form.
+pub(super) enum NotInBuild {
+    /// Correlated [`NotIn::BuildRows`]: UNKNOWN is recorded per build row.
+    BuildRowsCorrelated {
+        value_keys: usize,
+        output: NotInOutput,
+        /// One bit per build row, set once its mark is UNKNOWN; shared by
+        /// every probe partition, and never cleared.
+        unknown: SharedBitmapBuilder,
+        /// Hash table over the scope keys (`on[value_keys..]`) of all build
+        /// rows, probed with NULL-valued probe rows. `None` without scope keys.
+        scope_map: Option<Box<dyn JoinHashMapType>>,
+        /// The build rows with a NULL value key, `None` when there are none.
+        null_value_rows: Option<NullValueBuildRows>,
+    },
+    /// Uncorrelated [`NotIn::BuildRows`]: what every probe partition saw
+    /// decides every unmatched mark.
+    BuildRowsUncorrelated {
+        output: NotInOutput,
+        /// Logical NULLs of the value key, `None` when it has none. A NULL
+        /// build key's mark is UNKNOWN once the probe side has a row.
+        key_nulls: Option<NullBuffer>,
+    },
+    /// Correlated [`NotIn::ProbeRows`]: UNKNOWN is decided per probe row,
+    /// within its probe batch, so nothing is shared across probe partitions.
+    /// The fields are those of [`Self::BuildRowsCorrelated`].
+    ProbeRowsCorrelated {
+        value_keys: usize,
+        scope_map: Option<Box<dyn JoinHashMapType>>,
+        null_value_rows: Option<NullValueBuildRows>,
+    },
+    /// Uncorrelated [`NotIn::ProbeRows`].
+    ProbeRowsUncorrelated {
+        /// Whether a build key is NULL: then no probe row is emitted.
+        build_has_null: bool,
+    },
+}
+
+impl NotInBuild {
+    /// Builds the `NOT IN` state of a collected build side and charges it to
+    /// `reservation`. `keys` are the build keys as evaluated, `normalized`
+    /// with `-0.0` rewritten (see `JoinLeftData::values`).
+    #[expect(clippy::too_many_arguments)]
+    pub(super) fn try_new(
+        not_in: NotIn,
+        on_left: &[PhysicalExprRef],
+        batch: &RecordBatch,
+        keys: &[ArrayRef],
+        normalized: &[ArrayRef],
+        random_state: &RandomState,
+        reservation: &mut MemoryReservation,
+        metrics: &BuildProbeJoinMetrics,
+    ) -> Result<Self> {
+        let num_rows = batch.num_rows();
+        let correlated_row_state = |value_keys, reservation: &mut MemoryReservation| {
+            correlated_row_state(
+                on_left,
+                batch,
+                keys,
+                normalized,
+                value_keys,
+                random_state,
+                reservation,
+                metrics,
+            )
+        };
+        match not_in {
+            NotIn::ProbeRows {
+                scope: NotInScope::Uncorrelated,
+            } => Ok(Self::ProbeRowsUncorrelated {
+                build_has_null: keys[0].logical_null_count() > 0,
+            }),
+            NotIn::ProbeRows {
+                scope: NotInScope::Correlated { value_keys },
+            } => {
+                let (scope_map, null_value_rows) =
+                    correlated_row_state(value_keys, reservation)?;
+                Ok(Self::ProbeRowsCorrelated {
+                    value_keys,
+                    scope_map,
+                    null_value_rows,
+                })
+            }
+            NotIn::BuildRows {
+                scope: NotInScope::Uncorrelated,
+                output,
+            } => {
+                let key_nulls = keys[0].logical_nulls().filter(|n| n.null_count() > 0);
+                if let Some(nulls) = &key_nulls {
+                    // `logical_nulls` reuses an array's physical null buffer
+                    // when it can, which the batch reservation already holds.
+                    // Charge only a newly materialized one (dictionaries).
+                    let reuses_input_buffer = keys[0]
+                        .nulls()
+                        .is_some_and(|input| input.inner().ptr_eq(nulls.inner()));
+                    if !reuses_input_buffer {
+                        let size = nulls.buffer().capacity();
+                        reservation.try_grow(size)?;
+                        metrics.build_mem_used.add(size);
+                    }
+                }
+                Ok(Self::BuildRowsUncorrelated { output, key_nulls })
+            }
+            NotIn::BuildRows {
+                scope: NotInScope::Correlated { value_keys },
+                output,
+            } => {
+                let bitmap_size = bit_util::ceil(num_rows, 8);
+                reservation.try_grow(bitmap_size)?;
+                metrics.build_mem_used.add(bitmap_size);
+                let mut unknown = BooleanBufferBuilder::new(num_rows);
+                unknown.append_n(num_rows, false);
+
+                let (scope_map, null_value_rows) =
+                    correlated_row_state(value_keys, reservation)?;
+                Ok(Self::BuildRowsCorrelated {
+                    value_keys,
+                    output,
+                    unknown: Mutex::new(unknown),
+                    scope_map,
+                    null_value_rows,
+                })
+            }
+        }
+    }
+
+    /// The rows to emit for one chunk of final build rows, once every probe
+    /// partition has finished (`summary`), with the mark column for
+    /// [`NotInOutput::Mark`].
+    ///
+    /// A matched build row's `IN` mark is TRUE. An unmatched one's is UNKNOWN
+    /// (NULL) or FALSE (the "null bucket" and `hadNull` of Neumann, Leis and
+    /// Kemper, "The Complete Story of Joins (in HyPer)", Section 5.6):
+    /// - correlated: UNKNOWN where the bitmap recorded it;
+    /// - uncorrelated, a probe key was NULL: UNKNOWN;
+    /// - uncorrelated, the probe side was empty: FALSE (`x IN (empty)`);
+    /// - uncorrelated otherwise: UNKNOWN exactly for a NULL build key.
+    pub(super) fn final_chunk(
+        &self,
+        summary: ProbeSideSummary,
+        left_side: UInt64Array,
+        right_side: UInt32Array,
+    ) -> (UInt64Array, UInt32Array, Option<ArrayRef>) {
+        match self {
+            Self::ProbeRowsCorrelated { .. } | Self::ProbeRowsUncorrelated { .. } => {
+                (left_side, right_side, None)
+            }
+            Self::BuildRowsCorrelated {
+                output, unknown, ..
+            } => {
+                let unknown = unknown.lock();
+                emit(*output, left_side, right_side, |row| unknown.get_bit(row))
+            }
+            // A probe batch with a NULL key also has rows: `has_null` implies
+            // `non_empty`.
+            Self::BuildRowsUncorrelated { output, .. } if summary.has_null => {
+                emit_uniform(*output, left_side, right_side, true)
+            }
+            Self::BuildRowsUncorrelated { output, .. } if !summary.non_empty => {
+                emit_uniform(*output, left_side, right_side, false)
+            }
+            Self::BuildRowsUncorrelated { output, key_nulls } => match key_nulls {
+                Some(nulls) => {
+                    emit(*output, left_side, right_side, |row| nulls.is_null(row))
+                }
+                None => emit_uniform(*output, left_side, right_side, false),
+            },
+        }
+    }
+}
+
+/// Emits a chunk of final build rows given which unmatched rows have an
+/// UNKNOWN mark (see [`NotInBuild::final_chunk`]). `LeftAnti` chunks hold
+/// only unmatched rows and keep those whose mark is FALSE; `LeftMark` chunks
+/// hold every row, a valid probe index marking a matched one.
+fn emit(
+    output: NotInOutput,
+    left_side: UInt64Array,
+    right_side: UInt32Array,
+    is_unknown: impl Fn(usize) -> bool,
+) -> (UInt64Array, UInt32Array, Option<ArrayRef>) {
+    match output {
+        NotInOutput::Rows => {
+            let kept = UInt64Array::from_iter_values(
+                left_side
+                    .values()
+                    .iter()
+                    .copied()
+                    .filter(|row| !is_unknown(*row as usize)),
+            );
+            let right_side = UInt32Array::new_null(kept.len());
+            (kept, right_side, None)
+        }
+        NotInOutput::Mark => {
+            let marks: BooleanArray = left_side
+                .values()
+                .iter()
+                .zip(right_side.iter())
+                .map(|(row, probe)| {
+                    if probe.is_some() {
+                        Some(true)
+                    } else {
+                        (!is_unknown(*row as usize)).then_some(false)
+                    }
+                })
+                .collect();
+            (left_side, right_side, Some(Arc::new(marks)))
+        }
+    }
+}
+
+/// [`emit`] when every unmatched row's mark is the same: an anti join then
+/// keeps all of the chunk or none of it.
+fn emit_uniform(
+    output: NotInOutput,
+    left_side: UInt64Array,
+    right_side: UInt32Array,
+    unknown: bool,
+) -> (UInt64Array, UInt32Array, Option<ArrayRef>) {
+    match (output, unknown) {
+        (NotInOutput::Rows, true) => {
+            (UInt64Array::new_null(0), UInt32Array::new_null(0), None)
+        }
+        (NotInOutput::Rows, false) => (left_side, right_side, None),
+        (NotInOutput::Mark, _) => emit(output, left_side, right_side, |_| unknown),
+    }
+}
+
+/// The scope map and NULL-valued build rows of a correlated `NOT IN`.
+#[expect(clippy::too_many_arguments, clippy::type_complexity)]
+fn correlated_row_state(
+    on_left: &[PhysicalExprRef],
+    batch: &RecordBatch,
+    keys: &[ArrayRef],
+    normalized: &[ArrayRef],
+    value_keys: usize,
+    random_state: &RandomState,
+    reservation: &mut MemoryReservation,
+    metrics: &BuildProbeJoinMetrics,
+) -> Result<(Option<Box<dyn JoinHashMapType>>, Option<NullValueBuildRows>)> {
+    let num_rows = batch.num_rows();
+    // `on_left[..V]` are the value keys and `on_left[V..]` the (possibly
+    // empty) correlation scope keys.
+    let scope_keys = &on_left[value_keys..];
+    let scope_map = if scope_keys.is_empty() {
+        None
+    } else {
+        // Scope-only NULL marking uses a HashMap (the primary join map may
+        // use ArrayMap for full-key matches, but scope keys have arbitrary
+        // shape).
+        let mut scope_map = new_join_hashmap(num_rows, reservation, metrics)?;
+        let mut hashes_buffer = vec![0; num_rows];
+        update_hash(
+            scope_keys,
+            batch,
+            &mut *scope_map,
+            0,
+            random_state,
+            &mut hashes_buffer,
+            0,
+            true,
+            NullEquality::NullEqualsNothing,
+        )?;
+        Some(scope_map)
+    };
+
+    let Some(null_mask) = null_value_key_mask(&keys[..value_keys]) else {
+        return Ok((scope_map, None));
+    };
+    let build_indices =
+        UInt64Array::from_iter_values(null_mask.values().set_indices().map(|i| i as u64));
+    let scope_values = normalized[value_keys..]
+        .iter()
+        .map(|values| Ok(filter(values.as_ref(), &null_mask)?))
+        .collect::<Result<Vec<_>>>()?;
+    // `scope_values` and `build_indices` are retained for the lifetime of the
+    // join, so charge them like the maps and bitmaps.
+    let retained_size = build_indices.get_array_memory_size()
+        + scope_values
+            .iter()
+            .map(|values| values.get_array_memory_size())
+            .sum::<usize>();
+    reservation.try_grow(retained_size)?;
+    metrics.build_mem_used.add(retained_size);
+
+    let null_scope_map = if scope_values.is_empty() {
+        None
+    } else {
+        let null_rows = build_indices.len();
+        let mut map = new_join_hashmap(null_rows, reservation, metrics)?;
+        let mut hashes_buffer = vec![0; null_rows];
+        create_hashes(&scope_values, random_state, &mut hashes_buffer)?;
+        map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
+        Some(map)
+    };
+    Ok((
+        scope_map,
+        Some(NullValueBuildRows {
+            scope_map: null_scope_map,
+            scope_values,
+            build_indices,
+        }),
+    ))
+}
+
 /// The build rows with a NULL `NOT IN` value key (in any element of a
-/// multi-column key), used by correlated null-aware joins (see
-/// [`NotIn`]).
+/// multi-column key), used by correlated `NOT IN` (see [`NotInScope::Correlated`]).
 ///
 /// Such rows make `NOT IN` UNKNOWN whenever *any* probe row in their
 /// correlation scope passes the join filter (unless another element is a
@@ -226,7 +539,7 @@ impl<'a> UnknownMarks<'a> {
 /// probe rows for `RightAnti` (see [`UnknownMarks`]).
 ///
 /// Key layout: `on[..V]` are the `NOT IN` value keys, `on[V..]` the (possibly
-/// empty) correlation scope keys (see `HashJoinExec::null_aware`). A row is
+/// empty) correlation scope keys (see [`NotInScope::Correlated`]). A row is
 /// NULL-valued when any of its value keys is NULL. Each (build, probe) pair
 /// decides one of its rows (see [`UnknownMarks::unknown_row`]), and makes that
 /// row's `NOT IN` UNKNOWN instead of TRUE (a `LeftMark` mark NULL instead of
@@ -254,19 +567,20 @@ impl<'a> UnknownMarks<'a> {
 #[expect(clippy::too_many_arguments)]
 pub(super) fn mark_null_candidates_for_probe_batch(
     left_data: &JoinLeftData,
+    marks: UnknownMarks<'_>,
+    scope_map: Option<&dyn JoinHashMapType>,
+    null_value_build_rows: Option<&NullValueBuildRows>,
     probe_batch: &RecordBatch,
     probe_values: &[ArrayRef],
     num_value_keys: usize,
     filter: Option<&JoinFilter>,
     join_type: JoinType,
-    marks: UnknownMarks<'_>,
     random_state: &RandomState,
     batch_size: usize,
     hashes_buffer: &mut Vec<u64>,
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
 ) -> Result<()> {
-    let null_value_build_rows = left_data.null_value_build_rows();
     let probe_null_value_mask = null_value_key_mask(&probe_values[..num_value_keys]);
     if null_value_build_rows.is_none() && probe_null_value_mask.is_none() {
         return Ok(());
@@ -372,7 +686,7 @@ pub(super) fn mark_null_candidates_for_probe_batch(
             null_mask.values().set_indices().map(|i| i as u32),
         );
 
-        match left_data.null_aware_scope_map() {
+        match scope_map {
             Some(scope_map) => {
                 let probe_null_scope_values = probe_scope_values
                     .iter()
