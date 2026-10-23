@@ -53,6 +53,8 @@ use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
 Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use `date_bin` to downsample time series data by grouping rows into time-based "bins" or "windows" and applying an aggregate or selector function to each window.
 
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
+
+Bins are anchored to an origin instant (the UNIX epoch by default); an origin does not adjust for daylight saving time. For example, a bin aligned to midnight in `America/Denver` can shift to 01:00 after the spring daylight saving transition. Use `date_trunc` for calendar units such as local days. To bin other intervals on local wall-clock boundaries, convert the timestamp with `to_local_time(expression AT TIME ZONE '<zone>')` before calling `date_bin`, then apply `AT TIME ZONE` to the result if a timezone-aware timestamp is needed.
 "#,
     syntax_example = "date_bin(interval, expression[, origin_timestamp])",
     sql_example = r#"```sql
