@@ -1262,6 +1262,21 @@ SELECT extract(millisecond from arrow_cast('62.5 seconds', 'Interval(DayTime)'))
 ----
 2500 2500000
 
+# Reproducer from https://github.com/apache/datafusion/issues/26678
+query III
+SELECT extract(nanosecond from arrow_cast(1500000000, 'Duration(Nanosecond)')),
+       extract(nanosecond from interval '1.5 seconds'),
+       extract(microsecond from interval '1.5 seconds')
+----
+1500000000 1500000000 1500000
+
+# Reproducer from https://github.com/apache/datafusion/issues/14738#issuecomment-6372885638
+query II
+SELECT extract(millisecond from interval '62.5 seconds'),
+       extract(millisecond from arrow_cast(2500000000, 'Duration(Nanosecond)'))
+----
+2500 2500
+
 # Reproducer from https://github.com/apache/datafusion/issues/14738
 query III
 SELECT date_part('microseconds', interval '1 hour'),
@@ -1500,7 +1515,8 @@ SELECT date_part('microsecond', timestamp '1970-01-01T00:40:00' - timestamp '197
 ----
 NULL
 
-# Non-null inputs can give NULL results, so the result is nullable
+# Non-null inputs can give NULL results, so the result is nullable.
+# Reproducers from https://github.com/apache/datafusion/issues/26685
 query I
 SELECT extract(second from ts) FROM (VALUES (arrow_cast(9223372036854775807, 'Timestamp(Second, None)'))) AS t(ts)
 ----

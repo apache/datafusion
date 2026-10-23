@@ -132,13 +132,14 @@ impl ScalarUDFImpl for SparkDatePart {
 mod tests {
     use super::*;
     use arrow::datatypes::TimeUnit;
+    use datafusion_functions::datetime::date_part;
 
-    /// The result field matches the field of the `date_part` it simplifies to.
-    /// That `date_part` can return NULL for a non-null input, so both are
-    /// nullable.
     #[test]
-    fn test_date_part_nullability_matches_simplified() -> Result<()> {
-        let arg_fields: Vec<FieldRef> = vec![
+    fn test_date_part_return_field_nullability_matches_date_part() {
+        let func = SparkDatePart::new();
+        let part = ScalarValue::from("second");
+
+        let non_nullable_args: Vec<FieldRef> = vec![
             Arc::new(Field::new("part", DataType::Utf8, false)),
             Arc::new(Field::new(
                 "ts",
@@ -146,20 +147,24 @@ mod tests {
                 false,
             )),
         ];
-        let part = ScalarValue::from("second");
-        let scalar_arguments = [Some(&part), None];
-        let args = || ReturnFieldArgs {
-            arg_fields: &arg_fields,
-            scalar_arguments: &scalar_arguments,
-        };
 
-        let spark = SparkDatePart::new().return_field_from_args(args())?;
-        let simplified =
-            datafusion_functions::datetime::date_part().return_field_from_args(args())?;
-        assert!(spark.is_nullable());
-        assert_eq!(spark.is_nullable(), simplified.is_nullable());
-        assert_eq!(spark.data_type(), simplified.data_type());
+        let out = func
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &non_nullable_args,
+                scalar_arguments: &[Some(&part), None],
+            })
+            .expect("non-nullable arg should succeed");
+        assert_eq!(out.data_type(), &DataType::Int32);
+        assert!(out.is_nullable());
 
-        Ok(())
+        // Matches the `date_part` this simplifies to
+        let simplified = date_part()
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &non_nullable_args,
+                scalar_arguments: &[Some(&part), None],
+            })
+            .expect("non-nullable arg should succeed");
+        assert_eq!(out.data_type(), simplified.data_type());
+        assert_eq!(out.is_nullable(), simplified.is_nullable());
     }
 }

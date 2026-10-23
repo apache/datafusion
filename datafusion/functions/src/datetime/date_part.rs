@@ -575,6 +575,8 @@ where
     let secs = as_int32_array(secs.as_ref())?;
     let fraction = date_part(array, part)?;
     let fraction = as_int32_array(fraction.as_ref())?;
+    // At most 60 seconds, which fits in Int32 for milliseconds and
+    // microseconds, so the narrowing `as_` never truncates
     let r: PrimitiveArray<O> = binary(secs, fraction, |secs, fraction| {
         (secs as i64 * PER_SECOND + fraction as i64).as_()
     })?;
@@ -861,6 +863,38 @@ mod tests {
                 err.contains("failed on timezone"),
                 "error for {part} must keep the parse context: {err}"
             );
+        }
+    }
+
+    /// `epoch` is NULL only for a NULL input, but the integer parts can be NULL
+    /// for a non-null input, so they are always nullable.
+    #[test]
+    fn return_field_nullability() {
+        for input_nullable in [false, true] {
+            let arg_fields: Vec<FieldRef> = vec![
+                Field::new("a", DataType::Utf8, false).into(),
+                Field::new(
+                    "b",
+                    DataType::Timestamp(TimeUnit::Second, None),
+                    input_nullable,
+                )
+                .into(),
+            ];
+            for (part, nullable) in [
+                ("epoch", input_nullable),
+                ("second", true),
+                ("millisecond", true),
+                ("nanosecond", true),
+            ] {
+                let part = ScalarValue::from(part);
+                let field = DatePartFunc::new()
+                    .return_field_from_args(ReturnFieldArgs {
+                        arg_fields: &arg_fields,
+                        scalar_arguments: &[Some(&part), None],
+                    })
+                    .unwrap();
+                assert_eq!(field.is_nullable(), nullable, "{part}, {input_nullable}");
+            }
         }
     }
 
