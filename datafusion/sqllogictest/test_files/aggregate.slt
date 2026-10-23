@@ -8369,6 +8369,11 @@ SELECT STRING_AGG(DISTINCT x,'|' ORDER BY x) FROM strings
 ----
 a|b|i|j|p|x|y|z
 
+query TT
+SELECT STRING_AGG(x,'|' ORDER BY x DESC), STRING_AGG(DISTINCT x,'|' ORDER BY x) FROM strings
+----
+z|y|x|p|j|i|b|a a|b|i|j|p|x|y|z
+
 query error This feature is not implemented: string_agg delimiter must be a string literal
 SELECT STRING_AGG(DISTINCT x,y) FROM strings
 

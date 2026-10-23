@@ -247,6 +247,10 @@ name = "filter_query_sql"
 
 [[bench]]
 harness = false
+name = "in_list_rewrite"
+
+[[bench]]
+harness = false
 name = "struct_query_sql"
 
 [[bench]]
