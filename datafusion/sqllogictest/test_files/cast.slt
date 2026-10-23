@@ -368,3 +368,66 @@ DROP VIEW cast_interval_text_ids;
 
 statement ok
 DROP TABLE cast_interval_ids;
+
+# Regression tests for https://github.com/apache/datafusion/issues/26651:
+# a signed integer type's minimum value written with a postfix cast must
+# evaluate to that minimum, not fail in the optimizer. The positive
+# magnitude of the minimum is not representable in the type, so the sign
+# has to be folded into the literal before the cast is applied.
+
+query TI
+SELECT arrow_typeof(-128::TINYINT), -128::TINYINT;
+----
+Int8 -128
+
+query TI
+SELECT arrow_typeof(-32768::SMALLINT), -32768::SMALLINT;
+----
+Int16 -32768
+
+query TI
+SELECT arrow_typeof(-2147483648::INT), -2147483648::INT;
+----
+Int32 -2147483648
+
+query TI
+SELECT arrow_typeof(-9223372036854775808::BIGINT), -9223372036854775808::BIGINT;
+----
+Int64 -9223372036854775808
+
+# The CAST spelling of the same values
+query I
+SELECT CAST(-2147483648 AS INT);
+----
+-2147483648
+
+# Ordinary negative literals with postfix casts are unaffected
+query II
+SELECT -5::INT, -42::BIGINT;
+----
+-5 -42
+
+# A negative decimal literal with a postfix cast is unaffected
+query TR
+SELECT arrow_typeof(-1.5::DECIMAL(10, 2)), -1.5::DECIMAL(10, 2);
+----
+Decimal128(10, 2) -1.50
+
+# The minimum value also works in a WHERE filter and in INSERT .. VALUES
+statement ok
+CREATE TABLE min_value_test(x BIGINT);
+
+statement ok
+INSERT INTO min_value_test VALUES (-9223372036854775808::BIGINT);
+
+query I
+SELECT x FROM min_value_test WHERE x = -9223372036854775808::BIGINT;
+----
+-9223372036854775808
+
+statement ok
+DROP TABLE min_value_test;
+
+# One past the minimum must still fail: the value itself is out of range
+statement error Can't cast value -2147483649 to type Int32
+SELECT -2147483649::INT;
