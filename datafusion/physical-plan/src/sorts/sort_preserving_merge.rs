@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
+use crate::execution_plan::LimitBehavior;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
@@ -423,6 +424,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Merge { fetch: self.fetch }
     }
 
     /// Tries to swap the projection with its input [`SortPreservingMergeExec`].

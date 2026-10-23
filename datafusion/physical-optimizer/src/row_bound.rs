@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use datafusion_common::utils::combine_limit;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, LimitBehavior};
 
 /// `OFFSET skip LIMIT fetch` on the output of one operator.
 ///
@@ -47,14 +47,9 @@ impl RowBound {
 
     /// The bound a limit node imposes, or `None` if `plan` is not a limit node.
     pub fn of_limit_node(plan: &Arc<dyn ExecutionPlan>) -> Option<Self> {
-        if let Some(limit) = plan.downcast_ref::<GlobalLimitExec>() {
-            Some(Self {
-                skip: limit.skip(),
-                fetch: limit.fetch(),
-            })
-        } else {
-            plan.downcast_ref::<LocalLimitExec>()
-                .map(|limit| Self::fetch(Some(limit.fetch())))
+        match plan.limit_behavior() {
+            LimitBehavior::Limit { skip, fetch } => Some(Self { skip, fetch }),
+            _ => None,
         }
     }
 

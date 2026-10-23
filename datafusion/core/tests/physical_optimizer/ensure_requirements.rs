@@ -510,6 +510,35 @@ fn test_skip_and_fetch_multi_partition() {
     ");
 }
 
+/// A merge with its own fetch already selects rows, so the fetch of a
+/// stricter TopK above it must stay above it.
+#[test]
+fn test_fetched_merge_keeps_stricter_topk_above() {
+    let source = Arc::new(MockMultiPartitionExec::new(4));
+    let a = sort_expr_on("a", 0, false, false);
+    let a_b = LexOrdering::new(
+        a.iter()
+            .cloned()
+            .chain(sort_expr_on("b", 1, false, false).iter().cloned()),
+    )
+    .unwrap();
+    let inner = Arc::new(
+        SortExec::new(a.clone(), source)
+            .with_fetch(Some(5))
+            .with_preserve_partitioning(true),
+    );
+    let merge = Arc::new(SortPreservingMergeExec::new(a, inner).with_fetch(Some(5)));
+    let topk: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(a_b, merge).with_fetch(Some(2)));
+
+    assert_ensure_requirements_plan!(topk, @r"
+    SortExec: TopK(fetch=2), expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false], sort_prefix=[a@0 ASC NULLS LAST]
+      SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
+        LocalLimitExec: fetch=5
+          MockMultiPartitionExec
+    ");
+}
+
 // ========================================================================
 // Multiple sort columns test
 // ========================================================================
