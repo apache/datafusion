@@ -21,10 +21,11 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
+use crate::decorrelate::{
+    PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, build_join_filter,
+};
 use crate::extract_equijoin_predicate::split_eq_and_noneq_join_predicate;
 use crate::optimizer::ApplyOrder;
-use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
@@ -798,7 +799,11 @@ fn subquery_operands_are_bare_columns(
         filter
             .apply(|e| {
                 let refs = e.column_refs();
-                if !refs.is_empty() && refs.iter().all(|c| subquery_cols.contains(*c)) {
+                // `column_refs` skips outer references, which the join filters keep, so check them separately.
+                if !refs.is_empty()
+                    && !e.contains_outer()
+                    && refs.iter().all(|c| subquery_cols.contains(*c))
+                {
                     bare = matches!(e, Expr::Column(_));
                     return Ok(if bare {
                         TreeNodeRecursion::Jump
@@ -879,17 +884,11 @@ fn build_join(
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(alias.to_string())?
         .build()?;
-    let mut all_correlated_cols = BTreeSet::new();
-    pull_up
-        .correlated_subquery_cols_map
-        .values()
-        .for_each(|cols| all_correlated_cols.extend(cols.iter().cloned()));
-
-    // alias the join filter
-    let join_filter_opt = conjunction(pull_up.join_filters)
-        .map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, alias).map(Some)
-        })?;
+    let join_filter_opt = build_join_filter(
+        pull_up.join_filters,
+        pull_up.correlated_subquery_cols_map.values().flatten(),
+        alias,
+    )?;
 
     if let Some(expr_map) = count_bug_compensation
         && !expr_map.is_empty()
@@ -2684,6 +2683,34 @@ mod tests {
               Projection: test.c [c:UInt32]
                 Filter: test.a > test.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn in_subquery_correlated_with_same_table() -> Result<()> {
+        let outer_scan = test_table_scan()?;
+        let subquery_scan = test_table_scan()?;
+        let subquery = LogicalPlanBuilder::from(subquery_scan)
+            .filter(out_ref_col(DataType::UInt32, "test.a").gt(col("test.a")))?
+            .project(vec![col("c")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(in_subquery(col("test.b"), Arc::new(subquery)))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        // The outer `test.a` and the subquery's `test.a` stay apart in the join filter.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          LeftSemi Join:  Filter: test.b = __correlated_sq_1.c AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_1 [c:UInt32, a:UInt32]
+              Projection: test.c, test.a [c:UInt32, a:UInt32]
+                TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
