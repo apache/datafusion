@@ -2777,6 +2777,137 @@ mod tests {
         )
     }
 
+    /// A `Limit` whose row count nothing above it can observe is still dropped,
+    /// so the subquery decorrelates. Here only a `Projection`, which outputs one
+    /// row per input row, sits above it.
+    #[test]
+    fn exists_subquery_with_limit_below_projection_is_decorrelated() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
+                )?
+                .limit(0, Some(1))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey [c_custkey:Int64]
+          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+            SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
+              Projection: orders.o_custkey [o_custkey:Int64]
+                TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "
+        )
+    }
+
+    /// An `Aggregate` above the `Limit` does not stop the `Limit` going away:
+    /// a grouping outputs rows exactly when its input has rows, and a grouping
+    /// -free `Aggregate` always outputs its one row, so neither can be emptied
+    /// by the rows the `Limit` held back.
+    #[test]
+    fn exists_subquery_with_limit_below_aggregate_is_decorrelated() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
+                )?
+                .limit(0, Some(1))?
+                .aggregate(Vec::<Expr>::new(), vec![count_udaf().call(vec![])])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey [c_custkey:Int64]
+          Projection: customer.c_custkey, customer.c_name [c_custkey:Int64, c_name:Utf8]
+            Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __always_true:Boolean;N, count():Int64;N]
+              Left Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __always_true:Boolean;N, count():Int64;N]
+                TableScan: customer [c_custkey:Int64, c_name:Utf8]
+                SubqueryAlias: __correlated_sq_1 [o_custkey:Int64, __always_true:Boolean, count():Int64]
+                  Aggregate: groupBy=[[orders.o_custkey, Boolean(true) AS __always_true]], aggr=[[count()]] [o_custkey:Int64, __always_true:Boolean, count():Int64]
+                    TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "
+        )
+    }
+
+    /// A `HAVING` above the `Aggregate` reads the aggregate's value, so the
+    /// rows the `Limit` kept decide it: `HAVING count(*) > 1` can never hold
+    /// over the one row `LIMIT 1` keeps, however many rows the scan has.
+    /// https://github.com/apache/datafusion/issues/26629
+    #[test]
+    fn exists_subquery_with_limit_below_having_is_left_unchanged() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
+                )?
+                .limit(0, Some(1))?
+                .aggregate(Vec::<Expr>::new(), vec![count_udaf().call(vec![])])?
+                .filter(col("count()").gt(lit(1)))?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let result = DecorrelatePredicateSubquery::new()
+            .rewrite(plan.clone(), &crate::OptimizerContext::new())?;
+
+        assert!(!result.transformed);
+        assert_eq!(result.data, plan);
+        Ok(())
+    }
+
+    /// A `Filter` above the `Limit` reads the rows the `Limit` kept, so dropping
+    /// the `Limit` lets rows it held back decide the filter.
+    /// https://github.com/apache/datafusion/issues/26629
+    #[test]
+    fn exists_subquery_with_limit_below_filter_is_left_unchanged() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
+                )?
+                .limit(0, Some(1))?
+                .filter(col("orders.o_orderkey").eq(lit(1)))?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let result = DecorrelatePredicateSubquery::new()
+            .rewrite(plan.clone(), &crate::OptimizerContext::new())?;
+
+        assert!(!result.transformed);
+        assert_eq!(result.data, plan);
+        Ok(())
+    }
+
     #[test]
     fn exists_subquery_no_cols() -> Result<()> {
         let sq = Arc::new(
