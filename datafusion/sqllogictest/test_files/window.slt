@@ -7214,18 +7214,53 @@ select count(*) over (order by l nulls first) from (values ([NULL::int]), ([1]),
 2
 3
 
-# Lists containing structs or lists also form RANGE peer groups.
-query I
-select count(*) over (order by l) from (values ([struct(1)]), ([struct(2)])) t(l)
-----
-1
-2
+# With one row per batch, nested peers cross batch boundaries. The tie column
+# separates rows with the same nested key.
+statement ok
+set datafusion.execution.batch_size = 1;
 
-query I
-select count(*) over (order by l) from (values ([[1]]), ([[2]])) t(l)
+statement ok
+create table nested_range_peers as
+select * from (values
+    (NULL,            NULL,                0, 1),
+    (NULL,            NULL,                0, 2),
+    ([[NULL::int]],   [struct(NULL::int)], 0, 4),
+    ([[NULL::int]],   [struct(NULL::int)], 0, 8),
+    ([[NULL::int]],   [struct(NULL::int)], 1, 16),
+    ([[1]],           [struct(1::int)],    0, 32)
+) t(lists, structs, tie, v);
+
+query IIII
+select count(*) over (order by lists nulls first, tie),
+       count(*) over (order by structs nulls first, tie),
+       sum(v) over (order by lists nulls first, tie range between current row and current row),
+       sum(v) over (order by structs nulls first, tie range between current row and current row)
+from nested_range_peers order by v
 ----
-1
-2
+2 2 3 3
+2 2 3 3
+4 4 12 12
+4 4 12 12
+5 5 16 16
+6 6 32 32
+
+query II
+select sum(v) over (order by lists nulls first, tie range between current row and unbounded following),
+       sum(v) over (order by structs nulls first, tie range between current row and unbounded following)
+from nested_range_peers order by v
+----
+63 63
+63 63
+60 60
+60 60
+48 48
+32 32
+
+statement ok
+drop table nested_range_peers;
+
+statement ok
+reset datafusion.execution.batch_size;
 
 # after a duration key the free-range check looks at every ORDER BY type.
 # Trailing list keys remain rejected by this check.

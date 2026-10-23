@@ -345,7 +345,7 @@ impl PartitionBatchState {
 /// ranges of data while processing RANGE frames.
 /// Attribute `sort_options` stores the column ordering specified by the ORDER
 /// BY clause. This information is used to calculate the range.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct WindowFrameStateRange {
     sort_options: Vec<SortOptions>,
     peer_comparator: Option<RangePeerComparator>,
@@ -353,10 +353,28 @@ pub struct WindowFrameStateRange {
 
 /// Reuse comparators to avoid per-row setup work, including logical-null masks
 /// that can take O(n) to build for dictionary arrays.
-#[derive(Clone)]
 struct RangePeerComparator {
     columns: Vec<ArrayRef>,
-    comparator: Arc<LexicographicalComparator>,
+    comparator: LexicographicalComparator,
+}
+
+impl RangePeerComparator {
+    fn matches_columns(&self, columns: &[ArrayRef]) -> bool {
+        // Sliced arrays have different row indices even when they share buffers.
+        self.columns.len() == columns.len()
+            && self
+                .columns
+                .iter()
+                .zip(columns)
+                .all(|(old, new)| Arc::ptr_eq(old, new))
+    }
+}
+
+impl Clone for WindowFrameStateRange {
+    fn clone(&self) -> Self {
+        // A clone builds its own comparator when it first sees nested keys.
+        Self::new(self.sort_options.clone())
+    }
 }
 
 // Preserve the public WindowFrameStateRange type's existing unwind-safety traits.
@@ -382,34 +400,40 @@ impl WindowFrameStateRange {
         }
     }
 
-    fn peer_comparator(
+    fn peer_boundary<const START: bool>(
         &mut self,
         range_columns: &[ArrayRef],
-    ) -> Result<&LexicographicalComparator> {
-        let needs_rebuild = self.peer_comparator.as_ref().is_none_or(|cached| {
-            cached.columns.len() != range_columns.len()
-                || cached
-                    .columns
+        idx: usize,
+        mut boundary: usize,
+        length: usize,
+    ) -> Result<usize> {
+        let cached = match &self.peer_comparator {
+            Some(cached) if cached.matches_columns(range_columns) => cached,
+            _ => {
+                let sort_columns = range_columns
                     .iter()
-                    .zip(range_columns)
-                    .any(|(old, new)| !Arc::ptr_eq(old, new))
-        });
-        if needs_rebuild {
-            // Sliced arrays have different row indices even when they share buffers.
-            let sort_columns = range_columns
-                .iter()
-                .zip(&self.sort_options)
-                .map(|(values, options)| SortColumn {
-                    values: Arc::clone(values),
-                    options: Some(*options),
+                    .zip(&self.sort_options)
+                    .map(|(values, options)| SortColumn {
+                        values: Arc::clone(values),
+                        options: Some(*options),
+                    })
+                    .collect::<Vec<_>>();
+                self.peer_comparator.insert(RangePeerComparator {
+                    columns: range_columns.to_vec(),
+                    comparator: LexicographicalComparator::try_new(&sort_columns)?,
                 })
-                .collect::<Vec<_>>();
-            self.peer_comparator = Some(RangePeerComparator {
-                columns: range_columns.to_vec(),
-                comparator: Arc::new(LexicographicalComparator::try_new(&sort_columns)?),
-            });
+            }
+        };
+        // ScalarValue equality can distinguish encodings of the same nested value:
+        // a list with a null dictionary key and one with a key referencing null.
+        while boundary < length {
+            let is_peer = cached.comparator.compare(boundary, idx).is_eq();
+            if is_peer == START {
+                break;
+            }
+            boundary += 1;
         }
-        Ok(&self.peer_comparator.as_ref().unwrap().comparator)
+        Ok(boundary)
     }
 
     /// This function calculates beginning/ending indices for the frame of the current row.
@@ -425,6 +449,12 @@ impl WindowFrameStateRange {
         length: usize,
         idx: usize,
     ) -> Result<Range<usize>> {
+        let has_current_row = window_frame.start_bound == WindowFrameBound::CurrentRow
+            || window_frame.end_bound == WindowFrameBound::CurrentRow;
+        let nested_current_row = has_current_row
+            && range_columns
+                .iter()
+                .any(|column| column.data_type().is_nested());
         let start = match window_frame.start_bound {
             WindowFrameBound::Preceding(ref n) => {
                 if n.is_null() {
@@ -439,6 +469,9 @@ impl WindowFrameStateRange {
                         length,
                     )?
                 }
+            }
+            WindowFrameBound::CurrentRow if nested_current_row => {
+                self.peer_boundary::<true>(range_columns, idx, last_range.start, length)?
             }
             WindowFrameBound::CurrentRow => self.calculate_index_of_row::<true, true>(
                 range_columns,
@@ -465,6 +498,16 @@ impl WindowFrameStateRange {
                     Some(n),
                     length,
                 )?,
+            WindowFrameBound::CurrentRow if nested_current_row => {
+                // An equality scan cannot skip preceding non-peers if evaluation
+                // starts partway through a partition.
+                self.peer_boundary::<false>(
+                    range_columns,
+                    idx,
+                    last_range.end.max(idx),
+                    length,
+                )?
+            }
             WindowFrameBound::CurrentRow => self.calculate_index_of_row::<false, false>(
                 range_columns,
                 last_range,
@@ -494,39 +537,13 @@ impl WindowFrameStateRange {
     /// called twice, in succession, to get window frame start and end indices (with `SIDE`
     /// supplied as true and false, respectively).
     fn calculate_index_of_row<const SIDE: bool, const SEARCH_SIDE: bool>(
-        &mut self,
+        &self,
         range_columns: &[ArrayRef],
         last_range: &Range<usize>,
         idx: usize,
         delta: Option<&ScalarValue>,
         length: usize,
     ) -> Result<usize> {
-        if delta.is_none()
-            && range_columns
-                .iter()
-                .any(|column| column.data_type().is_nested())
-        {
-            // CURRENT ROW needs peer equality. ScalarValue equality can distinguish
-            // encodings of the same nested value: a list with a null dictionary
-            // key and one with a key referencing null. Use Arrow's logical
-            // comparison, which also matches the ordering used to sort these keys.
-            let mut boundary = if SIDE {
-                last_range.start
-            } else {
-                // Evaluation may start partway through a partition. An equality
-                // scan cannot skip preceding non-peers to reach the current row.
-                last_range.end.max(idx)
-            };
-            let comparator = self.peer_comparator(range_columns)?;
-            while boundary < length {
-                let is_peer = comparator.compare(boundary, idx).is_eq();
-                if is_peer == SIDE {
-                    break;
-                }
-                boundary += 1;
-            }
-            return Ok(boundary);
-        }
         let mut end_range = get_row_at_idx(range_columns, idx)?;
         let search_start = if SIDE {
             last_range.start
@@ -817,7 +834,7 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
 
     #[test]
-    fn range_peer_comparator_reuses_arrays_and_releases_after_pruning() -> Result<()> {
+    fn nested_range_peers_across_cloning_and_pruning() -> Result<()> {
         use arrow::array::ListArray;
         use arrow::datatypes::Int64Type;
 
@@ -838,15 +855,12 @@ mod tests {
             range.calculate_range(&frame, &(0..0), &columns, 4, 0)?,
             0..2
         );
-        let first = Arc::downgrade(&range.peer_comparator.as_ref().unwrap().comparator);
         assert_eq!(
-            range.calculate_range(&frame, &(0..2), &columns, 4, 1)?,
+            range
+                .clone()
+                .calculate_range(&frame, &(0..2), &columns, 4, 1)?,
             0..2
         );
-        assert!(Arc::ptr_eq(
-            &first.upgrade().unwrap(),
-            &range.peer_comparator.as_ref().unwrap().comparator,
-        ));
 
         let columns = [columns[0].slice(1, 3)];
         assert_eq!(
