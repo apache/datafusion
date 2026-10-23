@@ -559,7 +559,7 @@ impl Accumulator for OrderSensitiveMapAggAccumulator {
         for i in 0..keys.len() {
             // NULL keys cannot exist in a map; skip the whole pair.
             if keys.is_null(i) {
-                continue;
+                return exec_err!("null key's are not allowed in map_agg");
             }
             self.keys
                 .push(ScalarValue::try_from_array(keys, i)?.compacted());
