@@ -28,7 +28,7 @@ use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     ColumnNormalizer, coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
-    rewrite_sort_cols_by_aggs,
+    replace_col, rewrite_sort_cols_by_aggs,
 };
 use crate::logical_plan::{
     Aggregate, Analyze, AsOfJoin, AsOfMatch, Distinct, DistinctOn, EmptyRelation,
@@ -715,16 +715,23 @@ impl LogicalPlanBuilder {
     ///  (which will appear as a (1, 2), (1, 2) if a and b are projected
     ///
     /// See <https://github.com/apache/datafusion/issues/5065> for more details
+    ///
+    /// A projection cannot hold both the qualified field `t.c` and an
+    /// unqualified field `c`. When it already outputs `c`, e.g. for
+    /// `SELECT lower(t.c) AS c FROM t ORDER BY t.c`, the sort column is added
+    /// under an alias instead: the alias is recorded in `aliases` so the caller
+    /// can rebind the sorts to it, and the projection above the sort drops it.
     fn add_missing_columns(
         curr_plan: LogicalPlan,
         missing_cols: &IndexSet<Column>,
         is_distinct: bool,
+        aliases: &mut HashMap<Column, Column>,
     ) -> Result<LogicalPlan> {
         match curr_plan {
             LogicalPlan::Projection(Projection {
                 input,
                 mut expr,
-                schema: _,
+                schema,
             }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
                 let mut missing_exprs = missing_cols
                     .iter()
@@ -738,6 +745,26 @@ impl LogicalPlanBuilder {
                 if is_distinct {
                     Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
                 }
+
+                for e in missing_exprs.iter_mut() {
+                    let Expr::Column(column) = &*e else {
+                        continue;
+                    };
+                    let column = column.clone();
+                    if !schema
+                        .iter()
+                        .any(|(q, f)| q.is_none() && f.name() == column.name())
+                    {
+                        continue;
+                    }
+                    let mut name = column.flat_name();
+                    while schema.has_column_with_unqualified_name(&name) {
+                        name.push('_');
+                    }
+                    aliases.insert(column.clone(), Column::new_unqualified(name.clone()));
+                    *e = Expr::Column(column).alias(name);
+                }
+
                 expr.extend(missing_exprs);
                 project(Arc::unwrap_or_clone(input), expr)
             }
@@ -752,6 +779,7 @@ impl LogicalPlanBuilder {
                             (*input_plan).clone(),
                             missing_cols,
                             is_distinct,
+                            aliases,
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -855,11 +883,27 @@ impl LogicalPlanBuilder {
         let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
 
         let is_distinct = false;
+        let mut aliases = HashMap::new();
         let plan = Self::add_missing_columns(
             Arc::unwrap_or_clone(self.plan),
             &missing_cols,
             is_distinct,
+            &mut aliases,
         )?;
+
+        // Rebind the sorts to the columns that were carried under an alias
+        // rather than under their own name.
+        let replace: HashMap<&Column, &Column> = aliases.iter().collect();
+        let sorts = sorts
+            .into_iter()
+            .map(|sort| {
+                Ok(SortExpr::new(
+                    replace_col(sort.expr, &replace)?,
+                    sort.asc,
+                    sort.nulls_first,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
@@ -2526,6 +2570,30 @@ mod tests {
         Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST
           TableScan: employee_csv projection=[state, salary]
         ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_sort_missing_column_colliding_with_alias() -> Result<()> {
+        // The carried sort key cannot be added to the projection as
+        // `employee_csv.salary`: a schema cannot hold both that qualified
+        // field and the unqualified field `salary` the projection outputs.
+        let plan = table_scan(Some("employee_csv"), &employee_schema(), None)?
+            .project(vec![(col("salary") + lit(1.0)).alias("salary")])?
+            .sort(vec![expr::Sort::new(
+                col("employee_csv.salary"),
+                true,
+                false,
+            )])?
+            .build()?;
+
+        assert_snapshot!(plan, @r#"
+        Projection: salary
+          Sort: employee_csv.salary ASC NULLS LAST
+            Projection: employee_csv.salary + Float64(1) AS salary, employee_csv.salary AS employee_csv.salary
+              TableScan: employee_csv
+        "#);
 
         Ok(())
     }

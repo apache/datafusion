@@ -2276,3 +2276,25 @@ SELECT i, -i AS n FROM (
 -128 -128
 -128 -128
 NULL NULL
+
+# Regression for #26462: a select item aliased to the name of a source column
+# hid that source column from ORDER BY.
+statement ok
+CREATE TABLE employees (id INT, email VARCHAR) AS VALUES (1, 'B@x'), (2, 'a@y');
+
+# `e.email` is qualified, so it is the input column: b@x sorts before a@y.
+query T
+SELECT lower(e.email) AS email FROM employees e ORDER BY e.email;
+----
+b@x
+a@y
+
+# The bare name is the output column, as in PostgreSQL.
+query T
+SELECT lower(e.email) AS email FROM employees e ORDER BY email;
+----
+a@y
+b@x
+
+statement ok
+DROP TABLE employees;
