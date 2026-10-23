@@ -224,11 +224,16 @@ impl AggregateUDFImpl for MapAgg {
             ordering_dtypes,
             ordering,
             self.is_input_pre_ordered,
+            acc_args.is_reversed,
         )))
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::SoftRequirement
+    }
+
+    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        datafusion_expr::ReversedUDAF::Reversed(map_agg_udaf())
     }
 
     fn with_beneficial_ordering(
@@ -436,6 +441,8 @@ pub struct OrderSensitiveMapAggAccumulator {
     /// When true the input already satisfies `ordering_req`, so the pairs do
     /// not have to be sorted again before de-duplication.
     is_input_pre_ordered: bool,
+    /// Whether the input is ordered in the reverse direction of `ordering_req`.
+    reverse: bool,
 }
 
 impl OrderSensitiveMapAggAccumulator {
@@ -448,6 +455,7 @@ impl OrderSensitiveMapAggAccumulator {
         ordering_dtypes: Vec<DataType>,
         ordering_req: LexOrdering,
         is_input_pre_ordered: bool,
+        reverse: bool,
     ) -> Self {
         Self {
             key_type,
@@ -458,13 +466,17 @@ impl OrderSensitiveMapAggAccumulator {
             ordering_dtypes,
             ordering_req,
             is_input_pre_ordered,
+            reverse,
         }
     }
 
     /// Sort options of each ordering expression, used when sorting the pairs
     /// and when merging partial states.
     fn sort_options(&self) -> Vec<SortOptions> {
-        self.ordering_req.iter().map(|s| s.options).collect()
+        self.ordering_req
+            .iter()
+            .map(|s| if self.reverse { !s.options } else { s.options })
+            .collect()
     }
 
     /// Sorts the accumulated pairs by their ordering values, then applies
@@ -498,7 +510,12 @@ impl OrderSensitiveMapAggAccumulator {
         let mut keys = Vec::new();
         let mut values = Vec::new();
         let mut ordering_values = Vec::new();
-        for &i in &rows {
+        let row_indices = if self.reverse {
+            rows.iter().rev().copied().collect::<Vec<_>>()
+        } else {
+            rows
+        };
+        for i in row_indices {
             if seen.insert(&self.keys[i]) {
                 keys.push(self.keys[i].clone());
                 values.push(self.values[i].clone());
@@ -603,8 +620,12 @@ impl Accumulator for OrderSensitiveMapAggAccumulator {
             if map_array.is_null(row) {
                 continue;
             }
-            let (keys, values) = map_row_to_scalars(map_array, row)?;
-            let ord_vals = struct_to_rows(orderings.value(row).as_struct())?;
+            let (mut keys, mut values) = map_row_to_scalars(map_array, row)?;
+            let mut ord_vals = struct_to_rows(orderings.value(row).as_struct())?;
+
+            keys.iter_mut().for_each(ScalarValue::compact);
+            values.iter_mut().for_each(ScalarValue::compact);
+            ord_vals.iter_mut().flatten().for_each(ScalarValue::compact);
 
             partition_keys.push(keys.into());
             partition_values.push(values.into());
@@ -904,6 +925,7 @@ mod tests {
     /// Accumulator ordered by an `Int32` `ord` column (ascending, nulls first).
     fn ordered_accumulator(
         is_input_pre_ordered: bool,
+        reverse: bool,
     ) -> Result<OrderSensitiveMapAggAccumulator> {
         use arrow::datatypes::Schema;
         use datafusion_physical_expr::expressions::Column;
@@ -930,6 +952,7 @@ mod tests {
             vec![DataType::Int32],
             ordering,
             is_input_pre_ordered,
+            reverse,
         ))
     }
 
@@ -944,7 +967,7 @@ mod tests {
 
     #[test]
     fn ordered_map_agg_sorts_and_keeps_first_pair_per_key() -> Result<()> {
-        let mut acc = ordered_accumulator(false)?;
+        let mut acc = ordered_accumulator(false, false)?;
         acc.update_batch(&ordered_batch(&["a", "b", "a"], &[10, 20, 30], &[3, 1, 2]))?;
 
         // State carries the map plus the parallel ordering column.
@@ -966,10 +989,10 @@ mod tests {
 
     #[test]
     fn ordered_map_agg_merges_partition_states_in_ordering() -> Result<()> {
-        let mut lhs = ordered_accumulator(false)?;
+        let mut lhs = ordered_accumulator(false, false)?;
         lhs.update_batch(&ordered_batch(&["a", "c"], &[1, 3], &[1, 3]))?;
 
-        let mut rhs = ordered_accumulator(false)?;
+        let mut rhs = ordered_accumulator(false, false)?;
         rhs.update_batch(&ordered_batch(&["b", "a"], &[2, 4], &[2, 4]))?;
         let state = rhs
             .state()?
@@ -988,6 +1011,25 @@ mod tests {
         assert_eq!(map_keys, &StringArray::from(vec!["a", "b", "c"]));
         let map_values = map.values().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(map_values, &Int32Array::from(vec![1, 2, 3]));
+
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_map_agg_reverses_preordered_input_before_deduplication() -> Result<()> {
+        // The physical input is descending, while the aggregate ordering is
+        // ascending. This is the representation used when the optimizer marks
+        // an aggregate as reversed and preordered.
+        let mut acc = ordered_accumulator(true, true)?;
+        acc.update_batch(&ordered_batch(&["a", "a", "b"], &[20, 10, 5], &[20, 10, 5]))?;
+
+        let ScalarValue::Map(map) = acc.evaluate()? else {
+            panic!("expected map scalar");
+        };
+        let map_keys = map.keys().as_any().downcast_ref::<StringArray>().unwrap();
+        let map_values = map.values().as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(map_keys, &StringArray::from(vec!["b", "a"]));
+        assert_eq!(map_values, &Int32Array::from(vec![5, 10]));
 
         Ok(())
     }

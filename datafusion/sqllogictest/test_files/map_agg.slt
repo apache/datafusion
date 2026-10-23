@@ -121,6 +121,17 @@ FROM (VALUES ('a', 20), ('b', 5), ('a', 10)) t(k, v)
 ----
 {b: 5, a: 10}
 
+# Reverse-preordered input must still use the first pair in the requested
+# ordering, not the first physical row.
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (
+    SELECT * FROM (VALUES ('a', 20), ('b', 5), ('a', 10)) t(k, v)
+    ORDER BY v DESC
+) t
+----
+{b: 5, a: 10}
+
 # The default null ordering is NULLS LAST for ascending order, so NULL ordering
 # values sort to the end.
 query ?
