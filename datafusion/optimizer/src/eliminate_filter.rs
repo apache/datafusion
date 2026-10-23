@@ -142,12 +142,14 @@ fn is_null_literal(expr: &Expr) -> bool {
 fn simplify_filter_in_list(in_list: InList) -> SimplifiedFilterPredicate {
     let InList {
         expr,
-        list,
+        mut list,
         negated,
     } = in_list;
 
+    // `retain` drops the `NULL`s in place. Most lists have none, and that case
+    // then costs one pass and no allocation.
     let len_before = list.len();
-    let list: Vec<Expr> = list.into_iter().filter(|e| !is_null_literal(e)).collect();
+    list.retain(|e| !is_null_literal(e));
 
     if list.len() == len_before {
         // No `NULL` members, so there is nothing to simplify.
