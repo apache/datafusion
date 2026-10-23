@@ -85,6 +85,24 @@ impl BloomFilterStatistics {
         );
     }
 
+    /// Returns `true` if the Bloom filter definitely does not contain any of the given values.
+    ///
+    /// If all values are confirmed absent by the Bloom filter, returns `true`.
+    /// If any value might be present (or checking is unsupported), returns `false`.
+    pub fn is_known_not_present(
+        sbbf: &Sbbf,
+        values: &HashSet<ScalarValue>,
+        parquet_type: &Type,
+        type_length: i32,
+    ) -> bool {
+        if values.is_empty() {
+            return false;
+        }
+        values
+            .iter()
+            .all(|value| !Self::check_scalar(sbbf, value, parquet_type, type_length))
+    }
+
     /// Helper function for checking if [`Sbbf`] filter contains [`ScalarValue`].
     ///
     /// In case the type of scalar is not supported, returns `true`, assuming that the
@@ -209,20 +227,12 @@ impl PruningStatistics for BloomFilterStatistics {
         // positives (i.e. it might return true even if the value is not
         // present) however, the bloom filter will return `false` if the value is
         // definitely not present.
-
-        let known_not_present = values
-            .iter()
-            .map(|value| {
-                BloomFilterStatistics::check_scalar(
-                    &column_bloom_filter.sbbf,
-                    value,
-                    &column_bloom_filter.physical_type,
-                    column_bloom_filter.type_length,
-                )
-            })
-            // The row group doesn't contain any of the values if
-            // all the checks are false
-            .all(|v| !v);
+        let known_not_present = Self::is_known_not_present(
+            &column_bloom_filter.sbbf,
+            values,
+            &column_bloom_filter.physical_type,
+            column_bloom_filter.type_length,
+        );
 
         let contains = if known_not_present {
             Some(false)
@@ -719,5 +729,51 @@ mod tests {
         );
 
         Ok(pruned_row_groups)
+    }
+
+    #[test]
+    fn test_is_known_not_present() {
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        // 1. Empty values -> returns false
+        assert!(!BloomFilterStatistics::is_known_not_present(
+            &sbbf,
+            &HashSet::new(),
+            &Type::INT32,
+            0,
+        ));
+
+        // 2. Insert 42
+        sbbf.insert(&42_i32);
+
+        // Value 42 is present -> is_known_not_present should be false
+        let mut present_set = HashSet::new();
+        present_set.insert(ScalarValue::Int32(Some(42)));
+        assert!(!BloomFilterStatistics::is_known_not_present(
+            &sbbf,
+            &present_set,
+            &Type::INT32,
+            0,
+        ));
+
+        // Value 99 is absent -> is_known_not_present should be true
+        let mut absent_set = HashSet::new();
+        absent_set.insert(ScalarValue::Int32(Some(99)));
+        assert!(BloomFilterStatistics::is_known_not_present(
+            &sbbf,
+            &absent_set,
+            &Type::INT32,
+            0,
+        ));
+
+        // Mixed set containing present and absent -> is_known_not_present should be false
+        let mut mixed_set = HashSet::new();
+        mixed_set.insert(ScalarValue::Int32(Some(42)));
+        mixed_set.insert(ScalarValue::Int32(Some(99)));
+        assert!(!BloomFilterStatistics::is_known_not_present(
+            &sbbf,
+            &mixed_set,
+            &Type::INT32,
+            0,
+        ));
     }
 }
