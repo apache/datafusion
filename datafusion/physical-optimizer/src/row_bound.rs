@@ -25,6 +25,7 @@
 
 use std::sync::Arc;
 
+use datafusion_common::utils::combine_limit;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -57,6 +58,12 @@ impl RowBound {
         }
     }
 
+    /// `self` applied over the output of `inner`: first `inner`, then `self`.
+    pub fn over(self, inner: RowBound) -> RowBound {
+        let (skip, fetch) = combine_limit(self.skip, self.fetch, inner.skip, inner.fetch);
+        RowBound { skip, fetch }
+    }
+
     /// The tighter of two bounds on the same output. Both must have `skip == 0`.
     pub fn min(self, other: RowBound) -> RowBound {
         debug_assert!(self.skip == 0 && other.skip == 0);
@@ -74,6 +81,24 @@ impl RowBound {
     /// real one, so a fetch computed from it stays correct.
     pub fn input_rows(self) -> Option<usize> {
         self.fetch.map(|fetch| fetch.saturating_add(self.skip))
+    }
+}
+
+/// Writes `bound` on top of `plan`'s output.
+///
+/// `plan` absorbs `bound.input_rows()` as its own fetch when it can; a
+/// [`GlobalLimitExec`] on top still applies the skip, if any. When `plan`
+/// can't absorb it, a [`limit_node`] is added instead.
+pub(crate) fn place(
+    plan: Arc<dyn ExecutionPlan>,
+    bound: RowBound,
+) -> Arc<dyn ExecutionPlan> {
+    match plan.with_fetch(bound.input_rows()) {
+        Some(absorbed) if bound.skip == 0 => absorbed,
+        Some(absorbed) => {
+            Arc::new(GlobalLimitExec::new(absorbed, bound.skip, bound.fetch))
+        }
+        None => limit_node(plan, bound),
     }
 }
 
@@ -102,6 +127,17 @@ mod tests {
 
     fn bound(skip: usize, fetch: Option<usize>) -> RowBound {
         RowBound { skip, fetch }
+    }
+
+    #[test]
+    fn over_applies_inner_first() {
+        // LIMIT 5 over (OFFSET 2 LIMIT 10): rows 2..7 of the input.
+        assert_eq!(
+            bound(0, Some(5)).over(bound(2, Some(10))),
+            bound(2, Some(5))
+        );
+        // OFFSET 3 over LIMIT 10: 7 rows remain after the skip.
+        assert_eq!(bound(3, None).over(bound(0, Some(10))), bound(3, Some(7)));
     }
 
     #[test]
