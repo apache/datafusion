@@ -61,6 +61,11 @@ const pr = {
   },
   base: { ref: "main" },
 };
+const workflowRun = {
+  head_sha: sha,
+  head_branch: "feature",
+  head_repository: { owner: { login: "contributor" } },
+};
 const run = (id, event = "push", conclusion = "success", run_attempt = 1) => ({
   id,
   event,
@@ -92,6 +97,7 @@ async function execute({
   workflowState = "active",
   recentPrs = [pr],
   slice = [pr],
+  openPrs = [pr],
   calls = [],
 }) {
   const writes = [];
@@ -123,7 +129,11 @@ async function execute({
         getWorkflow: async () => ({ data: { state: workflowState } }),
       },
       pulls: {
-        list: async ({ per_page }) => {
+        list: async ({ per_page, head }) => {
+          if (head) {
+            assert.equal(head, "contributor:feature");
+            return { data: openPrs };
+          }
           if (per_page === 1) return { data: [pr], headers: {} };
           assert.equal(per_page, 25);
           return { data: slice };
@@ -141,7 +151,7 @@ async function execute({
     {
       repo: { owner: "apache", repo: "datafusion" },
       eventName: event,
-      payload: { pull_request: pr },
+      payload: { workflow_run: workflowRun },
     },
     { info: () => {} },
     Clock
@@ -161,11 +171,20 @@ function assertRun(write, method, expected) {
 test("notification selects a newer manual run instead of a push run", async () => {
   const latest = run(2, "workflow_dispatch");
   const writes = await execute({
-    event: "pull_request_target",
+    event: "workflow_run",
     runs: [latest, run(1)],
   });
   assert.equal(writes.length, 1);
   assertRun(writes[0], "create", latest);
+});
+
+test("notification skips a commit that is no longer a pull request head", async () => {
+  const writes = await execute({
+    event: "workflow_run",
+    openPrs: [{ ...pr, head: { ...pr.head, sha: "b".repeat(40) } }],
+    runs: [run(1)],
+  });
+  assert.deepEqual(writes, []);
 });
 
 for (const conclusion of ["cancelled", "failure"]) {

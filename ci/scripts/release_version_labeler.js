@@ -40,10 +40,18 @@ module.exports = async ({ github, context }) => {
         }
     }
 
-    await github.rest.issues.addLabels({
+    // A squash merge or a merge queue commit maps to the merged pull request.
+    const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
         owner: context.repo.owner,
         repo: context.repo.repo,
-        issue_number: context.payload.pull_request.number,
-        labels: [target_version]
+        commit_sha: context.sha
     });
+    for (const pull of pulls.filter((pull) => pull.merged_at && pull.base.ref === 'main')) {
+        await github.rest.issues.addLabels({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: pull.number,
+            labels: [target_version]
+        });
+    }
 };
