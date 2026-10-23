@@ -158,8 +158,8 @@ impl ScalarFunctionExpr {
         &self.config_options
     }
 
-    /// Returns whether this function expression's argument types have been
-    /// explicitly audited as candidates for range-key locality analysis.
+    /// Returns whether this function expression's argument types and literal
+    /// values have been audited as candidates for range-key locality analysis.
     ///
     /// See [`ScalarUDFImpl::supports_range_key_locality_analysis`] for the safety
     /// requirements.
@@ -172,9 +172,15 @@ impl ScalarFunctionExpr {
             .iter()
             .map(|argument| argument.data_type(input_schema))
             .collect::<Result<Vec<_>>>()?;
-        Ok(self
-            .fun
-            .supports_range_key_locality_analysis(&argument_types))
+        let literal_arguments = self
+            .args
+            .iter()
+            .map(|argument| argument.downcast_ref::<Literal>().map(Literal::value))
+            .collect::<Vec<_>>();
+        Ok(self.fun.supports_range_key_locality_analysis_with_args(
+            &argument_types,
+            &literal_arguments,
+        ))
     }
 
     /// Given an arbitrary PhysicalExpr attempt to downcast it to a ScalarFunctionExpr
@@ -413,6 +419,158 @@ mod tests {
                 &self.return_type,
             )?))
         }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct LiteralLocalityUDF {
+        signature: Signature,
+        admitted_literal: ScalarValue,
+    }
+
+    impl ScalarUDFImpl for LiteralLocalityUDF {
+        fn name(&self) -> &str {
+            "literal_locality"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            unreachable!("locality admission must not evaluate the function")
+        }
+
+        fn supports_range_key_locality_analysis_with_args(
+            &self,
+            argument_types: &[DataType],
+            literal_arguments: &[Option<&ScalarValue>],
+        ) -> bool {
+            argument_types == [DataType::Int32, DataType::Int32]
+                && matches!(
+                    literal_arguments,
+                    [Some(value), None] if **value == self.admitted_literal
+                )
+        }
+    }
+
+    #[test]
+    fn range_key_locality_analysis_receives_literal_values() -> Result<()> {
+        use crate::expressions::CastExpr;
+
+        let schema = Schema::new(vec![
+            Field::new("parameter", DataType::Int32, true),
+            Field::new("source", DataType::Int32, true),
+        ]);
+        let function = ScalarUDF::from(LiteralLocalityUDF {
+            signature: Signature::exact(
+                vec![DataType::Int32, DataType::Int32],
+                Volatility::Immutable,
+            ),
+            admitted_literal: ScalarValue::Int32(Some(1)),
+        });
+        let positive_literal: Arc<dyn PhysicalExpr> =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
+        let cases: Vec<(&str, Arc<dyn PhysicalExpr>, bool)> = vec![
+            ("positive literal", Arc::clone(&positive_literal), true),
+            (
+                "zero literal",
+                Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+                false,
+            ),
+            (
+                "negative literal",
+                Arc::new(Literal::new(ScalarValue::Int32(Some(-1)))),
+                false,
+            ),
+            (
+                "typed NULL literal",
+                Arc::new(Literal::new(ScalarValue::Int32(None))),
+                false,
+            ),
+            ("column", Arc::new(Column::new("parameter", 0)), false),
+            (
+                "unevaluated cast of a literal",
+                Arc::new(CastExpr::new(positive_literal, DataType::Int32, None)),
+                false,
+            ),
+        ];
+
+        for function in [
+            function.clone(),
+            function.with_aliases(["literal_locality_alias"]),
+        ] {
+            for (description, parameter, expected) in &cases {
+                let expr = ScalarFunctionExpr::try_new(
+                    Arc::new(function.clone()),
+                    vec![Arc::clone(parameter), Arc::new(Column::new("source", 1))],
+                    &schema,
+                    Arc::new(ConfigOptions::default()),
+                )?;
+                assert_eq!(
+                    expr.supports_range_key_locality_analysis(&schema)?,
+                    *expected,
+                    "{description}, aliases {:?}",
+                    function.aliases(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn range_key_locality_analysis_distinguishes_null_literals_from_columns() -> Result<()>
+    {
+        let schema = Schema::new(vec![Field::new("source", DataType::Int32, true)]);
+        let function = Arc::new(ScalarUDF::from(LiteralLocalityUDF {
+            signature: Signature::exact(
+                vec![DataType::Int32, DataType::Int32],
+                Volatility::Immutable,
+            ),
+            admitted_literal: ScalarValue::Int32(None),
+        }));
+        for (parameter, expected) in [
+            (
+                Arc::new(Literal::new(ScalarValue::Int32(None))) as Arc<dyn PhysicalExpr>,
+                true,
+            ),
+            (Arc::new(Column::new("source", 0)), false),
+        ] {
+            let expr = ScalarFunctionExpr::try_new(
+                Arc::clone(&function),
+                vec![parameter, Arc::new(Column::new("source", 0))],
+                &schema,
+                Arc::new(ConfigOptions::default()),
+            )?;
+            assert_eq!(
+                expr.supports_range_key_locality_analysis(&schema)?,
+                expected
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn range_key_locality_analysis_preserves_type_only_opt_ins() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        )]);
+        let expr = ScalarFunctionExpr::try_new(
+            datafusion_functions::datetime::date_trunc(),
+            vec![
+                Arc::new(Literal::new(ScalarValue::from("hour"))),
+                Arc::new(Column::new("ts", 0)),
+            ],
+            &schema,
+            Arc::new(ConfigOptions::default()),
+        )?;
+        assert!(expr.supports_range_key_locality_analysis(&schema)?);
+        Ok(())
     }
 
     fn default_bounds_expr(return_type: DataType) -> ScalarFunctionExpr {
