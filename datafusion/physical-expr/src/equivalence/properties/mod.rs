@@ -39,6 +39,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
@@ -1406,6 +1407,29 @@ impl EquivalenceProperties {
             .data()
             .map(|node| node.data)
             .unwrap_or_else(|_| ExprProperties::new_unknown())
+    }
+
+    /// Returns whether `transformed_expr` reports the same ordering direction
+    /// when `source_expr` is ordered and all other inputs are singleton.
+    pub(crate) fn is_same_direction_ordered_transform(
+        &self,
+        transformed_expr: &Arc<dyn PhysicalExpr>,
+        source_expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        if transformed_expr.eq(source_expr) {
+            return false;
+        }
+
+        let options = SortOptions::default();
+        let dependencies = Dependencies::new(std::iter::once(PhysicalSortExpr::new(
+            Arc::clone(source_expr),
+            options,
+        )));
+        matches!(
+            get_expr_properties(transformed_expr, &dependencies, &self.schema)
+                .map(|properties| properties.sort_properties),
+            Ok(SortProperties::Ordered(actual)) if actual == options
+        )
     }
 
     /// Transforms this `EquivalenceProperties` by mapping columns in the
