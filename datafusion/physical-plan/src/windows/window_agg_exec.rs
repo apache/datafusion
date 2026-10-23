@@ -277,7 +277,7 @@ impl ExecutionPlan for WindowAggExec {
             ChildrenPropertiesMode::Recompute => Ok(Arc::new(WindowAggExec::try_new(
                 self.window_expr.clone(),
                 children.swap_remove(0),
-                true,
+                self.can_repartition,
             )?)),
         }
     }
@@ -677,6 +677,62 @@ mod tests {
             window.cardinality_effect(),
             CardinalityEffect::Equal
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_window_agg_replace_children_preserves_can_repartition() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let args = vec![crate::expressions::col("a", &schema)?];
+        let window_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count(a)".to_string(),
+            &args,
+            &[],
+            &[],
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+
+        // can_repartition = false should be preserved after replace_children with Recompute
+        let window = Arc::new(WindowAggExec::try_new(
+            vec![window_expr.clone()],
+            Arc::clone(&input),
+            false,
+        )?);
+        assert!(!window.can_repartition);
+
+        let new_child: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let replaced = window.clone().replace_children(
+            vec![new_child],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let replaced_window = replaced.downcast_ref::<WindowAggExec>().unwrap();
+        assert_eq!(replaced_window.can_repartition, false);
+
+        // can_repartition = true should also be preserved
+        let window_true =
+            Arc::new(WindowAggExec::try_new(vec![window_expr], input, true)?);
+        assert!(window_true.can_repartition);
+        let new_child2: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let replaced_true = window_true.clone().replace_children(
+            vec![new_child2],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let replaced_window_true = replaced_true.downcast_ref::<WindowAggExec>().unwrap();
+        assert_eq!(replaced_window_true.can_repartition, true);
+
         Ok(())
     }
 }
