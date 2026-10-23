@@ -773,7 +773,11 @@ fn subquery_operands_are_bare_columns(
         filter
             .apply(|e| {
                 let refs = e.column_refs();
-                if !refs.is_empty() && refs.iter().all(|c| subquery_cols.contains(*c)) {
+                // `column_refs` skips outer references, which the join filters keep, so check them separately.
+                if !refs.is_empty()
+                    && !e.contains_outer()
+                    && refs.iter().all(|c| subquery_cols.contains(*c))
+                {
                     bare = matches!(e, Expr::Column(_));
                     return Ok(if bare {
                         TreeNodeRecursion::Jump
@@ -2653,6 +2657,34 @@ mod tests {
               Projection: test.c [c:UInt32]
                 Filter: test.a > test.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn in_subquery_correlated_with_same_table() -> Result<()> {
+        let outer_scan = test_table_scan()?;
+        let subquery_scan = test_table_scan()?;
+        let subquery = LogicalPlanBuilder::from(subquery_scan)
+            .filter(out_ref_col(DataType::UInt32, "test.a").gt(col("test.a")))?
+            .project(vec![col("c")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(in_subquery(col("test.b"), Arc::new(subquery)))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        // The outer `test.a` and the subquery's `test.a` stay apart in the join filter.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          LeftSemi Join:  Filter: test.b = __correlated_sq_1.c AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_1 [c:UInt32, a:UInt32]
+              Projection: test.c, test.a [c:UInt32, a:UInt32]
+                TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }

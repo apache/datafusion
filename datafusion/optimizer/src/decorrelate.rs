@@ -1144,8 +1144,8 @@ pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
     for filter in exprs {
         // Predicates containing outer references become join filters.
         if filter.contains_outer() {
-            // Check equality before stripping markers: inner and outer columns
-            // with the same qualified name still belong to different scopes.
+            // Compare with the outer-reference markers intact: inner and outer
+            // columns with the same qualified name belong to different scopes.
             if !matches!(filter, Expr::BinaryExpr(BinaryExpr { left, op: Operator::Eq, right }) if left.eq(right))
             {
                 joins.push(filter.clone());
@@ -1194,8 +1194,8 @@ fn remove_duplicated_filter(
 
     Ok(filters
         .into_iter()
-        .map(strip_outer_reference)
         .filter(|filter| {
+            let filter = &strip_outer_reference(filter.clone());
             if filter == in_predicate {
                 return false;
             }
