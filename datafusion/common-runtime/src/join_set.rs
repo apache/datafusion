@@ -76,6 +76,9 @@ impl<T> JoinSet<T> {
     }
 
     fn forget<R>(&mut self, joined: Option<&Result<(Id, R), JoinError>>) {
+        if self.reclaim.is_empty() {
+            return;
+        }
         match joined {
             Some(Ok((id, _))) => self.reclaim.remove(id),
             Some(Err(e)) => self.reclaim.remove(&e.id()),
@@ -189,16 +192,15 @@ impl<T: 'static> JoinSet<T> {
 
     /// [JoinSet::join_next](tokio::task::JoinSet::join_next) - Await the next completed task.
     pub async fn join_next(&mut self) -> Option<Result<T, JoinError>> {
-        let joined = self.inner.join_next_with_id().await;
-        self.forget(joined.as_ref());
-        joined.map(|res| res.map(|(_, output)| output))
+        self.join_next_with_id()
+            .await
+            .map(|res| res.map(|(_, output)| output))
     }
 
     /// [JoinSet::try_join_next](tokio::task::JoinSet::try_join_next) - Try to join the next completed task.
     pub fn try_join_next(&mut self) -> Option<Result<T, JoinError>> {
-        let joined = self.inner.try_join_next_with_id();
-        self.forget(joined.as_ref());
-        joined.map(|res| res.map(|(_, output)| output))
+        self.try_join_next_with_id()
+            .map(|res| res.map(|(_, output)| output))
     }
 
     /// [JoinSet::abort_all](tokio::task::JoinSet::abort_all) - Abort all tasks.
@@ -218,9 +220,8 @@ impl<T: 'static> JoinSet<T> {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<T, JoinError>>> {
-        let joined = ready!(self.inner.poll_join_next_with_id(cx));
-        self.forget(joined.as_ref());
-        Poll::Ready(joined.map(|res| res.map(|(_, output)| output)))
+        self.poll_join_next_with_id(cx)
+            .map(|joined| joined.map(|res| res.map(|(_, output)| output)))
     }
 
     /// [JoinSet::join_next_with_id](tokio::task::JoinSet::join_next_with_id) - Await the next completed task with its ID.
@@ -271,8 +272,11 @@ impl<T: 'static> JoinSet<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::{PanicOnDrop, block_in_drop, one_worker_runtime};
 
     use std::future::pending;
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
 
     use tokio::sync::oneshot;
 
@@ -337,12 +341,6 @@ mod tests {
 
     #[tokio::test]
     async fn abort_all_reports_a_panic_from_a_reclaimed_destructor() {
-        struct PanicOnDrop;
-        impl Drop for PanicOnDrop {
-            fn drop(&mut self) {
-                panic!("destructor panic");
-            }
-        }
         let mut set = JoinSet::new();
         set.spawn_reclaimable(async move {
             let _panics = PanicOnDrop;
@@ -357,31 +355,9 @@ mod tests {
 
     #[test]
     fn runtime_shutdown_does_not_wait_for_a_reclaiming_destructor() {
-        use std::sync::mpsc::{Receiver, Sender, channel};
-        use std::time::Duration;
-
-        struct BlockInDrop {
-            entered: Sender<()>,
-            resume: Receiver<()>,
-        }
-        impl Drop for BlockInDrop {
-            fn drop(&mut self) {
-                self.entered.send(()).unwrap();
-                let _ = self.resume.recv();
-            }
-        }
-
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .build()
-            .unwrap();
-        let (entered_tx, entered_rx) = channel();
-        let (resume_tx, resume_rx) = channel();
+        let runtime = one_worker_runtime();
+        let (guard, entered_rx, resume_tx) = block_in_drop();
         let (started_tx, started_rx) = channel();
-        let guard = BlockInDrop {
-            entered: entered_tx,
-            resume: resume_rx,
-        };
         let mut set = JoinSet::new();
         set.spawn_reclaimable_on(
             async move {
@@ -415,31 +391,9 @@ mod tests {
 
     #[test]
     fn dropping_join_all_reclaims_before_aborting() {
-        use std::sync::mpsc::{Receiver, Sender, channel};
-        use std::time::Duration;
-
-        struct BlockInDrop {
-            entered: Sender<()>,
-            resume: Receiver<()>,
-        }
-        impl Drop for BlockInDrop {
-            fn drop(&mut self) {
-                self.entered.send(()).unwrap();
-                let _ = self.resume.recv();
-            }
-        }
-
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .build()
-            .unwrap();
-        let (entered_tx, entered_rx) = channel();
-        let (resume_tx, resume_rx) = channel();
+        let runtime = one_worker_runtime();
+        let (guard, entered_rx, resume_tx) = block_in_drop();
         let (started_tx, started_rx) = channel();
-        let guard = BlockInDrop {
-            entered: entered_tx,
-            resume: resume_rx,
-        };
         let mut set = JoinSet::new();
         let first_started = started_tx.clone();
         set.spawn_reclaimable_on(

@@ -27,6 +27,8 @@
 
 pub mod common;
 mod join_set;
+#[cfg(test)]
+mod test_utils;
 mod trace_utils;
 
 pub use common::SpawnedTask;

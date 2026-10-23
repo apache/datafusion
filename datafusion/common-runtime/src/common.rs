@@ -249,10 +249,6 @@ impl<R> ReclaimHandle<R> {
     /// Drops the task's future on this thread, unless a worker is polling it,
     /// in which case the task drops it once aborted and that poll returns.
     pub(crate) fn reclaim(&self) {
-        // A panicking destructor would abort the process while this thread unwinds
-        if std::thread::panicking() {
-            return;
-        }
         let Some(future) = self
             .slot
             .try_lock()
@@ -283,6 +279,7 @@ impl<R> ReclaimHandle<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::PanicOnDrop;
 
     use std::future::{Pending, pending};
 
@@ -361,23 +358,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn drop_releases_idle_task_in_place() {
-        let owned = Arc::new(());
-        let released = Arc::downgrade(&owned);
-        let (started_tx, started_rx) = oneshot::channel();
-        let task = SpawnedTask::spawn_reclaimable(async move {
-            started_tx.send(()).unwrap();
-            pending::<()>().await;
-            drop(owned);
-        });
-        started_rx.await.unwrap();
-        wait_until_idle(&task);
-
-        drop(task);
-        assert_eq!(released.strong_count(), 0);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn drop_during_poll_releases_after_the_poll() {
         let owned = Arc::new(());
         let released = Arc::downgrade(&owned);
@@ -440,6 +420,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reclaimed_future_drops_in_the_runtime_outside_its_task() {
+        let owned = Arc::new(());
+        let released = Arc::downgrade(&owned);
         let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
         let record = RecordDropContext(dropped_tx);
         let (started_tx, started_rx) = oneshot::channel();
@@ -447,27 +429,23 @@ mod tests {
             let _record = record;
             started_tx.send(()).unwrap();
             pending::<()>().await;
+            drop(owned);
         });
         started_rx.await.unwrap();
         wait_until_idle(&task);
 
-        let dropper = std::thread::spawn(move || {
+        let (dropper, strong_count) = std::thread::spawn(move || {
             drop(task);
-            std::thread::current().id()
+            (std::thread::current().id(), released.strong_count())
         })
         .join()
         .unwrap();
+        assert_eq!(strong_count, 0);
         assert_eq!(dropped_rx.recv().unwrap(), (dropper, true, None));
     }
 
     #[tokio::test]
     async fn drop_contains_destructor_panics() {
-        struct PanicOnDrop;
-        impl Drop for PanicOnDrop {
-            fn drop(&mut self) {
-                panic!("destructor panic");
-            }
-        }
         let task = SpawnedTask::spawn_reclaimable(async move {
             let _panics = PanicOnDrop;
             pending::<()>().await;
@@ -476,5 +454,25 @@ mod tests {
         tokio::task::yield_now().await;
 
         drop(task);
+    }
+
+    #[tokio::test]
+    async fn drop_while_unwinding_releases_in_place() {
+        let owned = Arc::new(());
+        let released = Arc::downgrade(&owned);
+        let task = SpawnedTask::spawn_reclaimable(async move {
+            let _panics = PanicOnDrop;
+            pending::<()>().await;
+            drop(owned);
+        });
+        // Lets the task start and park
+        tokio::task::yield_now().await;
+
+        let unwound = std::panic::catch_unwind(AssertUnwindSafe(move || {
+            let _task = task;
+            panic!("unwinding");
+        }));
+        assert!(unwound.is_err());
+        assert_eq!(released.strong_count(), 0);
     }
 }
