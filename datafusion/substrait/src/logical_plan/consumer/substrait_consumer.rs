@@ -215,6 +215,24 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         from_substrait_rel(self, rel).await
     }
 
+    /// Consumes independent inputs of a JOIN or UNION, returning plans in input order.
+    ///
+    /// Implementations must return exactly one plan per input, in the same order.
+    /// On error, implementations must drop any unfinished input futures.
+    ///
+    /// The default preserves sequential consumption. Implementations may override it
+    /// when they can isolate mutable traversal state between inputs.
+    async fn consume_rel_inputs(
+        &self,
+        rels: &[&Rel],
+    ) -> datafusion::common::Result<Vec<LogicalPlan>> {
+        let mut plans = Vec::with_capacity(rels.len());
+        for rel in rels {
+            plans.push(self.consume_rel(rel).await?);
+        }
+        Ok(plans)
+    }
+
     async fn consume_read(
         &self,
         rel: &ReadRel,
@@ -896,5 +914,212 @@ mod tests {
         let result = consumer.get_outer_schema(1).unwrap();
         assert_eq!(result.fields()[0].name(), "a");
         assert!(consumer.get_outer_schema(2).is_none());
+    }
+
+    // A custom consumer exercises the trait default independently of the default
+    // consumer's scheduling policy.
+    struct InputConsumer {
+        extensions: Extensions,
+        state: SessionState,
+        reads: std::sync::Mutex<Vec<String>>,
+        ready: tokio::sync::Semaphore,
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for InputConsumer {
+        fn get_extensions(&self) -> &Extensions {
+            &self.extensions
+        }
+
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            &self.state
+        }
+
+        async fn resolve_table_ref(
+            &self,
+            _: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            unreachable!("test consumes reads directly")
+        }
+
+        async fn consume_rel(
+            &self,
+            rel: &Rel,
+        ) -> datafusion::common::Result<LogicalPlan> {
+            let Some(proto::rel::RelType::Read(read)) = &rel.rel_type else {
+                panic!("expected a read")
+            };
+            let Some(proto::read_rel::ReadType::NamedTable(table)) = &read.read_type
+            else {
+                panic!("expected a named table")
+            };
+            self.reads.lock().unwrap().push(table.names[0].clone());
+            self.ready.acquire().await.unwrap().forget();
+            if table.names[0] == "fail" {
+                return substrait_err!("input failed");
+            }
+            let provider =
+                datafusion::catalog::empty::EmptyTable::new(Arc::new(Schema::new(vec![
+                    Field::new("x", DataType::Int64, false),
+                ])));
+            datafusion::logical_expr::LogicalPlanBuilder::scan(
+                table.names[0].clone(),
+                datafusion::datasource::provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()
+        }
+    }
+
+    fn input_consumer() -> InputConsumer {
+        InputConsumer {
+            extensions: Extensions::default(),
+            state: datafusion::execution::SessionStateBuilder::new_with_default_features(
+            )
+            .build(),
+            reads: std::sync::Mutex::default(),
+            ready: tokio::sync::Semaphore::new(0),
+        }
+    }
+
+    fn input_read(name: &str) -> Rel {
+        Rel {
+            rel_type: Some(proto::rel::RelType::Read(Box::new(ReadRel {
+                read_type: Some(proto::read_rel::ReadType::NamedTable(
+                    proto::read_rel::NamedTable {
+                        names: vec![name.into()],
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            }))),
+        }
+    }
+
+    #[tokio::test]
+    async fn input_hook_default_is_sequential_and_stops_on_error() {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+        let consumer = input_consumer();
+        let rels = [input_read("a"), input_read("fail"), input_read("unreached")];
+        let inputs = rels.iter().collect::<Vec<_>>();
+        let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs));
+        poll_fn(|cx| {
+            assert!(pending.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert_eq!(*consumer.reads.lock().unwrap(), ["a"]);
+        consumer.ready.add_permits(3);
+        assert!(
+            pending
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("input failed")
+        );
+        assert_eq!(*consumer.reads.lock().unwrap(), ["a", "fail"]);
+    }
+
+    struct HookConsumer {
+        inner: InputConsumer,
+        calls: std::sync::Mutex<Vec<usize>>,
+        truncate: bool,
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for HookConsumer {
+        fn get_extensions(&self) -> &Extensions {
+            &self.inner.extensions
+        }
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            &self.inner.state
+        }
+        async fn resolve_table_ref(
+            &self,
+            _: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            unreachable!("test consumes reads directly")
+        }
+        async fn consume_rel_inputs(
+            &self,
+            rels: &[&Rel],
+        ) -> datafusion::common::Result<Vec<LogicalPlan>> {
+            self.calls.lock().unwrap().push(rels.len());
+            let mut plans = self.inner.consume_rel_inputs(rels).await?;
+            if self.truncate {
+                plans.pop();
+            }
+            Ok(plans)
+        }
+    }
+
+    #[tokio::test]
+    async fn join_and_union_use_the_input_hook() {
+        for truncate in [false, true] {
+            let consumer = HookConsumer {
+                inner: input_consumer(),
+                calls: std::sync::Mutex::default(),
+                truncate,
+            };
+            consumer.inner.ready.add_permits(6);
+            let join = JoinRel {
+                left: Some(Box::new(input_read("a"))),
+                right: Some(Box::new(input_read("b"))),
+                r#type: proto::join_rel::JoinType::Inner as i32,
+                ..Default::default()
+            };
+            let result = consumer.consume_join(&join).await;
+            if truncate {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("wrong number of inputs")
+                );
+            } else {
+                let LogicalPlan::Join(join) = result.unwrap() else {
+                    panic!("expected join")
+                };
+                assert!(
+                    join.left
+                        .display_indent()
+                        .to_string()
+                        .contains("TableScan: a")
+                );
+                assert!(
+                    join.right
+                        .display_indent()
+                        .to_string()
+                        .contains("TableScan: b")
+                );
+            }
+            for op in [
+                proto::set_rel::SetOp::UnionAll,
+                proto::set_rel::SetOp::UnionDistinct,
+            ] {
+                let set = SetRel {
+                    inputs: vec![input_read("a"), input_read("b")],
+                    op: op as i32,
+                    ..Default::default()
+                };
+                let result = consumer.consume_set(&set).await;
+                if truncate {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("wrong number of inputs")
+                    );
+                } else {
+                    let plan = result.unwrap().display_indent().to_string();
+                    assert!(
+                        plan.find("TableScan: a").unwrap()
+                            < plan.find("TableScan: b").unwrap()
+                    );
+                }
+            }
+            assert_eq!(*consumer.calls.lock().unwrap(), [2, 2, 2]);
+        }
     }
 }
