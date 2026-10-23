@@ -81,10 +81,10 @@ impl ScalarUDFImpl for SparkDatePart {
         internal_err!("Use return_field_from_args in this case instead.")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-
-        Ok(Arc::new(Field::new(self.name(), DataType::Int32, nullable)))
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Nullable like the integer parts of `date_part`, which this simplifies
+        // to, because they can be NULL for a non-null input
+        Ok(Arc::new(Field::new(self.name(), DataType::Int32, true)))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -125,5 +125,41 @@ impl ScalarUDFImpl for SparkDatePart {
         ));
 
         Ok(ExprSimplifyResult::Simplified(date_part_expr))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::TimeUnit;
+
+    /// The result field matches the field of the `date_part` it simplifies to.
+    /// That `date_part` can return NULL for a non-null input, so both are
+    /// nullable.
+    #[test]
+    fn test_date_part_nullability_matches_simplified() -> Result<()> {
+        let arg_fields: Vec<FieldRef> = vec![
+            Arc::new(Field::new("part", DataType::Utf8, false)),
+            Arc::new(Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Second, None),
+                false,
+            )),
+        ];
+        let part = ScalarValue::from("second");
+        let scalar_arguments = [Some(&part), None];
+        let args = || ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        };
+
+        let spark = SparkDatePart::new().return_field_from_args(args())?;
+        let simplified =
+            datafusion_functions::datetime::date_part().return_field_from_args(args())?;
+        assert!(spark.is_nullable());
+        assert_eq!(spark.is_nullable(), simplified.is_nullable());
+        assert_eq!(spark.data_type(), simplified.data_type());
+
+        Ok(())
     }
 }
