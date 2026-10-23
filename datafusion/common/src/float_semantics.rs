@@ -43,7 +43,7 @@ use half::f16;
 use crate::ScalarValue;
 
 /// The floating point types the functions in this module are defined for:
-/// [`f16`], [`f32`] and [`f64`].
+/// [`f16`](struct@f16), [`f32`] and [`f64`].
 pub trait FloatSemantics: Copy {
     /// Whether [`normalize_float`] would change this value. This is a cheap
     /// check that lets callers skip rewriting data which is already
