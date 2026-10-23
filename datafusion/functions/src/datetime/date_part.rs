@@ -39,7 +39,9 @@ use crate::datetime::common::parse_tz;
 use datafusion_common::{
     Result, ScalarValue,
     cast::{
-        as_date32_array, as_date64_array, as_int32_array, as_interval_dt_array,
+        as_date32_array, as_date64_array, as_duration_microsecond_array,
+        as_duration_millisecond_array, as_duration_nanosecond_array,
+        as_duration_second_array, as_int32_array, as_interval_dt_array,
         as_interval_mdn_array, as_interval_ym_array, as_primitive_array,
         as_time32_millisecond_array, as_time32_second_array, as_time64_microsecond_array,
         as_time64_nanosecond_array, as_timestamp_microsecond_array,
@@ -504,48 +506,6 @@ fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     }
 }
 
-/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
-/// result to a total number of seconds, milliseconds, microseconds or
-/// nanoseconds
-///
-/// Given epoch return f64, this is a duplicated function to optimize for f64 type
-fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
-    let sf = match unit {
-        Second => 1_f64,
-        Millisecond => 1_000_f64,
-        Microsecond => 1_000_000_f64,
-        Nanosecond => 1_000_000_000_f64,
-    };
-    let secs = date_part(array, DatePart::Second)?;
-    // This assumes array is primitive and not a dictionary
-    let secs = as_int32_array(secs.as_ref())?;
-    let subsecs = date_part(array, DatePart::Nanosecond)?;
-    let subsecs = as_int32_array(subsecs.as_ref())?;
-
-    // Special case where there are no nulls.
-    if subsecs.null_count() == 0 {
-        let r: Float64Array = binary(secs, subsecs, |secs, subsecs| {
-            (secs as f64 + ((subsecs % 1_000_000_000) as f64 / 1_000_000_000_f64)) * sf
-        })?;
-        Ok(Arc::new(r))
-    } else {
-        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
-        // where the number of nanoseconds overflows.
-        let r: Float64Array = secs
-            .iter()
-            .zip(subsecs)
-            .map(|(secs, subsecs)| {
-                secs.map(|secs| {
-                    let subsecs = subsecs.unwrap_or(0);
-                    (secs as f64 + ((subsecs % 1_000_000_000) as f64 / 1_000_000_000_f64))
-                        * sf
-                })
-            })
-            .collect();
-        Ok(Arc::new(r))
-    }
-}
-
 fn epoch(array: &dyn Array) -> Result<ArrayRef> {
     const SECONDS_IN_A_DAY: f64 = 86400_f64;
     // Note: Month-to-second conversion uses 30 days as an approximation.
@@ -589,7 +549,16 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
                     + x.nanoseconds as f64 / 1_000_000_000_f64
             })
         }
-        Duration(_) => return seconds(array, Second),
+        Duration(Second) => as_duration_second_array(array)?.unary(|x| x as f64),
+        Duration(Millisecond) => {
+            as_duration_millisecond_array(array)?.unary(|x| x as f64 / 1_000_f64)
+        }
+        Duration(Microsecond) => {
+            as_duration_microsecond_array(array)?.unary(|x| x as f64 / 1_000_000_f64)
+        }
+        Duration(Nanosecond) => {
+            as_duration_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
+        }
         d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))

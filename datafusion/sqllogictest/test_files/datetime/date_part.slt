@@ -1178,6 +1178,43 @@ SELECT extract(epoch from arrow_cast(2, 'Duration(Second)'))
 ----
 2
 
+# epoch keeps the fraction of a duration whose total sub-second units exceed i32::MAX
+query RR
+SELECT extract(epoch from arrow_cast(2147483647, 'Duration(Nanosecond)')),
+       extract(epoch from arrow_cast(2147483648, 'Duration(Nanosecond)'))
+----
+2.147483647 2.147483648
+
+query R
+SELECT extract(epoch from timestamp '2025-01-01 00:00:12.923350' - timestamp '2025-01-01 00:00:00')
+----
+12.92335
+
+query R
+SELECT extract(epoch from arrow_cast(2147483648, 'Duration(Microsecond)'))
+----
+2147.483648
+
+query R
+SELECT extract(epoch from arrow_cast(2147483648, 'Duration(Millisecond)'))
+----
+2147483.648
+
+query R
+SELECT extract(epoch from arrow_cast(2147483648, 'Duration(Second)'))
+----
+2147483648
+
+query R
+SELECT extract(epoch from arrow_cast(-2500000000, 'Duration(Nanosecond)'))
+----
+-2.5
+
+query R
+SELECT extract(epoch from arrow_cast(NULL, 'Duration(Nanosecond)'))
+----
+NULL
+
 query I
 SELECT extract(millisecond from arrow_cast(2, 'Duration(Second)'))
 ----
