@@ -446,6 +446,46 @@ async fn group_by_count_distinct_utf8_view() {
         .await
 }
 
+/// TopK keeps its input batches as they are, so zero-copy slices of one batch
+/// share its buffers and must reserve them once rather than once per slice.
+/// The 2,000 one-row slices below retain one ~280 KB batch, but reserving it
+/// per slice needs ~560 MB.
+#[tokio::test]
+async fn topk_reserves_shared_input_buffers_once() -> Result<()> {
+    let num_rows = 2_000;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("v", DataType::Utf8, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from_iter_values(0..num_rows as i64)),
+            Arc::new(StringArray::from_iter_values(
+                (0..num_rows).map(|i| format!("{i:0>100}")),
+            )),
+        ],
+    )?;
+    let slices = (0..num_rows).map(|i| batch.slice(i, 1)).collect();
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(16 * 1024 * 1024, 1.0)
+        .build_arc()?;
+    let config = SessionConfig::new().with_target_partitions(1);
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+    ctx.register_table("t", Arc::new(MemTable::try_new(schema, vec![slices])?))?;
+
+    // The limit is larger than the input, so TopK retains every slice
+    let batches = ctx
+        .sql("SELECT k, v FROM t ORDER BY k DESC LIMIT 100000")
+        .await?
+        .collect()
+        .await?;
+    let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(rows, num_rows);
+    Ok(())
+}
+
 /// A grouped aggregate emits its output as zero-copy slices of one batch, and
 /// the sort that buffers them must reserve their shared buffers once rather
 /// than once per slice. For 100,000 groups that needs about 6 MB instead of
