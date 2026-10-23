@@ -1799,7 +1799,6 @@ impl ExecutionPlan for HashJoinExec {
             self.right.output_ordering().is_some(),
             build_accumulator,
             self.mode,
-            null_aware,
             self.fetch,
         )))
     }
@@ -9155,7 +9154,7 @@ mod tests {
     ///
     /// A dictionary key that points at a NULL dictionary value has
     /// `null_count() == 0`, so only the `logical_null_count()` check in
-    /// `null_aware_skip_probe_batch` records it. This pins that check to the
+    /// `NotInProbe::before_lookup` records it. This pins that check to the
     /// cross-partition summary: the partition holding the logical NULL is not
     /// the one that emits the build rows, in either drain order.
     #[apply(hash_join_exec_configs)]

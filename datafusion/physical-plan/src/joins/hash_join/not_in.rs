@@ -27,8 +27,9 @@
 //! - [`NotIn::try_new`] when the plan is built or executed: is this join
 //!   legal, and which form is it;
 //! - [`NotInBuild::try_new`] once per build, from `collect_left_input`;
-//! - [`mark_null_candidates_for_probe_batch`] on each probe batch of a
-//!   correlated join;
+//! - [`NotInProbe::before_lookup`] and [`NotInProbe::after_lookup`] around
+//!   each probe batch's lookup, or [`NotInProbe::after_empty_build`] when
+//!   the build map is empty and there is no lookup;
 //! - [`NotInBuild::final_chunk`] on each chunk of build rows emitted after
 //!   the probe side is exhausted.
 
@@ -41,7 +42,7 @@ use arrow::array::{
     UInt32Array, UInt64Array,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::compute::{filter, take};
+use arrow::compute::{filter, filter_record_batch, take};
 use arrow::util::bit_util;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, plan_err};
@@ -399,6 +400,205 @@ fn emit_uniform(
     }
 }
 
+/// One probe stream's `NOT IN` work, with scratch space for the correlated
+/// marking pass, reused across probe batches.
+#[derive(Debug, Default)]
+pub(super) struct NotInProbe {
+    hashes: Vec<u64>,
+    probe_indices: Vec<u32>,
+    build_indices: Vec<u64>,
+    /// For [`NotInBuild::ProbeRowsCorrelated`], the rows of the current probe
+    /// batch whose `NOT IN` is UNKNOWN, set by [`Self::before_lookup`] on the
+    /// batch's first lookup; they are never emitted. `None` when there is no
+    /// such row.
+    unknown_probe_rows: Option<BooleanBuffer>,
+}
+
+impl NotInProbe {
+    /// Before a lookup of a probe batch. `first_chunk` is whether this is the
+    /// batch's first lookup: a batch may resume lookup several times, but
+    /// what it contributes to `NOT IN` is recorded once.
+    ///
+    /// - Uncorrelated [`NotIn::ProbeRows`] emits probe rows, so a NULL build
+    ///   key skips every batch.
+    /// - Uncorrelated [`NotIn::BuildRows`]: record what the batch saw for the
+    ///   final stage. The anti join skips once any partition saw a NULL probe
+    ///   key: every unmatched mark is then UNKNOWN. This is a best-effort
+    ///   early exit, checked on every resumed lookup; the final stage
+    ///   re-checks.
+    /// - Correlated: mark the rows this batch makes UNKNOWN, build rows for
+    ///   [`NotIn::BuildRows`] and this batch's probe rows for
+    ///   [`NotIn::ProbeRows`]. Must also run when the build map is empty: an
+    ///   all-NULL-key build side still needs its marks.
+    ///
+    /// Returns whether the batch cannot contribute any output row, so its
+    /// lookup is skipped. A no-op returning `false` for other joins.
+    #[expect(clippy::too_many_arguments)]
+    pub(super) fn before_lookup(
+        &mut self,
+        left_data: &JoinLeftData,
+        probe_batch: &RecordBatch,
+        probe_values: &[ArrayRef],
+        first_chunk: bool,
+        filter: Option<&JoinFilter>,
+        random_state: &RandomState,
+        batch_size: usize,
+    ) -> Result<bool> {
+        let Some(not_in) = left_data.not_in() else {
+            return Ok(false);
+        };
+        match not_in {
+            NotInBuild::ProbeRowsUncorrelated { build_has_null } => Ok(*build_has_null),
+            NotInBuild::BuildRowsUncorrelated { output, .. } => {
+                if first_chunk {
+                    // `on[0]` is the `NOT IN` value key. Only batches with rows
+                    // count: `NULL NOT IN (empty)` is TRUE.
+                    let probe_has_null = probe_values[0].logical_null_count() > 0;
+                    left_data
+                        .record_probe_batch(probe_batch.num_rows() > 0, probe_has_null);
+                }
+                Ok(*output == NotInOutput::Rows && left_data.probe_side_has_null_hint())
+            }
+            NotInBuild::BuildRowsCorrelated {
+                value_keys,
+                output,
+                unknown,
+                scope_map,
+                null_value_rows,
+            } => {
+                // The join filter needs the join type the output implies.
+                let join_type = match output {
+                    NotInOutput::Rows => JoinType::LeftAnti,
+                    NotInOutput::Mark => JoinType::LeftMark,
+                };
+                if first_chunk {
+                    mark_null_candidates_for_probe_batch(
+                        left_data,
+                        UnknownMarks::Build(unknown),
+                        scope_map.as_deref(),
+                        null_value_rows.as_ref(),
+                        probe_batch,
+                        probe_values,
+                        *value_keys,
+                        filter,
+                        join_type,
+                        random_state,
+                        batch_size,
+                        &mut self.hashes,
+                        &mut self.probe_indices,
+                        &mut self.build_indices,
+                    )?;
+                }
+                Ok(false)
+            }
+            NotInBuild::ProbeRowsCorrelated {
+                value_keys,
+                scope_map,
+                null_value_rows,
+            } => {
+                if !first_chunk {
+                    return Ok(false);
+                }
+                self.unknown_probe_rows = None;
+                // Without a NULL-valued row on either side no probe row can be
+                // UNKNOWN, so the bitmap is only allocated when one exists.
+                let may_be_unknown = null_value_rows.is_some()
+                    || probe_values[..*value_keys]
+                        .iter()
+                        .any(|values| values.logical_null_count() > 0);
+                if may_be_unknown {
+                    let num_rows = probe_batch.num_rows();
+                    let mut unknown = BooleanBufferBuilder::new(num_rows);
+                    unknown.append_n(num_rows, false);
+                    let unknown = Mutex::new(unknown);
+                    mark_null_candidates_for_probe_batch(
+                        left_data,
+                        UnknownMarks::Probe(&unknown),
+                        scope_map.as_deref(),
+                        null_value_rows.as_ref(),
+                        probe_batch,
+                        probe_values,
+                        *value_keys,
+                        filter,
+                        JoinType::RightAnti,
+                        random_state,
+                        batch_size,
+                        &mut self.hashes,
+                        &mut self.probe_indices,
+                        &mut self.build_indices,
+                    )?;
+                    let unknown = unknown.into_inner().finish();
+                    self.unknown_probe_rows =
+                        (unknown.count_set_bits() > 0).then_some(unknown);
+                }
+                Ok(false)
+            }
+        }
+    }
+
+    /// After a lookup, drops the probe rows a [`NotIn::ProbeRows`] join must
+    /// not emit: when uncorrelated, those whose key is NULL, since
+    /// `NULL NOT IN (..)` is never TRUE; when correlated, those that
+    /// [`Self::before_lookup`] marked UNKNOWN. `valid_keys` is the probe keys'
+    /// validity (`matchable_join_keys`), when the batch has one.
+    pub(super) fn after_lookup(
+        &self,
+        not_in: &NotInBuild,
+        probe_values: &[ArrayRef],
+        valid_keys: Option<&NullBuffer>,
+        right_indices: UInt32Array,
+    ) -> UInt32Array {
+        match not_in {
+            NotInBuild::ProbeRowsUncorrelated { .. } => {
+                let mask = valid_keys
+                    .cloned()
+                    .or_else(|| probe_values[0].logical_nulls());
+                match mask.filter(|m| m.null_count() > 0) {
+                    Some(mask) => {
+                        retain_probe_rows(&right_indices, |idx| !mask.is_null(idx))
+                    }
+                    None => right_indices,
+                }
+            }
+            NotInBuild::ProbeRowsCorrelated { .. } => match &self.unknown_probe_rows {
+                Some(unknown) => {
+                    retain_probe_rows(&right_indices, |idx| !unknown.value(idx))
+                }
+                None => right_indices,
+            },
+            NotInBuild::BuildRowsCorrelated { .. }
+            | NotInBuild::BuildRowsUncorrelated { .. } => right_indices,
+        }
+    }
+
+    /// With an empty build map the lookup is skipped and `output` holds the
+    /// probe batch as the join type emits it. Drops the probe rows that
+    /// [`Self::before_lookup`] marked UNKNOWN, as [`Self::after_lookup`] does.
+    pub(super) fn after_empty_build(&self, output: RecordBatch) -> Result<RecordBatch> {
+        match &self.unknown_probe_rows {
+            Some(unknown) => Ok(filter_record_batch(
+                &output,
+                &BooleanArray::new(!unknown, None),
+            )?),
+            None => Ok(output),
+        }
+    }
+}
+
+/// Keeps the probe rows of `right_indices` for which `keep` returns true.
+fn retain_probe_rows(
+    right_indices: &UInt32Array,
+    keep: impl Fn(usize) -> bool,
+) -> UInt32Array {
+    UInt32Array::from_iter_values(
+        right_indices
+            .values()
+            .iter()
+            .copied()
+            .filter(|idx| keep(*idx as usize)),
+    )
+}
+
 /// The scope map and NULL-valued build rows of a correlated `NOT IN`.
 #[expect(clippy::too_many_arguments, clippy::type_complexity)]
 fn correlated_row_state(
@@ -565,7 +765,7 @@ impl<'a> UnknownMarks<'a> {
 /// them. Without scope keys this also ends the pairing as soon as every row
 /// that can be decided is UNKNOWN.
 #[expect(clippy::too_many_arguments)]
-pub(super) fn mark_null_candidates_for_probe_batch(
+fn mark_null_candidates_for_probe_batch(
     left_data: &JoinLeftData,
     marks: UnknownMarks<'_>,
     scope_map: Option<&dyn JoinHashMapType>,
