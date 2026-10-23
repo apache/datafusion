@@ -60,14 +60,12 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
-use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, LimitBehavior};
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
 #[derive(Default, Debug)]
@@ -166,15 +164,12 @@ enum Step {
 }
 
 fn step(plan: &Arc<dyn ExecutionPlan>) -> Step {
-    if let Some(bound) = RowBound::of_limit_node(plan) {
-        Step::Limit(bound)
-    } else if !plan.supports_limit_pushdown() {
-        Step::Stop
-    } else if plan.is::<CoalescePartitionsExec>() || plan.is::<SortPreservingMergeExec>()
-    {
-        Step::Merge
-    } else {
-        Step::Pass
+    match plan.limit_behavior() {
+        LimitBehavior::Limit { skip, fetch } => Step::Limit(RowBound { skip, fetch }),
+        LimitBehavior::CopyToChildren | LimitBehavior::MoveToInput => Step::Pass,
+        LimitBehavior::Merge { .. } => Step::Merge,
+        // LimitPushPastWindows handles windows.
+        LimitBehavior::Stops | LimitBehavior::Window(_) => Step::Stop,
     }
 }
 

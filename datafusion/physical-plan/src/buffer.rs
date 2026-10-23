@@ -5,6 +5,7 @@
 //! [`BufferExec`] decouples production and consumption on messages by buffering the input in the
 //! background up to a certain capacity.
 
+use crate::execution_plan::LimitBehavior;
 use crate::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
 };
@@ -264,7 +265,17 @@ impl ExecutionPlan for BufferExec {
     }
 
     fn supports_limit_pushdown(&self) -> bool {
+        #[expect(deprecated)]
         self.input.supports_limit_pushdown()
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        // Buffering keeps rows 1:1, so a limit moves below it whenever it can
+        // also go below the input.
+        match self.input.limit_behavior() {
+            LimitBehavior::Stops | LimitBehavior::Window(_) => LimitBehavior::Stops,
+            _ => LimitBehavior::MoveToInput,
+        }
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {

@@ -67,6 +67,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::execution_plan::CardinalityEffect::{self, Equal};
+use crate::execution_plan::LimitBehavior;
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -323,6 +324,10 @@ impl ExecutionPlan for CooperativeExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::MoveToInput
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {

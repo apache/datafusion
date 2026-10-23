@@ -24,7 +24,6 @@ use datafusion_physical_expr_common::sort_expr::{
     PhysicalSortRequirement,
 };
 use datafusion_physical_plan::aggregates::AggregateExec;
-use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
     ColumnIndex, calculate_join_output_ordering,
@@ -38,7 +37,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::{
     ChildSatisfactionOptions, ChildrenPropertiesMode, ExecutionPlan,
-    ExecutionPlanProperties, ReplaceChildrenOptions,
+    ExecutionPlanProperties, LimitBehavior, ReplaceChildrenOptions,
 };
 
 use crate::row_bound::{RowBound, limit_node};
@@ -132,10 +131,12 @@ fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
     RowBound::fetch(f1).min(RowBound::fetch(f2)).fetch
 }
 
-/// Returns whether a fetch on `plan` can also be applied to each child.
+/// Returns whether a fetch on `plan` can move to its input.
 fn can_push_fetch_through(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.supports_limit_pushdown()
-        && matches!(plan.cardinality_effect(), CardinalityEffect::Equal)
+    matches!(
+        plan.limit_behavior(),
+        LimitBehavior::MoveToInput | LimitBehavior::Merge { fetch: None }
+    )
 }
 
 /// Returns a plan when the fast path for an already-satisfied ordering can also
@@ -440,29 +441,10 @@ fn pushdown_requirement_to_children(
     parent_required: OrderingRequirements,
     parent_fetch: Option<usize>,
 ) -> Result<Option<SortPushdownProposal>> {
-    // A parent fetch can be pushed through a plan only if the plan explicitly
-    // supports limit pushdown and does not change cardinality. For example, if
-    // LIMIT 2 is applied below a FilterExec that removes half the rows, only one
-    // row may remain. Applied after the filter, it correctly returns two rows
-    // when at least two are available.
-    //
-    // Checking `supports_limit_pushdown()` alone is not enough. For example:
-    //
-    // UnionExec advertises `supports_limit_pushdown() == true` because it can
-    // forward a LIMIT k to each of its children—i.e. apply “LIMIT k” separately
-    // on each branch before merging them together.
-    //
-    // However, UnionExec’s `cardinality_effect() == GreaterEqual` (it sums up
-    // all child row counts), so pushing a global TopK/LIMIT through it would
-    // break the semantics of “take the first k rows of the combined result.”
-    //
-    // For example, with two branches A and B and k = 3:
-    //   — Global LIMIT: take the first 3 rows from (A ∪ B) after merging.
-    //   — Pushed down: take 3 from A, 3 from B, then merge → up to 6 rows!
-    //
-    // That’s why we also require equal cardinality: even though UnionExec can
-    // push a LIMIT to its children, its GreaterEqual effect means it cannot
-    // preserve the global TopK semantics.
+    // Pushing the sort below `plan` moves the parent fetch with it. For
+    // example, if LIMIT 2 is applied below a FilterExec that removes half the
+    // rows, only one row may remain; and a LIMIT 3 pushed into both inputs of
+    // a UnionExec keeps up to 6 rows. See `LimitBehavior`.
     if parent_fetch.is_some() && !can_push_fetch_through(plan) {
         return Ok(None);
     }
