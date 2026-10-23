@@ -171,8 +171,10 @@ impl SortPreservingMergeExec {
             )
         };
 
-        let mut eq_properties = input.equivalence_properties().clone();
-        eq_properties.clear_per_partition_constants();
+        let mut eq_properties = input
+            .equivalence_properties()
+            .clone()
+            .merged(input_partitions, true);
         eq_properties.add_ordering(ordering);
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties

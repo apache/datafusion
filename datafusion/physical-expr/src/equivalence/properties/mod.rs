@@ -362,6 +362,25 @@ impl EquivalenceProperties {
         }
     }
 
+    /// The properties of the output of an operator that combines the rows of
+    /// `input_partitions` input partitions, such as `CoalescePartitionsExec`,
+    /// `SortPreservingMergeExec` and `RepartitionExec`, given the properties
+    /// of its input.
+    ///
+    /// With one input partition no rows from different partitions meet, so
+    /// everything that held still holds. Otherwise constants that may differ
+    /// between partitions are removed, and so are the orderings unless
+    /// `keeps_order` is set.
+    pub fn merged(mut self, input_partitions: usize, keeps_order: bool) -> Self {
+        if input_partitions > 1 {
+            if !keeps_order {
+                self.clear_orderings();
+            }
+            self.clear_per_partition_constants();
+        }
+        self
+    }
+
     /// Adds new orderings into the existing ordering equivalence class.
     pub fn add_orderings(
         &mut self,
@@ -1792,6 +1811,44 @@ mod tests {
             "equivalence group"
         );
         assert_eq!(baseline.oeq_class(), recomputed.oeq_class(), "orderings");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_merged_keeps_per_partition_facts_of_one_partition() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        // Each partition is sorted by `a` and has one value of `b`, which may
+        // differ between partitions.
+        let mut input = EquivalenceProperties::new(Arc::clone(&schema));
+        input.add_ordering([PhysicalSortExpr::new_default(Arc::clone(&a))]);
+        input.add_constants([ConstExpr::new(
+            Arc::clone(&b),
+            AcrossPartitions::Heterogeneous,
+        )])?;
+        let b_is_constant = |p: &EquivalenceProperties| p.is_expr_constant(&b).is_some();
+        let sorted_by_a = |p: &EquivalenceProperties| p.output_ordering().is_some();
+
+        // One input partition: no rows from different partitions meet.
+        for keeps_order in [false, true] {
+            let merged = input.clone().merged(1, keeps_order);
+            assert!(b_is_constant(&merged), "keeps_order={keeps_order}");
+            assert!(sorted_by_a(&merged), "keeps_order={keeps_order}");
+        }
+
+        // Several input partitions: `b` may take several values.
+        let merged = input.clone().merged(2, true);
+        assert!(!b_is_constant(&merged));
+        assert!(sorted_by_a(&merged));
+
+        let merged = input.merged(2, false);
+        assert!(!b_is_constant(&merged));
+        assert!(!sorted_by_a(&merged));
 
         Ok(())
     }

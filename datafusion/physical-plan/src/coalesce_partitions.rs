@@ -93,10 +93,11 @@ impl CoalescePartitionsExec {
             )
         };
 
-        // Coalescing partitions loses existing orderings:
-        let mut eq_properties = input.equivalence_properties().clone();
-        eq_properties.clear_orderings();
-        eq_properties.clear_per_partition_constants();
+        // Coalescing several partitions loses their orderings:
+        let eq_properties = input
+            .equivalence_properties()
+            .clone()
+            .merged(input_partitions, false);
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
@@ -469,13 +470,15 @@ mod tests {
     use crate::test::exec::{
         BarrierExec, BlockingExec, PanicExec, assert_strong_count_converges_to_zero,
     };
-    use crate::test::{self, assert_is_pending};
+    use crate::test::{self, TestMemoryExec, assert_is_pending};
     use crate::{collect, common};
 
     use std::time::Duration;
 
     use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     use futures::FutureExt;
 
@@ -704,5 +707,28 @@ mod tests {
             coalesce.cardinality_effect(),
             CardinalityEffect::LowerEqual
         ));
+    }
+
+    #[test]
+    fn keeps_input_ordering_of_one_partition() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new_default(col("a", &schema)?)].into();
+        let input = |partitions: usize| -> Result<Arc<dyn ExecutionPlan>> {
+            let batches = vec![vec![]; partitions];
+            let source = TestMemoryExec::try_new(&batches, Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering.clone()])?;
+            Ok(Arc::new(TestMemoryExec::update_cache(&Arc::new(source))))
+        };
+
+        // One input partition is passed through, so its order still holds.
+        let coalesce = CoalescePartitionsExec::new(input(1)?);
+        assert_eq!(coalesce.properties().output_ordering(), Some(&ordering));
+
+        // Rows of several partitions are interleaved.
+        let coalesce = CoalescePartitionsExec::new(input(2)?);
+        assert_eq!(coalesce.properties().output_ordering(), None);
+
+        Ok(())
     }
 }
