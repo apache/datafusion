@@ -1403,3 +1403,40 @@ SELECT a < b FROM decimal256_wide;
 
 statement ok
 DROP TABLE decimal256_wide;
+
+# Regression tests for https://github.com/apache/datafusion/issues/26648:
+# sum() over DECIMAL must error on overflow instead of silently wrapping,
+# consistent with scalar decimal arithmetic and avg().
+
+# Sanity check: a large decimal sum that fits in the result type is exact
+query TR
+SELECT arrow_typeof(sum(v)), sum(v)
+FROM (VALUES (CAST('40000000000000000000000000000000000000' AS DECIMAL(38,0))),
+             (CAST('40000000000000000000000000000000000000' AS DECIMAL(38,0)))) t(v);
+----
+Decimal128(38, 0) 80000000000000000000000000000000000000
+
+# Two maximum DECIMAL(38, 0) values overflow the result type
+query error DataFusion error: Execution error: Arithmetic Overflow in SumAccumulator
+SELECT sum(v)
+FROM (VALUES (CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0))),
+             (CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)))) t(v);
+
+# The GROUP BY path overflows the same way
+query error DataFusion error: Execution error: Arithmetic Overflow in SumAccumulator
+SELECT k, sum(v) FROM (VALUES (1, CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0))),
+                              (1, CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0))),
+                              (2, CAST('5' AS DECIMAL(38,0)))) t(k,v) GROUP BY k;
+
+# SUM(DISTINCT ...) overflows the same way
+query error DataFusion error: Execution error: Arithmetic Overflow in SumAccumulator
+SELECT sum(DISTINCT v)
+FROM (VALUES (CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0))),
+             (CAST('99999999999999999999999999999999999998' AS DECIMAL(38,0)))) t(v);
+
+# DECIMAL(76, 0) / Decimal256 sums overflow the same way. REPEAT builds the
+# largest DECIMAL(76, 0) value (76 nines) without a hand-counted literal.
+query error DataFusion error: Execution error: Arithmetic Overflow in SumAccumulator
+SELECT sum(v)
+FROM (VALUES (CAST(REPEAT('9', 76) AS DECIMAL(76,0))),
+             (CAST(REPEAT('9', 76) AS DECIMAL(76,0)))) t(v);

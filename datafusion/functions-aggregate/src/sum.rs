@@ -46,6 +46,9 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
+use datafusion_functions_aggregate_common::utils::{
+    add_decimal_checked, decimal_precision, sub_decimal_checked,
+};
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::{CastExpr, Column};
 use std::mem::{size_of, size_of_val};
@@ -299,7 +302,11 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        !args.is_distinct
+        // The primitive groups accumulator applies an infallible operation,
+        // so it cannot report decimal overflow. Decimal sums therefore use
+        // the fallible `SumAccumulator`, which errors on overflow instead
+        // of silently wrapping.
+        !args.is_distinct && decimal_precision(args.return_field.data_type()).is_none()
     }
 
     fn create_groups_accumulator(
@@ -491,6 +498,20 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
+        if let Some(precision) = decimal_precision(&self.data_type) {
+            // The kernel sum wraps on overflow, so accumulate decimals one
+            // value at a time with checked addition to report overflow
+            // instead of returning a wrapped (wrong) result.
+            let mut sum = self.sum;
+            for value in values.iter().flatten() {
+                sum = Some(match sum {
+                    Some(current) => add_decimal_checked(current, value, precision)?,
+                    None => value,
+                });
+            }
+            self.sum = sum;
+            return Ok(());
+        }
         if let Some(x) = arrow::compute::sum(values) {
             let v = self.sum.get_or_insert_with(|| T::Native::usize_as(0));
             *v = v.add_wrapping(x);
@@ -544,6 +565,13 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
         self.count += (values.len() - values.null_count()) as u64;
+        if let Some(precision) = decimal_precision(&self.data_type) {
+            // See `SumAccumulator::update_batch`: decimal sums are checked
+            for value in values.iter().flatten() {
+                self.sum = add_decimal_checked(self.sum, value, precision)?;
+            }
+            return Ok(());
+        }
         if let Some(x) = arrow::compute::sum(values) {
             self.sum = self.sum.add_wrapping(x)
         }
@@ -552,7 +580,12 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let values = states[0].as_primitive::<T>();
-        if let Some(x) = arrow::compute::sum(values) {
+        if let Some(precision) = decimal_precision(&self.data_type) {
+            // See `SumAccumulator::update_batch`: decimal sums are checked
+            for value in values.iter().flatten() {
+                self.sum = add_decimal_checked(self.sum, value, precision)?;
+            }
+        } else if let Some(x) = arrow::compute::sum(values) {
             self.sum = self.sum.add_wrapping(x)
         }
         if let Some(x) = arrow::compute::sum(states[1].as_primitive::<UInt64Type>()) {
@@ -572,7 +605,12 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        if let Some(x) = arrow::compute::sum(values) {
+        if let Some(precision) = decimal_precision(&self.data_type) {
+            // See `SumAccumulator::update_batch`: decimal sums are checked
+            for value in values.iter().flatten() {
+                self.sum = sub_decimal_checked(self.sum, value, precision)?;
+            }
+        } else if let Some(x) = arrow::compute::sum(values) {
             self.sum = self.sum.sub_wrapping(x)
         }
         self.count -= (values.len() - values.null_count()) as u64;
@@ -812,6 +850,75 @@ mod tests {
         assert_eq!(
             acc.evaluate()?,
             ScalarValue::Decimal128(Some(199_998), 15, 2)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decimal128_sum_overflow_errors() -> Result<()> {
+        // Two values of 10^38 - 1 (the largest DECIMAL(38, 0) value): the
+        // sum does not fit in DECIMAL(38, 0) and must error rather than
+        // silently wrap to a negative value
+        let values: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![
+                Some(99999999999999999999999999999999999999_i128),
+                Some(99999999999999999999999999999999999999_i128),
+            ])
+            .with_precision_and_scale(38, 0)?,
+        );
+        let mut acc = SumAccumulator::<Decimal128Type>::new(DataType::Decimal128(38, 0));
+
+        let err = acc.update_batch(&[values]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Arithmetic Overflow in SumAccumulator"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decimal128_sum_below_precision_limit_is_exact() -> Result<()> {
+        // 4 * 10^37 + 4 * 10^37 = 8 * 10^37 still fits in DECIMAL(38, 0)
+        let values: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![
+                Some(40000000000000000000000000000000000000_i128),
+                Some(40000000000000000000000000000000000000_i128),
+            ])
+            .with_precision_and_scale(38, 0)?,
+        );
+        let mut acc = SumAccumulator::<Decimal128Type>::new(DataType::Decimal128(38, 0));
+
+        acc.update_batch(&[values])?;
+
+        assert_eq!(
+            acc.evaluate()?,
+            ScalarValue::Decimal128(
+                Some(80000000000000000000000000000000000000_i128),
+                38,
+                0
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decimal128_sliding_sum_overflow_errors() -> Result<()> {
+        let values: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![
+                Some(99999999999999999999999999999999999999_i128),
+                Some(99999999999999999999999999999999999999_i128),
+            ])
+            .with_precision_and_scale(38, 0)?,
+        );
+        let mut acc =
+            SlidingSumAccumulator::<Decimal128Type>::new(DataType::Decimal128(38, 0));
+
+        let err = acc.update_batch(&[values]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Arithmetic Overflow in SumAccumulator"),
+            "unexpected error: {err}"
         );
         Ok(())
     }
