@@ -193,13 +193,16 @@ impl ScalarUDFImpl for DatePartFunc {
                     .flatten()
                     .filter(|s| !s.is_empty())
                     .map(|part| {
+                        // The integer parts are NULL for values arrow can't
+                        // convert or that overflow, even when the input is
+                        // not NULL
                         if is_epoch(part) {
                             Field::new(self.name(), DataType::Float64, nullable)
                         } else if is_nanosecond(part) {
-                            // See notes on [seconds_ns] for rationale
-                            Field::new(self.name(), DataType::Int64, nullable)
+                            // See notes on [subsecond_part] for rationale
+                            Field::new(self.name(), DataType::Int64, true)
                         } else {
-                            Field::new(self.name(), DataType::Int32, nullable)
+                            Field::new(self.name(), DataType::Int32, true)
                         }
                     })
             })
@@ -234,13 +237,11 @@ impl ScalarUDFImpl for DatePartFunc {
         let part_trim = part_normalization(&part);
 
         let arr = match DatePart::from_str(part_trim) {
-            Ok(part @ DatePart::Millisecond) => {
-                seconds_as_i32::<1_000>(array.as_ref(), part)?
-            }
-            Ok(part @ DatePart::Microsecond) => {
-                seconds_as_i32::<1_000_000>(array.as_ref(), part)?
-            }
-            Ok(DatePart::Nanosecond) => seconds_ns(array.as_ref())?,
+            Ok(
+                part @ (DatePart::Millisecond
+                | DatePart::Microsecond
+                | DatePart::Nanosecond),
+            ) => subsecond_part(array.as_ref(), part)?,
             Ok(part) => date_part(array.as_ref(), part)?,
             Err(_) if is_epoch(part_trim) => epoch(array.as_ref())?,
             // `timezone`, `timezone_hour` and `timezone_minute` have no
@@ -504,59 +505,58 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
 }
 
 /// Return the seconds of `array`, with their fraction, as a number of
-/// milliseconds or microseconds (`part`), as an Int32 array.
-fn seconds_as_i32<const PER_SECOND: i64>(
-    array: &dyn Array,
-    part: DatePart,
-) -> Result<ArrayRef> {
-    match array.data_type() {
-        // Fast path for Date32 and Date64 - no seconds
-        Date32 | Date64 => Ok(Arc::new(Int32Array::new(
-            vec![0; array.len()].into(),
-            array.nulls().cloned(),
-        ))),
-        // arrow's sub-second parts of intervals and durations already include
-        // the whole seconds
-        Interval(ArrowIntervalUnit::DayTime | ArrowIntervalUnit::MonthDayNano)
-        | Duration(_) => Ok(date_part(array, part)?),
-        _ => seconds_with_fraction::<Int32Type, PER_SECOND>(array, part),
-    }
-}
-
-/// Return the seconds of `array`, with their fraction, as a number of
-/// nanoseconds: the seconds of the minute for timestamps, times and intervals,
-/// and the total length for durations.
+/// milliseconds, microseconds or nanoseconds (`part`): the seconds of the
+/// minute for timestamps, times and intervals, and the total length for
+/// durations.
 ///
-/// This returns an Int64 rather than Int32 because there are 1 billion
+/// `nanosecond` returns an Int64 rather than Int32 because there are 1 billion
 /// `nanosecond`s in each second, so representing up to 60 seconds as
 /// nanoseconds can be values up to 60 billion, which does not fit in Int32.
-fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
-    let r: Int64Array = match array.data_type() {
-        // Fast path for Date32 and Date64 - no nanoseconds
-        Date32 | Date64 => {
-            Int64Array::new(vec![0; array.len()].into(), array.nulls().cloned())
+fn subsecond_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef> {
+    let len = array.len();
+    let nulls = array.nulls().cloned();
+    Ok(match (array.data_type(), part) {
+        // Fast path for Date32 and Date64 - no seconds
+        (Date32 | Date64, DatePart::Nanosecond) => {
+            Arc::new(Int64Array::new(vec![0; len].into(), nulls))
         }
+        (Date32 | Date64, _) => Arc::new(Int32Array::new(vec![0; len].into(), nulls)),
         // arrow's `date_part(Nanosecond)` computes these, but returns Int32,
         // which overflows past about 2.1 seconds
-        Interval(ArrowIntervalUnit::DayTime) => as_interval_dt_array(array)?
-            .unary(|x| (x.milliseconds % 60_000) as i64 * 1_000_000),
-        Interval(ArrowIntervalUnit::MonthDayNano) => {
-            as_interval_mdn_array(array)?.unary(|x| x.nanoseconds % 60_000_000_000)
+        (Interval(ArrowIntervalUnit::DayTime), DatePart::Nanosecond) => Arc::new(
+            as_interval_dt_array(array)?
+                .unary::<_, Int64Type>(|x| (x.milliseconds % 60_000) as i64 * 1_000_000),
+        ),
+        (Interval(ArrowIntervalUnit::MonthDayNano), DatePart::Nanosecond) => Arc::new(
+            as_interval_mdn_array(array)?
+                .unary::<_, Int64Type>(|x| x.nanoseconds % 60_000_000_000),
+        ),
+        (Duration(Nanosecond), DatePart::Nanosecond) => {
+            Arc::new(as_duration_nanosecond_array(array)?.reinterpret_cast::<Int64Type>())
         }
-        Duration(Nanosecond) => as_duration_nanosecond_array(array)?.reinterpret_cast(),
         // arrow's cast returns NULL on overflow, like its `date_part`
-        Duration(_) => {
+        (Duration(_), DatePart::Nanosecond) => Arc::new(
             as_duration_nanosecond_array(&cast(array, &Duration(Nanosecond))?)?
-                .reinterpret_cast()
+                .reinterpret_cast::<Int64Type>(),
+        ),
+        // arrow's sub-second parts of intervals and durations already include
+        // the whole seconds
+        (
+            Interval(ArrowIntervalUnit::DayTime | ArrowIntervalUnit::MonthDayNano)
+            | Duration(_),
+            _,
+        ) => date_part(array, part)?,
+        (_, DatePart::Millisecond) => {
+            seconds_with_fraction::<Int32Type, 1_000>(array, part)?
         }
-        _ => {
-            return seconds_with_fraction::<Int64Type, 1_000_000_000>(
-                array,
-                DatePart::Nanosecond,
-            );
+        (_, DatePart::Microsecond) => {
+            seconds_with_fraction::<Int32Type, 1_000_000>(array, part)?
         }
-    };
-    Ok(Arc::new(r))
+        (_, DatePart::Nanosecond) => {
+            seconds_with_fraction::<Int64Type, 1_000_000_000>(array, part)?
+        }
+        (_, part) => return internal_err!("{part} is not a sub-second part"),
+    })
 }
 
 /// Combine arrow's seconds of the minute with its fraction of the second in

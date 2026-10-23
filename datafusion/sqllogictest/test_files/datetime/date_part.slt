@@ -1500,6 +1500,27 @@ SELECT date_part('microsecond', timestamp '1970-01-01T00:40:00' - timestamp '197
 ----
 NULL
 
+# Non-null inputs can give NULL results, so the result is nullable
+query I
+SELECT extract(second from ts) FROM (VALUES (arrow_cast(9223372036854775807, 'Timestamp(Second, None)'))) AS t(ts)
+----
+NULL
+
+query I
+SELECT extract(hour from d) FROM (VALUES (arrow_cast(9223372036854775807, 'Duration(Second)'))) AS t(d)
+----
+NULL
+
+query I
+SELECT extract(nanosecond from d) FROM (VALUES (arrow_cast(9223372037, 'Duration(Second)'))) AS t(d)
+----
+NULL
+
+query I
+SELECT extract(millisecond from d) FROM (VALUES (arrow_cast(2147483648, 'Duration(Millisecond)'))) AS t(d)
+----
+NULL
+
 # test_extract_date_part_func
 
 query B
