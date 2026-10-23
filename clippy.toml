@@ -21,3 +21,8 @@ future-size-threshold = 10000
 # - https://github.com/apache/datafusion/issues/16652
 # - https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
 large-error-threshold = 70
+
+# `DFSchema` caches a name index in a `OnceLock`, which is excluded from its
+# `Hash` and `Eq`, so plans and expressions containing it are safe hash keys.
+# See: https://rust-lang.github.io/rust-clippy/master/index.html#mutable_key_type
+ignore-interior-mutability = ["bytes::Bytes", "datafusion_common::DFSchema"]
