@@ -3000,6 +3000,7 @@ Can be a constant, column, or function.</p></li>
 <h3><code class="docutils literal notranslate"><span class="pre">date_bin</span></code><a class="headerlink" href="#date-bin" title="Link to this heading">#</a></h3>
 <p>Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use <code class="docutils literal notranslate"><span class="pre">date_bin</span></code> to downsample time series data by grouping rows into time-based “bins” or “windows” and applying an aggregate or selector function to each window.</p>
 <p>For example, if you “bin” or “window” data into 15 minute intervals, an input timestamp of <code class="docutils literal notranslate"><span class="pre">2023-01-01T18:18:18Z</span></code> will be updated to the start time of the 15 minute bin it is in: <code class="docutils literal notranslate"><span class="pre">2023-01-01T18:15:00Z</span></code>.</p>
+<p>For timestamp inputs, binning beyond the supported numeric or calendar range returns an error. A NULL source or interval still produces NULL.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">date_bin</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">expression</span><span class="p">[,</span><span class="w"> </span><span class="n">origin_timestamp</span><span class="p">])</span>
 </pre></div>
 </div>
