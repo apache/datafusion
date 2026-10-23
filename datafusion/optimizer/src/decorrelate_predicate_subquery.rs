@@ -855,7 +855,8 @@ fn build_join(
         return Ok(None);
     }
     // Stopgap until a follow-up adds count-bug compensation for `IN`/`NOT IN`.
-    // Reject unless an outer row with no match gets the right answer anyway.
+    // The subquery stays correlated unless an outer row with no match gets the
+    // right answer anyway.
     if !exists_sub_query {
         let null_reads_as_false = match join_type {
             JoinType::LeftSemi => true,
@@ -879,9 +880,7 @@ fn build_join(
             Err(_) => false,
         };
         if !count_bug_is_harmless {
-            return not_impl_err!(
-                "Correlated IN/NOT IN subquery with an aggregate and no GROUP BY is not supported"
-            );
+            return Ok(None);
         }
     }
 
