@@ -476,8 +476,9 @@ fn append_prepend_return_type(
 
 /// Concatenates the list arrays in `args` row-wise.
 ///
-/// `field` is the list field the output must carry when it differs from the
-/// aligned inputs' first field.
+/// `field` is the list field the output must carry. `array_concat` passes the
+/// inner field of its planned return type, and `array_append` / `array_prepend`
+/// pass their input's field. `None` derives the field from the aligned inputs.
 fn concat_internal<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     field: Option<&FieldRef>,
