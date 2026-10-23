@@ -17,10 +17,8 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, MapArray, RecordBatch, StructArray};
+use arrow::array::{Array, Float32Array, Float64Array, ArrayRef, MapArray, RecordBatch, StructArray};
 use arrow::datatypes::{DataType, Schema};
-
-use arrow::array::{Array, ArrayRef, Float32Array, Float64Array, RecordBatch};
 use arrow::compute::{cast, max, min};
 use datafusion_common::{
     Result, ScalarValue, DataFusionError,downcast_value, exec_datafusion_err, exec_err,
@@ -289,7 +287,7 @@ impl PercentileParam {
     ) -> Result<f64> {
         match current {
             Some(current) if current == value => Ok(current),
-          Some(current) => {~~~
+          Some(current) => {
                 let agg_fn_name = &self.aggregate_fn_name;
                 exec_err!(
                     "Percentile value for '{agg_fn_name}' must be constant across the aggregation, found differing values {} and {}",
