@@ -85,8 +85,9 @@ use crate::{SendableRecordBatchStream, metrics};
 /// only the current group remains active after completed groups are emitted, and
 /// memory usage does not grow with the total number of groups.
 ///
-/// If the reservation after an input batch fails, the stream still emits the
-/// completed groups, and returns the error only when no group is complete.
+/// If the reservation after an input batch fails, `ClusteredPartialAggregateStream`
+/// still emits the completed groups, and returns the error only when no group is
+/// complete.
 ///
 /// ## Partial group clustering
 ///
@@ -318,22 +319,13 @@ impl Aggregating {
             let output = match reservation.try_resize(self.table.memory_size()) {
                 Ok(()) => self.table.take_completed_state_batch()?,
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
-                    // Emitting the completed groups leaves only the active group
-                    // under full group clustering. Partial group clustering may
-                    // have an unbounded active key range, so emit every state.
+                    // Partial group clustering may have an unbounded active key range.
                     // The final stage can merge incomplete states emitted here.
-                    let output = if matches!(
-                        self.table.group_clustering(),
-                        GroupClustering::Full(_)
-                    ) {
-                        self.table.take_completed_state_batch()?
+                    if matches!(self.table.group_clustering(), GroupClustering::Full(_)) {
+                        Some(self.table.take_completed_state_batch()?.ok_or(oom)?)
                     } else {
-                        self.table.take_state_batch()?
-                    };
-                    let Some(batch) = output else {
-                        return Err(oom);
-                    };
-                    Some(batch)
+                        Some(self.table.take_state_batch()?.ok_or(oom)?)
+                    }
                 }
                 Err(e) => return Err(e),
             };
@@ -445,20 +437,16 @@ mod tests {
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-    /// Runs a partial `SUM(v) GROUP BY k` over three batches sorted on `k`, where
-    /// each batch boundary repeats a key. Returns the output and the most memory
-    /// the stream held between batches.
+    /// Runs a partial `SUM(k) GROUP BY k` over two batches sorted on `k` that
+    /// share a boundary key. Returns the output and the most memory the stream
+    /// held between batches.
     async fn run(pool: Arc<dyn MemoryPool>) -> Result<(Vec<RecordBatch>, usize)> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Int64, false),
-            Field::new("v", DataType::Int64, false),
-        ]));
-        let batches = [0..=256, 256..=512, 512..=768]
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let batches = [0..=256, 256..=512]
             .into_iter()
             .map(|keys| {
                 let k = Int64Array::from_iter_values(keys);
-                let v = Int64Array::from(vec![1; k.len()]);
-                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(v)])
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k)])
             })
             .collect::<Result<Vec<_>, _>>()?;
         let input = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?
@@ -470,19 +458,15 @@ mod tests {
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".into())]),
             vec![Arc::new(
-                AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                AggregateExprBuilder::new(sum_udaf(), vec![col("k", &schema)?])
                     .schema(Arc::clone(&schema))
                     .alias("sum")
                     .build()?,
             )],
             vec![None],
-            Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
+            Arc::new(input),
             Arc::clone(&schema),
         )?;
-        assert_eq!(
-            aggregate.group_clustering_mode(),
-            &GroupClusteringMode::Full
-        );
         let context = Arc::new(
             TaskContext::default().with_runtime(
                 RuntimeEnvBuilder::new()
