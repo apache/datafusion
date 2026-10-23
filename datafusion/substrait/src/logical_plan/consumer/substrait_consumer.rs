@@ -31,11 +31,14 @@ use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::catalog::TableProvider;
 use datafusion::common::datatype::FieldExt;
 use datafusion::common::{
-    DFSchema, ScalarValue, TableReference, not_impl_err, substrait_err,
+    DFSchema, ScalarValue, TableReference, internal_datafusion_err, not_impl_err,
+    substrait_err,
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::LambdaVariable;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
+use futures::TryStreamExt;
+use futures::stream::FuturesUnordered;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use substrait::proto::expression as substrait_expression;
@@ -49,6 +52,7 @@ use substrait::proto::{
     Expression, ExtensionLeafRel, ExtensionMultiRel, ExtensionSingleRel, FetchRel,
     FilterRel, JoinRel, ProjectRel, ReadRel, Rel, SetRel, SortRel, r#type,
 };
+use tokio::sync::{OnceCell, Semaphore};
 
 #[async_trait]
 /// This trait is used to consume Substrait plans, converting them into DataFusion Logical Plans.
@@ -592,14 +596,29 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     }
 }
 
+const MAX_CONCURRENT_TABLE_LOADS: usize = 32;
+
+type TableCell = Arc<OnceCell<Option<Arc<dyn TableProvider>>>>;
+
+/// Table resolutions are shared across a consumer tree; traversal scopes are not.
+struct TableResolutionState {
+    providers: RwLock<HashMap<TableReference, TableCell>>,
+    loads: Semaphore,
+}
+
 /// Default SubstraitConsumer for converting standard Substrait without user-defined extensions.
 ///
-/// Used as the consumer in [crate::logical_plan::consumer::from_substrait_plan]
+/// Used as the consumer in [crate::logical_plan::consumer::from_substrait_plan].
+/// Independent JOIN and UNION inputs are consumed concurrently, with at most 32
+/// catalog table loads in flight across the consumer tree. Successful resolutions
+/// (including missing tables) are reused within that tree. Errors are not cached.
+/// A failing lookup waiting for a permit can report its error only after admission.
 pub struct DefaultSubstraitConsumer<'a> {
     pub(super) extensions: &'a Extensions,
     pub(super) state: &'a SessionState,
     outer_schemas: RwLock<Vec<Arc<DFSchema>>>,
     lambda_consumer: DefaultSubstraitLambdaConsumer,
+    tables: Arc<TableResolutionState>,
 }
 
 impl<'a> DefaultSubstraitConsumer<'a> {
@@ -609,6 +628,23 @@ impl<'a> DefaultSubstraitConsumer<'a> {
             state,
             outer_schemas: RwLock::new(Vec::new()),
             lambda_consumer: DefaultSubstraitLambdaConsumer::new(),
+            tables: Arc::new(TableResolutionState {
+                providers: RwLock::default(),
+                loads: Semaphore::new(MAX_CONCURRENT_TABLE_LOADS),
+            }),
+        }
+    }
+
+    // Siblings inherit the enclosing lexical scope but must not push/pop each
+    // other's stacks. Only catalog resolution state is shared. Keep this field
+    // list explicit so new consumer state requires a sharing decision.
+    fn fork(&self) -> Self {
+        Self {
+            extensions: self.extensions,
+            state: self.state,
+            outer_schemas: RwLock::new(self.outer_schemas.read().unwrap().clone()),
+            lambda_consumer: self.lambda_consumer.fork(),
+            tables: Arc::clone(&self.tables),
         }
     }
 }
@@ -619,10 +655,40 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
         &self,
         table_ref: &TableReference,
     ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
-        let table = table_ref.table().to_string();
-        let schema = self.state.schema_for_ref(table_ref.clone())?;
-        let table_provider = schema.table(&table).await?;
-        Ok(table_provider)
+        let cell = Arc::clone(
+            self.tables
+                .providers
+                .write()
+                .unwrap()
+                .entry(table_ref.clone())
+                .or_default(),
+        );
+        cell.get_or_try_init(|| async {
+            let schema = self.state.schema_for_ref(table_ref.clone())?;
+            // Only one lookup per table takes a permit; nested relations hold none.
+            let _permit = self.tables.loads.acquire().await.map_err(|error| {
+                internal_datafusion_err!("Table load limiter closed: {error}")
+            })?;
+            schema.table(table_ref.table()).await
+        })
+        .await
+        .cloned()
+    }
+
+    async fn consume_rel_inputs(
+        &self,
+        rels: &[&Rel],
+    ) -> datafusion::common::Result<Vec<LogicalPlan>> {
+        let pending = FuturesUnordered::new();
+        for (index, rel) in rels.iter().copied().enumerate() {
+            let branch = self.fork();
+            pending.push(async move {
+                branch.consume_rel(rel).await.map(|plan| (index, plan))
+            });
+        }
+        let mut completed = pending.try_collect::<Vec<_>>().await?;
+        completed.sort_unstable_by_key(|(index, _)| *index);
+        Ok(completed.into_iter().map(|(_, plan)| plan).collect())
     }
 
     fn get_extensions(&self) -> &Extensions {
@@ -735,6 +801,7 @@ pub struct DefaultSubstraitLambdaConsumer {
     inner: RwLock<DefaultSubstraitLambdaConsumerInner>,
 }
 
+#[derive(Clone)]
 struct DefaultSubstraitLambdaConsumerInner {
     /// Parameters of the lambdas currently in scope, ordered from innermost
     /// to outermost. Index 0 is the lambda being consumed; higher indices
@@ -757,6 +824,12 @@ impl DefaultSubstraitLambdaConsumer {
                 lambda_parameters: VecDeque::new(),
                 next_lambda_parameter: 0,
             }),
+        }
+    }
+
+    fn fork(&self) -> Self {
+        Self {
+            inner: RwLock::new(self.inner.read().unwrap().clone()),
         }
     }
 
@@ -846,6 +919,21 @@ mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
     use datafusion::arrow::datatypes::{Field, Schema};
+    use datafusion::catalog::empty::EmptyTable;
+    use datafusion::catalog::{CatalogProvider, MemoryCatalogProvider, SchemaProvider};
+    use datafusion::common::{Result, exec_err};
+    use datafusion::execution::SessionStateBuilder;
+    use futures::poll;
+    use futures::task::{ArcWake, waker_ref};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll};
+    use substrait::proto::read_rel::{NamedTable, ReadType};
+    use substrait::proto::rel::RelType;
+    use substrait::proto::set_rel::SetOp;
+    use substrait::proto::{NamedStruct, r#type};
 
     fn make_schema(fields: &[(&str, DataType)]) -> Arc<DFSchema> {
         let arrow_fields: Vec<Field> = fields
@@ -916,13 +1004,309 @@ mod tests {
         assert!(consumer.get_outer_schema(2).is_none());
     }
 
+    #[derive(Default)]
+    struct WakeFlag(AtomicBool);
+
+    impl ArcWake for WakeFlag {
+        fn wake_by_ref(flag: &Arc<Self>) {
+            flag.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    async fn poll_until_stalled<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
+        let flag = Arc::new(WakeFlag::default());
+        loop {
+            flag.0.store(false, Ordering::SeqCst);
+            let result = future
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker_ref(&flag)));
+            if result.is_ready() || !flag.0.load(Ordering::SeqCst) {
+                return result;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[derive(Debug)]
+    struct GatedSchema {
+        started: Mutex<Vec<String>>,
+        ready: Semaphore,
+    }
+
+    #[async_trait]
+    impl SchemaProvider for GatedSchema {
+        fn table_names(&self) -> Vec<String> {
+            vec![]
+        }
+
+        fn table_exist(&self, _name: &str) -> bool {
+            true
+        }
+
+        async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+            self.started.lock().unwrap().push(name.to_owned());
+            if name == "fail" {
+                return exec_err!("catalog load failed");
+            }
+            self.ready.acquire().await.unwrap().forget();
+            let schema = Schema::new(vec![Field::new("x", DataType::Int64, false)]);
+            Ok(Some(Arc::new(EmptyTable::new(Arc::new(schema)))))
+        }
+    }
+
+    fn gated_state() -> (SessionState, Arc<GatedSchema>) {
+        let schema = Arc::new(GatedSchema {
+            started: Mutex::new(vec![]),
+            ready: Semaphore::new(0),
+        });
+        let catalog = MemoryCatalogProvider::new();
+        catalog.register_schema("public", schema.clone()).unwrap();
+        let state = SessionStateBuilder::new_with_default_features().build();
+        state
+            .catalog_list()
+            .register_catalog("datafusion".into(), Arc::new(catalog));
+        (state, schema)
+    }
+
+    fn read(name: &str) -> Rel {
+        let ty = Type {
+            kind: Some(r#type::Kind::I64(r#type::I64 {
+                nullability: r#type::Nullability::Required as i32,
+                ..Default::default()
+            })),
+        };
+        Rel {
+            rel_type: Some(RelType::Read(Box::new(ReadRel {
+                base_schema: Some(NamedStruct {
+                    names: vec!["x".into()],
+                    r#struct: Some(r#type::Struct {
+                        types: vec![ty],
+                        nullability: r#type::Nullability::Required as i32,
+                        ..Default::default()
+                    }),
+                }),
+                read_type: Some(ReadType::NamedTable(NamedTable {
+                    names: vec![name.into()],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }))),
+        }
+    }
+
+    #[tokio::test]
+    async fn join_starts_both_table_loads_before_either_finishes() {
+        let (state, schema) = gated_state();
+        let extensions = Extensions::default();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        let join = JoinRel {
+            left: Some(Box::new(read("a"))),
+            right: Some(Box::new(read("b"))),
+            r#type: proto::join_rel::JoinType::Inner as i32,
+            ..Default::default()
+        };
+        let mut pending = Box::pin(consumer.consume_join(&join));
+        assert!(poll_until_stalled(pending.as_mut()).await.is_pending());
+        assert_eq!(*schema.started.lock().unwrap(), ["a", "b"]);
+        schema.ready.add_permits(2);
+        assert!(matches!(pending.await.unwrap(), LogicalPlan::Join(_)));
+    }
+
+    #[tokio::test]
+    async fn wide_union_bounds_table_loads_and_keeps_input_order() {
+        let (state, schema) = gated_state();
+        let extensions = Extensions::default();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        let set = SetRel {
+            inputs: (0..40).map(|i| read(&format!("table{i}"))).collect(),
+            op: SetOp::UnionAll as i32,
+            ..Default::default()
+        };
+        let mut pending = Box::pin(consumer.consume_set(&set));
+        assert!(poll_until_stalled(pending.as_mut()).await.is_pending());
+        assert_eq!(
+            schema.started.lock().unwrap().len(),
+            MAX_CONCURRENT_TABLE_LOADS
+        );
+        schema.ready.add_permits(40);
+        fn table_names(plan: &LogicalPlan, names: &mut Vec<String>) {
+            match plan {
+                LogicalPlan::Union(union) => {
+                    for input in &union.inputs {
+                        table_names(input, names);
+                    }
+                }
+                LogicalPlan::TableScan(scan) => {
+                    names.push(scan.table_name.table().to_owned())
+                }
+                other => panic!("expected a union or table scan, got {other:?}"),
+            }
+        }
+        let plan = pending.await.unwrap();
+        assert_eq!(schema.started.lock().unwrap().len(), 40);
+        let mut names = vec![];
+        table_names(&plan, &mut names);
+        assert_eq!(
+            names,
+            (0..40).map(|i| format!("table{i}")).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_unions_share_the_table_load_limit() {
+        let (state, schema) = gated_state();
+        let extensions = Extensions::default();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        let set = SetRel {
+            inputs: (0..40)
+                .map(|i| Rel {
+                    rel_type: Some(RelType::Set(SetRel {
+                        inputs: vec![read(&format!("a{i}")), read(&format!("b{i}"))],
+                        op: SetOp::UnionAll as i32,
+                        ..Default::default()
+                    })),
+                })
+                .collect(),
+            op: SetOp::UnionAll as i32,
+            ..Default::default()
+        };
+        let mut pending = Box::pin(consumer.consume_set(&set));
+        assert!(poll_until_stalled(pending.as_mut()).await.is_pending());
+        assert_eq!(
+            schema.started.lock().unwrap().len(),
+            MAX_CONCURRENT_TABLE_LOADS
+        );
+        schema.ready.add_permits(80);
+        assert!(matches!(pending.await.unwrap(), LogicalPlan::Union(_)));
+        assert_eq!(schema.started.lock().unwrap().len(), 80);
+    }
+
+    #[tokio::test]
+    async fn repeated_table_loads_are_shared_across_union_inputs() {
+        let (state, schema) = gated_state();
+        let extensions = Extensions::default();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        let set = SetRel {
+            inputs: vec![read("a"), read("a")],
+            op: SetOp::UnionAll as i32,
+            ..Default::default()
+        };
+        let mut pending = Box::pin(consumer.consume_set(&set));
+        assert!(poll_until_stalled(pending.as_mut()).await.is_pending());
+        assert_eq!(*schema.started.lock().unwrap(), ["a"]);
+        schema.ready.add_permits(1);
+        assert!(matches!(pending.await.unwrap(), LogicalPlan::Union(_)));
+        assert_eq!(*schema.started.lock().unwrap(), ["a"]);
+    }
+
+    #[tokio::test]
+    async fn union_error_cancels_pending_siblings_and_allows_retry() {
+        let (state, schema) = gated_state();
+        let extensions = Extensions::default();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        let set = SetRel {
+            inputs: vec![read("pending"), read("fail")],
+            op: SetOp::UnionAll as i32,
+            ..Default::default()
+        };
+        let mut pending = Box::pin(consumer.consume_set(&set));
+        let Poll::Ready(Err(error)) = poll!(&mut pending) else {
+            panic!("the later failure must not wait for the first input");
+        };
+        assert!(error.to_string().contains("catalog load failed"));
+        assert_eq!(*schema.started.lock().unwrap(), ["pending", "fail"]);
+        drop(pending);
+        schema.ready.add_permits(1);
+        assert!(
+            consumer
+                .resolve_table_ref(&TableReference::bare("pending"))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            *schema.started.lock().unwrap(),
+            ["pending", "fail", "pending"]
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_failure_is_reported_after_a_permit_becomes_available() {
+        let (state, schema) = gated_state();
+        let extensions = Extensions::default();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        let mut inputs = (0..MAX_CONCURRENT_TABLE_LOADS)
+            .map(|i| read(&format!("pending{i}")))
+            .collect::<Vec<_>>();
+        inputs.push(read("fail"));
+        let set = SetRel {
+            inputs,
+            op: SetOp::UnionAll as i32,
+            ..Default::default()
+        };
+        let mut pending = Box::pin(consumer.consume_set(&set));
+        assert!(poll_until_stalled(pending.as_mut()).await.is_pending());
+        assert_eq!(
+            schema.started.lock().unwrap().len(),
+            MAX_CONCURRENT_TABLE_LOADS
+        );
+        // One completion admits the failing lookup. The remaining pending reads
+        // must then be cancelled without needing their catalog responses.
+        schema.ready.add_permits(1);
+        let Poll::Ready(Err(error)) = poll_until_stalled(pending.as_mut()).await else {
+            panic!("an admitted failure must cancel pending siblings");
+        };
+        assert!(error.to_string().contains("catalog load failed"));
+    }
+
+    #[tokio::test]
+    async fn cancelled_initialization_can_be_retried_by_a_duplicate() {
+        let (state, schema) = gated_state();
+        let extensions = Extensions::default();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        let table = TableReference::bare("a");
+        let mut owner = Box::pin(consumer.resolve_table_ref(&table));
+        let mut waiter = Box::pin(consumer.resolve_table_ref(&table));
+        assert!(poll!(&mut owner).is_pending());
+        assert!(poll!(&mut waiter).is_pending());
+        assert_eq!(*schema.started.lock().unwrap(), ["a"]);
+        drop(owner);
+        assert!(poll!(&mut waiter).is_pending());
+        assert_eq!(*schema.started.lock().unwrap(), ["a", "a"]);
+        schema.ready.add_permits(1);
+        assert!(waiter.await.unwrap().is_some());
+    }
+
+    #[test]
+    fn fork_keeps_outer_and_lambda_scopes_independent() {
+        let state = SessionStateBuilder::new_with_default_features().build();
+        let extensions = Extensions::default();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        consumer.push_outer_schema(make_schema(&[("outer", DataType::Int64)]));
+        let ty = Type {
+            kind: Some(r#type::Kind::I64(r#type::I64::default())),
+        };
+        consumer
+            .push_lambda_parameters(&[ty], &DFSchema::empty())
+            .unwrap();
+        let fork = consumer.fork();
+        assert_eq!(fork.get_outer_schema(1), consumer.get_outer_schema(1));
+        assert_eq!(
+            fork.lambda_variable(0, 0).unwrap(),
+            consumer.lambda_variable(0, 0).unwrap()
+        );
+        fork.pop_outer_schema();
+        fork.pop_lambda_parameters();
+        assert!(consumer.get_outer_schema(1).is_some());
+        assert!(consumer.lambda_variable(0, 0).is_ok());
+    }
     // A custom consumer exercises the trait default independently of the default
     // consumer's scheduling policy.
     struct InputConsumer {
         extensions: Extensions,
         state: SessionState,
-        reads: std::sync::Mutex<Vec<String>>,
-        ready: tokio::sync::Semaphore,
+        reads: Mutex<Vec<String>>,
+        ready: Semaphore,
     }
 
     #[async_trait]
@@ -938,19 +1322,15 @@ mod tests {
         async fn resolve_table_ref(
             &self,
             _: &TableReference,
-        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+        ) -> Result<Option<Arc<dyn TableProvider>>> {
             unreachable!("test consumes reads directly")
         }
 
-        async fn consume_rel(
-            &self,
-            rel: &Rel,
-        ) -> datafusion::common::Result<LogicalPlan> {
-            let Some(proto::rel::RelType::Read(read)) = &rel.rel_type else {
+        async fn consume_rel(&self, rel: &Rel) -> Result<LogicalPlan> {
+            let Some(RelType::Read(read)) = &rel.rel_type else {
                 panic!("expected a read")
             };
-            let Some(proto::read_rel::ReadType::NamedTable(table)) = &read.read_type
-            else {
+            let Some(ReadType::NamedTable(table)) = &read.read_type else {
                 panic!("expected a named table")
             };
             self.reads.lock().unwrap().push(table.names[0].clone());
@@ -958,10 +1338,11 @@ mod tests {
             if table.names[0] == "fail" {
                 return substrait_err!("input failed");
             }
-            let provider =
-                datafusion::catalog::empty::EmptyTable::new(Arc::new(Schema::new(vec![
-                    Field::new("x", DataType::Int64, false),
-                ])));
+            let provider = EmptyTable::new(Arc::new(Schema::new(vec![Field::new(
+                "x",
+                DataType::Int64,
+                false,
+            )])));
             datafusion::logical_expr::LogicalPlanBuilder::scan(
                 table.names[0].clone(),
                 datafusion::datasource::provider_as_source(Arc::new(provider)),
@@ -974,23 +1355,19 @@ mod tests {
     fn input_consumer() -> InputConsumer {
         InputConsumer {
             extensions: Extensions::default(),
-            state: datafusion::execution::SessionStateBuilder::new_with_default_features(
-            )
-            .build(),
-            reads: std::sync::Mutex::default(),
-            ready: tokio::sync::Semaphore::new(0),
+            state: SessionStateBuilder::new_with_default_features().build(),
+            reads: Mutex::default(),
+            ready: Semaphore::new(0),
         }
     }
 
     fn input_read(name: &str) -> Rel {
         Rel {
-            rel_type: Some(proto::rel::RelType::Read(Box::new(ReadRel {
-                read_type: Some(proto::read_rel::ReadType::NamedTable(
-                    proto::read_rel::NamedTable {
-                        names: vec![name.into()],
-                        ..Default::default()
-                    },
-                )),
+            rel_type: Some(RelType::Read(Box::new(ReadRel {
+                read_type: Some(ReadType::NamedTable(NamedTable {
+                    names: vec![name.into()],
+                    ..Default::default()
+                })),
                 ..Default::default()
             }))),
         }
@@ -1023,7 +1400,7 @@ mod tests {
 
     struct HookConsumer {
         inner: InputConsumer,
-        calls: std::sync::Mutex<Vec<usize>>,
+        calls: Mutex<Vec<usize>>,
         truncate: bool,
     }
 
@@ -1038,13 +1415,10 @@ mod tests {
         async fn resolve_table_ref(
             &self,
             _: &TableReference,
-        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+        ) -> Result<Option<Arc<dyn TableProvider>>> {
             unreachable!("test consumes reads directly")
         }
-        async fn consume_rel_inputs(
-            &self,
-            rels: &[&Rel],
-        ) -> datafusion::common::Result<Vec<LogicalPlan>> {
+        async fn consume_rel_inputs(&self, rels: &[&Rel]) -> Result<Vec<LogicalPlan>> {
             self.calls.lock().unwrap().push(rels.len());
             let mut plans = self.inner.consume_rel_inputs(rels).await?;
             if self.truncate {
@@ -1059,7 +1433,7 @@ mod tests {
         for truncate in [false, true] {
             let consumer = HookConsumer {
                 inner: input_consumer(),
-                calls: std::sync::Mutex::default(),
+                calls: Mutex::default(),
                 truncate,
             };
             consumer.inner.ready.add_permits(6);
@@ -1094,10 +1468,7 @@ mod tests {
                         .contains("TableScan: b")
                 );
             }
-            for op in [
-                proto::set_rel::SetOp::UnionAll,
-                proto::set_rel::SetOp::UnionDistinct,
-            ] {
+            for op in [SetOp::UnionAll, SetOp::UnionDistinct] {
                 let set = SetRel {
                     inputs: vec![input_read("a"), input_read("b")],
                     op: op as i32,
