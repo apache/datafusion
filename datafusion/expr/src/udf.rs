@@ -364,6 +364,15 @@ impl ScalarUDF {
         self.inner.output_ordering(inputs)
     }
 
+    /// See [`ScalarUDFImpl::supports_range_key_locality_analysis`] for more details.
+    pub fn supports_range_key_locality_analysis(
+        &self,
+        argument_types: &[DataType],
+    ) -> bool {
+        self.inner
+            .supports_range_key_locality_analysis(argument_types)
+    }
+
     pub fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         self.inner.preserves_lex_ordering(inputs)
     }
@@ -983,6 +992,29 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         Ok(inner(inputs))
     }
 
+    /// Returns whether this function and argument-type combination has been
+    /// audited for range-partitioning locality analysis.
+    ///
+    /// Range-boundary analysis has subtle correctness requirements, so the
+    /// policy is default-deny. Functions may opt in only after individual audit.
+    /// At minimum, an opted-in combination must:
+    ///
+    /// - have same-direction [`SortProperties::Ordered`] metadata over the
+    ///   admitted non-null domain when all other inputs are singleton;
+    /// - preserve nullness exactly, so successful evaluation returns null if and
+    ///   only if the range input is null.
+    ///
+    /// Callers may then prove key locality by evaluating values on both sides of
+    /// each concrete range split. Ordered metadata alone is insufficient because
+    /// a non-strict transform can collapse a split boundary.
+    ///
+    /// This does not claim a concrete partition layout or cross-input
+    /// co-partitioning compatibility. Boundary evaluation errors cause the
+    /// analysis to return `false`. This capability is not transported across FFI.
+    fn supports_range_key_locality_analysis(&self, _argument_types: &[DataType]) -> bool {
+        false
+    }
+
     /// Returns true if the function preserves lexicographical ordering based on
     /// the input ordering.
     ///
@@ -1205,6 +1237,11 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.output_ordering(inputs)
     }
 
+    fn supports_range_key_locality_analysis(&self, argument_types: &[DataType]) -> bool {
+        self.inner
+            .supports_range_key_locality_analysis(argument_types)
+    }
+
     fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         self.inner.preserves_lex_ordering(inputs)
     }
@@ -1285,6 +1322,12 @@ mod tests {
         assert_ne!(b, o);
         assert_ne!(hash(&b), hash(&o)); // hash can collide for different values but does not collide in this test
         assert_eq!(b.partial_cmp(&o), Some(Ordering::Less));
+    }
+
+    #[test]
+    fn range_key_locality_analysis_is_disabled_by_default() {
+        let function = test_func("range_function", "a");
+        assert!(!function.supports_range_key_locality_analysis(&[DataType::Int64]));
     }
 
     fn test_func(name: &'static str, parameter: &'static str) -> ScalarUDF {

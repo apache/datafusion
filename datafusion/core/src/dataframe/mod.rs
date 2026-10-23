@@ -298,6 +298,8 @@ fn alias_aggregate_exprs(
 ) -> Result<(Vec<Expr>, HashMap<Expr, Expr>)> {
     let exprs = normalize_cols(exprs, plan)?;
     let mut used = HashSet::new();
+    // Arrow buffer memory accounting does not affect expression equality or hashing.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
     let mut rewrite_map = HashMap::new();
     let mut aliased = Vec::with_capacity(exprs.len());
     for expr in exprs {
@@ -318,6 +320,8 @@ fn alias_aggregate_exprs(
 }
 
 /// Replace aggregate subexpressions with columns produced by the Aggregate node.
+// Arrow buffer memory accounting does not affect expression equality or hashing.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)]
 fn rewrite_select_aggs(
     expr_list: Vec<SelectExpr>,
     input: &LogicalPlan,

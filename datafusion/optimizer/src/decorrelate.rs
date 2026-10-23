@@ -83,6 +83,9 @@ pub struct PullUpCorrelatedExpr {
     pub pull_up_having_expr: Option<Expr>,
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
+    ///
+    /// An `Aggregate` above stops the pull up when this is set. `f_up` visits
+    /// the aggregate that sets it before any node above.
     pub pulled_up_scalar_agg: bool,
     /// Every correlated conjunct that a `Filter` of the subquery applies,
     /// before `remove_duplicated_filter` drops the ones that the `IN`
@@ -556,6 +559,14 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::Aggregate(aggregate)
                 if self.in_predicate_opt.is_some() || !self.join_filters.is_empty() =>
             {
+                // A pulled up scalar aggregate below gives no row for unmatched
+                // outer rows, so this aggregate would see an empty input. Stop
+                // the rewrite here, since rebuilding the nodes above can fail
+                // with a schema error. See https://github.com/apache/datafusion/issues/26508
+                if self.pulled_up_scalar_agg {
+                    self.can_pull_up = false;
+                    return Ok(Transformed::new(plan, false, TreeNodeRecursion::Stop));
+                }
                 // If the aggregation is from a distinct it will not change the result for
                 // exists/in subqueries so we can still pull up all predicates.
                 let is_distinct = aggregate.aggr_expr.is_empty();
@@ -647,8 +658,6 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     }
                 }
                 if aggregate.group_expr.is_empty() {
-                    // TODO: how do we handle the case where we have pulled multiple aggregations? For example,
-                    // a group agg with a scalar agg as child.
                     self.pulled_up_scalar_agg = true;
                 }
                 let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
