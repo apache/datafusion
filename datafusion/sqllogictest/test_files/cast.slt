@@ -24,36 +24,73 @@ SELECT cast(c as varchar) FROM (SELECT 1 as c)
 # Narrowing TRY_CAST comparisons must preserve NULL-on-overflow semantics.
 statement ok
 CREATE TABLE try_cast_narrowing AS VALUES
+    (-2147483649::BIGINT),
+    (-2147483648::BIGINT),
     (5::BIGINT),
-    (9999999999::BIGINT);
+    (2147483647::BIGINT),
+    (2147483648::BIGINT),
+    (NULL::BIGINT);
 
-query IIB rowsort
+query IIBB
 SELECT column1,
-       try_cast(column1 AS INT),
-       try_cast(column1 AS INT) > 1
-FROM try_cast_narrowing;
+       try_cast(column1 AS INT) AS narrowed,
+       try_cast(column1 AS INT) > 1,
+       1 < try_cast(column1 AS INT)
+FROM try_cast_narrowing
+ORDER BY column1 NULLS LAST;
 ----
-5 5 true
-9999999999 NULL NULL
+-2147483649 NULL NULL NULL
+-2147483648 -2147483648 false false
+5 5 true true
+2147483647 2147483647 true true
+2147483648 NULL NULL NULL
+NULL NULL NULL NULL
 
 query I
 SELECT column1
 FROM try_cast_narrowing
-WHERE try_cast(column1 AS INT) > 1;
+WHERE try_cast(column1 AS INT) > 1
+ORDER BY column1;
 ----
 5
+2147483647
 
-query IIB rowsort
+query IBB
 SELECT column1,
-       try_cast(column1 AS INT) IN (5),
-       try_cast(column1 AS INT) NOT IN (5)
-FROM try_cast_narrowing;
+       try_cast(column1 AS INT) IN (1, 2, 3, 4, 5),
+       try_cast(column1 AS INT) NOT IN (1, 2, 3, 4, 5)
+FROM try_cast_narrowing
+ORDER BY column1 NULLS LAST;
 ----
+-2147483649 NULL NULL
+-2147483648 false true
 5 true false
-9999999999 NULL NULL
+2147483647 false true
+2147483648 NULL NULL
+NULL NULL NULL
 
 statement ok
 DROP TABLE try_cast_narrowing;
+
+# A signed-to-unsigned cast can narrow the domain without changing the width.
+statement ok
+CREATE TABLE try_cast_signed_to_unsigned AS VALUES
+    (-1::INT), (0::INT), (1::INT), (NULL::INT);
+
+query IIB
+SELECT column1,
+       try_cast(column1 AS INTEGER UNSIGNED) AS unsigned_value,
+       try_cast(column1 AS INTEGER UNSIGNED) > 0::INTEGER UNSIGNED
+FROM try_cast_signed_to_unsigned
+ORDER BY column1 NULLS LAST;
+----
+-1 NULL NULL
+0 0 false
+1 1 true
+NULL NULL NULL
+
+statement ok
+DROP TABLE try_cast_signed_to_unsigned;
 
 # cast tinyint
 query I

@@ -1099,3 +1099,66 @@ set datafusion.execution.parquet.pushdown_filters = false;
 
 statement ok
 DROP TABLE case_without_else;
+
+# Narrowing TRY_CAST must keep NULL-on-overflow semantics in the physical
+# simplifier, independently of the logical cast-unwrapping rule.
+statement ok
+COPY (VALUES (5::BIGINT), (7::BIGINT), (9999999999::BIGINT),
+             (10000000000::BIGINT), (-2147483649::BIGINT), (NULL::BIGINT))
+TO 'test_files/scratch/parquet_filter_pushdown/try_cast_narrowing.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
+
+statement ok
+CREATE EXTERNAL TABLE try_cast_narrowing
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/try_cast_narrowing.parquet';
+
+statement ok
+SET datafusion.optimizer.max_passes = 0;
+
+statement ok
+SET datafusion.execution.parquet.pruning = false;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = false;
+
+query I
+SELECT count(*) FROM try_cast_narrowing WHERE try_cast(column1 AS INT) > 1;
+----
+2
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query I
+SELECT count(*) FROM try_cast_narrowing WHERE try_cast(column1 AS INT) > 1;
+----
+2
+
+query I
+SELECT count(*) FROM try_cast_narrowing WHERE 1 < try_cast(column1 AS INT);
+----
+2
+
+query I
+SELECT count(*) FROM try_cast_narrowing WHERE try_cast(column1 AS INT) != 5;
+----
+1
+
+query I
+SELECT count(*) FROM try_cast_narrowing WHERE try_cast(column1 AS INT) < 1;
+----
+0
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+statement ok
+RESET datafusion.execution.parquet.pruning;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+DROP TABLE try_cast_narrowing;

@@ -472,17 +472,81 @@ mod tests {
     }
 
     #[test]
-    fn test_no_unwrap_narrowing_integer_try_cast() {
-        let schema = Schema::new(vec![Field::new("int_col", DataType::Int64, false)]);
+    fn test_no_unwrap_narrowing_integer_try_cast() -> Result<()> {
+        use arrow::array::{BooleanArray, Int64Array};
+        use arrow::record_batch::RecordBatch;
 
-        let column_expr = col("int_col", &schema).unwrap();
-        let try_cast_expr = Arc::new(TryCastExpr::new(column_expr, DataType::Int32));
-        let literal_expr = lit(1i32);
-        let binary_expr =
-            Arc::new(BinaryExpr::new(try_cast_expr, Operator::Gt, literal_expr));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "int_col",
+            DataType::Int64,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(i64::from(i32::MIN) - 1),
+                Some(i64::from(i32::MAX) + 1),
+                None,
+            ]))],
+        )?;
 
-        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
-        assert!(!result.transformed);
+        for (literal, expected) in [
+            (
+                ScalarValue::Int32(Some(1)),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    None,
+                    None,
+                    None,
+                ]),
+            ),
+            (
+                ScalarValue::UInt64(Some(1)),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    None,
+                ]),
+            ),
+        ] {
+            // Width narrowing and signed/unsigned transitions must both preserve
+            // NULL results for values outside the target integer domain.
+            let cast_type = literal.data_type();
+            for literal_on_left in [false, true] {
+                let column_expr = col("int_col", &schema)?;
+                let try_cast_expr =
+                    Arc::new(TryCastExpr::new(column_expr, cast_type.clone()));
+                let literal_expr = lit(literal.clone());
+                let binary_expr = if literal_on_left {
+                    BinaryExpr::new(literal_expr, Operator::Lt, try_cast_expr)
+                } else {
+                    BinaryExpr::new(try_cast_expr, Operator::Gt, literal_expr)
+                };
+
+                let result = unwrap_cast_in_comparison(Arc::new(binary_expr), &schema)?;
+                assert!(
+                    !result.transformed,
+                    "{cast_type:?}, literal_on_left={literal_on_left}"
+                );
+                let actual =
+                    result.data.evaluate(&batch)?.into_array(batch.num_rows())?;
+                assert_eq!(
+                    actual.as_any().downcast_ref::<BooleanArray>().unwrap(),
+                    &expected,
+                    "{cast_type:?}, literal_on_left={literal_on_left}"
+                );
+            }
+        }
+
+        Ok(())
     }
 
     #[test]
