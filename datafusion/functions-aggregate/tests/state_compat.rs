@@ -27,8 +27,8 @@ use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Float64Array, Int64Array, UInt32Array};
-use arrow::compute::{cast, concat, take};
+use arrow::array::{Array, ArrayRef, Float64Array, Int64Array, ListArray, UInt32Array};
+use arrow::compute::{cast, concat, sort, take};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, TimeUnit};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
@@ -518,7 +518,10 @@ fn take_all(arrays: &[ArrayRef], indices: &UInt32Array) -> Result<Vec<ArrayRef>>
 
 /// Runs every state exchange for one case.
 fn check_case(expr: &AggregateFunctionExpr, case: &Case) -> Errors {
-    let mut errors = Errors::default();
+    let mut errors = Errors {
+        ignore_list_order: case.distinct && !case.ordered,
+        ..Default::default()
+    };
     let input = match Input::new(expr, case) {
         Ok(input) => input,
         Err(e) => {
@@ -693,7 +696,12 @@ fn guard<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
 
 /// Failures for one case, deduplicated by message across groups.
 #[derive(Default)]
-struct Errors(Vec<(String, Vec<usize>)>);
+struct Errors {
+    failures: Vec<(String, Vec<usize>)>,
+    /// Compare list results as multisets. `array_agg(DISTINCT x)` without
+    /// ORDER BY does not define the order of its elements.
+    ignore_list_order: bool,
+}
 
 impl Errors {
     fn push(&mut self, msg: &str) {
@@ -708,14 +716,14 @@ impl Errors {
         // Only keep the first line, dropping e.g. the "please file a bug" text
         // of internal errors.
         let msg = msg.lines().next().unwrap_or_default().to_string();
-        match self.0.iter_mut().find(|(m, _)| *m == msg) {
+        match self.failures.iter_mut().find(|(m, _)| *m == msg) {
             Some((_, groups)) => groups.extend(group),
-            None => self.0.push((msg, group.into_iter().collect())),
+            None => self.failures.push((msg, group.into_iter().collect())),
         }
     }
 
     fn lines(&self) -> Vec<String> {
-        self.0
+        self.failures
             .iter()
             .map(|(msg, groups)| {
                 if groups.is_empty() {
@@ -771,7 +779,7 @@ impl Errors {
     ) {
         match got {
             Err(e) => self.push_group(&format!("{what}: {e}"), group),
-            Ok(got) if !scalars_match(&got, want) => {
+            Ok(got) if !scalars_match(&got, want, self.ignore_list_order) => {
                 self.push_group(&format!("{what}: got {got:?}, expected {want:?}"), group)
             }
             Ok(_) => {}
@@ -780,8 +788,15 @@ impl Errors {
 }
 
 /// Exact equality, except that floats are compared with a relative tolerance
-/// because merging in a different order can change rounding.
-fn scalars_match(a: &ScalarValue, b: &ScalarValue) -> bool {
+/// because merging in a different order can change rounding, and lists are
+/// compared as multisets when `ignore_list_order` is set.
+fn scalars_match(a: &ScalarValue, b: &ScalarValue, ignore_list_order: bool) -> bool {
+    if ignore_list_order
+        && let (ScalarValue::List(x), ScalarValue::List(y)) = (a, b)
+        && let (Some(x), Some(y)) = (sorted_list_values(x), sorted_list_values(y))
+    {
+        return x.as_ref() == y.as_ref();
+    }
     match (a, b) {
         (ScalarValue::Float64(Some(x)), ScalarValue::Float64(Some(y))) => {
             floats_match(*x, *y)
@@ -791,6 +806,15 @@ fn scalars_match(a: &ScalarValue, b: &ScalarValue) -> bool {
         }
         _ => a == b,
     }
+}
+
+/// The values of a single-row list, sorted, or `None` if the row is null or the
+/// values cannot be sorted.
+fn sorted_list_values(list: &ListArray) -> Option<ArrayRef> {
+    if list.len() != 1 || list.is_null(0) {
+        return None;
+    }
+    sort(list.value(0).as_ref(), None).ok()
 }
 
 fn floats_match(x: f64, y: f64) -> bool {

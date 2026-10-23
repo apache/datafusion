@@ -19,24 +19,49 @@
 
 use super::THRESHOLD_INLINE_INLIST;
 
-use datafusion_common::Result;
+use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_expr::Expr;
+use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::InList;
+use datafusion_expr::{Expr, ExprSchemable};
 
-pub(super) struct ShortenInListSimplifier {}
+pub(super) struct ShortenInListSimplifier<'a> {
+    schema: &'a DFSchema,
+}
 
-impl ShortenInListSimplifier {
-    pub(super) fn new() -> Self {
-        Self {}
+impl<'a> ShortenInListSimplifier<'a> {
+    pub(super) fn new(schema: &'a DFSchema) -> Self {
+        Self { schema }
+    }
+
+    /// Benchmarks in `in_list_rewrite` favor evaluating short literal lists as
+    /// membership expressions over OR/AND chains for these types on batches with
+    /// a mix of matches and misses, or no matches. Integer chains can still be
+    /// faster when every row matches the first value, allowing the remaining
+    /// comparisons to short circuit.
+    ///
+    /// See [PR #25187](https://github.com/apache/datafusion/pull/25187) for measurements.
+    fn should_retain_short_inlist(&self, expr: &Expr, list: &[Expr]) -> bool {
+        let Ok(data_type) = expr.get_type(self.schema) else {
+            return false;
+        };
+        matches!(
+            data_type,
+            DataType::Int32
+                | DataType::Int64
+                | DataType::UInt64
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::FixedSizeBinary(1 | 2 | 4 | 8 | 16)
+        ) && list.iter().all(|expr| expr.as_literal().is_some())
     }
 }
 
-impl TreeNodeRewriter for ShortenInListSimplifier {
+impl TreeNodeRewriter for ShortenInListSimplifier<'_> {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        // if expr is a single column reference:
+        // Rewrite eligible short lists to left-deep comparison chains:
         // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
         if let Expr::InList(InList {
             ref expr,
@@ -52,6 +77,7 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
                 list.len() == 1
                     || list.len() <= THRESHOLD_INLINE_INLIST
                         && expr.try_as_col().is_some()
+                        && !self.should_retain_short_inlist(expr, list)
             )
         {
             let first_val = list[0].clone();

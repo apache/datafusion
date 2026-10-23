@@ -300,12 +300,14 @@ impl NullAwareMode {
             Self::RightAnti if num_keys != 1 => plan_err!(
                 "null_aware {join_type} joins only support single column join key, got {num_keys} columns"
             ),
-            // Correlated joins share the per-build-row null bitmap across all
-            // probe partitions.
-            Self::LeftMark { .. }
-            | Self::LeftAnti {
-                correlated: true, ..
-            } if partition_mode == PartitionMode::Partitioned => {
+            // Build-driven joins decide in the final stage from state shared
+            // across the probe partitions: the per-build-row null bitmap for
+            // the correlated forms, and the probe-side NULL flag for the
+            // uncorrelated ones. `Partitioned` gives each output partition its
+            // own build side, so neither is global there.
+            Self::LeftMark { .. } | Self::LeftAnti { .. }
+                if partition_mode == PartitionMode::Partitioned =>
+            {
                 plan_err!(
                     "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
                 )
@@ -1217,13 +1219,9 @@ impl HashJoinExec {
             return false;
         }
 
-        // `preserve_file_partitions` can report Hive-style file groups as Hash
-        // partitioned even though their partition indexes do not follow the
-        // hash router used by partitioned dynamic filters. Reject Hash inputs
-        // because the metadata cannot distinguish those scans from a real hash
-        // repartition. Compatible Range inputs remain safe because matching
-        // ordering and split points align each build filter with its probe
-        // partition. Other unsupported layouts are rejected.
+        // Under `preserve_file_partitions`, file groups can report Hash without following
+        // the dynamic filter hash router and look like a real hash repartition, so reject
+        // Hash. Range inputs with matching split points are safe.
         // Follow-up work: enable dynamic filtering for preserve_file_partitioned scans (issue #20195).
         // https://github.com/apache/datafusion/issues/20195
         if config.optimizer.preserve_file_partitions > 0
@@ -2743,7 +2741,35 @@ mod proto_tests {
         let mut node = decodable_node();
         node.join_type = protobuf::JoinType::Leftanti.into();
         node.null_aware = true;
+        // `decodable_node` is `Partitioned`, which a null-aware join rejects
+        // (see `try_from_proto_rejects_a_null_aware_partitioned_join`).
+        node.partition_mode = protobuf::PartitionMode::CollectLeft.into();
         assert!(as_join(&decode(node)).null_aware);
+    }
+
+    /// A null-aware join decides in the final stage from state shared across
+    /// the probe partitions, which `PartitionMode::Partitioned` does not give
+    /// it. Decoding goes through the same builder as `try_new`, so a node
+    /// written with that combination is rejected rather than silently
+    /// returning rows for a `NOT IN` whose subquery contains NULL.
+    #[test]
+    fn try_from_proto_rejects_a_null_aware_partitioned_join() {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node();
+        node.join_type = protobuf::JoinType::Leftanti.into();
+        node.null_aware = true;
+        assert_eq!(
+            node.partition_mode,
+            protobuf::PartitionMode::Partitioned as i32
+        );
+
+        let err = HashJoinExec::try_from_proto(&join_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("null_aware joins require PartitionMode::CollectLeft"),
+            "{err}"
+        );
     }
 
     /// A multi-column `NOT IN` keeps its value key count through the round
@@ -10323,6 +10349,49 @@ mod tests {
             result.unwrap_err().to_string().contains(
                 "null_aware RightAnti joins only support single column join key"
             )
+        );
+    }
+
+    /// An uncorrelated null-aware `LeftAnti` must reject
+    /// `PartitionMode::Partitioned` just like the correlated forms do.
+    ///
+    /// `LeftAnti` emits build rows in the final stage, and the "a probe
+    /// partition saw a NULL `NOT IN` key" flag lives on the build data
+    /// (`JoinLeftData::probe_completion`). In `Partitioned` mode every output
+    /// partition builds its own build side, so a NULL probe key, hashed to a
+    /// single partition, would only silence that partition's build rows while
+    /// the others still emitted their unmatched ones.
+    #[tokio::test]
+    async fn test_null_aware_validation_left_anti_partitioned() {
+        let left =
+            build_table_two_cols(("c1", &vec![Some(1)]), ("dummy", &vec![Some(10)]));
+        let right =
+            build_table_two_cols(("c2", &vec![Some(1)]), ("dummy", &vec![Some(100)]));
+
+        // A single join key and no filter, so this is the uncorrelated
+        // `LeftAnti` form, which the partition-mode check used to let through.
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema()).unwrap()) as _,
+        )];
+
+        let err = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            true,
+        )
+        .expect_err("null_aware LeftAnti must reject PartitionMode::Partitioned");
+
+        assert!(
+            err.to_string()
+                .contains("null_aware joins require PartitionMode::CollectLeft"),
+            "{err}"
         );
     }
 
