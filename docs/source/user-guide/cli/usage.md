@@ -111,6 +111,23 @@ Available commands inside DataFusion CLI are:
 > \quiet [true|false]
 ```
 
+- Include
+
+Run the SQL statements in a file.
+
+```bash
+> \i filename
+```
+
+- OutputFormat
+
+Show the output format, or change it. The formats are the same as for
+`--format`.
+
+```bash
+> \pset [format [csv|tsv|table|json|nd-json|automatic]]
+```
+
 - list function
 
 ```bash
