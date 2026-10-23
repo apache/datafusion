@@ -2276,3 +2276,60 @@ SELECT i, -i AS n FROM (
 -128 -128
 -128 -128
 NULL NULL
+
+# SortPreservingMergeExec only guarantees its merge key ordering. Each file
+# below is sorted by both `a` and `b`, but merging them on `a` does not keep
+# them sorted by `b`, so the outer sort must stay.
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+query I
+COPY (VALUES (1, 10), (2, 20))
+TO 'test_files/scratch/order/spm_orderings/1.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+query I
+COPY (VALUES (1, 1), (3, 2))
+TO 'test_files/scratch/order/spm_orderings/2.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE spm_orderings (
+  a BIGINT,
+  b BIGINT
+)
+STORED AS CSV
+WITH ORDER (a ASC)
+WITH ORDER (b ASC)
+LOCATION 'test_files/scratch/order/spm_orderings/'
+OPTIONS ('format.has_header' 'true');
+
+query II
+SELECT * FROM (SELECT a, b FROM spm_orderings ORDER BY a LIMIT 10) ORDER BY b;
+----
+1 1
+3 2
+1 10
+2 20
+
+query TT
+EXPLAIN SELECT * FROM (SELECT a, b FROM spm_orderings ORDER BY a LIMIT 10) ORDER BY b;
+----
+logical_plan
+01)Sort: spm_orderings.b ASC NULLS LAST
+02)--Sort: spm_orderings.a ASC NULLS LAST, fetch=10
+03)----TableScan: spm_orderings projection=[a, b]
+physical_plan
+01)SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=10
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/spm_orderings/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/spm_orderings/2.csv]]}, projection=[a, b], limit=10, output_orderings=[[a@0 ASC NULLS LAST], [b@1 ASC NULLS LAST]], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE spm_orderings;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
