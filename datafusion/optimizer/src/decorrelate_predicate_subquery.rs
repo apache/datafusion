@@ -880,7 +880,7 @@ fn build_join(
         };
         if !count_bug_is_harmless {
             return not_impl_err!(
-                "Correlated IN/NOT IN subquery with an aggregate and no GROUP BY is not supported: an outer row with no match gets no subquery row instead of the aggregate's value on empty input"
+                "Correlated IN/NOT IN subquery with an aggregate and no GROUP BY is not supported"
             );
         }
     }
