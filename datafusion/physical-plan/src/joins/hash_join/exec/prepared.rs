@@ -79,6 +79,12 @@ impl PreparedHashJoinBuild {
         }
     }
 
+    /// Each consuming regular join has its own state; the durable buffers and
+    /// reservation remain shared. Prepared builds currently support INNER only.
+    pub(super) fn regular_probe_data(&self) -> JoinBuildState {
+        JoinBuildState::new(Arc::clone(&self.build), None, 0)
+    }
+
     /// Validate the build descriptor and current execution restrictions without
     /// consuming input or modifying either plan. Cache identity is caller-owned.
     pub(super) fn validate(&self, join: &HashJoinExec) -> Result<()> {
