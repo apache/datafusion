@@ -36,7 +36,7 @@ fn find_cdylib(deps_dir: &Path) -> Result<PathBuf> {
         "so"
     };
 
-    let pattern = format!("{lib_prefix}datafusion_ffi.{lib_ext}");
+    let pattern = format!("{lib_prefix}datafusion_ffi_integration_tests.{lib_ext}");
     let lib_path = deps_dir.join(&pattern);
 
     if lib_path.exists() {

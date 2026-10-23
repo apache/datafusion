@@ -1294,6 +1294,19 @@ select t1.t1_int from t1 where (
 2
 4
 
+# correlated_scalar_subquery_having_default_not_coerced_to_match_stacked_filter
+query II rowsort
+SELECT t1_id, (
+  SELECT c FROM (
+    SELECT count(*) AS c FROM t2 WHERE t2.t2_id = t1.t1_id HAVING count(*) < 10
+  ) s WHERE c > 5
+) AS v FROM t1
+----
+11 NULL
+22 NULL
+33 NULL
+44 NULL
+
 #correlated_scalar_subquery_count_agg_in_case_when
 query TT
 explain
@@ -1856,6 +1869,275 @@ item1 1970-01-01T00:00:03 75
 
 statement ok
 drop table source_table;
+
+
+
+# correlated_exists_groupless_count_agg_count_bug
+query II rowsort
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+11 1
+22 2
+33 3
+44 4
+
+# correlated_exists_groupless_count_agg_count_bug_having
+query TT
+explain SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_int
+02)--Filter: CASE WHEN __correlated_sq_1.__always_true IS NULL THEN Boolean(true) WHEN __correlated_sq_1.count(Int64(1)) = Int64(0) IS NOT TRUE THEN Boolean(false) ELSE Boolean(true) END
+03)----Projection: t1.t1_id, t1.t1_int, __correlated_sq_1.count(Int64(1)), __correlated_sq_1.__always_true
+04)------Left Join: t1.t1_id = __correlated_sq_1.t2_id
+05)--------TableScan: t1 projection=[t1_id, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------Projection: t2.t2_id, count(Int64(1)), Boolean(true) AS __always_true
+08)------------Aggregate: groupBy=[[t2.t2_id]], aggr=[[count(Int64(1))]]
+09)--------------TableScan: t2 projection=[t2_id]
+
+query II
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+----
+33 3
+
+# correlated_exists_groupless_compound_having_select_dummy_column
+query II
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0 AND count(*) < 100)
+----
+33 3
+
+# correlated_not_exists_groupless_compound_having_select_dummy_column
+query II rowsort
+SELECT t1_id, t1_int FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0 AND count(*) < 100)
+----
+11 1
+22 2
+44 4
+
+# correlated_exists_groupless_having_reads_outer_column_falls_back
+query I
+SELECT t1_id FROM t1 WHERE EXISTS (
+  SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id HAVING count(*) = t1.t1_int
+)
+----
+11
+
+# correlated_exists_groupless_having_with_stacked_filter_via_cte
+query II
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (
+  WITH agg AS (SELECT count(*) AS c FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+  SELECT c FROM agg WHERE c >= 0
+)
+----
+33 3
+
+# correlated_not_exists_groupless_having_with_stacked_filter_via_cte
+query II rowsort
+SELECT t1_id, t1_int FROM t1 WHERE NOT EXISTS (
+  WITH agg AS (SELECT count(*) AS c FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+  SELECT c FROM agg WHERE c >= 0
+)
+----
+11 1
+22 2
+44 4
+
+# correlated_exists_groupless_having_with_stacked_filter_on_different_aggregate
+query II
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (
+  WITH agg AS (SELECT count(*) AS c, sum(t2_int) AS s FROM t2 WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0)
+  SELECT c FROM agg WHERE s > 5
+)
+----
+
+# correlated_not_exists_groupless_count_agg_count_bug
+query II
+SELECT t1_id, t1_int FROM t1 WHERE NOT EXISTS (SELECT count(*) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+
+# correlated_exists_groupless_null_default_agg_always_true
+query II rowsort
+SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT sum(t2_int) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+11 1
+22 2
+33 3
+44 4
+
+# correlated_not_exists_groupless_null_default_agg_always_true
+query II
+SELECT t1_id, t1_int FROM t1 WHERE NOT EXISTS (SELECT sum(t2_int) FROM t2 WHERE t1.t1_id = t2.t2_id)
+----
+
+# correlated_not_exists_groupless_null_default_having_is_null_not_false
+query I rowsort
+SELECT t1_id FROM t1 WHERE NOT EXISTS (
+  SELECT c FROM (
+    SELECT count(*) AS c, sum(t2_int) AS s FROM t2
+    WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0
+  ) agg WHERE s > 5
+)
+----
+11
+22
+33
+44
+
+# correlated_not_exists_groupless_null_default_having_is_null_not_false_embedded_in_or
+query I rowsort
+SELECT t1_id FROM t1 WHERE t1_id > 100 OR NOT EXISTS (
+  SELECT c FROM (
+    SELECT count(*) AS c, sum(t2_int) AS s FROM t2
+    WHERE t1.t1_id = t2.t2_id HAVING count(*) = 0
+  ) agg WHERE s > 5
+)
+----
+11
+22
+33
+44
+
+# correlated_exists_groupless_count_agg_count_bug_embedded_in_or
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or exists (select count(*) from t2 where t1.t1_id = t2.t2_id having count(*) = 0)
+----
+33
+44
+
+# correlated_not_exists_groupless_count_agg_count_bug_embedded_in_or
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or not exists (select count(*) from t2 where t1.t1_id = t2.t2_id having count(*) = 0)
+----
+11
+22
+44
+
+# correlated_exists_groupless_null_default_agg_count_bug_embedded_in_or
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or exists (select sum(t2_int) from t2 where t1.t1_id = t2.t2_id having sum(t2_int) is null)
+----
+33
+44
+
+# correlated_not_exists_groupless_null_default_agg_count_bug_embedded_in_or
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or not exists (select sum(t2_int) from t2 where t1.t1_id = t2.t2_id having sum(t2_int) is null)
+----
+11
+22
+44
+
+statement ok
+CREATE TABLE dedup_outer(k INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE dedup_inner(k TEXT, v INT) AS VALUES ('1', 10), ('1', 20), ('01', 30), ('01', 40);
+
+# TODO(#26014): should match DuckDB (1, 2), not main's answer.
+# correlated_exists_groupless_count_agg_duplicate_match_dedup
+query I rowsort
+SELECT o.k FROM dedup_outer o WHERE EXISTS (
+  SELECT count(*) FROM dedup_inner i WHERE CAST(i.k AS INT) = o.k
+)
+----
+1
+
+# TODO(#26014): should match DuckDB, not main's answer.
+# correlated_not_exists_groupless_count_agg_duplicate_match_dedup
+query I rowsort
+SELECT o.k FROM dedup_outer o WHERE NOT EXISTS (
+  SELECT count(*) FROM dedup_inner i WHERE CAST(i.k AS INT) = o.k HAVING count(*) = 0
+)
+----
+1
+2
+
+statement ok
+DROP TABLE dedup_outer;
+
+statement ok
+DROP TABLE dedup_inner;
+
+statement ok
+CREATE TABLE cte_dedup_outer(k INT) AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE cte_dedup_inner(k TEXT, v INT) AS VALUES ('1', 10), ('01', 20), ('2', 30);
+
+# TODO(#26014): should match DuckDB, not main's answer.
+# correlated_exists_groupless_count_agg_duplicate_match_dedup_via_cte
+query I
+SELECT o.k FROM cte_dedup_outer o WHERE EXISTS (
+  WITH agg AS (SELECT count(*) AS c FROM cte_dedup_inner i WHERE CAST(i.k AS INT) = o.k)
+  SELECT c FROM agg WHERE c = 2
+)
+----
+
+# TODO(#26014): should match DuckDB, not main's answer.
+# correlated_not_exists_groupless_count_agg_duplicate_match_dedup_via_cte
+query I rowsort
+SELECT o.k FROM cte_dedup_outer o WHERE NOT EXISTS (
+  WITH agg AS (SELECT count(*) AS c FROM cte_dedup_inner i WHERE CAST(i.k AS INT) = o.k)
+  SELECT c FROM agg WHERE c = 2
+)
+----
+1
+2
+3
+
+statement ok
+DROP TABLE cte_dedup_outer;
+
+statement ok
+DROP TABLE cte_dedup_inner;
+
+statement ok
+CREATE TABLE limit_zero_outer(k INT) AS VALUES (1);
+
+statement ok
+CREATE TABLE limit_zero_inner(k INT, v INT) AS VALUES (1, NULL);
+
+# correlated_exists_groupless_count_agg_limit_zero
+query I
+SELECT o.k FROM limit_zero_outer o WHERE EXISTS (
+  SELECT count(*) FROM limit_zero_inner i WHERE i.k = o.k LIMIT 0
+)
+----
+
+# correlated_not_exists_groupless_count_agg_limit_zero
+query I
+SELECT o.k FROM limit_zero_outer o WHERE NOT EXISTS (
+  SELECT count(*) FROM limit_zero_inner i WHERE i.k = o.k LIMIT 0
+)
+----
+1
+
+# correlated_in_groupless_max_agg_is_not_count_bug_compensated
+query I
+SELECT t1_id FROM t1
+WHERE t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id)
+----
+11
+
+# correlated_not_in_groupless_count_agg_is_not_count_bug_compensated
+query I rowsort
+SELECT t1_id FROM t1
+WHERE t1_int NOT IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id)
+----
+22
+33
+44
+
+statement ok
+DROP TABLE limit_zero_outer;
+
+statement ok
+DROP TABLE limit_zero_inner;
 
 statement count 0
 drop table t1;
@@ -2907,6 +3189,10 @@ DROP TABLE metrics;
 # `GROUPING SETS ((k), ())`, turns into `GROUPING SETS ((k), (k, k))`. The empty
 # set is gone, and with it the grand total row the subquery returns for every
 # outer row, including the rows whose filter matches nothing.
+#
+# Follow-up (#25708): a non-empty set that leaves the correlated column out is
+# safe to extend when nothing above the aggregate reads that column, so those
+# queries decorrelate again below.
 statement ok
 CREATE TABLE gs_outer(k INT) AS VALUES (1), (2), (NULL), (4), (5);
 
@@ -2927,14 +3213,36 @@ SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k 
 
 # A set that leaves out the correlated column fills it with NULL. The pull up
 # would turn `(j)` into `(j, k)`, and `k` would then carry a value in the rows
-# where the set fills it with NULL. Anything above the aggregate that reads `k`
-# sees the difference, so the subquery stays correlated.
-#
-# Known limitation: when nothing reads `k`, as here, the pull up was correct
-# before this guard and the query now fails to plan. Telling the two cases apart
-# needs the correlated column added to each set under an alias.
+# where the set fills it with NULL. Nothing above this `EXISTS` reads `k`
+# though (it only checks for a row), so the difference is invisible and the
+# subquery still decorrelates.
+query IB
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) FROM gs_outer ORDER BY gs_outer.k;
+----
+1 true
+2 true
+4 false
+5 true
+NULL false
+
+# A filter above the grouping set `Aggregate`, through another `Aggregate`
+# stacked on top of it, reads the NULL filled column. `walk` must not stop at
+# the first `Aggregate` it finds (the outer `count(*)`) without recursing into
+# its input, or it never sees that read and wrongly decorrelates.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT gs_outer.k, (SELECT count(*) FROM (SELECT gs_inner.k AS kk FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) t WHERE t.kk IS NULL) FROM gs_outer ORDER BY gs_outer.k;
+
+# The same read, but in a later join input rather than directly above the
+# grouping set `Aggregate`. `walk` must visit every input, not stop once one
+# of them turns up a grouping set `Aggregate` below it.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
-SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) FROM gs_outer;
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM (SELECT count(*) AS c FROM gs_inner) a JOIN (SELECT gs_inner.k FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) b ON a.c > 0 WHERE b.k IS NULL) FROM gs_outer ORDER BY gs_outer.k;
+
+# The same read, above a second, nested grouping set `Aggregate` stacked on
+# top of the first. `walk` must keep walking through a grouping set
+# `Aggregate` too, not only a plain one.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM (SELECT gs_inner.k AS kk, gs_inner.j AS jj FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) t GROUP BY GROUPING SETS ((t.kk), (t.kk, t.jj)) HAVING t.kk IS NULL) FROM gs_outer ORDER BY gs_outer.k;
 
 # The same sets with a HAVING that reads the NULL filled column. For k = 1 the
 # `(j)` set yields the row `(NULL, 10)`, which passes the HAVING, so EXISTS is
@@ -2942,6 +3250,32 @@ SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k 
 # query answers false for every row.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
 SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j)) HAVING gs_inner.k IS NULL) FROM gs_outer;
+
+# The same sets with a `GROUPING(k)` read out of the aggregate itself: for the
+# `(j)` set it is 1 (k is not one of its columns) before the pull up, and 0
+# (k is now one of its columns in every set) after, so the subquery stays
+# correlated even though nothing above the aggregate reads `k` directly.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT gs_outer.k, (SELECT GROUPING(gs_inner.k) FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j)) LIMIT 1) FROM gs_outer;
+
+# `GROUPING`/`GROUPING_ID` are rewritten by `ResolveGroupingFunction` into bit
+# tests on `__grouping_id` in a node above the aggregate before this rule
+# runs, so the aggregate's own `aggr_expr` never holds a raw `GROUPING` call.
+# Reading `GROUPING(j)` out of the `(j)`/`(x)` sets, as a HAVING or through an
+# outer projection, reads `__grouping_id` above the aggregate without reading
+# `j` or `x` themselves, so this is only caught by looking for
+# `__grouping_id` in `column_refs_above_aggregate` directly.
+statement ok
+CREATE TABLE gs_inner3(k INT, j INT, x INT) AS VALUES (1, 10, 100), (NULL, 20, 200), (5, 30, 300), (2, 40, 400);
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner3 WHERE gs_inner3.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner3.j), (gs_inner3.x)) HAVING GROUPING(gs_inner3.j) = 1) FROM gs_outer ORDER BY gs_outer.k;
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT gs_outer.k, (SELECT count(*) FROM (SELECT GROUPING(gs_inner3.j) AS g FROM gs_inner3 WHERE gs_inner3.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner3.j), (gs_inner3.x))) t WHERE t.g = 1) FROM gs_outer ORDER BY gs_outer.k;
+
+statement ok
+DROP TABLE gs_inner3;
 
 # The correlated column does not have to appear in the grouping set at all.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
@@ -3384,10 +3718,9 @@ DROP TABLE oj_a;
 statement ok
 DROP TABLE oj_b;
 
-# Regression test for #25792: a correlated filter below a window function must
-# not be pulled above the window. The filter selects the rows the window
-# function sees for each outer row, so once it is above the window the window
-# function runs over all rows and computes different values.
+# Regression test for #25792: a correlated filter below a window function
+# selects the rows that the window function sees for each outer row. For
+# `y = k`, the pull up partitions the window by `y` as well.
 statement ok
 CREATE TABLE win_outer(k INT) AS VALUES (1), (2), (5);
 
@@ -3397,39 +3730,49 @@ CREATE TABLE win_inner(id INT, y INT) AS VALUES (1, 1), (2, 2);
 statement ok
 set datafusion.explain.logical_plan_only = true;
 
-# The correlated filter is below the window, so the subquery stays correlated.
+# The correlated filter is below the window, so the window is partitioned by b.y.
 query TT
 EXPLAIN SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT 1 FROM (SELECT b.id, row_number() OVER (ORDER BY b.id) AS rn FROM (SELECT * FROM win_inner WHERE win_inner.y = win_outer.k) AS b) AS w WHERE w.rn = 1);
 ----
 logical_plan
-01)Filter: EXISTS (<subquery>)
-02)--Subquery:
-03)----Projection: Int64(1)
-04)------SubqueryAlias: w
-05)--------Projection: b.id, row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
-06)----------Filter: row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
-07)------------WindowAggr: windowExpr=[[row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-08)--------------SubqueryAlias: b
-09)----------------Projection: win_inner.id, win_inner.y
-10)------------------Filter: win_inner.y = outer_ref(win_outer.k)
-11)--------------------TableScan: win_inner
-12)--TableScan: win_outer projection=[k]
+01)LeftSemi Join: win_outer.k = __correlated_sq_1.y
+02)--TableScan: win_outer projection=[k]
+03)--SubqueryAlias: __correlated_sq_1
+04)----SubqueryAlias: w
+05)------Projection: b.y
+06)--------Filter: row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
+07)----------Projection: b.y, row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+08)------------WindowAggr: windowExpr=[[row_number() PARTITION BY [b.y] ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+09)--------------SubqueryAlias: b
+10)----------------TableScan: win_inner projection=[id, y]
 
-# It errors rather than returning wrong results. The right answer is `1, 2`.
-statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+# The right answer is `1, 2`.
+query I
 SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT 1 FROM (SELECT b.id, row_number() OVER (ORDER BY b.id) AS rn FROM (SELECT * FROM win_inner WHERE win_inner.y = win_outer.k) AS b) AS w WHERE w.rn = 1) ORDER BY win_outer.k;
+----
+1
+2
 
 # The same for NOT EXISTS. The right answer is `5`.
-statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+query I
 SELECT win_outer.k FROM win_outer WHERE NOT EXISTS (SELECT 1 FROM (SELECT b.id, row_number() OVER (ORDER BY b.id) AS rn FROM (SELECT * FROM win_inner WHERE win_inner.y = win_outer.k) AS b) AS w WHERE w.rn = 1) ORDER BY win_outer.k;
+----
+5
 
 # The same for IN. The right answer is `1, 2`.
-statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+query I
 SELECT win_outer.k FROM win_outer WHERE 1 IN (SELECT row_number() OVER (ORDER BY win_inner.id) FROM win_inner WHERE win_inner.y = win_outer.k) ORDER BY win_outer.k;
+----
+1
+2
 
 # And for a scalar subquery. The right answer is `(1, 1), (2, 1), (5, NULL)`.
-statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+query II
 SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 1
+2 1
+5 NULL
 
 # A correlated filter above the window is still pulled up, because the window
 # input does not depend on the outer row.
@@ -3474,13 +3817,98 @@ SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (PARTITION 
 2 1
 5 NULL
 
-# A window that partitions by an expression of the column does not count.
-statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+# A window that partitions by an expression of the column is partitioned by
+# the column as well.
+query II
 SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (PARTITION BY win_inner.y + 0 ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 1
+2 1
+5 NULL
+
+# A window below another window whose output has the name the extended window
+# would get. The extended window keeps its old name, so the names stay unique.
+query II
+SELECT win_outer.k, (SELECT max(w.a + w.b) FROM (SELECT row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) AS a, row_number() OVER (ORDER BY win_inner.id) AS b FROM win_inner WHERE win_inner.y = win_outer.k) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 2
+2 2
+5 NULL
+
+# A lossless widening cast, as coercion adds for `INT = BIGINT`, keeps the
+# distinct values of `y` apart, so the window is partitioned by `y`.
+query II
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = CAST(win_outer.k AS BIGINT)) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 1
+2 1
+5 NULL
+
+# `-0.0 = 0.0` holds but a window partition keeps the two apart, so a float
+# `y` keeps the subquery correlated. The right answer is `(1, 2), (2, NULL), (5, NULL)`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (ORDER BY v.id) AS rn FROM (VALUES (1, 0.0), (2, -0.0)) AS v(id, f) WHERE v.f = CAST(win_outer.k - 1 AS DOUBLE)) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+
+# A volatile outer expression can match several `y` values for one outer row, so
+# the subquery stays correlated.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k + CAST(random() * 0 AS INT)) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+
+# A lossy `CAST(f AS INT) = k` matches several `f` values for one outer row, so
+# the subquery stays correlated. The right answer is `(1, 2), (2, NULL), (5, NULL)`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (ORDER BY v.id) AS rn FROM (VALUES (1, 1.2), (2, 1.4)) AS v(id, f) WHERE CAST(v.f AS INT) = win_outer.k) AS w) AS m FROM win_outer ORDER BY win_outer.k;
 
 # A window over an aggregate with count bug handling stays correlated.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
 SELECT win_outer.k, (SELECT count(*) OVER () FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS m FROM win_outer ORDER BY win_outer.k;
+
+# A projection that drops the aggregate column keeps the count bug handling, so
+# the subquery stays correlated. The right answer is `(1, 1), (2, 1), (5, 1)`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT count(*) OVER () FROM (SELECT 1 AS x FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS b) AS m FROM win_outer ORDER BY win_outer.k;
+
+# Without the window, the constant keeps its value for an outer row without a match.
+query II
+SELECT win_outer.k, (SELECT b.x FROM (SELECT 1 AS x FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS b) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 1
+2 1
+5 1
+
+# An aggregate without `GROUP BY` returns a row for an outer row without a match.
+# A window above it keeps the subquery correlated, whatever node sits between
+# them. The right answer for each scalar case is `(1, 1), (2, 1), (5, 1)`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT count(*) OVER () FROM (SELECT DISTINCT a.c FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS b) AS m FROM win_outer ORDER BY win_outer.k;
+
+# A Filter that cannot be evaluated on an empty input.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT count(*) OVER () FROM (SELECT a.c FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a WHERE random() >= 0) AS b) AS m FROM win_outer ORDER BY win_outer.k;
+
+# The same for EXISTS, NOT EXISTS and IN, which do not track count bug handling.
+# The right answers are `1, 2, 5`, no rows, and `1, 2, 5`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT count(*) OVER () FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) ORDER BY win_outer.k;
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT win_outer.k FROM win_outer WHERE NOT EXISTS (SELECT count(*) OVER () FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) ORDER BY win_outer.k;
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+SELECT win_outer.k FROM win_outer WHERE 1 IN (SELECT count(*) OVER () FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) ORDER BY win_outer.k;
+
+# And for LATERAL.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support undecorrelated Subquery
+SELECT win_outer.k, s.n FROM win_outer, LATERAL (SELECT count(*) OVER () AS n FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS s ORDER BY win_outer.k;
+
+# An aggregate with `GROUP BY` returns no row for an outer row without a match,
+# so the window above it is partitioned.
+query II
+SELECT win_outer.k, (SELECT max(w.n) FROM (SELECT count(*) OVER () AS n FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k GROUP BY win_inner.y) AS a) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 1
+2 1
+5 NULL
 
 # LEFT JOIN LATERAL keeps the outer rows without a match.
 query III

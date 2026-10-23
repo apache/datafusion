@@ -478,6 +478,19 @@ impl NestedLoopJoinExec {
     /// This function should be called BEFORE inserting any repartitioning
     /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
     /// for more details.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// Direct use of this API in downstream projects is discouraged because
+    /// correctness depends on strict preconditions. See the notes above for
+    /// correct usage.
+    ///
+    /// This API may change frequently as internal join optimizations evolve.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.left();
         let right = self.right();
@@ -3428,7 +3441,7 @@ impl NestedLoopJoinStream {
             )?
         } else {
             // No filter: all pairs match
-            BooleanArray::from(vec![true; total_rows])
+            BooleanArray::new(BooleanBuffer::new_set(total_rows), None)
         };
 
         // Update the global left or right bitmap for matched indices
@@ -3560,7 +3573,7 @@ impl NestedLoopJoinStream {
         let cur_right_bitmap = if let Some(filter) = &self.join_filter {
             apply_filter_to_row_join_batch(left_row, right_batch, filter)?
         } else {
-            BooleanArray::from(vec![true; right_row_count])
+            BooleanArray::new(BooleanBuffer::new_set(right_row_count), None)
         };
 
         self.update_matched_bitmap(l_index, &cur_right_bitmap)?;

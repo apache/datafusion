@@ -903,7 +903,7 @@ pub fn try_type_union_resolution_with_struct(
     let mut keys_string: Option<String> = None;
     for data_type in data_types {
         if let DataType::Struct(fields) = data_type {
-            let keys = fields.iter().map(|f| f.name().to_owned()).join(",");
+            let keys = fields.iter().map(|f| f.name()).join(",");
             if let Some(ref k) = keys_string {
                 if *k != keys {
                     return exec_err!(
@@ -931,11 +931,10 @@ pub fn try_type_union_resolution_with_struct(
 
     for data_type in data_types.iter().skip(1) {
         if let DataType::Struct(fields) = data_type {
-            let incoming_struct_types: Vec<DataType> =
-                fields.iter().map(|f| f.data_type().to_owned()).collect();
             // The order of field is verified above
-            for (lhs_type, rhs_type) in
-                struct_types.iter_mut().zip(incoming_struct_types.iter())
+            for (lhs_type, rhs_type) in struct_types
+                .iter_mut()
+                .zip(fields.iter().map(|f| f.data_type()))
             {
                 if let Some(coerced_type) =
                     type_union_resolution_coercion(lhs_type, rhs_type)
@@ -954,9 +953,9 @@ pub fn try_type_union_resolution_with_struct(
         }
     }
 
-    let mut final_struct_types = vec![];
+    let mut final_struct_types = Vec::with_capacity(data_types.len());
     for s in data_types {
-        let mut new_fields = vec![];
+        let mut new_fields = Vec::with_capacity(struct_types.len());
         if let DataType::Struct(fields) = s {
             for (i, f) in fields.iter().enumerate() {
                 let field = Arc::unwrap_or_clone(Arc::clone(f))
