@@ -809,6 +809,20 @@ pub fn transform_schema_to_view(schema: &Schema) -> Schema {
             DataType::Binary | DataType::LargeBinary => {
                 field_with_new_type(field, DataType::BinaryView)
             }
+            DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+                DataType::Utf8 | DataType::LargeUtf8 => field_with_new_type(
+                    field,
+                    DataType::Dictionary(key_type.clone(), Box::new(DataType::Utf8View)),
+                ),
+                DataType::Binary | DataType::LargeBinary => field_with_new_type(
+                    field,
+                    DataType::Dictionary(
+                        key_type.clone(),
+                        Box::new(DataType::BinaryView),
+                    ),
+                ),
+                _ => Arc::clone(field),
+            },
             _ => Arc::clone(field),
         })
         .collect();
@@ -2263,5 +2277,41 @@ mod tests {
         );
         // Plain Binary is converted as before
         assert_eq!(result.field(4).data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn transform_schema_to_view_handles_dictionary_value_types() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Binary),
+                ),
+                true,
+            ),
+        ]);
+
+        let result = transform_schema_to_view(&schema);
+
+        assert_eq!(
+            result.field(0).data_type(),
+            &DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Utf8View)
+            ),
+        );
+        assert_eq!(
+            result.field(1).data_type(),
+            &DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::BinaryView)
+            ),
+        );
     }
 }
