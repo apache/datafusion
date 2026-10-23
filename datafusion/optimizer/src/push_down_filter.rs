@@ -62,8 +62,9 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, EmptyRelation, Expr, Filter, Operator, Projection,
-    TableProviderFilterPushDown, and, or,
+    BinaryExpr, Distinct, EmptyRelation, Expr, Extension, Filter, MaterializedCte,
+    Operator, Projection, TableProviderFilterPushDown, UserDefinedLogicalNodeCore, and,
+    or,
 };
 
 use crate::extract_leaf_expressions::is_pure_extraction_projection;
@@ -1174,10 +1175,14 @@ impl OptimizerRule for PushDownFilter {
                 // multiple window functions, each with potentially different partition keys.
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
+                // Arrow buffer memory accounting does not affect expression hashing.
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                 fn extract_partition_keys(func: &WindowFunction) -> HashSet<&Expr> {
                     func.params.partition_by.iter().collect()
                 }
 
+                // Arrow buffer memory accounting does not affect expression hashing.
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                 let potential_partition_keys = window
                     .window_expr
                     .iter()
@@ -1397,6 +1402,23 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     LogicalPlan::TableScan(scan),
                 )))
+            }
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<MaterializedCte>() =>
+            {
+                // The output is the output of the continuation, so the filter
+                // moves onto the continuation. The body is shared by every scan
+                // of the CTE and is never filtered for one of them.
+                let cte = node.as_any().downcast_ref::<MaterializedCte>().unwrap();
+                let continuation = LogicalPlan::Filter(Filter::new(
+                    filter.predicate,
+                    Arc::new(cte.continuation.clone()),
+                ));
+                let cte = cte
+                    .with_exprs_and_inputs(vec![], vec![cte.cte.clone(), continuation])?;
+                Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(cte),
+                })))
             }
             LogicalPlan::Extension(extension_plan) => {
                 // This check prevents the Filter from being removed when the extension node has no children,
@@ -1660,6 +1682,7 @@ fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
 ///
 /// A predicate containing a subquery is never pushed: what the subquery reads is
 /// not visible from the expression tree.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Arrow buffer memory accounting does not affect expression hashing.
 fn reads_only_partition_keys(
     expr: &Expr,
     partition_keys: &HashSet<&Expr>,
@@ -1728,7 +1751,7 @@ mod tests {
     use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
-    use datafusion_expr::test::function_stub::sum;
+    use datafusion_expr::test::function_stub::{count, sum};
     use insta::assert_snapshot;
 
     use super::*;
@@ -4841,9 +4864,11 @@ mod tests {
 
     /// `PushDownFilter` and `PushDownLeafProjections` must not undo each other
     /// for a filter next to a pure extraction projection
-    /// (<https://github.com/apache/datafusion/issues/14540>). Neither rule may
-    /// change the plan in the last optimizer pass. The source does not absorb
-    /// filters, so the `Filter` node stays in the plan.
+    /// (<https://github.com/apache/datafusion/issues/14540>). The source does
+    /// not absorb filters, so the `Filter` node stays in the plan. Also,
+    /// `PushDownLeafProjections` must not split a projection that
+    /// `OptimizeProjections` merges back. No rule may change the plan in the
+    /// last optimizer pass.
     #[test]
     fn filter_and_extraction_projection_reach_fixed_point() -> Result<()> {
         let scan = || {
@@ -4864,13 +4889,26 @@ mod tests {
             .project(vec![leaf_udf_expr(col("a")), col("b")])?
             .build()?;
 
-        for plan in [simple, two_filters] {
+        // No filter: the extraction projection cannot move below the scan.
+        let no_filter = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![leaf_udf_expr(col("a"))])?
+            .build()?;
+
+        // Leaf expression above an Aggregate: the Aggregate blocks movement.
+        let above_aggregate = LogicalPlanBuilder::from(test_table_scan_with_struct()?)
+            .aggregate(vec![col("user")], vec![count(lit(1))])?
+            .project(vec![
+                leaf_udf_expr(col("user")).is_not_null().alias("has_name"),
+                col("COUNT(Int32(1))"),
+            ])?
+            .build()?;
+
+        for plan in [simple, two_filters, no_filter, above_aggregate] {
             let passes = rules_that_changed_plan_per_pass(plan)?;
             let last = passes.last().unwrap();
             assert!(
-                !last.iter().any(|rule| rule == "push_down_filter"
-                    || rule == "push_down_leaf_projections"),
-                "pushdown rules changed the plan in the last pass: {passes:?}"
+                last.is_empty(),
+                "rules changed the plan in the last pass: {passes:?}"
             );
         }
         Ok(())

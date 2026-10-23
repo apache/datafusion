@@ -17,7 +17,7 @@
 
 use datafusion::prelude::*;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{TableReference, assert_contains};
+use datafusion_common::{TableReference, assert_batches_eq, assert_contains};
 use datafusion_expr::dml::MergeIntoOp;
 use datafusion_expr::{Expr, LogicalPlan, WriteOp};
 
@@ -113,6 +113,45 @@ async fn unsupported_copy_returns_error() {
     );
 
     let options = options.with_allow_dml(true);
+    ctx.sql_with_options(&sql, options).await.unwrap();
+}
+
+#[tokio::test]
+async fn copy_can_be_disabled_independently_from_dml() {
+    let tmpdir = TempDir::new().unwrap();
+    let tmpfile = tmpdir.path().join("foo.parquet");
+
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE test (x int)").await.unwrap();
+
+    let options = SQLOptions::new().with_allow_copy(false);
+    let sql = format!(
+        "COPY (values(1)) TO '{}' STORED AS parquet",
+        tmpfile.to_string_lossy()
+    );
+    let df = ctx.sql_with_options(&sql, options).await;
+    assert_eq!(
+        df.unwrap_err().strip_backtrace(),
+        "Error during planning: COPY not supported"
+    );
+
+    ctx.sql_with_options("INSERT INTO test VALUES (1)", options)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let results = ctx
+        .sql_with_options("SELECT x FROM test", options)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(["+---+", "| x |", "+---+", "| 1 |", "+---+"], &results);
+
+    let options = options.with_allow_copy(true);
     ctx.sql_with_options(&sql, options).await.unwrap();
 }
 

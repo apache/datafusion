@@ -17,9 +17,13 @@
 
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
-use arrow::datatypes::Schema;
-use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err, plan_err};
+use arrow::array::{Array, ArrayRef, Float32Array, Float64Array, RecordBatch};
+use arrow::compute::{cast, max, min};
+use arrow::datatypes::{DataType, Schema};
+use datafusion_common::{
+    Result, ScalarValue, downcast_value, exec_datafusion_err, exec_err,
+    internal_datafusion_err, internal_err, plan_err,
+};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -37,41 +41,240 @@ pub(crate) fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarVal
     }
 }
 
-/// Validates that a percentile expression is a literal float value between 0.0 and 1.0.
-///
-/// Used by both `percentile_cont` and `approx_percentile_cont` to validate their
-/// percentile parameters.
-pub(crate) fn validate_percentile_expr(
-    expr: &Arc<dyn PhysicalExpr>,
-    fn_name: &str,
-) -> Result<f64> {
-    let scalar_value = get_scalar_value(expr).map_err(|_e| {
-        DataFusionError::Plan(format!(
-            "Percentile value for '{fn_name}' must be a literal"
-        ))
-    })?;
-
+/// Validates that a percentile scalar is a Float32/Float64 value between 0.0 and 1.0.
+fn scalar_to_percentile(scalar_value: ScalarValue, fn_name: &str) -> Result<f64> {
     let percentile = match scalar_value {
         ScalarValue::Float32(Some(value)) => value as f64,
         ScalarValue::Float64(Some(value)) => value,
         ScalarValue::Float32(None) | ScalarValue::Float64(None) => {
             return plan_err!(
-                "Percentile value for '{fn_name}' must be Float32 or Float64 literal (got null)"
+                "Percentile value for '{fn_name}' must be Float32 or Float64 (got null)"
             );
         }
         sv => {
             return plan_err!(
-                "Percentile value for '{fn_name}' must be Float32 or Float64 literal (got data type {})",
+                "Percentile value for '{fn_name}' must be Float32 or Float64 (got data type {})",
                 sv.data_type()
             );
         }
     };
 
-    // Ensure the percentile is between 0 and 1.
+    check_percentile_range(percentile)
+}
+
+/// Ensures the percentile is between 0 and 1.
+fn check_percentile_range(percentile: f64) -> Result<f64> {
     if !(0.0..=1.0).contains(&percentile) {
         return plan_err!(
             "Percentile value must be between 0.0 and 1.0 inclusive, {percentile} is invalid"
         );
     }
     Ok(percentile)
+}
+
+/// State of the PercentileParam resolution.
+/// Either already resolved or still requiring a non-empty record batch.
+#[derive(Debug, Clone)]
+pub(crate) enum PercentileParamState {
+    Resolved(f64),
+    Pending,
+}
+
+/// Percentile argument for `aggregate_fn_name` and its state.
+#[derive(Debug)]
+pub struct PercentileParam {
+    pub aggregate_fn_name: String,
+    pub(crate) state: PercentileParamState,
+    pub(crate) is_desc: bool,
+}
+
+impl PercentileParam {
+    /// Try to resolve the percentile eagerly. If the expression can't be
+    /// evaluated without row data (i.e. it references a column), defer
+    /// resolution to the first batch instead of erroring here.
+    pub fn try_new(
+        expr: &Arc<dyn PhysicalExpr>,
+        fn_name: &str,
+        is_desc: bool,
+    ) -> Result<Self> {
+        match get_scalar_value(expr) {
+            Ok(scalar_value) => Ok(PercentileParam {
+                aggregate_fn_name: fn_name.to_string(),
+                state: PercentileParamState::Resolved(scalar_to_percentile(
+                    scalar_value,
+                    fn_name,
+                )?),
+                is_desc,
+            }),
+            Err(_)
+                if !datafusion_physical_expr::utils::collect_columns(expr).is_empty() =>
+            {
+                Ok(PercentileParam {
+                    aggregate_fn_name: fn_name.to_string(),
+                    state: PercentileParamState::Pending,
+                    is_desc,
+                })
+            }
+            _ => plan_err!(
+                "PercentileParam must be a scalar value or reference a column, got {}",
+                expr
+            ),
+        }
+    }
+
+    /// Resolve using the current batch if `Pending`
+    /// and validate that the argument is constant across all batches.
+    pub(crate) fn resolve(&mut self, array: &ArrayRef) -> Result<()> {
+        if array.null_count() >= array.len() {
+            return Ok(());
+        }
+
+        let (batch_min, batch_max) = match array.data_type() {
+            DataType::Float64 => {
+                let float_array = downcast_value!(array, Float64Array);
+                (min(float_array), max(float_array))
+            }
+            DataType::Float32 => {
+                let float_array = downcast_value!(array, Float32Array);
+                (
+                    min(float_array).map(|v| v as f64),
+                    max(float_array).map(|v| v as f64),
+                )
+            }
+            data_type => {
+                return exec_err!(
+                    "Percentile value for {} must be Float32 or Float64 (got {})",
+                    self.aggregate_fn_name,
+                    data_type
+                );
+            }
+        };
+        let batch_min = batch_min.ok_or_else(|| {
+            internal_datafusion_err!("expected a non-null percentile value")
+        })?;
+        let batch_max = batch_max.ok_or_else(|| {
+            internal_datafusion_err!("expected a non-null percentile value")
+        })?;
+        if batch_min.is_nan() || batch_max.is_nan() {
+            return exec_err!(
+                "Percentile value must be between 0.0 and 1.0 inclusive, NaN is invalid"
+            );
+        }
+        if batch_min != batch_max {
+            return exec_err!(
+                "Percentile value for '{}' must be constant across the aggregation, found differing values {} and {}",
+                self.aggregate_fn_name,
+                batch_min,
+                batch_max
+            );
+        }
+
+        match self.state {
+            PercentileParamState::Resolved(resolved) => {
+                if batch_min != resolved {
+                    return exec_err!(
+                        "Percentile value for '{}' must be constant across the aggregation, found differing values {} and {}",
+                        self.aggregate_fn_name,
+                        batch_min,
+                        resolved
+                    );
+                }
+            }
+            PercentileParamState::Pending => {
+                let resolved = scalar_to_percentile(
+                    ScalarValue::Float64(Some(batch_min)),
+                    &self.aggregate_fn_name,
+                )
+                .map_err(|e| exec_datafusion_err!("{e}"))?;
+                self.state = PercentileParamState::Resolved(resolved);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns the resolved percentile.
+    /// Errors if it has not been yet resolved.
+    pub(crate) fn get(&self) -> Result<f64> {
+        match self.state {
+            PercentileParamState::Resolved(value) => Ok(value),
+            PercentileParamState::Pending => {
+                let aggregate_fn_name = self.aggregate_fn_name.clone();
+                exec_err!(
+                    "Percentile value for '{aggregate_fn_name}' could not be determined: no non-null percentile value was seen"
+                )
+            }
+        }
+    }
+
+    /// The percentile to use, applying the `1.0 - p` flip for descending
+    /// `WITHIN GROUP (ORDER BY ... DESC)`.
+    pub(crate) fn effective_percentile(&self) -> Result<f64> {
+        Ok(self.apply_order(self.get()?))
+    }
+
+    /// Applies the `1.0 - p` flip for descending `WITHIN GROUP (ORDER BY ... DESC)`.
+    pub(crate) fn apply_order(&self, percentile: f64) -> f64 {
+        if self.is_desc {
+            1.0 - percentile
+        } else {
+            percentile
+        }
+    }
+
+    /// Returns `true` if the percentile must be read from the input rows,
+    /// i.e. it was given as a column reference rather than a literal.
+    pub(crate) fn is_col_ref(&self) -> bool {
+        matches!(self.state, PercentileParamState::Pending)
+    }
+
+    /// Casts a percentile argument array to `Float64`.
+    pub(crate) fn to_float64_array(&self, array: &ArrayRef) -> Result<Float64Array> {
+        match array.data_type() {
+            DataType::Float64 | DataType::Float32 => {
+                let array = cast(array, &DataType::Float64)?;
+                Ok(downcast_value!(array, Float64Array).clone())
+            }
+            data_type => {
+                let agg_fn_name = &self.aggregate_fn_name;
+                exec_err!(
+                    "Percentile value for {agg_fn_name} must be Float32 or Float64 (got {data_type})"
+                )
+            }
+        }
+    }
+
+    /// Validates `value` as the percentile of a single group: it must be in
+    /// range and agree with the group's `current` percentile, if any.
+    pub(crate) fn resolve_group_value(
+        &self,
+        current: Option<f64>,
+        value: f64,
+    ) -> Result<f64> {
+        match current {
+            Some(current) if current == value => Ok(current),
+            Some(current) => {
+                let agg_fn_name = &self.aggregate_fn_name;
+                exec_err!(
+                    "Percentile value for '{agg_fn_name}' must be constant across the aggregation, found differing values {} and {}",
+                    current,
+                    value
+                )
+            }
+            None => {
+                check_percentile_range(value).map_err(|e| exec_datafusion_err!("{e}"))
+            }
+        }
+    }
+
+    /// Returns the resolved percentile of a group.
+    /// Errors if no percentile was seen for it.
+    pub(crate) fn get_group_value(&self, value: Option<f64>) -> Result<f64> {
+        value.ok_or_else(|| {
+            exec_datafusion_err!(
+                "Percentile value for '{}' could not be determined: no non-null percentile value was seen",
+                &self.aggregate_fn_name
+            )
+        })
+    }
 }
