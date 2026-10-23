@@ -567,8 +567,6 @@ impl WindowAggStream {
         let columns = transpose(partition_results)
             .iter()
             .map(|elems| concat(&elems.iter().map(|x| x.as_ref()).collect::<Vec<_>>()))
-            .collect::<Vec<_>>()
-            .into_iter()
             .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
 
         // combine with the original cols

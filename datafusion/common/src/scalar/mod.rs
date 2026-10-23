@@ -59,6 +59,7 @@ use crate::scalar::consts::{
 };
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
+use arrow::array::timezone::Tz;
 use arrow::array::{
     Array, ArrayData, ArrayDataBuilder, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType,
     AsArray, BinaryArray, BinaryViewArray, BinaryViewBuilder, BooleanArray, Date32Array,
@@ -83,10 +84,10 @@ use arrow::compute::kernels::numeric::{
 };
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType, Date32Type,
-    Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, Field,
-    FieldRef, Float32Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTime,
-    IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, MAX_DECIMAL32_FOR_EACH_PRECISION,
+    Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
+    DecimalType, Field, FieldRef, Float32Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType,
+    IntervalUnit, IntervalYearMonthType, MAX_DECIMAL32_FOR_EACH_PRECISION,
     MAX_DECIMAL64_FOR_EACH_PRECISION, MAX_DECIMAL128_FOR_EACH_PRECISION,
     MAX_DECIMAL256_FOR_EACH_PRECISION, MIN_DECIMAL32_FOR_EACH_PRECISION,
     MIN_DECIMAL64_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION,
@@ -97,7 +98,7 @@ use arrow::datatypes::{
 };
 use arrow::util::display::{ArrayFormatter, FormatOptions, array_value_to_string};
 use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
-use chrono::{Duration, NaiveDate};
+use chrono::{Duration, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone};
 use half::f16;
 use num_traits::ToPrimitive;
 pub use struct_builder::ScalarStructBuilder;
@@ -108,6 +109,52 @@ const MICROS_PER_DAY: i64 = MILLIS_PER_DAY * 1_000;
 const NANOS_PER_DAY: i64 = MICROS_PER_DAY * 1_000;
 const MICROS_PER_MILLISECOND: i64 = 1_000;
 const NANOS_PER_MILLISECOND: i64 = 1_000_000;
+
+/// Returns the first instant of `date` in `tz` (UTC if `tz` is `None`) as a
+/// UTC [`NaiveDateTime`].
+///
+/// This is local midnight unless the timezone skips midnight that day (for
+/// example a daylight saving transition from 00:00 to 01:00), in which case
+/// it is the first instant after the gap. If midnight occurs twice (a
+/// transition back from 01:00 to 00:00) the earlier instant is returned.
+///
+/// This follows the convention for local times that fall in a gap or are
+/// ambiguous described in [RFC 5545 §3.3.5].
+///
+/// [RFC 5545 §3.3.5]: https://datatracker.ietf.org/doc/html/rfc5545#section-3.3.5
+fn first_instant_of_date(date: NaiveDate, tz: Option<&Tz>) -> Option<NaiveDateTime> {
+    let midnight = date.and_hms_opt(0, 0, 0)?;
+    let Some(tz) = tz else {
+        return Some(midnight);
+    };
+    match tz.from_local_datetime(&midnight) {
+        LocalResult::Single(dt) => Some(dt.naive_utc()),
+        LocalResult::Ambiguous(earliest, _) => Some(earliest.naive_utc()),
+        LocalResult::None => {
+            // Midnight falls in a gap, so the first instant of the day is the
+            // instant of the transition itself. To find it we need the UTC
+            // offset that was in effect just before the transition to follow
+            // the RFC convention.
+            //
+            // `midnight` is a local time, but here it is deliberately treated
+            // as if it were UTC: we only need *some* UTC instant that is before
+            // the transition and after any earlier transition, and the exact
+            // value does not matter.
+            //
+            // Read as UTC, the transition instant is within |offset| < 1 day of
+            // `midnight`, so `midnight` minus one day is guaranteed to fall
+            // before it. This assumes that transitions are separated by more
+            // than two days, so subtracting a day does not cross an earlier
+            // one.
+            let probe = midnight.checked_sub_signed(Duration::days(1))?;
+            let offset_before = tz.offset_from_utc_datetime(&probe).fix();
+            let transition = midnight.checked_sub_offset(offset_before)?;
+            // Sanity check: the transition must land on or after local midnight
+            (tz.from_utc_datetime(&transition).naive_local() >= midnight)
+                .then_some(transition)
+        }
+    }
+}
 
 /// Returns the multiplier that converts the input date representation into the
 /// desired timestamp unit, if the conversion requires a multiplication that can
@@ -481,6 +528,19 @@ impl Hash for Fl<f16> {
     }
 }
 
+/// Equality of the arrays inside nested scalars.
+///
+/// Arrow's array equality converts both arrays to `ArrayData` before it
+/// compares anything, which is costly for wide nested types. Values of
+/// different lengths or types are unequal without that, and an array is
+/// equal to itself.
+fn nested_eq<T: Array + PartialEq>(a: &Arc<T>, b: &Arc<T>) -> bool {
+    Arc::ptr_eq(a, b)
+        || (a.len() == b.len()
+            && a.data_type() == b.data_type()
+            && a.as_ref() == b.as_ref())
+}
+
 // manual implementation of `PartialEq`
 impl PartialEq for ScalarValue {
     fn eq(&self, other: &Self) -> bool {
@@ -552,19 +612,19 @@ impl PartialEq for ScalarValue {
             (FixedSizeBinary(_, _), _) => false,
             (LargeBinary(v1), LargeBinary(v2)) => v1.eq(v2),
             (LargeBinary(_), _) => false,
-            (FixedSizeList(v1), FixedSizeList(v2)) => v1.eq(v2),
+            (FixedSizeList(v1), FixedSizeList(v2)) => nested_eq(v1, v2),
             (FixedSizeList(_), _) => false,
-            (List(v1), List(v2)) => v1.eq(v2),
+            (List(v1), List(v2)) => nested_eq(v1, v2),
             (List(_), _) => false,
-            (LargeList(v1), LargeList(v2)) => v1.eq(v2),
+            (LargeList(v1), LargeList(v2)) => nested_eq(v1, v2),
             (LargeList(_), _) => false,
-            (ListView(v1), ListView(v2)) => v1.eq(v2),
+            (ListView(v1), ListView(v2)) => nested_eq(v1, v2),
             (ListView(_), _) => false,
-            (LargeListView(v1), LargeListView(v2)) => v1.eq(v2),
+            (LargeListView(v1), LargeListView(v2)) => nested_eq(v1, v2),
             (LargeListView(_), _) => false,
-            (Struct(v1), Struct(v2)) => v1.eq(v2),
+            (Struct(v1), Struct(v2)) => nested_eq(v1, v2),
             (Struct(_), _) => false,
-            (Map(v1), Map(v2)) => v1.eq(v2),
+            (Map(v1), Map(v2)) => nested_eq(v1, v2),
             (Map(_), _) => false,
             (Date32(v1), Date32(v2)) => v1.eq(v2),
             (Date32(_), _) => false,
@@ -1430,6 +1490,143 @@ impl ScalarValue {
             TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(value, tz_opt),
             TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(value, tz_opt),
             TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(value, tz_opt),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] of type `target_type` representing `date`.
+    ///
+    /// For `Timestamp` types the result is the first instant of `date` in the
+    /// type's timezone (or UTC when the type has no timezone). This is normally
+    /// midnight, but when the timezone skips midnight (for example a daylight
+    /// saving transition at 00:00) it is the first instant that exists on that
+    /// day, such as 01:00. When midnight occurs twice (a transition back to
+    /// 00:00) the earlier instant is returned.
+    ///
+    /// Returns `None` if `target_type` is not a date or timestamp type, or if
+    /// the result is outside the range of the timestamp unit.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, TimeUnit};
+    /// # use chrono::NaiveDate;
+    /// # use datafusion_common::ScalarValue;
+    /// let date = NaiveDate::from_ymd_opt(2024, 5, 1).unwrap();
+    ///
+    /// // Dates
+    /// assert_eq!(
+    ///     ScalarValue::try_from_date(date, &DataType::Date32),
+    ///     Some(ScalarValue::Date32(Some(19844)))
+    /// );
+    ///
+    /// // Timestamps without a timezone are midnight UTC
+    /// assert_eq!(
+    ///     ScalarValue::try_from_date(date, &DataType::Timestamp(TimeUnit::Second, None)),
+    ///     Some(ScalarValue::TimestampSecond(Some(1714521600), None))
+    /// );
+    ///
+    /// // Timestamps with a timezone are midnight in that timezone
+    /// let tz: Arc<str> = Arc::from("+02:00");
+    /// assert_eq!(
+    ///     ScalarValue::try_from_date(
+    ///         date,
+    ///         &DataType::Timestamp(TimeUnit::Second, Some(Arc::clone(&tz)))
+    ///     ),
+    ///     Some(ScalarValue::TimestampSecond(Some(1714514400), Some(tz)))
+    /// );
+    ///
+    /// // Other types are not supported
+    /// assert_eq!(ScalarValue::try_from_date(date, &DataType::Int32), None);
+    /// ```
+    pub fn try_from_date(date: NaiveDate, target_type: &DataType) -> Option<Self> {
+        Some(match target_type {
+            DataType::Date32 => {
+                ScalarValue::Date32(Some(Date32Type::from_naive_date(date)))
+            }
+            DataType::Date64 => {
+                ScalarValue::Date64(Some(Date64Type::from_naive_date(date)))
+            }
+            DataType::Timestamp(unit, tz_opt) => {
+                let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
+                let utc = first_instant_of_date(date, tz.as_ref())?;
+
+                // The date can only be out of range for `TimeUnit::Nanosecond`
+                // as the other units cover the entire range of `NaiveDate`.
+                match unit {
+                    TimeUnit::Second => {
+                        let value = TimestampSecondType::from_naive_datetime(utc, None)?;
+                        ScalarValue::TimestampSecond(Some(value), tz_opt.clone())
+                    }
+                    TimeUnit::Millisecond => {
+                        let value =
+                            TimestampMillisecondType::from_naive_datetime(utc, None)?;
+                        ScalarValue::TimestampMillisecond(Some(value), tz_opt.clone())
+                    }
+                    TimeUnit::Microsecond => {
+                        let value =
+                            TimestampMicrosecondType::from_naive_datetime(utc, None)?;
+                        ScalarValue::TimestampMicrosecond(Some(value), tz_opt.clone())
+                    }
+                    TimeUnit::Nanosecond => {
+                        let value =
+                            TimestampNanosecondType::from_naive_datetime(utc, None)?;
+                        ScalarValue::TimestampNanosecond(Some(value), tz_opt.clone())
+                    }
+                }
+            }
+            _ => return None,
+        })
+    }
+
+    /// Returns the internal Arrow representation of a timestamp.
+    ///
+    /// Returns `None` if this value is not a timestamp or is `NULL`.
+    ///
+    /// Returns a tuple of (`i64` value, [`TimeUnit`], and timezone) for a
+    /// non-null timestamp. The `i64` is always the offset from the UTC epoch in
+    /// `unit`s, regardless of the timezone, as defined by the
+    /// [Arrow specification].
+    ///
+    /// [Arrow specification]: https://github.com/apache/arrow/blob/main/format/Schema.fbs
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::TimeUnit;
+    /// # use datafusion_common::ScalarValue;
+    /// let utc: Arc<str> = Arc::from("UTC");
+    /// let ts = ScalarValue::TimestampSecond(Some(1714521600), Some(Arc::clone(&utc)));
+    /// assert_eq!(
+    ///     ts.try_as_timestamp(),
+    ///     Some((1714521600, TimeUnit::Second, Some(&utc)))
+    /// );
+    ///
+    /// // Timestamps without a timezone
+    /// let ts = ScalarValue::TimestampMillisecond(Some(1714521600000), None);
+    /// assert_eq!(
+    ///     ts.try_as_timestamp(),
+    ///     Some((1714521600000, TimeUnit::Millisecond, None))
+    /// );
+    ///
+    /// // NULL timestamps and other types return None
+    /// assert_eq!(ScalarValue::TimestampSecond(None, None).try_as_timestamp(), None);
+    /// assert_eq!(ScalarValue::Int64(Some(1)).try_as_timestamp(), None);
+    /// ```
+    pub fn try_as_timestamp(&self) -> Option<(i64, TimeUnit, Option<&Arc<str>>)> {
+        match self {
+            ScalarValue::TimestampSecond(Some(v), tz) => {
+                Some((*v, TimeUnit::Second, tz.as_ref()))
+            }
+            ScalarValue::TimestampMillisecond(Some(v), tz) => {
+                Some((*v, TimeUnit::Millisecond, tz.as_ref()))
+            }
+            ScalarValue::TimestampMicrosecond(Some(v), tz) => {
+                Some((*v, TimeUnit::Microsecond, tz.as_ref()))
+            }
+            ScalarValue::TimestampNanosecond(Some(v), tz) => {
+                Some((*v, TimeUnit::Nanosecond, tz.as_ref()))
+            }
+            _ => None,
         }
     }
 
@@ -4377,7 +4574,7 @@ impl ScalarValue {
     pub fn cast_to_with_options(
         &self,
         target_type: &DataType,
-        cast_options: &CastOptions<'static>,
+        cast_options: &CastOptions<'_>,
     ) -> Result<Self> {
         let source_type = self.data_type();
 
@@ -6038,6 +6235,48 @@ mod tests {
     use arrow::util::pretty::pretty_format_columns;
     use insta::assert_snapshot;
     use rand::Rng;
+
+    #[test]
+    fn try_from_date_timestamp_dst_at_midnight() {
+        // America/Havana moves its clocks at midnight: in 2024 it sprang
+        // forward 00:00 -> 01:00 on March 10 and fell back 01:00 -> 00:00 on
+        // November 3.
+        let tz: Arc<str> = Arc::from("America/Havana");
+        let ty = DataType::Timestamp(TimeUnit::Second, Some(Arc::clone(&tz)));
+        let ts = |s: &str| {
+            let dt = chrono::DateTime::parse_from_rfc3339(s).unwrap();
+            ScalarValue::TimestampSecond(Some(dt.timestamp()), Some(Arc::clone(&tz)))
+        };
+
+        // Ordinary day: midnight local (-05:00)
+        let date = NaiveDate::from_ymd_opt(2024, 3, 9).unwrap();
+        assert_eq!(
+            ScalarValue::try_from_date(date, &ty),
+            Some(ts("2024-03-09T00:00:00-05:00"))
+        );
+
+        // Midnight is skipped: the first instant of the day is 01:00 (-04:00),
+        // which is the same instant as the (nonexistent) 00:00 -05:00
+        let date = NaiveDate::from_ymd_opt(2024, 3, 10).unwrap();
+        assert_eq!(
+            ScalarValue::try_from_date(date, &ty),
+            Some(ts("2024-03-10T01:00:00-04:00"))
+        );
+
+        // Midnight occurs twice: the earlier instant (-04:00) is returned
+        let date = NaiveDate::from_ymd_opt(2024, 11, 3).unwrap();
+        assert_eq!(
+            ScalarValue::try_from_date(date, &ty),
+            Some(ts("2024-11-03T00:00:00-04:00"))
+        );
+
+        // The day after is back to -05:00
+        let date = NaiveDate::from_ymd_opt(2024, 11, 4).unwrap();
+        assert_eq!(
+            ScalarValue::try_from_date(date, &ty),
+            Some(ts("2024-11-04T00:00:00-05:00"))
+        );
+    }
 
     #[test]
     fn test_scalar_value_from_for_map() {
@@ -9927,6 +10166,49 @@ mod tests {
                 assert_eq!(ts1, &back);
             }
         }
+    }
+
+    #[test]
+    fn test_nested_scalar_eq() {
+        let struct_type = |name: &str| {
+            DataType::Struct(Fields::from(vec![
+                Field::new(format!("{name}_a"), DataType::Int32, true),
+                Field::new(format!("{name}_b"), DataType::Utf8, true),
+            ]))
+        };
+        let null_x = ScalarValue::try_from(&struct_type("x")).unwrap();
+        let null_x_again = ScalarValue::try_from(&struct_type("x")).unwrap();
+        let null_y = ScalarValue::try_from(&struct_type("y")).unwrap();
+        assert_eq!(null_x, null_x.clone());
+        assert_eq!(null_x, null_x_again);
+        assert_ne!(null_x, null_y);
+
+        let value = |a: i32| {
+            ScalarValue::Struct(Arc::new(StructArray::from(vec![
+                (
+                    Arc::new(Field::new("x_a", DataType::Int32, true)),
+                    Arc::new(Int32Array::from(vec![Some(a)])) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("x_b", DataType::Utf8, true)),
+                    Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef,
+                ),
+            ])))
+        };
+        assert_eq!(value(1), value(1));
+        assert_ne!(value(1), value(2));
+        assert_ne!(value(1), null_x);
+
+        let list_i32 = ScalarValue::List(ScalarValue::new_list_nullable(
+            &[ScalarValue::Int32(Some(1))],
+            &DataType::Int32,
+        ));
+        let list_i64 = ScalarValue::List(ScalarValue::new_list_nullable(
+            &[ScalarValue::Int64(Some(1))],
+            &DataType::Int64,
+        ));
+        assert_eq!(list_i32, list_i32.clone());
+        assert_ne!(list_i32, list_i64);
     }
 
     #[test]

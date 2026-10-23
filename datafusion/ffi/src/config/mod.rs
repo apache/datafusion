@@ -46,8 +46,7 @@ impl From<&ConfigOptions> for FFI_ConfigOptions {
         let base_options: SVec<(SString, SString)> = options
             .entries()
             .into_iter()
-            .filter_map(|entry| entry.value.map(|value| (entry.key, value)))
-            .map(|(key, value)| (key.into(), value.into()))
+            .filter_map(|entry| entry.value.map(|value| (entry.key.into(), value.into())))
             .collect();
 
         let mut extensions = FFI_ExtensionOptions::default();
@@ -137,8 +136,7 @@ impl From<&TableOptions> for FFI_TableOptions {
         let base_options: SVec<(SString, SString)> = options
             .entries()
             .into_iter()
-            .filter_map(|entry| entry.value.map(|value| (entry.key, value)))
-            .map(|(key, value)| (key.into(), value.into()))
+            .filter_map(|entry| entry.value.map(|value| (entry.key.into(), value.into())))
             .collect();
 
         let mut extensions = FFI_ExtensionOptions::default();

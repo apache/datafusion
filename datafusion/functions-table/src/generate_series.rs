@@ -39,6 +39,9 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
+#[cfg(feature = "proto")]
+pub mod proto;
+
 /// Empty generator that produces no rows - used when series arguments contain null values
 #[derive(Debug, Clone)]
 pub struct Empty {
@@ -62,6 +65,23 @@ impl LazyBatchGenerator for Empty {
 
     fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
         Arc::new(RwLock::new(Empty { name: self.name }))
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+    ) -> Result<Option<datafusion_proto_models::protobuf::GenerateSeriesNode>> {
+        use datafusion_proto_models::protobuf;
+        Ok(Some(protobuf::GenerateSeriesNode {
+            schema: None,
+            // Preserve the batch size used by the legacy empty generator codec.
+            target_batch_size: 8192,
+            args: Some(protobuf::generate_series_node::Args::ContainsNull(
+                protobuf::GenerateSeriesArgsContainsNull {
+                    name: proto::encode_name(self.name)? as i32,
+                },
+            )),
+        }))
     }
 }
 
@@ -99,6 +119,22 @@ pub trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
 
     /// Display the value for debugging
     fn display_value(&self) -> String;
+
+    /// Encode the arguments of a series with this value type.
+    ///
+    /// Implementations without a built-in wire representation return `None`,
+    /// allowing the owning plan to use an extension codec instead.
+    #[cfg(feature = "proto")]
+    fn try_to_proto_args(
+        &self,
+        _end: &Self,
+        _step: &Self::StepType,
+        _include_end: bool,
+        _name: &str,
+    ) -> Result<Option<datafusion_proto_models::protobuf::generate_series_node::Args>>
+    {
+        Ok(None)
+    }
 }
 
 impl SeriesValue for i64 {
@@ -140,6 +176,27 @@ impl SeriesValue for i64 {
 
     fn display_value(&self) -> String {
         self.to_string()
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto_args(
+        &self,
+        end: &Self,
+        step: &Self::StepType,
+        include_end: bool,
+        name: &str,
+    ) -> Result<Option<datafusion_proto_models::protobuf::generate_series_node::Args>>
+    {
+        use datafusion_proto_models::protobuf;
+        Ok(Some(protobuf::generate_series_node::Args::Int64Args(
+            protobuf::GenerateSeriesArgsInt64 {
+                start: *self,
+                end: *end,
+                step: *step,
+                include_end,
+                name: proto::encode_name(name)? as i32,
+            },
+        )))
     }
 }
 
@@ -236,6 +293,46 @@ impl SeriesValue for TimestampValue {
 
     fn display_value(&self) -> String {
         self.value.to_string()
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto_args(
+        &self,
+        end: &Self,
+        step: &Self::StepType,
+        include_end: bool,
+        name: &str,
+    ) -> Result<Option<datafusion_proto_models::protobuf::generate_series_node::Args>>
+    {
+        use datafusion_proto_models::protobuf;
+        let step = Some(datafusion_proto_common::IntervalMonthDayNanoValue {
+            months: step.months,
+            days: step.days,
+            nanos: step.nanoseconds,
+        });
+        let name = proto::encode_name(name)? as i32;
+        let args = match &self.tz_str {
+            Some(tz) => protobuf::generate_series_node::Args::TimestampArgs(
+                protobuf::GenerateSeriesArgsTimestamp {
+                    start: self.value,
+                    end: end.value,
+                    step,
+                    include_end,
+                    name,
+                    tz: Some(tz.to_string()),
+                },
+            ),
+            None => protobuf::generate_series_node::Args::DateArgs(
+                protobuf::GenerateSeriesArgsDate {
+                    start: self.value,
+                    end: end.value,
+                    step,
+                    include_end,
+                    name,
+                },
+            ),
+        };
+        Ok(Some(args))
     }
 }
 
@@ -508,6 +605,33 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
         new.current = new.start.clone();
         new.finished = false;
         Arc::new(RwLock::new(new))
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+    ) -> Result<Option<datafusion_proto_models::protobuf::GenerateSeriesNode>> {
+        use datafusion_common::utils::usize_to_wire;
+        use datafusion_proto_models::protobuf;
+
+        let Some(args) = self.start.try_to_proto_args(
+            &self.end,
+            &self.step,
+            self.include_end,
+            self.name,
+        )?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(protobuf::GenerateSeriesNode {
+            schema: None,
+            target_batch_size: usize_to_wire(
+                self.batch_size,
+                "GenerateSeriesNode",
+                "target_batch_size",
+            )?,
+            args: Some(args),
+        }))
     }
 }
 

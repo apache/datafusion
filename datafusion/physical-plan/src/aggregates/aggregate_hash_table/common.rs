@@ -39,7 +39,7 @@ use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
 };
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::order::GroupClustering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
     group_id_array, max_duplicate_ordinal,
@@ -181,7 +181,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .collect::<Result<_>>()?;
 
         let group_schema = agg.group_by().group_schema(&input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        let group_values = new_group_values(group_schema, &GroupClustering::None)?;
 
         Ok(Self {
             group_by_metrics: metrics.group_by,

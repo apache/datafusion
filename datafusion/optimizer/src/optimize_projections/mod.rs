@@ -16,6 +16,17 @@
 // under the License.
 
 //! [`OptimizeProjections`] identifies and eliminates unused columns
+//!
+//! # Precedence over `PushDownLeafProjections`
+//!
+//! `OptimizeProjections` merges adjacent projections, including a recovery
+//! projection over an extraction projection that
+//! [`PushDownLeafProjections`] creates. To keep the two rules from undoing each
+//! other, `PushDownLeafProjections` only creates that pair when the extraction
+//! projection moves below the input. See the module documentation of
+//! [`extract_leaf_expressions`](crate::extract_leaf_expressions).
+//!
+//! [`PushDownLeafProjections`]: crate::extract_leaf_expressions::PushDownLeafProjections
 
 mod required_indices;
 
@@ -28,6 +39,7 @@ use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{
     Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScanBuilder, Unnest,
     Window, logical_plan::LogicalPlan,
@@ -154,16 +166,18 @@ fn optimize_projections(
             {
                 aggregate.group_expr
             } else {
-                let group_by_expr_existing = aggregate
+                let group_by_input_indices = aggregate
                     .group_expr
                     .iter()
-                    .map(|group_by_expr| group_by_expr.schema_name().to_string())
+                    .map(|group_by_expr| {
+                        passthrough_field_index(group_by_expr, aggregate.input.schema())
+                    })
                     .collect::<Vec<_>>();
 
                 if let Some(simplest_groupby_indices) =
                     get_required_group_by_exprs_indices(
                         aggregate.input.schema(),
-                        &group_by_expr_existing,
+                        &group_by_input_indices,
                     )
                 {
                     // Some of the fields in the GROUP BY may be required by
