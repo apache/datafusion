@@ -28,7 +28,7 @@ pub use datafusion_common::utils::memory::get_record_batch_memory_size;
 #[doc(hidden)]
 pub use spill_manager::SpillManager;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
@@ -42,11 +42,12 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::{ByteViewType, Schema, SchemaRef};
 use arrow::ipc::{
     MetadataVersion,
-    reader::StreamDecoder,
+    convert::try_fb_to_schema,
+    reader::{RecordBatchDecoder, read_dictionary_impl},
     writer::{IpcWriteOptions, StreamEncoder},
 };
 use arrow::record_batch::RecordBatch;
-use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
+use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN, UnsafeFlag};
 #[cfg(test)]
 use arrow_ipc::writer::StreamWriter;
 use arrow_ipc::{CompressionType, root_as_message};
@@ -59,13 +60,13 @@ use futures::Stream;
 use log::debug;
 
 /// Stream that reads spill files from a [`SpillFile`] backend as a stream of [`RecordBatch`]es.
-/// Uses [`StreamDecoder`] to decode IPC bytes received from the backend's async byte stream.
+/// Uses [`MessageFramer`] and [`MessageDecoder`] to decode IPC bytes received from the backend's async byte stream.
 /// Backends handle their own threading concerns internally - OS files use
 /// `tokio::fs::File` which performs blocking IO per-syscall without holding a thread
 /// for the file's lifetime, avoiding deadlocks when concurrent reads exceed thread pool limits.
 struct SpillReaderStream {
     schema: SchemaRef,
-    decoder: StreamDecoder,
+    decoder: MessageDecoder,
     byte_stream: Pin<Box<dyn Stream<Item = Result<bytes::Bytes>> + Send>>,
     is_done: bool,
 
@@ -81,9 +82,6 @@ struct SpillReaderStream {
     /// Assembles the chunks of `byte_stream` into exactly sized messages
     framer: MessageFramer,
 
-    /// Framed message buffers not yet consumed by `decoder`
-    pending: VecDeque<Buffer>,
-
     /// Keeps the file alive until the stream is dropped
     _spill_file: Arc<dyn SpillFile>,
 
@@ -94,7 +92,7 @@ struct SpillReaderStream {
 const SPILL_BATCH_MEMORY_MARGIN: usize = 4096;
 
 /// Reassembles an IPC stream read in arbitrary chunks into one exactly sized
-/// allocation per message, so that the zero-copy [`StreamDecoder`] produces
+/// allocation per message, so that the zero-copy [`MessageDecoder`] produces
 /// batches whose buffers pin only their own message.
 ///
 /// # Why
@@ -295,10 +293,11 @@ impl MessageFramer {
     ///
     /// This mirrors [`StreamDecoder::finish`]: a stream is complete either
     /// when the end-of-stream marker was read, or when it ends right after a
-    /// message. Framing moves the partial bytes of a truncated file out of
-    /// the decoder's own scratch space and into the framer, so without this
-    /// check a truncated spill file would silently decode as a shorter
-    /// stream instead of erroring.
+    /// message. Only the framer holds the partial bytes of a truncated file,
+    /// so without this check a truncated spill file would silently decode as
+    /// a shorter stream instead of erroring.
+    ///
+    /// [`StreamDecoder::finish`]: arrow::ipc::reader::StreamDecoder::finish
     fn finish(&self) -> Result<()> {
         match &self.state {
             FramerState::Finished
@@ -327,6 +326,81 @@ impl FramerState {
 /// Marks a length prefix in the IPC stream format, see `arrow_ipc`.
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
+/// Decodes the messages framed by [`MessageFramer`] without validating them.
+///
+/// DataFusion controls what it writes so it can trust its own IPC output.
+/// [`StreamDecoder::with_skip_validation`] would only skip validating the
+/// dictionaries, and check every offset and string of the record batches.
+///
+/// [`StreamDecoder::with_skip_validation`]: arrow::ipc::reader::StreamDecoder::with_skip_validation
+#[derive(Default)]
+struct MessageDecoder {
+    /// The schema of the stream, from its first message
+    schema: Option<SchemaRef>,
+    dictionaries: HashMap<i64, ArrayRef>,
+}
+
+impl MessageDecoder {
+    /// Decodes a message framed into `buffers`, returning its batch if it is a
+    /// record batch.
+    fn decode(&mut self, buffers: &[Buffer]) -> Result<Option<RecordBatch>> {
+        let head = &buffers[0];
+        let empty = Buffer::from(&[]);
+        let body = buffers.get(1).unwrap_or(&empty);
+        let prefix_len = if head.starts_with(&CONTINUATION_MARKER) {
+            8
+        } else {
+            4
+        };
+        if head.len() == prefix_len {
+            // The end-of-stream marker
+            return Ok(None);
+        }
+        let message = root_as_message(&head[prefix_len..]).map_err(|e| {
+            datafusion_common::exec_datafusion_err!(
+                "Invalid IPC message in spill file: {e}"
+            )
+        })?;
+        let version = message.version();
+        let mut skip_validation = UnsafeFlag::new();
+        // SAFETY: spill files are only read by the process that wrote them
+        unsafe { skip_validation.set(true) };
+
+        if let Some(schema) = message.header_as_schema() {
+            self.schema = Some(Arc::new(try_fb_to_schema(schema)?));
+            return Ok(None);
+        }
+        let schema = self.schema.as_ref().ok_or_else(|| {
+            datafusion_common::exec_datafusion_err!("Missing schema in spill file")
+        })?;
+        if let Some(dictionary) = message.header_as_dictionary_batch() {
+            read_dictionary_impl(
+                body,
+                dictionary,
+                schema,
+                &mut self.dictionaries,
+                &version,
+                false,
+                skip_validation,
+            )?;
+            return Ok(None);
+        }
+        let Some(batch) = message.header_as_record_batch() else {
+            return Ok(None);
+        };
+        let batch = RecordBatchDecoder::try_new(
+            body,
+            batch,
+            Arc::clone(schema),
+            &self.dictionaries,
+            &version,
+        )?
+        .with_skip_validation(skip_validation)
+        .read_record_batch()?;
+        Ok(Some(batch))
+    }
+}
+
 impl SpillReaderStream {
     fn new(
         schema: SchemaRef,
@@ -334,18 +408,14 @@ impl SpillReaderStream {
         max_record_batch_memory: Option<usize>,
     ) -> Result<Self> {
         let byte_stream = spill_file.read_stream()?;
-        // DataFusion controls what it writes so it can trust its own IPC output,
-        // matching the behavior of the previous StreamReader-based implementation.
-        let decoder = unsafe { StreamDecoder::new().with_skip_validation(true) };
         Ok(Self {
             schema,
-            decoder,
+            decoder: MessageDecoder::default(),
             byte_stream,
             max_record_batch_memory,
             is_done: false,
             current_buffer: Buffer::from(&[]),
             framer: MessageFramer::new(),
-            pending: VecDeque::new(),
             _spill_file: spill_file,
             schema_validated: false,
         })
@@ -363,17 +433,18 @@ impl Stream for SpillReaderStream {
         }
 
         loop {
-            // Decode the framed messages first
-            if let Some(buffer) = this.pending.front_mut() {
-                if buffer.is_empty() {
-                    this.pending.pop_front();
-                    continue;
-                }
-                match this.decoder.decode(buffer) {
+            // Frame the next message out of the current chunk and decode it
+            if !this.current_buffer.is_empty() {
+                let decoded = match this.framer.push(&mut this.current_buffer) {
+                    Ok(Some(buffers)) => this.decoder.decode(&buffers),
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(e),
+                };
+                match decoded {
                     Ok(Some(batch)) => {
                         // One-time schema validation on the first decoded batch.
                         // The IPC stream embeds the writer's schema in its header;
-                        // StreamDecoder surfaces it via the first batch's schema.
+                        // the decoder surfaces it via the first batch's schema.
                         // We check here rather than in new() because schema bytes
                         // only arrive after decoding the IPC header from the stream.
                         if !this.schema_validated {
@@ -409,22 +480,9 @@ impl Stream for SpillReaderStream {
                         return Poll::Ready(Some(Ok(batch)));
                     }
                     Ok(None) => {
-                        // A schema or dictionary message, or the buffer was
-                        // only part of a message. Carry on with the next one.
+                        // A schema or dictionary message, or the chunk ended
+                        // inside a message. Carry on with the next one.
                     }
-                    Err(e) => {
-                        this.is_done = true;
-                        return Poll::Ready(Some(Err(e.into())));
-                    }
-                }
-                continue;
-            }
-
-            // Then frame the next message out of the current chunk
-            if !this.current_buffer.is_empty() {
-                match this.framer.push(&mut this.current_buffer) {
-                    Ok(Some(buffers)) => this.pending.extend(buffers),
-                    Ok(None) => {}
                     Err(e) => {
                         this.is_done = true;
                         return Poll::Ready(Some(Err(e)));
@@ -433,7 +491,7 @@ impl Stream for SpillReaderStream {
                 continue;
             }
 
-            // Finally fetch another chunk
+            // Then fetch another chunk
             match futures::ready!(this.byte_stream.as_mut().poll_next(cx)) {
                 Some(Ok(chunk)) => {
                     this.current_buffer = Buffer::from(chunk);
@@ -449,9 +507,6 @@ impl Stream for SpillReaderStream {
                     // message, so it is the one that detects truncation.
                     if let Err(e) = this.framer.finish() {
                         return Poll::Ready(Some(Err(e)));
-                    }
-                    if let Err(e) = this.decoder.finish() {
-                        return Poll::Ready(Some(Err(e.into())));
                     }
                     return Poll::Ready(None);
                 }
@@ -1008,7 +1063,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array, StringArray};
     use arrow::compute::cast;
     use arrow::datatypes::{DataType, Field};
-    use arrow::ipc::reader::StreamReader;
+    use arrow::ipc::reader::{StreamDecoder, StreamReader};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::StreamExt as _;
     use std::io::Cursor;
@@ -1702,6 +1757,38 @@ mod tests {
             "truncated spill file should error, got Ok with {} batches",
             result.as_ref().map(|b| b.len()).unwrap_or(0)
         );
+        Ok(())
+    }
+
+    /// Spill files are read back without validating them again, see
+    /// [`MessageDecoder`]. Validation would reject these bytes, which are not
+    /// UTF-8.
+    #[tokio::test]
+    async fn test_spill_read_skips_validation() -> Result<()> {
+        use arrow::array::BinaryArray;
+
+        let binary = BinaryArray::from_iter_values([b"\xa0\xa1".as_slice(), b"valid"]);
+        // SAFETY: the test only compares the bytes and never reads them as `str`
+        let strings = unsafe {
+            StringArray::new_unchecked(
+                binary.offsets().clone(),
+                binary.values().clone(),
+                None,
+            )
+        };
+        let batch = RecordBatch::try_from_iter([("s", Arc::new(strings) as ArrayRef)])?;
+
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, batch.schema());
+        let spill_file = spill_manager
+            .spill_record_batch_and_finish(std::slice::from_ref(&batch), "Test")?
+            .unwrap();
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
+        let read_back = collect(stream).await?;
+        assert_eq!(read_back.len(), 1);
+        // `ArrayData` formats the bytes, not the strings, if this fails
+        assert_eq!(read_back[0].column(0).to_data(), batch.column(0).to_data());
         Ok(())
     }
 
