@@ -1982,8 +1982,8 @@ statement ok
 drop table rename_swap_struct_field;
 
 # Merging an extraction projection into a projection whose output lost its
-# qualifier. Eliminating the empty side of the union leaves a projection of
-# bare column names over a qualified input, and the merge used to add the
+# qualifier. Eliminating the empty side of the union leaves a projection that
+# renames qualified input columns to bare names, and the merge used to add the
 # pass-through columns under those bare names beside the qualified ones the
 # projection already carried, which is an ambiguous schema.
 statement ok
@@ -2009,7 +2009,7 @@ logical_plan
 03)----Aggregate: groupBy=[[expanded.env]], aggr=[[sum(CAST(__datafusion_extracted_1 AS Int64))]]
 04)------SubqueryAlias: expanded
 05)--------SubqueryAlias: samples
-06)----------Projection: leaf_merge_source.env, get_field(s, Utf8("a")) AS __datafusion_extracted_1
+06)----------Projection: leaf_merge_source.env, get_field(leaf_merge_source.s, Utf8("a")) AS __datafusion_extracted_1
 07)------------TableScan: leaf_merge_source projection=[s, env]
 
 statement ok
