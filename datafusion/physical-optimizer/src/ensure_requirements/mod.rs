@@ -18,9 +18,13 @@
 //! [`EnsureRequirements`] optimizer rule that enforces distribution and
 //! sorting requirements together so that the two never invalidate each other.
 //!
-//! This rule replaces the separate `EnforceDistribution` + `EnforceSorting`
-//! rules with a unified approach inspired by Apache Spark's `EnsureRequirements`
-//! and Presto/Trino's `AddExchanges`.
+//! # Placement in the Optimizer Pipeline
+//!
+//! Unlike most optimizer rules, this rule modifies an unexecutable physical
+//! plan that does not satisfy distribution and ordering requirements into an
+//! *executable* one. A pipeline that omits this rule may produce a plan that
+//! is not runnable or that returns incorrect results. See the [Physical
+//! Optimizer](crate::optimizer) for details.
 //!
 //! # Motivation
 //!
@@ -161,10 +165,10 @@ use datafusion_physical_plan::ExecutionPlan;
 
 /// Optimizer rule that enforces both distribution and sorting requirements.
 ///
-/// This rule combines the functionality of `EnforceDistribution` and
-/// `EnforceSorting` into a coordinated sequence where distribution is
-/// always settled before sorting for each operator, preventing the
-/// non-idempotent interactions between the two separate rules.
+/// This rule inserts the repartitioning and sorting operators needed to
+/// satisfy the requirements that operators declare via
+/// [`ExecutionPlan::input_distribution_requirements`] and
+/// [`ExecutionPlan::required_input_ordering`].
 ///
 /// See [module level documentation](self) for more details.
 #[derive(Default, Debug)]

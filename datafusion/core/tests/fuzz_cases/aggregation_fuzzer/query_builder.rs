@@ -93,9 +93,9 @@ pub struct QueryBuilder {
     ///   ...
     /// ```
     ///
-    /// More details can see [`GroupOrdering`].
+    /// More details can see [`GroupClustering`].
     ///
-    /// [`GroupOrdering`]:  datafusion_physical_plan::aggregates::order::GroupOrdering
+    /// [`GroupClustering`]:  datafusion_physical_plan::aggregates::order::GroupClustering
     dataset_sort_keys: Vec<Vec<String>>,
 
     /// If we will also test the no grouping case like:

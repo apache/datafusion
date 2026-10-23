@@ -28,7 +28,9 @@ use crate::utils::{NamePreserver, merge_into_schema};
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
@@ -41,7 +43,9 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::{cast_subquery, cast_subquery_columns};
-use datafusion_expr::logical_plan::Subquery;
+use datafusion_expr::logical_plan::{
+    Extension, MaterializedCte, MaterializedCteId, MaterializedCteScan, Subquery,
+};
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
     type_union_coercion,
@@ -96,8 +100,6 @@ impl AnalyzerRule for TypeCoercion {
     }
 
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
-        static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
-
         // Record bare row-count parameter types before coercion makes them indistinguishable
         // from explicit casts. A type inferred elsewhere takes precedence over the default.
         let parameter_fields = plan.get_parameter_fields()?;
@@ -118,19 +120,112 @@ impl AnalyzerRule for TypeCoercion {
             .data;
 
         // recurse
-        let transformed_plan = plan
-            .transform_up_with_subqueries(|plan| {
-                analyze_internal(
-                    &EMPTY_SCHEMA,
-                    plan,
-                    config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
-                )
-            })?
-            .data;
+        let transformed_plan = coerce_plan_and_subqueries(plan, config)?;
 
         // finish
         coerce_output(transformed_plan, config)
     }
+}
+
+/// Coerce each node of `plan` and of its subqueries, from the leaves up.
+fn coerce_plan_and_subqueries(
+    plan: LogicalPlan,
+    config: &ConfigOptions,
+) -> Result<LogicalPlan> {
+    static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
+
+    plan.transform_down_up_with_subqueries(
+        |plan| {
+            let cte = match &plan {
+                LogicalPlan::Extension(Extension { node }) => {
+                    node.as_any().downcast_ref::<MaterializedCte>().cloned()
+                }
+                _ => None,
+            };
+            let Some(cte) = cte else {
+                return Ok(Transformed::no(plan));
+            };
+            // Coercion can change the types of the body, for example the type
+            // of a `NULL` column of a `UNION`. Coerce the body first, and give
+            // its new schema to the scans before the continuation is coerced.
+            let body = coerce_plan_and_subqueries(cte.cte, config)?;
+            let continuation = with_materialized_cte_scan_schema(
+                cte.continuation,
+                cte.id,
+                body.schema(),
+            )?;
+            let continuation = coerce_plan_and_subqueries(continuation, config)?;
+            Ok(Transformed::new(
+                LogicalPlan::Extension(Extension {
+                    node: Arc::new(MaterializedCte {
+                        id: cte.id,
+                        name: cte.name,
+                        cte: body,
+                        continuation,
+                    }),
+                }),
+                true,
+                TreeNodeRecursion::Jump,
+            ))
+        },
+        |plan| {
+            analyze_internal(
+                &EMPTY_SCHEMA,
+                plan,
+                config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
+            )
+        },
+    )
+    .map(|t| t.data)
+}
+
+/// Give the fields of `body_schema` to each scan of the materialized CTE `id`
+/// in `continuation`, also in subquery expressions. A scan keeps its
+/// qualifiers.
+fn with_materialized_cte_scan_schema(
+    continuation: LogicalPlan,
+    id: MaterializedCteId,
+    body_schema: &DFSchemaRef,
+) -> Result<LogicalPlan> {
+    continuation
+        .transform_down_with_subqueries(|plan| {
+            let LogicalPlan::Extension(Extension { node }) = &plan else {
+                return Ok(Transformed::no(plan));
+            };
+            // A nested occurrence of the same CTE owns the scans below it.
+            if node
+                .as_any()
+                .downcast_ref::<MaterializedCte>()
+                .is_some_and(|nested| nested.id == id)
+            {
+                return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump));
+            }
+            let Some(scan) =
+                node.as_any()
+                    .downcast_ref::<MaterializedCteScan>()
+                    .filter(|scan| {
+                        scan.id == id && scan.schema.inner() != body_schema.inner()
+                    })
+            else {
+                return Ok(Transformed::no(plan));
+            };
+            let qualifiers = scan.schema.iter().map(|(q, _)| q.cloned()).collect();
+            let schema = DFSchema::from_field_specific_qualified_schema(
+                qualifiers,
+                body_schema.inner(),
+            )?
+            .with_functional_dependencies(
+                body_schema.functional_dependencies().clone(),
+            )?;
+            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(MaterializedCteScan {
+                    id: scan.id,
+                    name: scan.name.clone(),
+                    schema: Arc::new(schema),
+                }),
+            })))
+        })
+        .map(|t| t.data)
 }
 
 /// use the external schema to handle the correlated subqueries case

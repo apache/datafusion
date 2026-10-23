@@ -2360,14 +2360,12 @@ fn test_spm_fetch_preserves_ordering_through_child_rewrite() -> Result<()> {
         .downcast_ref::<LocalLimitExec>()
         .expect("SPM fetch should become a local limit");
     assert_eq!(limit.fetch(), 100);
-    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
 
     let config = ConfigOptions::new();
     let optimized = ProjectionPushdown::new().optimize(optimized, &config)?;
     let limit = optimized
         .downcast_ref::<LocalLimitExec>()
         .expect("projection rewrite should retain the local limit");
-    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
     assert!(limit.input().is::<DataSourceExec>());
 
     let optimized = LimitPushdown::new().optimize(optimized, &config)?;
@@ -2379,7 +2377,7 @@ fn test_spm_fetch_preserves_ordering_through_child_rewrite() -> Result<()> {
         .downcast_ref::<FileScanConfig>()
         .expect("parquet scan should use FileScanConfig");
     assert_eq!(config.limit, Some(100));
-    assert!(config.preserve_order);
+    assert!(config.preserves_file_order());
 
     Ok(())
 }

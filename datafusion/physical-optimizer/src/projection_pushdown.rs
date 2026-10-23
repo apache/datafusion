@@ -30,8 +30,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{JoinSide, JoinType, Result};
-use datafusion_physical_expr::expressions::Column;
+use datafusion_common::{JoinSide, JoinType, Result, internal_datafusion_err};
+use datafusion_physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
@@ -130,7 +130,7 @@ fn try_push_down_join_filter(
         rhs_rewrite.data.1.column_indices(),
         lhs_rewrite.data.0.schema().as_ref(),
         rhs_rewrite.data.0.schema().as_ref(),
-    );
+    )?;
 
     let new_lhs_length = lhs_rewrite.data.0.schema().fields.len();
     let projections = match projections.as_ref() {
@@ -219,8 +219,14 @@ fn try_push_down_projection(
             })
             .collect::<Fields>();
 
-        let join_filter = JoinFilter::new(
+        let expression = remap_filter_expr(
             new_expr.data,
+            join_filter.schema().fields().len(),
+            rewriter.intermediate_column_indices.len(),
+            |column| Ok(column.clone()),
+        )?;
+        let join_filter = JoinFilter::new(
+            expression,
             rewriter.intermediate_column_indices,
             Arc::new(Schema::new(intermediate_schema)),
         );
@@ -240,15 +246,14 @@ fn minimize_join_filter(
     old_column_indices: &[ColumnIndex],
     lhs_schema: &Schema,
     rhs_schema: &Schema,
-) -> JoinFilter {
+) -> Result<JoinFilter> {
     let mut used_columns = HashSet::with_capacity(old_column_indices.len());
     expr.apply(|expr| {
         if let Some(col) = expr.downcast_ref::<Column>() {
             used_columns.insert(col.index());
         }
         Ok(TreeNodeRecursion::Continue)
-    })
-    .expect("Closure cannot fail");
+    })?;
 
     let new_column_indices = old_column_indices
         .iter()
@@ -265,27 +270,24 @@ fn minimize_join_filter(
         })
         .collect::<Fields>();
 
-    let final_expr = expr
-        .transform_up(|expr| match expr.downcast_ref::<Column>() {
-            None => Ok(Transformed::no(expr)),
-            Some(column) => {
-                let new_idx = used_columns
-                    .iter()
-                    .filter(|idx| **idx < column.index())
-                    .count();
-                let new_column = Column::new(column.name(), new_idx);
-                Ok(Transformed::yes(
-                    Arc::new(new_column) as Arc<dyn PhysicalExpr>
-                ))
-            }
-        })
-        .expect("Closure cannot fail");
+    let final_expr = remap_filter_expr(
+        expr,
+        old_column_indices.len(),
+        new_column_indices.len(),
+        |column| {
+            let new_idx = used_columns
+                .iter()
+                .filter(|idx| **idx < column.index())
+                .count();
+            Ok(Column::new(column.name(), new_idx))
+        },
+    )?;
 
-    JoinFilter::new(
-        final_expr.data,
+    Ok(JoinFilter::new(
+        final_expr,
         new_column_indices,
         Arc::new(Schema::new(fields)),
-    )
+    ))
 }
 
 /// Implements the push-down machinery.
@@ -300,6 +302,7 @@ struct JoinFilterRewriter<'a> {
     join_side_schema: &'a Schema,
     join_side_projections: Vec<(Arc<dyn PhysicalExpr>, String)>,
     intermediate_column_indices: Vec<ColumnIndex>,
+    original_filter_column_count: usize,
     alias_generator: &'a AliasGenerator,
 }
 
@@ -327,6 +330,7 @@ impl<'a> JoinFilterRewriter<'a> {
             join_side,
             join_side_schema,
             join_side_projections: projections,
+            original_filter_column_count: column_indices.len(),
             intermediate_column_indices: column_indices,
             alias_generator,
         }
@@ -339,6 +343,11 @@ impl<'a> JoinFilterRewriter<'a> {
         &mut self,
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+        // A lambda is evaluated by its enclosing high-order function. Keep its
+        // body in that scope; a complete high-order function may still be moved.
+        if expr.is::<LambdaExpr>() {
+            return Ok(Transformed::no(expr));
+        }
         let depends_on_this_side = self.depends_on_join_side(&expr, self.join_side)?;
         // We don't push down things that do not depend on this side (other side or no side).
         if !depends_on_this_side {
@@ -378,22 +387,21 @@ impl<'a> JoinFilterRewriter<'a> {
         // First, add a new projection. The expression must be rewritten, as it is no longer
         // executed against the filter schema.
         let new_idx = self.join_side_projections.len();
-        let rewritten_expr = expr.transform_up(|expr| {
-            Ok(match expr.downcast_ref::<Column>() {
-                None => Transformed::no(expr),
-                Some(column) => {
-                    let intermediate_column =
-                        &self.intermediate_column_indices[column.index()];
-                    assert_eq!(intermediate_column.side, self.join_side);
+        let rewritten_expr = remap_filter_expr(
+            expr,
+            self.original_filter_column_count,
+            self.join_side_schema.fields().len(),
+            |column| {
+                let intermediate_column =
+                    &self.intermediate_column_indices[column.index()];
+                assert_eq!(intermediate_column.side, self.join_side);
 
-                    let join_side_index = intermediate_column.index;
-                    let field = self.join_side_schema.field(join_side_index);
-                    let new_column = Column::new(field.name(), join_side_index);
-                    Transformed::yes(Arc::new(new_column) as Arc<dyn PhysicalExpr>)
-                }
-            })
-        })?;
-        self.join_side_projections.push((rewritten_expr.data, name));
+                let join_side_index = intermediate_column.index;
+                let field = self.join_side_schema.field(join_side_index);
+                Ok(Column::new(field.name(), join_side_index))
+            },
+        )?;
+        self.join_side_projections.push((rewritten_expr, name));
 
         // Then, update the column indices
         let new_intermediate_idx = self.intermediate_column_indices.len();
@@ -418,6 +426,40 @@ impl<'a> JoinFilterRewriter<'a> {
             }))
         })
     }
+}
+
+/// Remaps captured columns and rebases lambda parameters when the input changes.
+/// Parameters are appended after the input columns, including at nested lambda
+/// scopes. Moving a complete high-order expression preserves their relative
+/// offsets, so every parameter shifts by the change in the root input width.
+fn remap_filter_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    old_input_len: usize,
+    new_input_len: usize,
+    map_column: impl Fn(&Column) -> Result<Column>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_up(|expr| {
+        if let Some(column) = expr.downcast_ref::<Column>() {
+            let new_column = map_column(column)?;
+            if new_column != *column {
+                return Ok(Transformed::yes(Arc::new(new_column) as _));
+            }
+        } else if let Some(variable) = expr.downcast_ref::<LambdaVariable>()
+            && old_input_len != new_input_len
+        {
+            let offset = variable.index().checked_sub(old_input_len).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Lambda parameter {variable} precedes the {old_input_len} input columns"
+                )
+            })?;
+            return Ok(Transformed::yes(Arc::new(LambdaVariable::new(
+                new_input_len + offset,
+                Arc::clone(variable.field()),
+            )) as _));
+        }
+        Ok(Transformed::no(expr))
+    })
+    .data()
 }
 
 #[cfg(test)]

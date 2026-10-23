@@ -214,6 +214,71 @@ physical_plan
 02)--ProjectionExec: expr=[a@0 = 1 as __common_expr_1, a@0 = 2 as __common_expr_2, a@0 + 3 as __common_expr_3, a@0 + 4 as __common_expr_4]
 03)----DataSourceExec: partitions=1, partition_sizes=[0]
 
+statement ok
+CREATE TABLE cse_nullable_case(a INT, b INT) AS VALUES (1, 1), (2, 2), (3, 3);
+
+query I
+SELECT sum(CASE WHEN (CASE WHEN a > 1 AND b < 3 THEN a ELSE 0 END)
+                BETWEEN 1 AND 2 THEN 1 ELSE 0 END)
+FROM cse_nullable_case;
+----
+1
+
+query I
+SELECT count(CASE WHEN (CASE WHEN a > 1 AND b < 3 THEN a ELSE 0 END)
+                  BETWEEN 1 AND 2 THEN 1 ELSE 0 END)
+FROM cse_nullable_case;
+----
+3
+
+query I
+SELECT sum(CASE WHEN (CASE WHEN a > 1 AND b < 3 THEN a ELSE 0 END) >= 1
+                AND (CASE WHEN a > 1 AND b < 3 THEN a ELSE 0 END) <= 2
+                THEN 1 ELSE 0 END)
+FROM cse_nullable_case;
+----
+1
+
+statement ok
+INSERT INTO cse_nullable_case VALUES (NULL, 2), (2, NULL), (NULL, NULL);
+
+query II
+SELECT sum(v), count(v)
+FROM (SELECT CASE WHEN a > 1 AND b < 3 THEN a ELSE 0 END AS v FROM cse_nullable_case);
+----
+2 6
+
+query II
+SELECT sum(v), count(v)
+FROM (SELECT CASE WHEN a > 1 OR b < 3 THEN a ELSE 0 END AS v FROM cse_nullable_case);
+----
+8 5
+
+query II
+SELECT sum(v), count(v)
+FROM (SELECT CASE WHEN NOT (a > 1 OR b < 3) THEN a ELSE 0 END AS v FROM cse_nullable_case);
+----
+0 6
+
+query II
+SELECT sum(v), count(v)
+FROM (SELECT CASE WHEN a > 1 AND b < 3 THEN a END AS v FROM cse_nullable_case);
+----
+2 1
+
+query II
+SELECT sum(v), count(v)
+FROM (SELECT CASE WHEN a > 1 AND b < 3 THEN a ELSE b END AS v FROM cse_nullable_case);
+----
+8 4
+
+query II
+SELECT sum(v), count(v)
+FROM (SELECT CASE WHEN a > 1 AND b < 3 THEN a ELSE 0 END AS v FROM cse_nullable_case)
+WHERE false;
+----
+NULL 0
+
 # Only conditionally evaluated expressions
 query TT
 EXPLAIN SELECT
