@@ -1028,6 +1028,18 @@ impl JoinFuzzTestCase {
     /// if `debug` flag is set the test will save randomly generated inputs and outputs to user folders,
     /// so it is easy to debug a test on top of the failed data
     async fn run_test(&self, join_tests: &[JoinTestType], debug: bool) {
+        // NLJ is the reference result, which does not depend on the batch size,
+        // so compute it once. NLJ's own batch-size handling is covered by its
+        // unit tests.
+        let nlj_collected =
+            collect(self.nested_loop_join(), SessionContext::new().task_ctx())
+                .await
+                .unwrap();
+        let nlj_rows = nlj_collected.iter().fold(0, |acc, b| acc + b.num_rows());
+        let nlj_formatted = pretty_format_batches(&nlj_collected).unwrap().to_string();
+        let mut nlj_formatted_sorted: Vec<&str> = nlj_formatted.trim().lines().collect();
+        nlj_formatted_sorted.sort_unstable();
+
         for batch_size in self.batch_sizes {
             let session_config = SessionConfig::new().with_batch_size(*batch_size);
             let ctx = SessionContext::new_with_config(session_config);
@@ -1039,20 +1051,14 @@ impl JoinFuzzTestCase {
             let smj = self.sort_merge_join();
             let smj_collected = collect(smj, task_ctx.clone()).await.unwrap();
 
-            let nlj = self.nested_loop_join();
-            let nlj_collected = collect(nlj, task_ctx.clone()).await.unwrap();
-
             // Get actual row counts(without formatting overhead) for HJ and SMJ
             let hj_rows = hj_collected.iter().fold(0, |acc, b| acc + b.num_rows());
             let smj_rows = smj_collected.iter().fold(0, |acc, b| acc + b.num_rows());
-            let nlj_rows = nlj_collected.iter().fold(0, |acc, b| acc + b.num_rows());
 
             // compare
             let smj_formatted =
                 pretty_format_batches(&smj_collected).unwrap().to_string();
             let hj_formatted = pretty_format_batches(&hj_collected).unwrap().to_string();
-            let nlj_formatted =
-                pretty_format_batches(&nlj_collected).unwrap().to_string();
 
             let mut smj_formatted_sorted: Vec<&str> =
                 smj_formatted.trim().lines().collect();
@@ -1061,10 +1067,6 @@ impl JoinFuzzTestCase {
             let mut hj_formatted_sorted: Vec<&str> =
                 hj_formatted.trim().lines().collect();
             hj_formatted_sorted.sort_unstable();
-
-            let mut nlj_formatted_sorted: Vec<&str> =
-                nlj_formatted.trim().lines().collect();
-            nlj_formatted_sorted.sort_unstable();
 
             if debug
                 && ((join_tests.contains(&NljHj) && nlj_rows != hj_rows)
