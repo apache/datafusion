@@ -117,28 +117,28 @@ impl DiskManagerBuilder {
         match self.mode {
             DiskManagerMode::OsTmpDirectory => Ok(DiskManager {
                 local_dirs: Mutex::new(Some(vec![])),
+                configured_dirs: vec![],
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
                 factory: None,
             }),
-            DiskManagerMode::Directories(conf_dirs) => {
-                let local_dirs = create_local_dirs(&conf_dirs)?;
-                debug!(
-                    "Created local dirs {local_dirs:?} as DataFusion working directory"
-                );
-                Ok(DiskManager {
-                    local_dirs: Mutex::new(Some(local_dirs)),
-                    max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
-                    max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
-                    used_disk_space: Arc::new(AtomicU64::new(0)),
-                    active_files_count: Arc::new(AtomicUsize::new(0)),
-                    factory: None,
-                })
-            }
+            // The `datafusion-*` directories are created on the first call to
+            // `create_tmp_file`, as in `OsTmpDirectory` mode, so that building a
+            // `DiskManager` that never spills does not touch the filesystem.
+            DiskManagerMode::Directories(conf_dirs) => Ok(DiskManager {
+                local_dirs: Mutex::new(Some(vec![])),
+                configured_dirs: conf_dirs,
+                max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
+                max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
+                used_disk_space: Arc::new(AtomicU64::new(0)),
+                active_files_count: Arc::new(AtomicUsize::new(0)),
+                factory: None,
+            }),
             DiskManagerMode::Disabled => Ok(DiskManager {
                 local_dirs: Mutex::new(None),
+                configured_dirs: vec![],
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
@@ -147,6 +147,7 @@ impl DiskManagerBuilder {
             }),
             DiskManagerMode::Custom(factory) => Ok(DiskManager {
                 local_dirs: Mutex::new(None),
+                configured_dirs: vec![],
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
@@ -167,6 +168,10 @@ pub enum DiskManagerMode {
     /// Create a new [DiskManager] that creates temporary files within
     /// the specified directories. One of the directories will be chosen
     /// at random for each temporary file created.
+    ///
+    /// A `datafusion-*` working directory is created inside each of the
+    /// specified directories when the first temporary file is requested, not
+    /// when the [DiskManager] is built.
     Directories(Vec<PathBuf>),
 
     /// Create a new [DiskManager] with a cutstom backend
@@ -192,9 +197,14 @@ impl Debug for DiskManagerMode {
 pub struct DiskManager {
     /// TempDirs to put temporary files in.
     ///
-    /// If `Some(vec![])` a new OS specified temporary directory will be created
+    /// If `Some(vec![])` the directories are created on the first call to
+    /// `create_tmp_file`: one in each of `configured_dirs`, or a new OS
+    /// specified temporary directory if `configured_dirs` is empty.
     /// If `None` an error will be returned (configured not to spill)
     local_dirs: Mutex<Option<Vec<Arc<TempDir>>>>,
+    /// Directories configured with [`DiskManagerMode::Directories`], in which
+    /// `local_dirs` are created on demand. Empty for the other modes.
+    configured_dirs: Vec<PathBuf>,
     /// The maximum amount of data (in bytes) stored inside the temporary directories.
     /// Default to 100GB. Stored as `AtomicU64` so it can be adjusted at runtime
     /// without requiring exclusive (`&mut`) access to the `DiskManager`.
@@ -214,6 +224,7 @@ impl Debug for DiskManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DiskManager")
             .field("local_dirs", &self.local_dirs)
+            .field("configured_dirs", &self.configured_dirs)
             .field("max_temp_directory_size", &self.max_temp_directory_size)
             .field("used_disk_space", &self.used_disk_space)
             .field("active_files_count", &self.active_files_count)
@@ -316,6 +327,9 @@ impl DiskManager {
     }
 
     /// Returns the temporary directory paths
+    ///
+    /// The directories are created when the first temporary file is
+    /// requested, so this returns an empty list until then.
     pub fn temp_dir_paths(&self) -> Vec<PathBuf> {
         self.local_dirs
             .lock()
@@ -354,17 +368,27 @@ impl DiskManager {
             )
         })?;
 
-        // Create a temporary directory if needed
+        // Create the temporary directories if needed
         if local_dirs.is_empty() {
-            let tempdir = tempfile::tempdir().map_err(DataFusionError::IoError)?;
+            if self.configured_dirs.is_empty() {
+                let tempdir = tempfile::tempdir().map_err(DataFusionError::IoError)?;
 
-            debug!(
-                "Created directory '{:?}' as DataFusion tempfile directory for {}",
-                tempdir.path().to_string_lossy(),
-                request_description,
-            );
+                debug!(
+                    "Created directory '{:?}' as DataFusion tempfile directory for {}",
+                    tempdir.path().to_string_lossy(),
+                    request_description,
+                );
 
-            local_dirs.push(Arc::new(tempdir));
+                local_dirs.push(Arc::new(tempdir));
+            } else {
+                // Only store the directories once all of them were created, so
+                // that a failure is retried by the next call
+                let created = create_local_dirs(&self.configured_dirs)?;
+                debug!(
+                    "Created local dirs {created:?} as DataFusion working directory for {request_description}"
+                );
+                local_dirs.extend(created);
+            }
         }
 
         let dir_index = rng().random_range(0..local_dirs.len());
@@ -711,12 +735,89 @@ mod tests {
     }
 
     #[test]
-    fn test_disk_manager_create_spill_folder() {
-        let dir = TempDir::new().unwrap();
-        DiskManagerBuilder::default()
-            .with_mode(DiskManagerMode::Directories(vec![dir.path().to_path_buf()]))
-            .build()
-            .unwrap();
+    fn test_disk_manager_create_spill_folder() -> Result<()> {
+        let dir = TempDir::new()?;
+        let spill_dir = dir.path().join("spill");
+        let dm = Arc::new(
+            DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Directories(vec![spill_dir.clone()]))
+                .build()?,
+        );
+        // The configured directory is created together with the first temp file
+        assert!(!spill_dir.exists());
+        let temp_file = dm.create_tmp_file("Testing")?;
+        assert!(spill_dir.exists());
+        assert_path_in_dirs(
+            temp_file.path().unwrap(),
+            std::iter::once(spill_dir.as_path()),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_configured_dir_creation() -> Result<()> {
+        let local_dir1 = TempDir::new()?;
+        let local_dir2 = TempDir::new()?;
+        let local_dirs = [local_dir1.path(), local_dir2.path()];
+        let dm = Arc::new(
+            DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Directories(
+                    local_dirs.iter().map(|p| p.into()).collect(),
+                ))
+                .build()?,
+        );
+
+        // Building the disk manager does not create any directory
+        assert!(dm.tmp_files_enabled());
+        assert!(dm.temp_dir_paths().is_empty());
+        for dir in local_dirs {
+            assert_eq!(std::fs::read_dir(dir)?.count(), 0);
+        }
+
+        // The first temp file creates one `datafusion-*` directory in each
+        // configured directory
+        let first = dm.create_tmp_file("Testing")?;
+        let created = dm.temp_dir_paths();
+        assert_eq!(created.len(), 2);
+        for (created, dir) in created.iter().zip(local_dirs) {
+            assert_eq!(created.parent(), Some(dir));
+            let name = created.file_name().unwrap().to_str().unwrap();
+            assert!(name.starts_with("datafusion-"), "{name}");
+        }
+        assert_path_in_dirs(first.path().unwrap(), created.iter().map(|p| p.as_path()));
+
+        // Later temp files reuse the same directories
+        let second = dm.create_tmp_file("Testing")?;
+        assert_eq!(dm.temp_dir_paths(), created);
+        for dir in local_dirs {
+            assert_eq!(std::fs::read_dir(dir)?.count(), 1);
+        }
+
+        // The directories are removed once the disk manager and its temp files
+        // are dropped
+        drop(first);
+        drop(second);
+        drop(dm);
+        for dir in created {
+            assert!(!dir.exists());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unusable_configured_dir_fails_first_temp_file() -> Result<()> {
+        let dir = TempDir::new()?;
+        // A regular file can not be used as a parent directory
+        let file_path = dir.path().join("not_a_dir");
+        std::fs::write(&file_path, b"")?;
+        let dm = Arc::new(
+            DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Directories(vec![file_path]))
+                .build()?,
+        );
+        assert!(dm.create_tmp_file("Testing").is_err());
+        assert!(dm.temp_dir_paths().is_empty());
+        Ok(())
     }
 
     /// Asserts that `file_path` is found anywhere in any of `dir` directories
