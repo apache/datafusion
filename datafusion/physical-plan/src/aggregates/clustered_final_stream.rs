@@ -261,7 +261,8 @@ impl ClusteredFinalAggregateStream {
     /// 1. Start.
     /// 2. Merge one input batch:
     ///    - If memory fits and no groups are complete, continue reading input.
-    ///    - If OOM, spill.
+    ///    - If OOM, spill. Without spilling, emit completed groups through [3],
+    ///      and fail only when no group is complete.
     /// 3. Prepare output:
     ///    - Before any spill, a prefix of groups is complete: materialize the
     ///      entire prefix once, retaining the input and active groups to resume
@@ -340,7 +341,15 @@ impl Aggregating {
                 Ok(()) => {}
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
                     let Some(spill_context) = self.spill_context.as_mut() else {
-                        return Err(oom);
+                        // Without spilling, emitting completed groups is the only
+                        // way to release memory. Fail only when none is complete.
+                        let batch =
+                            self.table.take_completed_result_batch()?.ok_or(oom)?;
+                        timer.done();
+                        return Ok(Some(ExecutionStage::Outputting(Outputting {
+                            batch,
+                            resume: Some(self),
+                        })));
                     };
                     if self.table.is_empty() {
                         return Err(oom);
@@ -464,8 +473,11 @@ mod tests {
     use crate::test::TestMemoryExec;
     use arrow::array::{Int64Array, StringViewArray};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
+    };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::{min_max::min_udaf, sum::sum_udaf};
     use datafusion_physical_expr::PhysicalSortExpr;
@@ -730,6 +742,89 @@ mod tests {
         }
         drop(second);
         assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    /// Runs a final `SUM(k) GROUP BY k` over two partial-state batches sorted on
+    /// `k` that share a boundary key. Returns the output and the most memory the
+    /// stream held while handing off output.
+    async fn run_fully_sorted(
+        pool: Arc<dyn MemoryPool>,
+    ) -> Result<(Vec<RecordBatch>, usize)> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let groups = PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".into())]);
+        let expressions = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("k", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum")
+                .build()?,
+        )];
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            expressions.clone(),
+            vec![None],
+            empty,
+            Arc::clone(&schema),
+        )?;
+        let partial_schema = partial.schema();
+        let batches = [0..=256, 256..=512]
+            .into_iter()
+            .map(|keys| {
+                let k = Int64Array::from_iter_values(keys);
+                RecordBatch::try_new(
+                    Arc::clone(&partial_schema),
+                    vec![Arc::new(k.clone()), Arc::new(k)],
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("k", &partial_schema)?)])
+                .unwrap();
+        let input =
+            TestMemoryExec::try_new(&[batches], Arc::clone(&partial_schema), None)?
+                .try_with_sort_information(vec![ordering])?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Final,
+            groups.as_final(),
+            expressions,
+            vec![None],
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
+            schema,
+        )?;
+        assert!(matches!(
+            aggregate.group_clustering_mode(),
+            GroupClusteringMode::Full
+        ));
+        let context = Arc::new(
+            TaskContext::default().with_runtime(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(Arc::clone(&pool))
+                    .build_arc()?,
+            ),
+        );
+        let mut stream =
+            ClusteredFinalAggregateStream::new(&aggregate, &context, 0)?.into_stream();
+        // Each output batch is a single slice, so the stream releases it before
+        // handing it off and holds only the table.
+        let mut held = pool.reserved();
+        let mut output = vec![];
+        while let Some(batch) = stream.next().await.transpose()? {
+            held = held.max(pool.reserved());
+            output.push(batch);
+        }
+        Ok((output, held))
+    }
+
+    /// The limit fits the table with only the active group, but not the table
+    /// before the completed groups are emitted. The result must not change.
+    #[tokio::test]
+    async fn completed_groups_under_memory_pressure() -> Result<()> {
+        let (expected, held) =
+            run_fully_sorted(Arc::new(UnboundedMemoryPool::default())).await?;
+        let (actual, _) = run_fully_sorted(Arc::new(GreedyMemoryPool::new(held))).await?;
+        assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
         Ok(())
     }
 }
