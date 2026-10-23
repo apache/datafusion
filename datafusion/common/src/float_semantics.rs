@@ -25,10 +25,14 @@
 //! [`compare_floats`] sorts `-0.0` before `+0.0`.
 //!
 //! Every comparison, hash or grouping boundary should be built from these
-//! helpers rather than inspecting float bits itself. Where an Arrow kernel
-//! compares, sorts, row-encodes or hashes the values, normalize them first.
-//! Where DataFusion compares values itself, use [`compare_floats`],
-//! [`float_lt`] or [`float_gt`]. Where it hashes them, hash [`hash_input`].
+//! helpers rather than inspecting float bits itself:
+//!
+//! - Equality and grouping: normalize first ([`normalize_float`],
+//!   [`normalize_floats`], [`normalize_float_scalar`]), then compare bits or
+//!   call Arrow's `eq`, `RowConverter` or `make_comparator`. Hash
+//!   [`hash_input`].
+//! - Ordering: use [`compare_floats`], [`float_lt`] or [`float_gt`]. Sorting
+//!   does not normalize yet, so `-0.0` still sorts before `+0.0`.
 //!
 
 use std::cmp::Ordering;
@@ -114,8 +118,9 @@ pub fn float_gt<T: FloatSemantics>(left: T, right: T) -> bool {
     compare_floats(left, right).is_gt()
 }
 
-/// The value that DataFusion hashes in place of a float. Values that compare
-/// as equal hash the same, so this is the value [`normalize_float`] returns.
+/// The value that DataFusion hashes in place of a float. Values that DataFusion
+/// treats as equal hash the same, so this is the value [`normalize_float`]
+/// returns.
 #[inline]
 pub fn hash_input<T: FloatSemantics>(v: T) -> T {
     normalize_float(v)
