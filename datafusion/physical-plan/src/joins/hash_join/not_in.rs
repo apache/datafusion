@@ -19,6 +19,7 @@
 //! records the rows whose `NOT IN` is UNKNOWN, and its helpers.
 
 use crate::hash_utils::create_hashes;
+use crate::joins::PartitionMode;
 use crate::joins::SharedBitmapBuilder;
 use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::stream::lookup_join_hashmap;
@@ -30,13 +31,140 @@ use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{filter, take};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::RandomState;
-use datafusion_common::{JoinSide, JoinType, NullEquality, Result};
+use datafusion_common::{JoinSide, JoinType, NullEquality, Result, plan_err};
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::apply_cmp;
 
+/// Which `NOT IN` a null-aware join computes, derived from
+/// `HashJoinExec::null_aware`, the join type, the keys and the filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NotIn {
+    /// `build.key NOT IN (probe.key)`: the final stage gives every build row
+    /// its `IN` mark, from the visited bitmap and the NULLs seen.
+    BuildRows {
+        scope: NotInScope,
+        output: NotInOutput,
+    },
+    /// `probe.key NOT IN (build.key)`, `CollectLeft` (`RightAnti`): emits the
+    /// probe rows whose `IN` is FALSE, decided while streaming because every
+    /// probe row sees the whole build side.
+    ProbeRows { scope: NotInScope },
+}
+
+/// Which rows of the other side a NULL can make a row's `IN` UNKNOWN for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NotInScope {
+    /// One value key, no correlation keys, no filter: a NULL anywhere on the
+    /// other side makes every unmatched row UNKNOWN. [`NotIn::BuildRows`]
+    /// probe partitions share one summary of what they saw
+    /// (`ProbeCompletion`); [`NotIn::ProbeRows`] emits nothing once any build
+    /// key is NULL, and never a probe row whose key is NULL.
+    Uncorrelated,
+    /// Correlation scope keys (`on[value_keys..]`), a multi-column value key
+    /// (`on[..value_keys]`), or a filter: only the rows in the same scope
+    /// count, so UNKNOWN is decided per row (see
+    /// [`mark_null_candidates_for_probe_batch`]).
+    Correlated { value_keys: usize },
+}
+
+/// What a [`NotIn::BuildRows`] join emits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NotInOutput {
+    /// `LeftAnti`: the build rows whose mark is FALSE.
+    Rows,
+    /// `LeftMark`: every build row with its mark, a nullable Boolean column.
+    Mark,
+}
+
+impl NotIn {
+    /// Validates that `null_aware` may be set for this join and returns its
+    /// form. The errors are those of the legality table this replaced.
+    pub(super) fn try_new(
+        join_type: JoinType,
+        partition_mode: PartitionMode,
+        num_keys: usize,
+        num_value_keys: usize,
+        has_filter: bool,
+    ) -> Result<Self> {
+        if num_value_keys == 0 || num_value_keys > num_keys {
+            return plan_err!(
+                "null_aware {join_type} join needs between 1 and {num_keys} `NOT IN` value keys, got {num_value_keys}"
+            );
+        }
+        // `num_keys > 1` also covers a multi-column value key without any
+        // correlation: a NULL in one tuple element leaves the comparison FALSE
+        // whenever another element is a definite mismatch, so it too must be
+        // decided per row.
+        let scope = if num_keys > 1 || has_filter {
+            NotInScope::Correlated {
+                value_keys: num_value_keys,
+            }
+        } else {
+            NotInScope::Uncorrelated
+        };
+        let output = match (join_type, partition_mode) {
+            (JoinType::LeftAnti, _) => NotInOutput::Rows,
+            (JoinType::LeftMark, _) => NotInOutput::Mark,
+            // `PartitionMode::CollectLeft` is safe because `RightAnti` is
+            // probe-driven: every probe row sees the whole build side.
+            (JoinType::RightAnti, PartitionMode::CollectLeft) => {
+                return Ok(Self::ProbeRows { scope });
+            }
+            _ => {
+                return plan_err!(
+                    "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, or LeftMark joins, got {join_type} with {partition_mode}"
+                );
+            }
+        };
+        // Build-driven joins decide in the final stage from state shared
+        // across the probe partitions: the per-build-row null bitmap for
+        // the correlated forms, and the probe-side NULL flag for the
+        // uncorrelated ones. `Partitioned` gives each output partition its
+        // own build side, so neither is global there.
+        if partition_mode == PartitionMode::Partitioned {
+            return plan_err!(
+                "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
+            );
+        }
+        Ok(Self::BuildRows { scope, output })
+    }
+
+    fn scope(self) -> NotInScope {
+        match self {
+            Self::BuildRows { scope, .. } | Self::ProbeRows { scope } => scope,
+        }
+    }
+
+    /// Whether UNKNOWN is decided per row.
+    pub(super) fn is_correlated(self) -> bool {
+        matches!(self.scope(), NotInScope::Correlated { .. })
+    }
+
+    /// Whether this join records UNKNOWN per build row in the shared
+    /// null-indices bitmap: a correlated [`NotIn::BuildRows`].
+    pub(super) fn marks_build_rows(self) -> bool {
+        matches!(
+            self,
+            Self::BuildRows {
+                scope: NotInScope::Correlated { .. },
+                ..
+            }
+        )
+    }
+
+    /// Number of leading keys that are `NOT IN` value keys; the keys after
+    /// them are correlation scope keys.
+    pub(super) fn value_keys(self) -> usize {
+        match self.scope() {
+            NotInScope::Correlated { value_keys } => value_keys,
+            NotInScope::Uncorrelated => 1,
+        }
+    }
+}
+
 /// The build rows with a NULL `NOT IN` value key (in any element of a
 /// multi-column key), used by correlated null-aware joins (see
-/// [`NullAwareMode`](super::exec::NullAwareMode)).
+/// [`NotIn`]).
 ///
 /// Such rows make `NOT IN` UNKNOWN whenever *any* probe row in their
 /// correlation scope passes the join filter (unless another element is a

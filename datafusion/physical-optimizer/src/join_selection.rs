@@ -320,7 +320,7 @@ fn statistical_join_selection_subrule(
                         && should_swap_join_order(left, right, context)?
                     {
                         // A null-aware join is never in `Partitioned` mode
-                        // (`NullAwareMode::try_new` rejects it), so the swap
+                        // (`NotIn::try_new` rejects it), so the swap
                         // keeps the mode this arm matched on.
                         hash_join
                             .swap_inputs(PartitionMode::Partitioned)

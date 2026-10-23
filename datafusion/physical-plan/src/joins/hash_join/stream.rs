@@ -27,9 +27,9 @@ use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::joins::Map;
 use crate::joins::PartitionMode;
 use crate::joins::SharedBitmapBuilder;
-use crate::joins::hash_join::exec::{JoinLeftData, NullAwareMode};
+use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::not_in::{
-    UnknownMarks, mark_null_candidates_for_probe_batch,
+    NotIn, NotInOutput, NotInScope, UnknownMarks, mark_null_candidates_for_probe_batch,
 };
 use crate::joins::hash_join::probe_completion::ProbeSideSummary;
 use crate::joins::hash_join::shared_bounds::{
@@ -433,7 +433,7 @@ pub(super) struct HashJoinStream {
     /// Uses `LimitedBatchCoalescer` to efficiently combine batches and absorb limit with 'fetch'
     output_buffer: LimitedBatchCoalescer,
     /// Null-aware (`NOT IN`) semantics of this join, if any
-    null_aware: Option<NullAwareMode>,
+    null_aware: Option<NotIn>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -588,7 +588,7 @@ impl HashJoinStream {
         right_side_ordered: bool,
         build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
-        null_aware: Option<NullAwareMode>,
+        null_aware: Option<NotIn>,
         fetch: Option<usize>,
     ) -> Self {
         // Create output buffer with coalescing and optional fetch limit.
@@ -903,7 +903,8 @@ impl HashJoinStream {
                     // `RightAnti` decides the rows of this probe batch. Without
                     // a NULL-valued row on either side none of them can be
                     // UNKNOWN, so the bitmap is only allocated when one exists.
-                    NullAwareMode::RightAnti { value_keys, .. } => {
+                    NotIn::ProbeRows { .. } => {
+                        let value_keys = mode.value_keys();
                         let may_be_unknown =
                             build_side.left_data.null_value_build_rows().is_some()
                                 || state.values[..value_keys]
@@ -922,7 +923,7 @@ impl HashJoinStream {
                     }
                     // The others decide the build rows shared by all probe
                     // partitions.
-                    NullAwareMode::LeftAnti { .. } | NullAwareMode::LeftMark { .. } => {
+                    NotIn::BuildRows { .. } => {
                         mark(UnknownMarks::Build(
                             build_side.left_data.null_indices_bitmap(),
                         ))?;
@@ -1069,13 +1070,13 @@ impl HashJoinStream {
         )?;
 
         match self.null_aware {
-            Some(NullAwareMode::RightAnti {
-                correlated: false, ..
+            Some(NotIn::ProbeRows {
+                scope: NotInScope::Uncorrelated,
             }) => {
                 right_indices = drop_null_probe_keys(state, right_indices);
             }
-            Some(NullAwareMode::RightAnti {
-                correlated: true, ..
+            Some(NotIn::ProbeRows {
+                scope: NotInScope::Correlated { .. },
             }) => {
                 if let Some(unknown) = &state.unknown_probe_rows {
                     right_indices = retain_probe_rows(&right_indices, |idx| {
@@ -1226,20 +1227,30 @@ impl HashJoinStream {
         // Null-aware joins post-process the build rows under SQL three-valued
         // logic; see the helpers for the rules.
         let (left_side, right_side, mark_column) = match self.null_aware {
-            Some(NullAwareMode::LeftAnti { correlated, .. }) => {
+            Some(
+                mode @ NotIn::BuildRows {
+                    output: NotInOutput::Rows,
+                    ..
+                },
+            ) => {
                 let (left_side, right_side) = null_aware_left_anti_final_indices(
                     &build_side.left_data,
-                    correlated,
+                    mode.is_correlated(),
                     probe_summary,
                     left_side,
                     right_side,
                 );
                 (left_side, right_side, None)
             }
-            Some(NullAwareMode::LeftMark { correlated, .. }) => {
+            Some(
+                mode @ NotIn::BuildRows {
+                    output: NotInOutput::Mark,
+                    ..
+                },
+            ) => {
                 let mark_column = null_aware_left_mark_column(
                     &build_side.left_data,
-                    correlated,
+                    mode.is_correlated(),
                     probe_summary,
                     &left_side,
                     &right_side,
@@ -1342,32 +1353,28 @@ fn next_final_indices_chunk(
 /// - `LeftMark` only records the shared flags; the mark column is built in
 ///   the final stage from them.
 fn null_aware_skip_probe_batch(
-    mode: NullAwareMode,
+    mode: NotIn,
     state: &ProcessProbeBatchState,
     left_data: &JoinLeftData,
 ) -> bool {
     match mode {
-        NullAwareMode::RightAnti {
-            correlated: false, ..
+        NotIn::ProbeRows {
+            scope: NotInScope::Uncorrelated,
         } => left_data.build_side_has_null,
         // Correlated joins decide UNKNOWN per row instead, in
         // `mark_null_candidates_for_probe_batch`.
-        NullAwareMode::RightAnti {
-            correlated: true, ..
+        NotIn::ProbeRows {
+            scope: NotInScope::Correlated { .. },
         }
-        | NullAwareMode::LeftAnti {
-            correlated: true, ..
-        }
-        | NullAwareMode::LeftMark {
-            correlated: true, ..
+        | NotIn::BuildRows {
+            scope: NotInScope::Correlated { .. },
+            ..
         } => false,
-        NullAwareMode::LeftAnti {
-            correlated: false, ..
-        }
-        | NullAwareMode::LeftMark {
-            correlated: false, ..
+        NotIn::BuildRows {
+            scope: NotInScope::Uncorrelated,
+            output,
         } => {
-            let is_anti = matches!(mode, NullAwareMode::LeftAnti { .. });
+            let is_anti = output == NotInOutput::Rows;
             if state.is_first_chunk() {
                 // `on[0]` is the `NOT IN` value key for both modes. A probe
                 // batch may resume lookup many times, but its summary is
@@ -1423,7 +1430,7 @@ fn retain_probe_rows(
 /// Final-stage rules of a null-aware `LeftAnti` join, evaluated by the last
 /// probe partition.
 ///
-/// A correlated join (see `NullAwareMode`) drops the unmatched build rows
+/// A correlated join (see `NotIn`) drops the unmatched build rows
 /// whose `NOT IN` was marked UNKNOWN in the null-indices bitmap.
 ///
 /// Otherwise the rules use what every partition together saw:

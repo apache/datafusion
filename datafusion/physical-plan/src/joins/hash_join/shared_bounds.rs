@@ -26,8 +26,9 @@ use crate::ExecutionPlanProperties;
 use crate::Partitioning;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::exec::{HASH_JOIN_SEED, NullAwareMode};
+use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
+use crate::joins::hash_join::not_in::NotIn;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
@@ -273,7 +274,7 @@ pub(crate) struct SharedBuildAccumulator {
     null_equality: NullEquality,
     /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
-    null_aware: Option<NullAwareMode>,
+    null_aware: Option<NotIn>,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -385,7 +386,7 @@ impl SharedBuildAccumulator {
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
         null_equality: NullEquality,
-        null_aware: Option<NullAwareMode>,
+        null_aware: Option<NotIn>,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -918,6 +919,7 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::joins::hash_join::not_in::{NotInOutput, NotInScope};
 
     use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int32Array};
     use arrow::compute::SortOptions;
@@ -1451,9 +1453,9 @@ mod tests {
             probe_schema,
             probe_range_partitioning: None,
             null_equality,
-            null_aware: null_aware.then_some(NullAwareMode::LeftAnti {
-                correlated: false,
-                value_keys: 1,
+            null_aware: null_aware.then_some(NotIn::BuildRows {
+                scope: NotInScope::Uncorrelated,
+                output: NotInOutput::Rows,
             }),
         }
     }
@@ -1666,9 +1668,9 @@ mod tests {
                 probe_schema: Arc::new(Schema::new(fields)),
                 probe_range_partitioning: None,
                 null_equality: NullEquality::NullEqualsNothing,
-                null_aware: Some(NullAwareMode::LeftMark {
-                    correlated: true,
-                    value_keys,
+                null_aware: Some(NotIn::BuildRows {
+                    scope: NotInScope::Correlated { value_keys },
+                    output: NotInOutput::Mark,
                 }),
             };
 
