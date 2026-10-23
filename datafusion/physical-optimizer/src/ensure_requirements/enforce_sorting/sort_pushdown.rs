@@ -51,6 +51,8 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
+use crate::row_bound::{RowBound, limit_node};
+
 /// "Data class" used by sort pushdown (now driven from `EnsureRequirements`)
 /// to push down [`SortExec`] in the plan. In some cases the total
 /// computational cost is reduced by pushing down `SortExec`s through certain
@@ -94,21 +96,19 @@ pub type SortPushDown = PlanContext<ParentRequirements>;
 /// fetch is the tighter bound. Using the bare `fetch` would be wrong too, as
 /// it would turn `LIMIT 10 OFFSET 5` into `TopK(10)` below the limit, i.e. 5
 /// result rows.
-///
-/// `skip` and `fetch` are independent `usize`s, so their sum can overflow. Like
-/// [`combine_limit`], we saturate: `usize::MAX` input rows is never a smaller
-/// bound than the real one, so the pushed-down fetch stays correct.
-///
-/// [`combine_limit`]: datafusion_common::utils::combine_limit
 fn input_fetch(
     plan: &Arc<dyn ExecutionPlan>,
     parent_fetch: Option<usize>,
 ) -> Option<usize> {
-    let fetch = min_fetch(plan.fetch(), parent_fetch)?;
     let skip = plan
         .downcast_ref::<GlobalLimitExec>()
         .map_or(0, |limit| limit.skip());
-    Some(fetch.saturating_add(skip))
+    let output = RowBound::fetch(plan.fetch()).min(RowBound::fetch(parent_fetch));
+    RowBound {
+        skip,
+        fetch: output.fetch,
+    }
+    .input_rows()
 }
 
 /// Assigns the ordering requirement of the root node to the its children.
@@ -140,12 +140,7 @@ pub fn pushdown_sorts(sort_push_down: SortPushDown) -> Result<SortPushDown> {
 }
 
 fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
-    match (f1, f2) {
-        (Some(f1), Some(f2)) => Some(f1.min(f2)),
-        (Some(_), _) => f1,
-        (_, Some(_)) => f2,
-        _ => None,
-    }
+    RowBound::fetch(f1).min(RowBound::fetch(f2)).fetch
 }
 
 /// Returns whether a fetch on `plan` can also be applied to each child.
@@ -188,11 +183,7 @@ fn preserve_fetch_above_ordered_plan(
         node.plan.output_partitioning().partition_count() > 1;
     let input = Arc::clone(&node.plan);
 
-    let limit: Arc<dyn ExecutionPlan> = if input_has_multiple_partitions {
-        Arc::new(LocalLimitExec::new(input, fetch))
-    } else {
-        Arc::new(GlobalLimitExec::new(input, 0, Some(fetch)))
-    };
+    let limit = limit_node(input, RowBound::fetch(Some(fetch)));
     let limit_node = PlanContext::new(limit, ParentRequirements::default(), vec![node]);
 
     if input_has_multiple_partitions
