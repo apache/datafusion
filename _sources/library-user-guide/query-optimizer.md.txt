@@ -168,9 +168,10 @@ Two rules can want the opposite order for the same pair of adjacent plan nodes. 
 
 Do not let two rules compete. Give one rule precedence, make the competing rule yield, and record the decision in the module documentation of both rules.
 
-There is one such decision today:
+There are two such decisions today:
 
 - `PushDownFilter` yields to a _pure extraction projection_. A pure extraction projection is a projection whose expressions are only `__datafusion_extracted_N` aliases and pass-through columns. `ExtractLeafExpressions` creates it, and `PushDownLeafProjections` moves it towards the leaves. `PushDownFilter` does not move a filter below such a projection, so the projection stays next to the scan. A Parquet scan then merges the projection into the file projection and reads only the struct leaf. The filter loses nothing, because `PushDownFilter` records the predicate in `TableScan::filters` in the pass that runs before the extraction projection exists. See [issue #14540](https://github.com/apache/datafusion/issues/14540).
+- `PushDownLeafProjections` yields to `OptimizeProjections`. When the extraction projection cannot move below the input of a projection, for example a `TableScan` or an `Aggregate`, `PushDownLeafProjections` leaves the projection unchanged. A split in place would give a recovery projection over an extraction projection on the same input, which `OptimizeProjections` merges back. The source absorbs the leaf expressions of the original projection just as well. See [PR #26085](https://github.com/apache/datafusion/pull/26085).
 
 ### Expression Naming
 
