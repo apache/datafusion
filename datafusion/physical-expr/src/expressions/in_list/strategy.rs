@@ -17,9 +17,11 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray};
-use arrow::compute::take;
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray, PrimitiveArray};
+use arrow::compute::{concat, take};
+use arrow::datatypes::{
+    ArrowPrimitiveType, DataType, Float16Type, Float32Type, Float64Type,
+};
 use datafusion_common::Result;
 
 use super::array_static_filter::ArrayStaticFilter;
@@ -34,6 +36,13 @@ pub(super) fn instantiate_static_filter(
     needle_data_type: &DataType,
 ) -> Result<StaticFilterRef> {
     let in_array = flatten_dictionary_haystack(in_array)?;
+    // Expand before choosing a filter so its cutoff counts every physical key.
+    let in_array = match in_array.data_type() {
+        DataType::Float16 => add_missing_signed_zero::<Float16Type>(in_array)?,
+        DataType::Float32 => add_missing_signed_zero::<Float32Type>(in_array)?,
+        DataType::Float64 => add_missing_signed_zero::<Float64Type>(in_array)?,
+        _ => in_array,
+    };
 
     let filter = if view_types_match(needle_data_type, in_array.data_type())
         && let Some(filter) = instantiate_byte_view_filter(&in_array)?
@@ -54,6 +63,31 @@ pub(super) fn instantiate_static_filter(
     } else {
         Ok(filter)
     }
+}
+
+/// SQL membership equates the zero signs, while the primitive filters compare bits.
+fn add_missing_signed_zero<T: ArrowPrimitiveType>(
+    in_array: ArrayRef,
+) -> Result<ArrayRef> {
+    let array = in_array.as_primitive::<T>();
+    let positive_zero = T::Native::ZERO;
+    let negative_zero = positive_zero.neg_wrapping();
+    let mut positive_present = false;
+    let mut negative_present = false;
+    for value in array.iter().flatten() {
+        positive_present = positive_present || value.is_eq(positive_zero);
+        negative_present = negative_present || value.is_eq(negative_zero);
+        if positive_present && negative_present {
+            return Ok(in_array);
+        }
+    }
+    let missing = match (positive_present, negative_present) {
+        (true, false) => negative_zero,
+        (false, true) => positive_zero,
+        _ => return Ok(in_array),
+    };
+    let alias = PrimitiveArray::<T>::from_value(missing, 1);
+    Ok(concat(&[array, &alias])?)
 }
 
 /// Raw view access requires the expression and list to use the same view type.
@@ -85,9 +119,10 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        BooleanArray, DictionaryArray, Int8Array, Int16Array, Int32Array,
+        BooleanArray, DictionaryArray, Float32Array, Int8Array, Int16Array, Int32Array,
     };
 
+    use super::super::branchless_filter::BranchlessFilterType;
     use super::*;
 
     fn nested_dictionary(keys: Int16Array) -> Result<ArrayRef> {
@@ -127,6 +162,92 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn float_zero_expansion_preserves_values_and_reuses_complete_lists() -> Result<()> {
+        let nan = f32::from_bits(0x7fc0_0001);
+        for zero in [0.0_f32, -0.0_f32] {
+            let array: ArrayRef = Arc::new(
+                Float32Array::from(vec![Some(9.0), None, Some(nan), Some(zero)])
+                    .slice(1, 3),
+            );
+            let expanded = add_missing_signed_zero::<Float32Type>(array)?;
+            let bits = expanded
+                .as_primitive::<Float32Type>()
+                .iter()
+                .map(|value| value.map(f32::to_bits))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                bits,
+                vec![
+                    None,
+                    Some(nan.to_bits()),
+                    Some(zero.to_bits()),
+                    Some((-zero).to_bits())
+                ]
+            );
+            assert!(Arc::ptr_eq(
+                &expanded,
+                &add_missing_signed_zero::<Float32Type>(Arc::clone(&expanded))?
+            ));
+        }
+
+        let unchanged: [ArrayRef; 4] = [
+            Arc::new(Float32Array::from(Vec::<f32>::new())),
+            Arc::new(Float32Array::from(vec![None::<f32>])),
+            Arc::new(Float32Array::from(vec![0.0_f32, -0.0_f32])),
+            Arc::new(Float32Array::from(vec![0.0_f32, 1.0]).slice(1, 1)),
+        ];
+        for array in unchanged {
+            assert!(Arc::ptr_eq(
+                &array,
+                &add_missing_signed_zero::<Float32Type>(Arc::clone(&array))?
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn static_float_filters_match_both_zeros_at_cutoffs() -> Result<()> {
+        fn check<T: BranchlessFilterType>() -> Result<()> {
+            let positive_zero = T::Native::ZERO;
+            let negative_zero = positive_zero.neg_wrapping();
+            let needles = PrimitiveArray::<T>::from_iter([
+                Some(positive_zero),
+                Some(negative_zero),
+                Some(T::Native::ONE),
+                None,
+            ]);
+            for len in [T::MAX_LIST_LEN - 1, T::MAX_LIST_LEN] {
+                for zero in [positive_zero, negative_zero] {
+                    let array = Arc::new(PrimitiveArray::<T>::from_value(zero, len));
+                    let filter = instantiate_static_filter(array, &T::DATA_TYPE)?;
+                    assert_eq!(
+                        filter.contains(&needles, false)?,
+                        BooleanArray::from(vec![
+                            Some(true),
+                            Some(true),
+                            Some(false),
+                            None
+                        ])
+                    );
+                    assert_eq!(
+                        filter.contains(&needles, true)?,
+                        BooleanArray::from(vec![
+                            Some(false),
+                            Some(false),
+                            Some(true),
+                            None
+                        ])
+                    );
+                }
+            }
+            Ok(())
+        }
+        check::<Float16Type>()?;
+        check::<Float32Type>()?;
+        check::<Float64Type>()
     }
 
     #[test]
