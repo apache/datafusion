@@ -1831,7 +1831,7 @@ pub async fn collect_partitioned(
     let mut join_set = JoinSet::new();
     // Execute the plan and collect the results into batches.
     streams.into_iter().enumerate().for_each(|(idx, stream)| {
-        join_set.spawn(async move {
+        join_set.spawn_reclaimable(async move {
             let result: Result<Vec<RecordBatch>> = stream.try_collect().await;
             (idx, result)
         });
@@ -2108,12 +2108,14 @@ mod tests {
 
     use super::*;
     use crate::buffer::BufferExec;
-    use crate::test::exec::MockExec;
+    use crate::test::assert_is_pending;
+    use crate::test::exec::{BlockingExec, MockExec};
     use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
     use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+    use futures::FutureExt;
 
     #[derive(Debug)]
     pub struct EmptyExec {
@@ -3262,6 +3264,20 @@ mod tests {
             result.err().unwrap().strip_backtrace(),
             "Execution error: Invalid batch column at '0' has null but schema specifies non-nullable",
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_collect_partitioned_drop_cancel() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let blocking_exec = Arc::new(BlockingExec::new(schema, 2));
+        let refs = blocking_exec.refs();
+
+        let mut fut =
+            collect_partitioned(blocking_exec, Arc::new(TaskContext::default())).boxed();
+        assert_is_pending(&mut fut);
+        drop(fut);
+        assert_eq!(refs.strong_count(), 0);
         Ok(())
     }
 }
