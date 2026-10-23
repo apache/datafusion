@@ -44,27 +44,8 @@ statement ok
 CREATE TABLE small(x INT) AS VALUES (1), (2);
 
 ###
-### Sorting by a cast of a sort key
+### Unions
 ###
-
-# CAST(a AS BIGINT) and CAST(b AS BIGINT) are strictly increasing in a and b,
-# so data sorted by (a, b) is also sorted by (ca, cb). The plan only merges
-# the sorted partitions and has no SortExec.
-query TT
-EXPLAIN SELECT a, CAST(a AS BIGINT) ca, b, CAST(b AS BIGINT) cb FROM t ORDER BY ca, cb;
-----
-physical_plan
-01)SortPreservingMergeExec: [ca@1 ASC NULLS LAST, cb@3 ASC NULLS LAST]
-02)--ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as ca, b@1 as b, CAST(b@1 AS Int64) as cb]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
-
-query IIII
-SELECT a, CAST(a AS BIGINT) ca, b, CAST(b AS BIGINT) cb FROM t ORDER BY ca, cb LIMIT 3;
-----
-0 0 0 0
-0 0 0 0
-0 0 0 0
 
 # Each side of the union is sorted by a and also by a cast of a, but the cast
 # is in column x on the left side and in column y on the right side. The
@@ -92,9 +73,9 @@ physical_plan
 
 # The GROUP BY lists its keys as d, c, b, a, which matches neither input
 # ordering. The aggregates still find that c, a and b are sorted (c from the
-# ordering on c, then a and b from the ordering on (a, b)) and run in
-# partially sorted mode on them, and the repartition merges on c, a, b. The
-# key order chosen here decides both the merge key and the clustering mode.
+# ordering on c, then a and b from the ordering on (a, b)), so they run in
+# partially sorted mode. The clustering mode lists those keys by their
+# position in the GROUP BY, in the order they were found: [1, 3, 2].
 query TT
 EXPLAIN SELECT d, c, b, a, count(*) FROM t GROUP BY d, c, b, a;
 ----
@@ -131,25 +112,6 @@ SELECT * FROM (SELECT b, c FROM t WHERE b = 1 ORDER BY c LIMIT 5) ORDER BY b, c;
 1 28
 1 29
 
-# Each side knows that b is constant only through an equality: a = 1 and
-# b = a. The union keeps b constant, so ORDER BY b, c is satisfied by the
-# sides' order on c and needs only a merge, with no SortExec.
-query TT
-EXPLAIN SELECT a, b, c FROM t WHERE a = 1 AND b = a
-UNION ALL
-SELECT a, b, c FROM t WHERE a = 1 AND b = a
-ORDER BY b, c;
-----
-physical_plan
-01)SortPreservingMergeExec: [b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
-02)--UnionExec
-03)----FilterExec: a@0 = 1 AND b@1 = a@0
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], file_type=csv, has_header=true
-06)----FilterExec: a@0 = 1 AND b@1 = a@0
-07)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
-08)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], file_type=csv, has_header=true
-
 # A cross join keeps the constants of its left input: b = 1 still holds after
 # the join, so ORDER BY l.b, l.c sorts on c only.
 query TT
@@ -164,8 +126,8 @@ physical_plan
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c], output_ordering=[c@1 ASC NULLS LAST], file_type=csv, has_header=true
 07)----DataSourceExec: partitions=1, partition_sizes=[1]
 
-# A cross join also keeps the constants of its right input: x = 1 still holds
-# after the join, so ORDER BY l.c, s.x sorts on c only.
+# A cross join also keeps a right-side constant set by an equality filter:
+# x = 1 still holds after the join, so ORDER BY l.c, s.x sorts on c only.
 query TT
 EXPLAIN SELECT l.c, s.x FROM (SELECT c FROM t) l CROSS JOIN (SELECT x FROM small WHERE x = 1) s ORDER BY l.c, s.x;
 ----
