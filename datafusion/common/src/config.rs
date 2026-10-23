@@ -931,29 +931,6 @@ config_namespace! {
         /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
         pub perfect_hash_join_min_key_density: f64, default = 0.15
 
-        /// Enable an exact integer membership prefilter for hash joins with a single
-        /// integer key when the build side uses a hash table and the join is not
-        /// null-aware. It skips lookups for absent keys while retaining NULLs and
-        /// probe rows for the original join logic.
-        pub enable_join_integer_prefilter: bool, default = false
-
-        /// Maximum number of integer values covered by the join prefilter bitmap
-        /// (`max_key - min_key + 1`). Zero disables bitmap construction.
-        /// Larger ranges fall back to normal hash table lookups.
-        pub join_integer_prefilter_max_key_range: u64, default = 262144
-
-        /// The integer prefilter must prune more than this fraction of all sampled
-        /// probe rows, including NULLs, to keep filtering. Must be finite and in
-        /// [0, 1], validated when executing the join.
-        pub join_integer_prefilter_min_pruning_ratio: f64, default = 0.5
-
-        /// Minimum input probe rows in each integer prefilter sampling window,
-        /// including NULLs. Must be greater than zero. Windows end at batch boundaries.
-        /// Unprofitable samples initially pause for 10 times this many input rows;
-        /// consecutive failures double the pause up to 128 times. A profitable
-        /// sample resets the pause to 10 times this many rows.
-        pub join_integer_prefilter_sample_rows: ConfigNonZeroUsize, default = non_zero_usize_default(12288)
-
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
         /// are highly selective filters or joins that could produce tiny output batches. The
@@ -1424,8 +1401,8 @@ config_namespace! {
         /// values as UTC-adjusted instants, so callers that need the resulting
         /// Arrow type to be timezone-aware (e.g. for Spark `TimestampType`
         /// semantics) should set this to `"UTC"`. No effect when `coerce_int96`
-        /// is `None`.
-        pub coerce_int96_tz: Option<String>, default = None
+        /// is `None`, but the value is still validated when it is set.
+        pub coerce_int96_tz: Option<ConfigTimeZone>, default = None
 
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
@@ -4272,6 +4249,7 @@ impl Display for OutputFormat {
 #[cfg(test)]
 mod tests {
     use crate::assert_contains;
+    #[cfg(feature = "parquet")]
     use crate::config::TableParquetOptions;
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
@@ -5087,6 +5065,48 @@ mod tests {
         let mut scalar = DFTimeUnit::Microsecond;
         assert!(ConfigField::set(&mut scalar, "typo", "ns").is_err());
         assert_eq!(scalar, DFTimeUnit::Microsecond);
+    }
+
+    #[test]
+    fn test_parquet_coerce_int96_tz_validation() {
+        use crate::config::ConfigOptions;
+
+        const KEY: &str = "datafusion.execution.parquet.coerce_int96_tz";
+        let mut config = ConfigOptions::default();
+        let tz = |config: &ConfigOptions| {
+            config
+                .execution
+                .parquet
+                .coerce_int96_tz
+                .as_ref()
+                .map(|tz| tz.to_string())
+        };
+        assert_eq!(tz(&config), None);
+
+        // Valid values are kept exactly as written, with or without coerce_int96.
+        for value in ["UTC", "America/Los_Angeles", "+08:00", "-0530", "+08"] {
+            config.set(KEY, value).unwrap();
+            assert_eq!(tz(&config).as_deref(), Some(value));
+        }
+
+        // A rejected value leaves the previous one in place.
+        for value in ["Not/A_Timezone", "utc", "08:00", ""] {
+            let err = config.set(KEY, value).unwrap_err();
+            assert_contains!(err.to_string(), format!("Invalid time zone: {value}."));
+            assert_eq!(tz(&config).as_deref(), Some("+08"));
+        }
+
+        // Reset restores None, and an invalid update leaves it unset.
+        config.reset(KEY).unwrap();
+        assert_eq!(tz(&config), None);
+        assert!(config.set(KEY, "Not/A_Timezone").is_err());
+        assert_eq!(tz(&config), None);
+
+        // The option has no nested fields.
+        config.set(KEY, "UTC").unwrap();
+        assert!(config.set(&format!("{KEY}.typo"), "UTC").is_err());
+        assert!(config.reset(&format!("{KEY}.typo")).is_err());
+        assert_eq!(tz(&config).as_deref(), Some("UTC"));
     }
 
     #[cfg(feature = "parquet")]

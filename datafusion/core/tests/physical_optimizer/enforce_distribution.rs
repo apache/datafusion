@@ -28,9 +28,12 @@ use crate::physical_optimizer::test_utils::{
     sort_preserving_merge_exec, union_exec,
 };
 
-use arrow::array::{Int64Array, RecordBatch, UInt8Array, UInt64Array};
+use arrow::array::{
+    Int64Array, RecordBatch, TimestampNanosecondArray, UInt8Array, UInt64Array,
+};
 use arrow::compute::SortOptions;
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use datafusion::assert_batches_sorted_eq;
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::MemTable;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -75,7 +78,7 @@ use datafusion_physical_plan::operator_statistics::{
 
 use datafusion_physical_expr::{
     AcrossPartitions, ConstExpr, Distribution, Partitioning, RangePartitioning,
-    SplitPoint,
+    ScalarFunctionExpr, SplitPoint,
 };
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
@@ -956,6 +959,233 @@ fn range_aggregate_reuses_range_partitioning() -> Result<()> {
     "
     );
 
+    Ok(())
+}
+
+fn timestamp_range_input(split: i64) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "timestamp",
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        false,
+    )]));
+    let hour = 3_600_000_000_000;
+    let (before_split, after_split): (Vec<_>, Vec<_>) =
+        [0, 1, hour, hour + 1, 2 * hour, 2 * hour + 1]
+            .into_iter()
+            .partition(|timestamp| *timestamp < split);
+    let partitions = [before_split, after_split]
+        .into_iter()
+        .map(|values| -> Result<_> {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(TimestampNanosecondArray::from(values))],
+            )?;
+            Ok(vec![batch])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let range = RangePartitioning::try_new(
+        [PhysicalSortExpr::new_default(col("timestamp", &schema)?)].into(),
+        vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+            Some(split),
+            None,
+        )])],
+    )?;
+    let source = MemorySourceConfig::try_new_exec(&partitions, schema, None)?;
+    Ok(Arc::new(
+        source
+            .as_ref()
+            .clone()
+            .with_partitioning(Partitioning::Range(range)),
+    ))
+}
+
+fn date_trunc_expr(
+    input: &dyn ExecutionPlan,
+    precision: &str,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(ScalarFunctionExpr::new(
+        "date_trunc",
+        datafusion_functions::datetime::date_trunc(),
+        vec![lit(precision), col("timestamp", &input.schema())?],
+        Field::new(
+            "bucket",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        )
+        .into(),
+        Arc::new(ConfigOptions::default()),
+    )))
+}
+
+/// Builds separate Partial and Final stages without projected range metadata.
+/// This exercises checking group locality through the partial stage's input.
+fn partial_final_date_trunc_count(
+    input: Arc<dyn ExecutionPlan>,
+    precision: &str,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    let group_by = PhysicalGroupBy::new_single(vec![(
+        date_trunc_expr(input.as_ref(), precision)?,
+        "bucket".to_string(),
+    )]);
+    let count = Arc::new(
+        AggregateExprBuilder::new(count_udaf(), vec![col("timestamp", &input_schema)?])
+            .schema(Arc::clone(&input_schema))
+            .alias("count")
+            .build()?,
+    );
+    let partial = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        group_by.clone(),
+        vec![Arc::clone(&count)],
+        vec![None],
+        input,
+        Arc::clone(&input_schema),
+    )?);
+    assert!(matches!(
+        partial.properties().output_partitioning(),
+        Partitioning::UnknownPartitioning(2)
+    ));
+
+    Ok(Arc::new(AggregateExec::try_new(
+        AggregateMode::FinalPartitioned,
+        group_by.as_final(),
+        vec![count],
+        vec![None],
+        partial,
+        input_schema,
+    )?))
+}
+
+#[tokio::test]
+async fn aligned_hour_groups_avoid_shuffle_through_partial_aggregate() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let input = timestamp_range_input(hour)?;
+    let aggregate = partial_final_date_trunc_count(input, "hour")?;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+    let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+
+    assert_plan!(
+        optimized,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[bucket@0 as bucket], aggr=[count]
+      AggregateExec: mode=Partial, gby=[date_trunc(hour, timestamp@0) as bucket], aggr=[count]
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
+    let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------------------+-------+",
+            "| bucket              | count |",
+            "+---------------------+-------+",
+            "| 1970-01-01T00:00:00 | 2     |",
+            "| 1970-01-01T01:00:00 | 2     |",
+            "| 1970-01-01T02:00:00 | 2     |",
+            "+---------------------+-------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn crossing_day_groups_keep_shuffle_through_partial_aggregate() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let input = timestamp_range_input(hour)?;
+    let aggregate = partial_final_date_trunc_count(input, "day")?;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+    let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+
+    assert_plan!(
+        optimized,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[bucket@0 as bucket], aggr=[count]
+      RepartitionExec: partitioning=Hash([bucket@0], 2), input_partitions=2
+        AggregateExec: mode=Partial, gby=[date_trunc(day, timestamp@0) as bucket], aggr=[count]
+          DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
+    let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------------------+-------+",
+            "| bucket              | count |",
+            "+---------------------+-------+",
+            "| 1970-01-01T00:00:00 | 6     |",
+            "+---------------------+-------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+#[test]
+fn range_transform_aggregate_optimization_is_idempotent() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+
+    for precision in ["hour", "day"] {
+        let input = timestamp_range_input(hour)?;
+        let aggregate = partial_final_date_trunc_count(input, precision)?;
+        let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+        SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+        let reoptimized =
+            EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
+        SanityCheckPlan::new().optimize(Arc::clone(&reoptimized), &config)?;
+        assert_plan!(optimized, reoptimized);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn range_transform_locality_does_not_satisfy_join_distribution() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let left = timestamp_range_input(hour)?;
+    let right = timestamp_range_input(2 * hour)?;
+    let left_key = date_trunc_expr(left.as_ref(), "hour")?;
+    let right_key = date_trunc_expr(right.as_ref(), "hour")?;
+    for (input, key) in [(&left, &left_key), (&right, &right_key)] {
+        assert!(input.output_partitioning().keeps_keys_local(
+            &[Arc::clone(key)],
+            input.equivalence_properties(),
+            false,
+        ));
+    }
+    let join =
+        hash_join_exec(left, right, &vec![(left_key, right_key)], &JoinType::Inner);
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+    let optimized = EnsureRequirements::new().optimize(join, &config)?;
+    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    assert_plan!(
+        optimized,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(date_trunc(hour, timestamp@0), date_trunc(hour, timestamp@0))]
+      RepartitionExec: partitioning=Hash([date_trunc(hour, timestamp@0)], 2), input_partitions=2
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+      RepartitionExec: partitioning=Hash([date_trunc(hour, timestamp@0)], 2), input_partitions=2
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
+    let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
+    assert_eq!(
+        batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        3 * 2 * 2,
+        "three hour buckets, each joining two left rows with two right rows"
+    );
     Ok(())
 }
 
@@ -4760,7 +4990,7 @@ fn parallelization_multiple_files() -> Result<()> {
                                                                                         @r"
     SortRequiredExec: [a@0 ASC]
       FilterExec: c@2 = 0
-        DataSourceExec: file_groups={8 groups: [[x:0..25], [y:0..25], [x:25..50], [y:25..50], [x:50..75], [y:50..75], [x:75..100], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+        DataSourceExec: file_groups={8 groups: [[x:0..25], [x:25..50], [x:50..75], [x:75..100], [y:0..25], [y:25..50], [y:50..75], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
     let plan_8_sort = test_config_concurrency_8.to_plan(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_8_distrib, plan_8_sort);

@@ -53,11 +53,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new("a", array_a.data_type(), true).into(),
                         Field::new("b", array_b.data_type(), true).into(),
                     ],
-                    number_rows: 0,
+                    number_rows: n_rows,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
                 })
-                .expect("date_bin should work on valid values"),
+                .expect("gcd should work on valid values"),
             )
         })
     });
@@ -74,11 +74,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new("a", array_a.data_type(), true).into(),
                         Field::new("b", scalar_b.data_type(), true).into(),
                     ],
-                    number_rows: 0,
+                    number_rows: n_rows,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
                 })
-                .expect("date_bin should work on valid values"),
+                .expect("gcd should work on valid values"),
             )
         })
     });
@@ -95,11 +95,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new("a", scalar_a.data_type(), true).into(),
                         Field::new("b", scalar_b.data_type(), true).into(),
                     ],
-                    number_rows: 0,
+                    number_rows: 1,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
                 })
-                .expect("date_bin should work on valid values"),
+                .expect("gcd should work on valid values"),
             )
         })
     });

@@ -565,7 +565,14 @@ fn deserialize_cast_options(
 
 impl fmt::Display for CastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "CAST({} AS {})", self.expr, self.cast_type())
+        write!(f, "CAST({} AS {}", self.expr, self.cast_type())?;
+        // A cast to an explicit field can change only the nullability (for
+        // example when a union aligns its inputs), so show it the way schemas
+        // do: `;N` marks a nullable field.
+        if self.explicit_target && self.target_field.is_nullable() {
+            write!(f, ";N")?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -705,6 +712,28 @@ fn can_propagate_cast_constraints(source: &DataType, target: &DataType) -> bool 
         || (source.is_integer() && target.is_integer())
         // NaN bounds are unbounded; finite Float32 values widen exactly.
         || (*source == Float32 && *target == Float64)
+        || is_decimal_widening(source, target)
+}
+
+/// Whether a decimal-to-decimal cast keeps every value exactly, i.e. the target
+/// has at least as many fractional and integer digits as the source. Casting
+/// bounds back to the source then rounds to a neighboring representable value,
+/// which never excludes a valid input.
+fn is_decimal_widening(source: &DataType, target: &DataType) -> bool {
+    fn precision_scale(data_type: &DataType) -> Option<(i16, i16)> {
+        match data_type {
+            Decimal32(p, s) | Decimal64(p, s) | Decimal128(p, s) | Decimal256(p, s) => {
+                Some((*p as i16, *s as i16))
+            }
+            _ => None,
+        }
+    }
+    match (precision_scale(source), precision_scale(target)) {
+        (Some((source_p, source_s)), Some((target_p, target_s))) => {
+            target_s >= source_s && target_p - target_s >= source_p - source_s
+        }
+        _ => false,
+    }
 }
 
 #[cfg(feature = "proto")]
@@ -926,6 +955,11 @@ mod tests {
             (Int32, Float64, true),
             (Float32, Float64, true),
             (Decimal128(4, 1), Decimal128(4, 1), true),
+            (Decimal128(4, 1), Decimal128(6, 2), true),
+            (Decimal128(15, 2), Decimal128(30, 15), true),
+            (Decimal32(9, 2), Decimal128(20, 4), true),
+            (Decimal128(6, 2), Decimal128(6, 3), false),
+            (Decimal128(6, 2), Decimal128(8, 1), false),
         ] {
             let schema = Schema::new(vec![Field::new("x", source.clone(), true)]);
             let expr = CastExpr::new(col("x", &schema)?, target.clone(), None);
@@ -942,6 +976,76 @@ mod tests {
                 Some(expected),
                 "{source} -> {target}"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal_widening_constraint_boundaries() -> Result<()> {
+        fn decimal(data_type: &DataType, value: i128) -> ScalarValue {
+            match data_type {
+                Decimal32(p, s) => ScalarValue::Decimal32(Some(value as i32), *p, *s),
+                Decimal64(p, s) => ScalarValue::Decimal64(Some(value as i64), *p, *s),
+                Decimal128(p, s) => ScalarValue::Decimal128(Some(value), *p, *s),
+                Decimal256(p, s) => {
+                    ScalarValue::Decimal256(Some(i256::from_i128(value)), *p, *s)
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        // (source, target, scale factor, extreme unscaled source value)
+        for (source, target, factor, extreme) in [
+            (Decimal128(3, 2), Decimal128(5, 3), 10, 999),
+            // Cross-width widening:
+            (Decimal32(4, 2), Decimal128(10, 4), 100, 9999),
+            (Decimal64(5, 1), Decimal256(10, 3), 100, 99999),
+            // Negative scale:
+            (Decimal128(3, -1), Decimal128(5, 0), 10, 999),
+        ] {
+            // Source values near zero and near the extremes of the precision:
+            let values: Vec<i128> = (-5..=5)
+                .chain(extreme - 5..=extreme)
+                .chain(-extreme..=-extreme + 5)
+                .collect();
+            // Output bounds at, between, and just past the widened values,
+            // including past the source's extremes, so casting back rounds in
+            // both directions and overflows:
+            let mut bounds: Vec<i128> = values
+                .iter()
+                .flat_map(|v| {
+                    let w = v * factor;
+                    [w - factor, w - 1, w, w + 1, w + factor / 2, w + factor]
+                })
+                .collect();
+            bounds.sort_unstable();
+            bounds.dedup();
+
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("x", source.clone(), false)]));
+            let expr = CastExpr::new(col("x", &schema)?, target.clone(), None);
+            let input = Interval::make_unbounded(&source)?;
+            for (i, lower) in bounds.iter().enumerate() {
+                for upper in &bounds[i..] {
+                    let output = Interval::try_new(
+                        decimal(&target, *lower),
+                        decimal(&target, *upper),
+                    )?;
+                    let propagated =
+                        expr.propagate_constraints(&output, &[&input])?.unwrap();
+                    assert_eq!(propagated.len(), 1);
+                    for value in &values {
+                        if output.contains_value(decimal(&target, value * factor))? {
+                            assert!(
+                                propagated[0].contains_value(decimal(&source, *value))?,
+                                "{source} -> {target}: input={value}, output={output}, \
+                                 propagated={:?}",
+                                propagated[0]
+                            );
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -1836,6 +1940,33 @@ mod tests {
         assert_eq!(display_string, "CAST(b@0 AS Int32)");
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         assert_eq!(sql_string, "CAST(b AS Int32)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_display_explicit_target_nullability() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+
+        // A same-type cast to a nullable field only relabels the nullability
+        let expr = CastExpr::new_with_target_field(
+            col("a", &schema)?,
+            Arc::new(Field::new("a", Int32, true)),
+            None,
+        );
+        assert_eq!(expr.to_string(), "CAST(a@0 AS Int32;N)");
+        assert_eq!(fmt_sql(&expr).to_string(), "CAST(a AS Int32)");
+
+        let expr = CastExpr::new_with_target_field(
+            col("a", &schema)?,
+            Arc::new(Field::new("a", Int32, false)),
+            None,
+        );
+        assert_eq!(expr.to_string(), "CAST(a@0 AS Int32)");
+
+        // A cast to a bare type is unchanged
+        let expr = CastExpr::new(col("a", &schema)?, Int64, None);
+        assert_eq!(expr.to_string(), "CAST(a@0 AS Int64)");
 
         Ok(())
     }

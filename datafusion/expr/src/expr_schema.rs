@@ -517,6 +517,7 @@ impl ExprSchemable for Expr {
     /// - **Column references**: Preserve original field metadata from input schema
     /// - **Literals**: Use explicitly provided metadata, otherwise empty
     /// - **Aliases**: Merge underlying expr metadata with alias-specific metadata, preferring the alias metadata
+    /// - **List unnesting**: Preserve the element field metadata
     /// - **Binary expressions**: field metadata is empty
     /// - **Boolean expressions**: field metadata is empty
     /// - **Cast expressions**: Type-only casts pass through source metadata (stripping extension
@@ -678,6 +679,27 @@ impl ExprSchemable for Expr {
             Expr::LambdaVariable(LambdaVariable {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
+            Expr::Unnest(Unnest { expr, .. }) => {
+                let nullable = self.nullable(schema)?;
+                match expr.get_type(schema)? {
+                    DataType::List(field)
+                    | DataType::LargeList(field)
+                    | DataType::FixedSizeList(field, _)
+                    | DataType::ListView(field)
+                    | DataType::LargeListView(field) => Ok(Arc::new(
+                        field
+                            .as_ref()
+                            .clone()
+                            .with_name(&schema_name)
+                            .with_nullable(nullable),
+                    )),
+                    _ => Ok(Arc::new(Field::new(
+                        &schema_name,
+                        self.get_type(schema)?,
+                        nullable,
+                    ))),
+                }
+            }
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -689,7 +711,6 @@ impl ExprSchemable for Expr {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::Unnest(_)
             | Expr::Lambda(_)
             | Expr::LambdaVariable(_) => Ok(Arc::new(Field::new(
                 &schema_name,
