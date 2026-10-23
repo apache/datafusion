@@ -19,7 +19,7 @@
 //! `> ALL`) into boolean expressions built from `EXISTS` subqueries
 //! that capture SQL three-valued logic.
 
-use crate::utils::merge_into_schema;
+use crate::utils::{NamePreserver, merge_into_schema};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ExprSchema, Result, ScalarValue, plan_err};
@@ -49,8 +49,14 @@ impl RewriteSetComparison {
         if let Some(merge_schema) = merge_into_schema(&plan)? {
             schema = merge_schema;
         }
+        // The rewritten `CASE WHEN EXISTS ...` expression has a different
+        // display name than the original `SetComparison`, so preserve the
+        // original names to keep the plan's output schema unchanged.
+        let name_preserver = NamePreserver::new(&plan);
         plan.map_expressions(|expr| {
+            let original_name = name_preserver.save(&expr);
             expr.transform_up(|expr| rewrite_set_comparison(expr, &schema))
+                .map(|t| t.update_data(|expr| original_name.restore(expr)))
         })
     }
 }

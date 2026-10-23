@@ -2267,6 +2267,44 @@ select id from set_cmp_self where age <> all(select age from set_cmp_self);
 statement count 0
 drop table set_cmp_self;
 
+# set comparisons in the SELECT list must keep their original column name
+# https://github.com/apache/datafusion/issues/26622
+statement ok
+create table set_cmp_proj_t(x int) as values (1), (6);
+
+statement ok
+create table set_cmp_proj_s(y int) as values (5);
+
+query IB rowsort
+select x, x > all(select y from set_cmp_proj_s) from set_cmp_proj_t;
+----
+1 false
+6 true
+
+query IB rowsort
+select x, x = any(select y from set_cmp_proj_s) from set_cmp_proj_t;
+----
+1 false
+6 false
+
+query IB rowsort
+select x, x < any(select y from set_cmp_proj_s) from set_cmp_proj_t;
+----
+1 true
+6 false
+
+query IB rowsort
+select x, x > all(select y from set_cmp_proj_s) as r from set_cmp_proj_t;
+----
+1 false
+6 true
+
+statement count 0
+drop table set_cmp_proj_t;
+
+statement count 0
+drop table set_cmp_proj_s;
+
 # correlated_recursive_scalar_subquery_with_level_3_exists_subquery_referencing_level1_relation
 query TT
 explain select c_custkey from customer
