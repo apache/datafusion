@@ -54,16 +54,15 @@ use crate::PhysicalOptimizerRule;
 use crate::optimizer::{
     ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
 };
+use crate::row_bound::{RowBound, limit_node, place};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
-use datafusion_common::utils::combine_limit;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -73,21 +72,6 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// the parent to the child if applicable.
 #[derive(Default, Debug)]
 pub struct LimitPushdown {}
-
-/// This is a "data class" we use within the [`LimitPushdown`] rule to push
-/// down limits in the plan. GlobalRequirements are hold as a rule-wide state
-/// and holds the fetch and skip information. The struct also has a field named
-/// satisfied which means if the "current" plan is valid in terms of limits or not.
-///
-/// For example: If the plan is satisfied with current fetch info, we decide to not add a LocalLimit
-///
-/// [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
-#[derive(Default, Clone, Debug)]
-pub struct GlobalRequirements {
-    fetch: Option<usize>,
-    skip: usize,
-    satisfied: bool,
-}
 
 impl LimitPushdown {
     #[expect(missing_docs)]
@@ -110,13 +94,8 @@ impl PhysicalOptimizerRule for LimitPushdown {
         plan: Arc<dyn ExecutionPlan>,
         context: &dyn PhysicalOptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let global_state = GlobalRequirements {
-            fetch: None,
-            skip: 0,
-            satisfied: false,
-        };
         with_statistics_context(context, |stats_ctx| {
-            pushdown_limits(plan, global_state, stats_ctx)
+            push_limits(plan, Above::Nothing, stats_ctx)
         })
     }
 
@@ -129,29 +108,228 @@ impl PhysicalOptimizerRule for LimitPushdown {
     }
 }
 
-struct LimitInfo {
-    input: Arc<dyn ExecutionPlan>,
-    fetch: Option<usize>,
-    skip: usize,
+/// The row bound a node receives from its ancestors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Above {
+    /// No bound.
+    Nothing,
+    /// `OFFSET skip LIMIT fetch` that no ancestor enforces yet: it must be
+    /// placed at or above the first node it can't pass.
+    Open(RowBound),
+    /// A bound an ancestor already enforces, with its `skip` applied. A node
+    /// below may stop after `fetch` rows; nothing else is required of it. A
+    /// limit node further down is still folded in and placed again.
+    Enforced(Option<usize>),
 }
 
-/// This function is the main helper function of the `LimitPushDown` rule.
-/// The helper takes an `ExecutionPlan` and a global (algorithm) state which is
-/// an instance of `GlobalRequirements` and modifies these parameters while
-/// checking if the limits can be pushed down or not.
+impl Above {
+    fn open(bound: RowBound) -> Self {
+        if bound == RowBound::default() {
+            Above::Nothing
+        } else {
+            Above::Open(bound)
+        }
+    }
+
+    fn bound(self) -> RowBound {
+        match self {
+            Above::Nothing => RowBound::default(),
+            Above::Open(bound) => bound,
+            Above::Enforced(fetch) => RowBound::fetch(fetch),
+        }
+    }
+
+    /// `self` above a node that enforces its own `fetch` (a TopK, a scan with
+    /// a row limit, ...). The node enforces the combined bound unless rows
+    /// still have to be skipped above it.
+    fn above_fetching_node(self, fetch: usize) -> Self {
+        let bound = self.bound().over(RowBound::fetch(Some(fetch)));
+        if bound.skip > 0 {
+            Above::Open(bound)
+        } else {
+            Above::Enforced(bound.fetch)
+        }
+    }
+}
+
+/// What a node does with a bound from its parent.
+enum Step {
+    /// A limit node: its bound is folded in and the node removed.
+    Limit(RowBound),
+    /// Passes the bound to every child.
+    Pass,
+    /// Combines partitions, so it sees every row and can enforce the whole
+    /// bound itself.
+    Merge,
+    /// The bound can't go below this node.
+    Stop,
+}
+
+fn step(plan: &Arc<dyn ExecutionPlan>) -> Step {
+    if let Some(bound) = RowBound::of_limit_node(plan) {
+        Step::Limit(bound)
+    } else if !plan.supports_limit_pushdown() {
+        Step::Stop
+    } else if plan.is::<CoalescePartitionsExec>() || plan.is::<SortPreservingMergeExec>()
+    {
+        Step::Merge
+    } else {
+        Step::Pass
+    }
+}
+
+/// Pushes the bounds of all limit nodes in `plan` down as far as they pass,
+/// and writes each one once, at the first node that can enforce it:
 ///
-/// If a limit is encountered, a [`TreeNodeRecursion::Stop`] is returned. Otherwise,
-/// return a [`TreeNodeRecursion::Continue`].
+/// - a merge, which takes it as its own fetch;
+/// - otherwise the first node the bound can't pass, which takes it as its
+///   fetch or gets a limit node on top.
 ///
-/// Computes statistics with a new [`StatisticsContext`] that has no statistics
-/// providers. A context built from a statistics registry, as [`LimitPushdown`]
-/// uses, also consults the registered providers, so switching to
-/// [`pushdown_limit_helper_with_stats`] with such a context can change the
-/// result when providers are registered.
+/// Below the place a bound is enforced, nodes that can stop early are given
+/// it as a fetch too. Operators can't skip rows, so a bound with an `OFFSET`
+/// always keeps a [`GlobalLimitExec`] where it is enforced.
+///
+/// [`GlobalLimitExec`]: datafusion_physical_plan::limit::GlobalLimitExec
+fn push_limits(
+    mut plan: Arc<dyn ExecutionPlan>,
+    mut above: Above,
+    stats_ctx: &StatisticsContext,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    while let Some((input, folded)) = fold_limit(&plan, above, stats_ctx)? {
+        (plan, above) = (input, folded);
+    }
+    let (plan, below) = apply_bound(plan, above);
+
+    let children = plan.children();
+    let mut changed = false;
+    let new_children = children
+        .into_iter()
+        .map(|child| {
+            let new_child = push_limits(Arc::clone(child), below, stats_ctx)?;
+            changed |= !Arc::ptr_eq(child, &new_child);
+            Ok(new_child)
+        })
+        .collect::<Result<_>>()?;
+    if changed {
+        replace_children_if_necessary(plan, new_children)
+    } else {
+        Ok(plan)
+    }
+}
+
+/// If `plan` is a limit node, returns its input and `above` combined with the
+/// limit's bound. Otherwise returns `None`.
+fn fold_limit(
+    plan: &Arc<dyn ExecutionPlan>,
+    above: Above,
+    stats_ctx: &StatisticsContext,
+) -> Result<Option<(Arc<dyn ExecutionPlan>, Above)>> {
+    let Step::Limit(limit) = step(plan) else {
+        return Ok(None);
+    };
+    let input = Arc::clone(plan.children()[0]);
+    let bound = above.bound().over(limit);
+    // Exact statistics may prove the input already has few enough rows. The
+    // bound is kept so a nested limit can still be combined with it.
+    let above = if limit_satisfied_by_input(&input, bound, stats_ctx)? {
+        Above::Enforced(bound.fetch)
+    } else {
+        Above::open(bound)
+    };
+    Ok(Some((input, above)))
+}
+
+/// Applies `above` to `plan`, which is not a limit node. Returns the new plan
+/// and the bound its children receive.
+fn apply_bound(
+    plan: Arc<dyn ExecutionPlan>,
+    above: Above,
+) -> (Arc<dyn ExecutionPlan>, Above) {
+    let above = match plan.fetch() {
+        Some(fetch) => above.above_fetching_node(fetch),
+        None => above,
+    };
+    match (step(&plan), above) {
+        (_, Above::Nothing | Above::Enforced(None)) => (plan, Above::Nothing),
+        // Only an OFFSET: it is placed here, operators can't skip.
+        (_, Above::Open(bound)) if bound.fetch.is_none() => {
+            (limit_node(plan, bound), Above::Nothing)
+        }
+        (Step::Limit(_), _) => unreachable!("limit nodes are folded before apply_bound"),
+        (Step::Pass, above) => (plan, above),
+        (Step::Merge, Above::Open(bound)) => match plan.with_fetch(bound.input_rows()) {
+            Some(_) => (place(plan, bound), Above::Enforced(bound.input_rows())),
+            // Not reachable in-tree: both merges absorb a fetch. Unlike the
+            // other branches, the bound below does not add `skip`.
+            None => (limit_node(plan, bound), Above::Enforced(bound.fetch)),
+        },
+        (Step::Merge, Above::Enforced(fetch)) => (
+            plan.with_fetch(fetch).unwrap_or(plan),
+            Above::Enforced(fetch),
+        ),
+        (Step::Stop, Above::Open(bound)) => (place(plan, bound), Above::Nothing),
+        (Step::Stop, Above::Enforced(fetch)) => {
+            (plan.with_fetch(fetch).unwrap_or(plan), Above::Nothing)
+        }
+    }
+}
+
+/// The state [`pushdown_limit_helper`] carries from one node to the next.
 #[deprecated(
     since = "56.0.0",
-    note = "use `pushdown_limit_helper_with_stats` and share one `StatisticsContext` across calls"
+    note = "LimitPushdown no longer works one node at a time; run the `LimitPushdown` rule"
 )]
+#[derive(Default, Clone, Debug)]
+pub struct GlobalRequirements {
+    fetch: Option<usize>,
+    skip: usize,
+    satisfied: bool,
+}
+
+#[expect(deprecated)]
+impl From<GlobalRequirements> for Above {
+    fn from(state: GlobalRequirements) -> Self {
+        let bound = RowBound {
+            skip: state.skip,
+            fetch: state.fetch,
+        };
+        if state.satisfied && bound.skip == 0 {
+            Above::Enforced(bound.fetch)
+        } else {
+            Above::open(bound)
+        }
+    }
+}
+
+#[expect(deprecated)]
+impl From<Above> for GlobalRequirements {
+    fn from(above: Above) -> Self {
+        match above {
+            Above::Nothing => GlobalRequirements::default(),
+            Above::Open(bound) => GlobalRequirements {
+                fetch: bound.fetch,
+                skip: bound.skip,
+                satisfied: false,
+            },
+            Above::Enforced(fetch) => GlobalRequirements {
+                fetch,
+                skip: 0,
+                satisfied: true,
+            },
+        }
+    }
+}
+
+/// Applies the [`LimitPushdown`] rule to one node. A limit node is removed and
+/// [`TreeNodeRecursion::Stop`] is returned; call again on its input.
+///
+/// Computes statistics with a new [`StatisticsContext`] that has no statistics
+/// providers.
+#[deprecated(
+    since = "56.0.0",
+    note = "LimitPushdown no longer works one node at a time; run the `LimitPushdown` rule"
+)]
+#[expect(deprecated)]
 pub fn pushdown_limit_helper(
     pushdown_plan: Arc<dyn ExecutionPlan>,
     global_state: GlobalRequirements,
@@ -163,172 +341,43 @@ pub fn pushdown_limit_helper(
     )
 }
 
-/// Like [`pushdown_limit_helper`], but computes statistics with `stats_ctx`,
-/// so its cache can be shared with other calls and other rules.
+/// Like [`pushdown_limit_helper`], but computes statistics with `stats_ctx`.
+#[deprecated(
+    since = "56.0.0",
+    note = "LimitPushdown no longer works one node at a time; run the `LimitPushdown` rule"
+)]
+#[expect(deprecated)]
 pub fn pushdown_limit_helper_with_stats(
-    mut pushdown_plan: Arc<dyn ExecutionPlan>,
-    mut global_state: GlobalRequirements,
+    pushdown_plan: Arc<dyn ExecutionPlan>,
+    global_state: GlobalRequirements,
     stats_ctx: &StatisticsContext,
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
-    // Extract limit, if exist, and return child inputs.
-    if let Some(limit_info) = extract_limit(&pushdown_plan) {
-        // If we have fetch/skip info in the global state already, we need to
-        // decide which one to continue with:
-        let (skip, fetch) = combine_limit(
-            global_state.skip,
-            global_state.fetch,
-            limit_info.skip,
-            limit_info.fetch,
-        );
-        global_state.skip = skip;
-        global_state.fetch = fetch;
-        global_state.satisfied = false;
-
-        if let Some(fetch) = fetch
-            && limit_satisfied_by_input(&limit_info.input, skip, fetch, stats_ctx)?
-        {
-            // The input already produces at most `fetch` rows, so no new limit
-            // node is needed. Mark satisfied so downstream won't re-add one,
-            // but preserve skip/fetch so any nested limit nodes (e.g. an inner
-            // GlobalLimitExec) can still be merged with the outer constraint.
-            global_state.satisfied = true;
-
-            return Ok((
-                Transformed {
-                    data: limit_info.input,
-                    transformed: true,
-                    tnr: TreeNodeRecursion::Stop,
-                },
-                global_state,
-            ));
-        }
-
-        // Now the global state has the most recent information, we can remove
-        // the limit node. We will decide later if we should add it again or
-        // not.
+    let above = Above::from(global_state);
+    if let Some((input, above)) = fold_limit(&pushdown_plan, above, stats_ctx)? {
         return Ok((
-            Transformed {
-                data: limit_info.input,
-                transformed: true,
-                tnr: TreeNodeRecursion::Stop,
-            },
-            global_state,
+            Transformed::new(input, true, TreeNodeRecursion::Stop),
+            above.into(),
         ));
     }
-
-    // If we have a non-limit operator with fetch capability, update global
-    // state as necessary:
-    if pushdown_plan.fetch().is_some() {
-        if global_state.skip == 0 {
-            global_state.satisfied = true;
-        }
-        (global_state.skip, global_state.fetch) = combine_limit(
-            global_state.skip,
-            global_state.fetch,
-            0,
-            pushdown_plan.fetch(),
-        );
-    }
-
-    let Some(global_fetch) = global_state.fetch else {
-        // There's no valid fetch information, exit early:
-        return if global_state.skip > 0 && !global_state.satisfied {
-            // There might be a case with only offset, if so add a global limit:
-            global_state.satisfied = true;
-            Ok((
-                Transformed::yes(add_global_limit(
-                    pushdown_plan,
-                    global_state.skip,
-                    None,
-                )),
-                global_state,
-            ))
-        } else {
-            // There's no info on offset or fetch, nothing to do:
-            Ok((Transformed::no(pushdown_plan), global_state))
-        };
-    };
-
-    let skip_and_fetch = Some(global_fetch + global_state.skip);
-
-    if pushdown_plan.supports_limit_pushdown() {
-        if !combines_input_partitions(&pushdown_plan) {
-            // We have information in the global state and the plan pushes down,
-            // continue:
-            Ok((Transformed::no(pushdown_plan), global_state))
-        } else if let Some(plan_with_fetch) = pushdown_plan.with_fetch(skip_and_fetch) {
-            // This plan is combining input partitions, so we need to add the
-            // fetch info to plan if possible. If not, we must add a limit node
-            // with the information from the global state.
-            let mut new_plan = plan_with_fetch;
-            // Execution plans can't (yet) handle skip, so if we have one,
-            // we still need to add a global limit
-            if global_state.skip > 0 {
-                new_plan =
-                    add_global_limit(new_plan, global_state.skip, global_state.fetch);
-            }
-            global_state.fetch = skip_and_fetch;
-            global_state.skip = 0;
-            global_state.satisfied = true;
-            Ok((Transformed::yes(new_plan), global_state))
-        } else if global_state.satisfied {
-            // If the plan is already satisfied, do not add a limit:
-            Ok((Transformed::no(pushdown_plan), global_state))
-        } else {
-            global_state.satisfied = true;
-            Ok((
-                Transformed::yes(add_limit(
-                    pushdown_plan,
-                    global_state.skip,
-                    global_fetch,
-                )),
-                global_state,
-            ))
-        }
-    } else {
-        // The plan does not support push down and it is not a limit. We will need
-        // to add a limit or a fetch. If the plan is already satisfied, we will try
-        // to add the fetch info and return the plan.
-
-        // There's no push down, change fetch & skip to default values:
-        let global_skip = global_state.skip;
-        global_state.fetch = None;
-        global_state.skip = 0;
-
-        let maybe_fetchable = pushdown_plan.with_fetch(skip_and_fetch);
-        if global_state.satisfied {
-            if let Some(plan_with_fetch) = maybe_fetchable {
-                Ok((Transformed::yes(plan_with_fetch), global_state))
-            } else {
-                Ok((Transformed::no(pushdown_plan), global_state))
-            }
-        } else {
-            global_state.satisfied = true;
-            pushdown_plan = if let Some(plan_with_fetch) = maybe_fetchable {
-                if global_skip > 0 {
-                    add_global_limit(plan_with_fetch, global_skip, Some(global_fetch))
-                } else {
-                    plan_with_fetch
-                }
-            } else {
-                add_limit(pushdown_plan, global_skip, global_fetch)
-            };
-            Ok((Transformed::yes(pushdown_plan), global_state))
-        }
-    }
+    let original = Arc::clone(&pushdown_plan);
+    let (plan, below) = apply_bound(pushdown_plan, above);
+    let transformed = !Arc::ptr_eq(&original, &plan);
+    Ok((
+        Transformed::new_transformed(plan, transformed),
+        below.into(),
+    ))
 }
 
 /// Returns true if exact input statistics prove that applying the limit would
 /// not remove any rows.
 fn limit_satisfied_by_input(
     plan: &Arc<dyn ExecutionPlan>,
-    skip: usize,
-    fetch: usize,
+    bound: RowBound,
     stats_ctx: &StatisticsContext,
 ) -> Result<bool> {
-    if skip > 0 {
+    let (0, Some(fetch)) = (bound.skip, bound.fetch) else {
         return Ok(false);
-    }
+    };
 
     if plan.output_partitioning().partition_count() != 1 {
         return Ok(false);
@@ -373,102 +422,6 @@ fn limit_eliminable_exact_num_rows(
     }
 
     Ok(None)
-}
-
-/// Pushes down the limit through the plan.
-pub(crate) fn pushdown_limits(
-    pushdown_plan: Arc<dyn ExecutionPlan>,
-    global_state: GlobalRequirements,
-    stats_ctx: &StatisticsContext,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    // Call pushdown_limit_helper.
-    // This will either extract the limit node (returning the child), or apply the limit pushdown.
-    let (mut new_node, mut global_state) =
-        pushdown_limit_helper_with_stats(pushdown_plan, global_state, stats_ctx)?;
-
-    // While limits exist, continue combining the global_state.
-    while new_node.tnr == TreeNodeRecursion::Stop {
-        (new_node, global_state) =
-            pushdown_limit_helper_with_stats(new_node.data, global_state, stats_ctx)?;
-    }
-
-    // Once a limit has been materialized above the current node, child
-    // subtrees should not inherit its `skip`. Keep `fetch`, but clear
-    // `skip` before recursing so child-local limits are not merged with
-    // an `OFFSET` that has already been applied.
-    if global_state.satisfied {
-        global_state.skip = 0;
-    }
-
-    // Apply pushdown limits in children
-    let children = new_node.data.children();
-    let mut changed = false;
-    let new_children = children
-        .into_iter()
-        .map(|child: &Arc<dyn ExecutionPlan>| {
-            let new_child = pushdown_limits(
-                Arc::<dyn ExecutionPlan>::clone(child),
-                global_state.clone(),
-                stats_ctx,
-            )?;
-            // Tracking if any of the children changed
-            changed |= !Arc::ptr_eq(child, &new_child);
-            Ok(new_child)
-        })
-        .collect::<Result<_>>()?;
-
-    if changed {
-        replace_children_if_necessary(new_node.data, new_children)
-    } else {
-        Ok(new_node.data)
-    }
-}
-
-/// Extracts limit information from the [`ExecutionPlan`] if it is a
-/// [`GlobalLimitExec`] or a [`LocalLimitExec`].
-fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
-    if let Some(global_limit) = plan.downcast_ref::<GlobalLimitExec>() {
-        Some(LimitInfo {
-            input: Arc::clone(global_limit.input()),
-            fetch: global_limit.fetch(),
-            skip: global_limit.skip(),
-        })
-    } else {
-        plan.downcast_ref::<LocalLimitExec>()
-            .map(|local_limit| LimitInfo {
-                input: Arc::clone(local_limit.input()),
-                fetch: Some(local_limit.fetch()),
-                skip: 0,
-            })
-    }
-}
-
-/// Checks if the given plan combines input partitions.
-fn combines_input_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.is::<CoalescePartitionsExec>() || plan.is::<SortPreservingMergeExec>()
-}
-
-/// Adds a limit to the plan, chooses between global and local limits based on
-/// skip value and the number of partitions.
-fn add_limit(
-    pushdown_plan: Arc<dyn ExecutionPlan>,
-    skip: usize,
-    fetch: usize,
-) -> Arc<dyn ExecutionPlan> {
-    if skip > 0 || pushdown_plan.output_partitioning().partition_count() == 1 {
-        add_global_limit(pushdown_plan, skip, Some(fetch))
-    } else {
-        Arc::new(LocalLimitExec::new(pushdown_plan, fetch + skip)) as _
-    }
-}
-
-/// Adds a global limit to the plan.
-fn add_global_limit(
-    pushdown_plan: Arc<dyn ExecutionPlan>,
-    skip: usize,
-    fetch: Option<usize>,
-) -> Arc<dyn ExecutionPlan> {
-    Arc::new(GlobalLimitExec::new(pushdown_plan, skip, fetch)) as _
 }
 
 // See tests in datafusion/core/tests/physical_optimizer
