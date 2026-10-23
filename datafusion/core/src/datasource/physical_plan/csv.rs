@@ -36,8 +36,8 @@ mod tests {
     use crate::prelude::CsvReadOptions;
     use crate::prelude::SessionContext;
     use crate::test::partitioned_file_groups;
-    use datafusion_common::config::CsvOptions;
     use crate::test_util::aggr_test_schema;
+    use datafusion_common::config::CsvOptions;
     use datafusion_common::test_util::arrow_test_data;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{Result, assert_batches_eq};
@@ -61,7 +61,6 @@ mod tests {
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
-
 
     #[rstest(
         file_compression_type,
