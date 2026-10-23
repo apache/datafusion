@@ -1147,3 +1147,20 @@ ns3 4 t3 m
 # Config reset
 statement ok
 RESET datafusion.execution.batch_size;
+
+# ORDER BY two output aliases of the same column; the union output keeps
+# x = y equivalent, so the [x ASC] input ordering satisfies [x ASC, y ASC].
+# repro for https://github.com/apache/datafusion/issues/26625
+statement ok
+  CREATE TABLE t_26625(a INT) AS VALUES (2), (1);
+
+query II
+  SELECT a AS x, a AS y FROM t_26625
+  UNION ALL
+  SELECT a AS x, a AS y FROM t_26625
+  ORDER BY x, y;
+----
+1 1
+1 1
+2 2
+2 2

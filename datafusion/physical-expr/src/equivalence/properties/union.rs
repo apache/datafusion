@@ -19,7 +19,7 @@ use std::iter::Peekable;
 use std::sync::Arc;
 
 use super::EquivalenceProperties;
-use crate::equivalence::class::AcrossPartitions;
+use crate::equivalence::class::{AcrossPartitions, EquivalenceClass, EquivalenceGroup};
 use crate::{ConstExpr, PhysicalSortExpr};
 
 use arrow::datatypes::SchemaRef;
@@ -74,10 +74,44 @@ fn calculate_union_binary(
     orderings.add_satisfied_orderings(&rhs, &lhs)?;
     let orderings = orderings.build();
 
+    // Equivalence classes hold at the union output only when they hold in
+    // every input. Partition each lhs class into the subsets whose members
+    // are also grouped together by the rhs.
+    let classes = lhs
+        .eq_group()
+        .iter()
+        .flat_map(|cls| partition_class_by_equivalence(cls, rhs.eq_group()))
+        .filter(|cls| !cls.is_trivial())
+        .collect::<Vec<_>>();
+
     let mut eq_properties = EquivalenceProperties::new(lhs.schema);
     eq_properties.add_constants(constants)?;
+    eq_properties.add_equivalence_group(EquivalenceGroup::new(classes))?;
     eq_properties.add_orderings(orderings);
     Ok(eq_properties)
+}
+
+/// Partitions `cls` into equivalence classes whose members are still grouped
+/// together by `group`. Expressions that are equivalent under `lhs` but not
+/// under `rhs` end up in different subsets; singleton subsets are dropped by
+/// the caller since they carry no equivalence information.
+fn partition_class_by_equivalence(
+    cls: &EquivalenceClass,
+    group: &EquivalenceGroup,
+) -> Vec<EquivalenceClass> {
+    let mut parts: Vec<EquivalenceClass> = vec![];
+    'outer: for expr in cls.iter() {
+        for part in parts.iter_mut() {
+            // A part is nonempty by construction.
+            let representative = part.canonical_expr().unwrap();
+            if group.exprs_equal(representative, expr) {
+                part.push(Arc::clone(expr));
+                continue 'outer;
+            }
+        }
+        parts.push(EquivalenceClass::new([Arc::clone(expr)]));
+    }
+    parts
 }
 
 /// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
@@ -310,6 +344,7 @@ mod tests {
     use crate::PhysicalExpr;
     use crate::equivalence::tests::{create_test_schema, parse_sort_expr};
     use crate::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
 
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::ScalarValue;
@@ -401,6 +436,70 @@ mod tests {
             .with_child_sort(vec![vec!["a1", "b1"], vec!["c1"]], &schema2)?
             .with_expected_sort(vec![vec!["a", "b"], vec!["c"]])?
             .run()
+    }
+
+    #[test]
+    fn test_union_equivalence_properties_preserves_classes() -> Result<()> {
+        // A UNION ALL over `SELECT a AS x, a AS y` keeps x = y in its output,
+        // so a requirement like `[x ASC, y ASC]` must still be satisfied by
+        // the `[x ASC]` ordering of the inputs. See
+        // https://github.com/apache/datafusion/issues/26625
+        let schema = create_test_schema().unwrap();
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+
+        let mut child = EquivalenceProperties::new(Arc::clone(&schema));
+        child.add_equivalence_group(EquivalenceGroup::new([EquivalenceClass::new([
+            Arc::clone(&col_a),
+            Arc::clone(&col_b),
+        ])]))?;
+        child.add_orderings([
+            LexOrdering::new(vec![parse_sort_expr("a ASC", &schema)]).unwrap()
+        ]);
+
+        let union_props =
+            calculate_union(vec![child.clone(), child], Arc::clone(&schema))?;
+
+        // The equivalence class survives the union.
+        assert!(union_props.eq_group().exprs_equal(&col_a, &col_b));
+        // And the requirement that motivated the issue is satisfied.
+        let requirements: [PhysicalSortRequirement; 2] = [
+            parse_sort_expr("a ASC", &schema).into(),
+            parse_sort_expr("b ASC", &schema).into(),
+        ];
+        assert!(
+            union_props.ordering_satisfy_requirement(requirements)?,
+            "union output must satisfy [a ASC, b ASC] given a = b and [a ASC] inputs"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_equivalence_properties_classes_partial_overlap() -> Result<()> {
+        // {a, b, c} in one child but {a, b} and {c, d} in the other leaves
+        // only {a, b} at the union output.
+        let schema = create_test_schema().unwrap();
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+        let col_d = col("d", &schema)?;
+
+        let mut child_a = EquivalenceProperties::new(Arc::clone(&schema));
+        child_a.add_equivalence_group(EquivalenceGroup::new([EquivalenceClass::new(
+            [Arc::clone(&col_a), Arc::clone(&col_b), Arc::clone(&col_c)],
+        )]))?;
+        let mut child_b = EquivalenceProperties::new(Arc::clone(&schema));
+        child_b.add_equivalence_group(EquivalenceGroup::new([
+            EquivalenceClass::new([Arc::clone(&col_a), Arc::clone(&col_b)]),
+            EquivalenceClass::new([Arc::clone(&col_c), Arc::clone(&col_d)]),
+        ]))?;
+
+        let union_props = calculate_union(vec![child_a, child_b], Arc::clone(&schema))?;
+
+        assert!(union_props.eq_group().exprs_equal(&col_a, &col_b));
+        assert!(!union_props.eq_group().exprs_equal(&col_a, &col_c));
+        assert!(!union_props.eq_group().exprs_equal(&col_c, &col_d));
+        Ok(())
     }
 
     #[test]
