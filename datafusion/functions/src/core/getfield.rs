@@ -36,7 +36,7 @@ use datafusion_macros::user_doc;
 
 use super::named_struct::NamedStructFunc;
 use super::r#struct::StructFunc;
-use crate::utils::map_lookup;
+use crate::utils::{map_lookup, strip_dictionary};
 
 #[user_doc(
     doc_section(label = "Other Functions"),
@@ -528,8 +528,35 @@ impl ScalarUDFImpl for GetFieldFunc {
                 arg_types.len()
             );
         }
-        // Accept types as-is, validation happens in return_field_from_args
-        Ok(arg_types.to_vec())
+        // Map lookup keys must have the map's key type (see `map_lookup`), so
+        // coerce them as `map_extract` does: `m['a']` on a map with Utf8View
+        // keys, or `m[1]` on a map with Int32 keys. Struct field names and
+        // nested or NULL map keys are left as-is; the remaining validation
+        // happens in return_field_from_args.
+        let mut coerced = arg_types.to_vec();
+        let mut current = &arg_types[0];
+        for key_type in coerced.iter_mut().skip(1) {
+            let DataType::Map(entries, _) = current else {
+                // Field names of a struct are only known from the literal
+                // values, so stop at the first non-map level.
+                break;
+            };
+            let DataType::Struct(fields) = entries.data_type() else {
+                break;
+            };
+            let [map_key, map_value] = &fields[..] else {
+                break;
+            };
+            let map_key_type = strip_dictionary(map_key.data_type());
+            if !map_key_type.is_nested()
+                && !key_type.is_null()
+                && strip_dictionary(key_type) != map_key_type
+            {
+                *key_type = map_key_type.clone();
+            }
+            current = map_value.data_type();
+        }
+        Ok(coerced)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

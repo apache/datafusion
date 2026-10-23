@@ -468,7 +468,7 @@ pub fn map_lookup(map: &MapArray, keys: &dyn Array) -> Result<UInt32Array> {
 const SAMPLE_ROWS: usize = 32;
 
 /// The value type of a dictionary-encoded type, or the type itself.
-fn strip_dictionary(data_type: &DataType) -> &DataType {
+pub(crate) fn strip_dictionary(data_type: &DataType) -> &DataType {
     match data_type {
         DataType::Dictionary(_, value_type) => value_type,
         other => other,
