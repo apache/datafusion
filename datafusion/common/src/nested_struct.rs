@@ -903,7 +903,7 @@ fn validate_map_key_data_type(
             }
             Ok(())
         }
-        _ if is_injective_map_key_cast(source_type, target_type) => Ok(()),
+        _ if is_injective_cast(source_type, target_type) => Ok(()),
         _ => _plan_err!(
             "Cannot safely evolve Map key type from {} to {}",
             source_type,
@@ -912,15 +912,15 @@ fn validate_map_key_data_type(
     }
 }
 
-/// Returns true when casting a Map key from `source_type` to `target_type` is
-/// known to preserve key identity.
+/// Returns true when casting from `source_type` to `target_type` is known to
+/// preserve value identity, so distinct source values stay distinct.
 ///
-/// Keep this list conservative. Map keys define equality/lookup identity, so
-/// only representation widenings that cannot merge distinct source keys belong
-/// here. Other Arrow-supported casts, including decimal/timestamp widening and
-/// dictionaries, should stay rejected until their identity semantics are
-/// deliberately reviewed.
-fn is_injective_map_key_cast(source_type: &DataType, target_type: &DataType) -> bool {
+/// Keep this list conservative. Map keys and decorrelated equality keys depend
+/// on identity, so only representation widenings that cannot merge distinct
+/// source values belong here. Other Arrow-supported casts, including
+/// decimal/timestamp widening and dictionaries, should stay rejected until
+/// their identity semantics are deliberately reviewed.
+pub fn is_injective_cast(source_type: &DataType, target_type: &DataType) -> bool {
     matches!(
         (source_type, target_type),
         (
@@ -2283,14 +2283,14 @@ mod tests {
             (DataType::UInt16, DataType::Int64),
             (DataType::UInt32, DataType::Int64),
         ] {
-            assert!(is_injective_map_key_cast(&source_type, &target_type));
+            assert!(is_injective_cast(&source_type, &target_type));
         }
         for (source_type, target_type) in [
             (DataType::UInt8, DataType::Int8),
             (DataType::UInt16, DataType::Int16),
             (DataType::UInt32, DataType::Int32),
         ] {
-            assert!(!is_injective_map_key_cast(&source_type, &target_type));
+            assert!(!is_injective_cast(&source_type, &target_type));
         }
     }
 

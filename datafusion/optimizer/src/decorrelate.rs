@@ -23,11 +23,14 @@ use std::sync::Arc;
 use crate::push_down_filter::lr_is_preserved;
 use crate::simplify_expressions::ExprSimplifier;
 
+use datafusion_common::nested_struct::is_injective_cast;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
+use datafusion_common::utils::has_float_leaf;
 use datafusion_common::{
-    Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
+    Column, DFSchema, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err,
+    plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::logical_plan::{Join, JoinType};
@@ -38,7 +41,7 @@ use datafusion_expr::utils::{
 use datafusion_expr::{
     Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, Extension,
     FetchType, LogicalPlan, LogicalPlanBuilder, MaterializedCte, Operator, SkipType,
-    UserDefinedLogicalNodeCore, expr, lit,
+    UserDefinedLogicalNodeCore, Window, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -59,6 +62,10 @@ pub struct PullUpCorrelatedExpr {
     /// Indicates if we encounter any correlated expression that can not be pulled up
     /// above a aggregation without changing the meaning of the query.
     can_pull_over_aggregation: bool,
+    /// Whether every correlated conjunct seen so far passes
+    /// [`is_partitionable_equality`], so a Window above them can partition by their
+    /// columns.
+    can_extend_partition_by: bool,
     /// Do we need to handle [the count bug] during the pull up process.
     ///
     /// The "count bug" was described in [Optimization of Nested SQL
@@ -76,6 +83,9 @@ pub struct PullUpCorrelatedExpr {
     pub pull_up_having_expr: Option<Expr>,
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
+    ///
+    /// An `Aggregate` above stops the pull up when this is set. `f_up` visits
+    /// the aggregate that sets it before any node above.
     pub pulled_up_scalar_agg: bool,
     /// Every correlated conjunct that a `Filter` of the subquery applies,
     /// before `remove_duplicated_filter` drops the ones that the `IN`
@@ -117,6 +127,7 @@ impl PullUpCorrelatedExpr {
             exists_sub_query: false,
             can_pull_up: true,
             can_pull_over_aggregation: true,
+            can_extend_partition_by: true,
             need_handle_count_bug: false,
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
@@ -321,7 +332,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             //   outer row. A non-equality filter can return duplicates, see
             //   https://github.com/apache/datafusion/issues/25808.
             // - A Window keeps or drops whole partitions when the filter reads
-            //   only its `PARTITION BY` columns. `f_up` checks this.
+            //   only its `PARTITION BY` columns. For other filters, `f_up` adds
+            //   the columns of a column equality to `PARTITION BY` and keeps
+            //   the subquery correlated in the remaining cases.
             // - An Unnest maps each input row to its own output rows, so a
             //   filter on a column it passes through keeps the same rows.
             //   The arm above checks that the filter does not read an unnested
@@ -384,11 +397,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
         match &plan {
             LogicalPlan::Filter(plan_filter) => {
                 let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
-                self.can_pull_over_aggregation = self.can_pull_over_aggregation
-                    && subquery_filter_exprs
-                        .iter()
-                        .filter(|e| e.contains_outer())
-                        .all(|&e| can_pullup_over_aggregation(e));
+                for &expr in subquery_filter_exprs.iter().filter(|e| e.contains_outer()) {
+                    self.can_pull_over_aggregation &= can_pullup_over_aggregation(expr);
+                    self.can_extend_partition_by &=
+                        is_partitionable_equality(expr, plan_filter.input.schema());
+                }
                 for expr in &subquery_filter_exprs {
                     if expr.contains_outer() && !self.correlated_filters.contains(expr) {
                         self.correlated_filters.push((*expr).clone());
@@ -546,6 +559,14 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::Aggregate(aggregate)
                 if self.in_predicate_opt.is_some() || !self.join_filters.is_empty() =>
             {
+                // A pulled up scalar aggregate below gives no row for unmatched
+                // outer rows, so this aggregate would see an empty input. Stop
+                // the rewrite here, since rebuilding the nodes above can fail
+                // with a schema error. See https://github.com/apache/datafusion/issues/26508
+                if self.pulled_up_scalar_agg {
+                    self.can_pull_up = false;
+                    return Ok(Transformed::new(plan, false, TreeNodeRecursion::Stop));
+                }
                 // If the aggregation is from a distinct it will not change the result for
                 // exists/in subqueries so we can still pull up all predicates.
                 let is_distinct = aggregate.aggr_expr.is_empty();
@@ -637,8 +658,6 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     }
                 }
                 if aggregate.group_expr.is_empty() {
-                    // TODO: how do we handle the case where we have pulled multiple aggregations? For example,
-                    // a group agg with a scalar agg as child.
                     self.pulled_up_scalar_agg = true;
                 }
                 let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
@@ -713,6 +732,16 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         .iter()
                         .all(|expr| partitions_by_all(expr, &local_correlated_cols))
                 {
+                    // `inner.y = outer.k` keeps the rows of one `y` value for
+                    // each outer row, so partitioning by `y` as well gives each
+                    // window function the same rows. An aggregate without
+                    // `GROUP BY` below returns a row for an outer row without
+                    // a match, which the pulled up filter would drop.
+                    if self.can_extend_partition_by && !self.pulled_up_scalar_agg {
+                        let extended =
+                            partition_window_by(window, &local_correlated_cols)?;
+                        return self.pass_through_pulled_up_cols(extended);
+                    }
                     self.can_pull_up = false;
                 }
                 self.pass_through_pulled_up_cols(plan)
@@ -960,6 +989,46 @@ fn correlated_filter_columns(plan: &LogicalPlan) -> Vec<Column> {
     cols
 }
 
+/// Adds `cols` to the `PARTITION BY` of every window function of `window`. Each
+/// window expression keeps its old output name, so nothing above sees a change.
+fn partition_window_by(window: &Window, cols: &BTreeSet<Column>) -> Result<LogicalPlan> {
+    let window_expr = window
+        .window_expr
+        .iter()
+        .map(|expr| {
+            add_partition_by(expr, cols).alias_if_changed(expr.schema_name().to_string())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Window::try_new(window_expr, Arc::clone(&window.input)).map(LogicalPlan::Window)
+}
+
+fn add_partition_by(expr: &Expr, cols: &BTreeSet<Column>) -> Expr {
+    match expr {
+        Expr::Alias(alias) => Expr::Alias(Alias {
+            expr: Box::new(add_partition_by(&alias.expr, cols)),
+            ..alias.clone()
+        }),
+        Expr::WindowFunction(window_fun) => {
+            let mut window_fun = window_fun.clone();
+            for col in cols {
+                let partitioned = window_fun
+                    .params
+                    .partition_by
+                    .iter()
+                    .any(|expr| matches!(expr, Expr::Column(c) if c == col));
+                if !partitioned {
+                    window_fun
+                        .params
+                        .partition_by
+                        .push(Expr::Column(col.clone()));
+                }
+            }
+            Expr::WindowFunction(window_fun)
+        }
+        _ => expr.clone(),
+    }
+}
+
 /// Whether the window function `expr` lists each of `cols` as a plain
 /// `PARTITION BY` column.
 fn partitions_by_all(expr: &Expr, cols: &BTreeSet<Column>) -> bool {
@@ -989,30 +1058,54 @@ fn collides_with_existing(exprs: &[Expr], candidate: &Expr) -> bool {
 }
 
 fn can_pullup_over_aggregation(expr: &Expr) -> bool {
-    if let Expr::BinaryExpr(BinaryExpr {
+    split_column_equality(expr).is_some()
+}
+
+/// Whether partitioning by the columns of `expr` keeps the rows `expr` matches
+/// for one outer row in one partition. That holds for `col = <expr>` or
+/// `<expr> = col`, where:
+/// - `<expr>` reads no subquery column and is not volatile.
+/// - `col` has no float leaf, because `-0.0 = 0.0` holds but a partition
+///   keeps the two apart.
+/// - `col` is cast only by a cast that keeps distinct values distinct. A lossy
+///   cast lets several `col` values match one outer row, see #26014.
+fn is_partitionable_equality(expr: &Expr, schema: &DFSchema) -> bool {
+    let Some((col_side, other)) = split_column_equality(expr) else {
+        return false;
+    };
+    let (col, cast_to) = match col_side {
+        Expr::Cast(Cast { expr, field }) => (&**expr, Some(field.data_type())),
+        _ => (col_side, None),
+    };
+    let Ok(col_type) = col.get_type(schema) else {
+        return false;
+    };
+    !other.is_volatile()
+        && !has_float_leaf(&col_type)
+        && cast_to.is_none_or(|to| is_injective_cast(&col_type, to))
+}
+
+/// Splits `col = <expr>` or `<expr> = col` into the subquery column side, a
+/// column or a cast of one, and the other side, which reads no subquery column.
+fn split_column_equality(expr: &Expr) -> Option<(&Expr, &Expr)> {
+    let Expr::BinaryExpr(BinaryExpr {
         left,
         op: Operator::Eq,
         right,
     }) = expr
-    {
-        match (&**left, &**right) {
-            (Expr::Column(_), right) => !right.any_column_refs(),
-            (left, Expr::Column(_)) => !left.any_column_refs(),
-            (Expr::Cast(Cast { expr, .. }), right)
-                if matches!(&**expr, Expr::Column(_)) =>
-            {
-                !right.any_column_refs()
-            }
-            (left, Expr::Cast(Cast { expr, .. }))
-                if matches!(&**expr, Expr::Column(_)) =>
-            {
-                !left.any_column_refs()
-            }
-            (_, _) => false,
-        }
-    } else {
-        false
-    }
+    else {
+        return None;
+    };
+    [(&**left, &**right), (&**right, &**left)]
+        .into_iter()
+        .find(|(col_side, other)| {
+            let is_col = match col_side {
+                Expr::Column(_) => true,
+                Expr::Cast(Cast { expr, .. }) => matches!(&**expr, Expr::Column(_)),
+                _ => false,
+            };
+            is_col && !other.any_column_refs()
+        })
 }
 
 fn collect_local_correlated_cols(
@@ -1121,7 +1214,11 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             })
             .data()?;
 
-        if result_expr.ne(expr) {
+        // An expression that reads no column, like `1 AS x`, keeps its value
+        // on an empty input, while the join that replaces the subquery gives
+        // it NULL for an outer row without a match.
+        let is_constant = !expr.any_column_refs() && !expr.contains_outer();
+        if result_expr.ne(expr) || is_constant {
             let info = SimplifyContext::builder()
                 .with_schema(Arc::clone(schema))
                 .build();
