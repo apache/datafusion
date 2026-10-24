@@ -372,6 +372,7 @@ pub(crate) fn take_need(
         EmitTo::First(n) => {
             // split off the first N values in seen_values
             //
+            let n = n.min(bool_buf.len());
             let first_n: BooleanBuffer = bool_buf.slice(0, n);
             // reset the existing buffer
             bool_buf_builder.append_buffer(&bool_buf.slice(n, bool_buf.len() - n));
