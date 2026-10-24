@@ -36,6 +36,7 @@ use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::DataType;
 use arrow_schema::FieldRef;
 use datafusion_catalog::MemoryCatalogProviderList;
+#[cfg(feature = "sql")]
 use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, INFORMATION_SCHEMA_TABLES, InformationSchemaProvider,
 };
@@ -83,13 +84,12 @@ use datafusion_session::{
 };
 #[cfg(feature = "sql")]
 use datafusion_sql::{
-    parser::{DFParserBuilder, Statement},
+    parser::{DFParserBuilder, ExplainStatement, Statement},
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_sql::parser::ExplainStatement;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use log::{debug, info};
@@ -711,6 +711,7 @@ impl SessionState {
         query.statement_to_plan(statement)
     }
 
+    #[cfg(feature = "sql")]
     fn requires_information_schema(statement: &Statement) -> bool {
         match &statement {
             Statement::Explain(ExplainStatement { statement, .. }) => {
