@@ -315,6 +315,10 @@ impl NotInBuild {
         left_side: UInt64Array,
         right_side: UInt32Array,
     ) -> (UInt64Array, UInt32Array, Option<ArrayRef>) {
+        debug_assert!(
+            !summary.has_null || summary.non_empty,
+            "a probe batch with a NULL key has rows"
+        );
         match self {
             Self::ProbeRowsCorrelated { .. } | Self::ProbeRowsUncorrelated { .. } => {
                 (left_side, right_side, None)
@@ -690,17 +694,17 @@ pub(super) struct NullValueBuildRows {
     /// build rows. Stored positions index into `scope_values`/`build_indices`,
     /// not the full build batch. `None` when the join has no correlation
     /// scope keys, so every probe row is in scope.
-    pub(super) scope_map: Option<Box<dyn JoinHashMapType>>,
+    scope_map: Option<Box<dyn JoinHashMapType>>,
     /// Correlation scope key values of the NULL-valued build rows.
-    pub(super) scope_values: Vec<ArrayRef>,
+    scope_values: Vec<ArrayRef>,
     /// Maps positions in `map`/`scope_values` back to row indices in the full
     /// build batch.
-    pub(super) build_indices: UInt64Array,
+    build_indices: UInt64Array,
 }
 
 /// Returns the rows where at least one of `value_keys` is NULL, or `None` when
 /// there is no such row.
-pub(super) fn null_value_key_mask(value_keys: &[ArrayRef]) -> Option<BooleanArray> {
+fn null_value_key_mask(value_keys: &[ArrayRef]) -> Option<BooleanArray> {
     let logical_nulls: Vec<_> = value_keys.iter().map(|v| v.logical_nulls()).collect();
     let valid = NullBuffer::union_many(logical_nulls.iter().map(Option::as_ref))?;
     (valid.null_count() > 0).then(|| BooleanArray::new(!valid.inner(), None))
@@ -709,7 +713,7 @@ pub(super) fn null_value_key_mask(value_keys: &[ArrayRef]) -> Option<BooleanArra
 /// Where a correlated null-aware join records the rows whose `NOT IN` is
 /// UNKNOWN, see [`mark_null_candidates_for_probe_batch`].
 #[derive(Clone, Copy)]
-pub(super) enum UnknownMarks<'a> {
+enum UnknownMarks<'a> {
     /// `LeftAnti` and `LeftMark` mark build rows, in the null-indices bitmap
     /// shared by all probe partitions.
     Build(&'a SharedBitmapBuilder),

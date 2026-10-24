@@ -211,7 +211,7 @@ struct JoinBuildData {
     /// Evaluated build-side key expressions, with float `-0.0` rewritten to
     /// `+0.0` so probe batches can compare against them without scanning the
     /// build side again. The dynamic filters (`bounds`, `membership`) and
-    /// the `NOT IN` state were computed from the original keys in
+    /// the `NOT IN` NULL masks were computed from the original keys in
     /// `collect_left_input`.
     values: Vec<ArrayRef>,
     /// Bounds computed from the build side; absent for an empty partition.
@@ -270,7 +270,7 @@ impl JoinLeftData {
 
     /// Returns the build side key values, with float `-0.0` already rewritten
     /// to `+0.0` for key comparison. The dynamic filters and the `NOT IN`
-    /// state were derived from the original keys instead.
+    /// NULL masks were derived from the original keys instead.
     pub(super) fn values(&self) -> &[ArrayRef] {
         &self.build.values
     }
@@ -491,7 +491,7 @@ impl HashJoinExecBuilder {
             }
         }
         // Validate null_aware flag
-        exec.null_aware_mode()?;
+        exec.not_in()?;
 
         if preserve_properties {
             return Ok(exec);
@@ -1199,7 +1199,7 @@ impl HashJoinExec {
     /// The null-aware semantics of this join, if [`Self::null_aware`] is set.
     ///
     /// Errors if `null_aware` is set on a join that does not support it.
-    pub(super) fn null_aware_mode(&self) -> Result<Option<NotIn>> {
+    pub(super) fn not_in(&self) -> Result<Option<NotIn>> {
         self.null_aware
             .then(|| {
                 NotIn::try_new(
@@ -1664,7 +1664,7 @@ impl ExecutionPlan for HashJoinExec {
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
-        let null_aware = self.null_aware_mode()?;
+        let not_in = self.not_in()?;
 
         let array_map_created_count = MetricBuilder::new(&self.metrics)
             .with_category(MetricCategory::Rows)
@@ -1691,7 +1691,7 @@ impl ExecutionPlan for HashJoinExec {
                             on_right,
                             repartition_random_state,
                             self.null_equality,
-                            null_aware,
+                            not_in,
                         ))
                     })))
                 })
@@ -1725,7 +1725,7 @@ impl ExecutionPlan for HashJoinExec {
                     enable_dynamic_filter_pushdown,
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
-                    null_aware,
+                    not_in,
                     array_map_created_count,
                     BuildMode::Ordinary,
                 ))
@@ -1747,7 +1747,7 @@ impl ExecutionPlan for HashJoinExec {
                     enable_dynamic_filter_pushdown,
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
-                    null_aware,
+                    not_in,
                     array_map_created_count,
                     BuildMode::Ordinary,
                 ))
@@ -3072,7 +3072,7 @@ async fn collect_left_input(
     should_compute_dynamic_filters: bool,
     config: Arc<ConfigOptions>,
     null_equality: NullEquality,
-    null_aware: Option<NotIn>,
+    not_in: Option<NotIn>,
     array_map_created_count: Count,
     mode: BuildMode,
 ) -> Result<JoinLeftData> {
@@ -3165,7 +3165,7 @@ async fn collect_left_input(
         should_compute_dynamic_filters,
         &config,
         null_equality,
-        null_aware,
+        not_in,
         &array_map_created_count,
         prepared,
     )
@@ -3196,7 +3196,7 @@ fn build_in_memory(
     should_compute_dynamic_filters: bool,
     config: &ConfigOptions,
     null_equality: NullEquality,
-    null_aware: Option<NotIn>,
+    not_in: Option<NotIn>,
     array_map_created_count: &Count,
     prepared: bool,
 ) -> Result<JoinLeftData> {
@@ -3325,7 +3325,7 @@ fn build_in_memory(
         BooleanBufferBuilder::new(0)
     };
 
-    let not_in = null_aware
+    let not_in = not_in
         .map(|not_in| {
             NotInBuild::try_new(
                 not_in,
@@ -10163,7 +10163,7 @@ mod tests {
                 output: NotInOutput::Rows,
             },
         };
-        assert_eq!(join.null_aware_mode()?, Some(expected));
+        assert_eq!(join.not_in()?, Some(expected));
         Ok(())
     }
 
