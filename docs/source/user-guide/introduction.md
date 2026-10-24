@@ -122,6 +122,7 @@ Here are some active projects using DataFusion:
   scalable LLMs fine-tuning and distributed AI model training.
 - [LakeSoul](https://github.com/lakesoul-io/LakeSoul) Open source LakeHouse framework with native IO in Rust.
 - [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
+- [nuthatch](https://github.com/nightswatchhq/nuthatch) Self-hosted EVM blockchain indexer in one Rust binary, serving SQL over sealed Parquet
 - [OpenObserve] Distributed cloud native observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
 - [Parseable] Log storage and observability platform
