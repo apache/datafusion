@@ -384,7 +384,6 @@ impl LogicalPlanBuilder {
         let mut fields = ValuesFields::new();
         for j in 0..n_cols {
             let field_type = schema.field(j).data_type();
-            let field_nullable = schema.field(j).is_nullable();
             for row in values.iter() {
                 let value = &row[j];
                 let data_type = value.get_type(schema)?;
@@ -399,7 +398,13 @@ impl LogicalPlanBuilder {
                     );
                 }
             }
-            fields.push(field_type.to_owned(), field_nullable);
+            let field = schema.field(j);
+
+            fields.push_with_metadata(
+                field_type.clone(),
+                field.is_nullable(),
+                Some(FieldMetadata::new_from_field(field)),
+            );
         }
 
         Self::infer_inner(values, fields, schema)
@@ -1788,10 +1793,6 @@ struct ValuesFields {
 impl ValuesFields {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn push(&mut self, data_type: DataType, nullable: bool) {
-        self.push_with_metadata(data_type, nullable, None);
     }
 
     pub fn push_with_metadata(

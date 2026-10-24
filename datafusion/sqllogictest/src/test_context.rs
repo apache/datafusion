@@ -29,7 +29,7 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaRef, TimeUnit, UInt32Type,
+    DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit, UInt32Type,
     UnionFields,
 };
 use arrow::record_batch::RecordBatch;
@@ -38,13 +38,12 @@ use datafusion::catalog::{
 };
 use datafusion::common::config::Dialect;
 use datafusion::common::stats::Precision;
-use datafusion::common::{DataFusionError, Result, not_impl_err};
+use datafusion::common::{DataFusionError, Result, ScalarValue, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
-use datafusion::logical_expr::planner::TypePlanner;
 use datafusion::logical_expr::{
-    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility, create_udf,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility, create_udf,
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
@@ -70,7 +69,6 @@ use datafusion::physical_plan::operator_statistics::{
 };
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use log::info;
-use sqlparser::ast;
 use tempfile::TempDir;
 
 mod range_partitioning;
@@ -81,22 +79,6 @@ pub struct TestContext {
     ctx: SessionContext,
     /// Temporary directory created and cleared at the end of the test
     test_dir: Option<TempDir>,
-}
-
-#[derive(Debug)]
-struct SqlLogicTestTypePlanner;
-
-impl TypePlanner for SqlLogicTestTypePlanner {
-    fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
-        match sql_type {
-            ast::DataType::Uuid => Ok(Some(Arc::new(
-                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
-                ),
-            ))),
-            _ => Ok(None),
-        }
-    }
 }
 
 impl TestContext {
@@ -135,14 +117,6 @@ impl TestContext {
             if let Some(config) = state_builder.config() {
                 config.options_mut().sql_parser.dialect = Dialect::Spark;
             }
-        }
-
-        if matches!(
-            relative_path.file_name().and_then(|name| name.to_str()),
-            Some("cast_extension_type_metadata.slt")
-        ) {
-            state_builder =
-                state_builder.with_type_planner(Arc::new(SqlLogicTestTypePlanner));
         }
 
         if matches!(
@@ -252,6 +226,10 @@ impl TestContext {
             "async_udf.slt" => {
                 info!("Registering dummy async udf");
                 register_async_abs_udf(test_ctx.session_ctx())
+            }
+            "sql_extension_types.slt" => {
+                info!("Registering udf returning a custom extension type");
+                register_custom_extension_udf(test_ctx.session_ctx())
             }
             _ => {
                 info!("Using default SessionContext");
@@ -923,6 +901,57 @@ fn register_async_abs_udf(ctx: &SessionContext) {
     let async_abs = AsyncAbs::new();
     let udf = AsyncScalarUDF::new(Arc::new(async_abs));
     ctx.register_udf(udf.into_scalar_udf());
+}
+
+/// Registers `custom_id()`, a UDF that returns a `FixedSizeBinary(16)` field tagged
+/// with the extension name `test.custom_id`.
+///
+/// Its storage type is identical to `UUID` (`FixedSizeBinary(16)`), but its extension
+/// type is not `arrow.uuid`, which lets tests check how values with the *same* storage
+/// type but a *different* extension type are handled by a `UUID` column.
+fn register_custom_extension_udf(ctx: &SessionContext) {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct CustomId {
+        signature: Signature,
+    }
+    impl CustomId {
+        fn new() -> Self {
+            Self {
+                signature: Signature::nullary(Volatility::Immutable),
+            }
+        }
+    }
+    impl ScalarUDFImpl for CustomId {
+        fn name(&self) -> &str {
+            "custom_id"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::FixedSizeBinary(16))
+        }
+
+        fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+            Ok(Arc::new(
+                Field::new(self.name(), DataType::FixedSizeBinary(16), true)
+                    .with_metadata(HashMap::from([(
+                        "ARROW:extension:name".to_string(),
+                        "test.custom_id".to_string(),
+                    )])),
+            ))
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(
+                16,
+                Some(vec![1u8; 16]),
+            )))
+        }
+    }
+    ctx.register_udf(ScalarUDF::new_from_impl(CustomId::new()));
 }
 
 fn register_conflicting_metadata_tables(ctx: &SessionContext) {

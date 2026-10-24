@@ -400,11 +400,6 @@ impl TypePlanner for CustomTypePlanner {
         sql_type: &sqlparser::ast::DataType,
     ) -> Result<Option<FieldRef>> {
         match sql_type {
-            sqlparser::ast::DataType::Uuid => Ok(Some(Arc::new(
-                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
-                ),
-            ))),
             sqlparser::ast::DataType::Datetime(precision) => {
                 let precision = match precision {
                     Some(0) => TimeUnit::Second,
