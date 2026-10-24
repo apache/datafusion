@@ -494,7 +494,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                             LogicalPlanBuilder::from((*plan_filter.input).clone())
                                 .build()?;
                         self.correlated_subquery_cols_map
-                            .insert(new_plan.clone(), correlated_subquery_cols);
+                            .entry(new_plan.clone())
+                            .or_default()
+                            .extend(correlated_subquery_cols);
                         Ok(Transformed::yes(new_plan))
                     }
                     (None, _) => {
@@ -506,7 +508,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         }
                         let new_plan = plan.build()?;
                         self.correlated_subquery_cols_map
-                            .insert(new_plan.clone(), correlated_subquery_cols);
+                            .entry(new_plan.clone())
+                            .or_default()
+                            .extend(correlated_subquery_cols);
                         Ok(Transformed::yes(new_plan))
                     }
                 }
