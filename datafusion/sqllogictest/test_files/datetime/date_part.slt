@@ -949,6 +949,21 @@ FROM (SELECT arrow_cast(column1, 'Time64(Nanosecond)') AS t
 NULL NULL NULL NULL
 1 1000 1000000 1000000001
 
+# times outside one day are NULL, like the other parts. The last row is 2^32 + 5
+# seconds, which must not wrap around to 5 seconds.
+query IIII
+SELECT extract(nanosecond from arrow_cast(arrow_cast(column1, 'Int32'), 'Time32(Second)')),
+       extract(nanosecond from arrow_cast(arrow_cast(column2, 'Int32'), 'Time32(Millisecond)')),
+       extract(nanosecond from arrow_cast(column3, 'Time64(Microsecond)')),
+       extract(nanosecond from arrow_cast(column4, 'Time64(Nanosecond)'))
+FROM (VALUES (-1, -1, -1, -1),
+             (86400, 86400000, 86400000000, 86400000000000),
+             (NULL, NULL, 4294967301000000, 4294967301000000000))
+----
+NULL NULL NULL NULL
+NULL NULL NULL NULL
+NULL NULL NULL NULL
+
 # test_extract_epoch
 
 query R

@@ -18,22 +18,27 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::temporal_conversions::as_datetime_with_timezone;
+use arrow::array::temporal_conversions::{
+    as_datetime_with_timezone, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
+    timestamp_s_to_datetime, timestamp_us_to_datetime,
+};
 use arrow::array::timezone::Tz;
 use arrow::array::{
     Array, ArrayRef, Float64Array, Int32Array, Int64Array, PrimitiveArray,
 };
-use arrow::compute::{DatePart, binary, cast, date_part};
+use arrow::compute::{DatePart, cast, date_part};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     ArrowPrimitiveType, ArrowTimestampType, DataType, Field, FieldRef, Int32Type,
-    Int64Type, IntervalUnit as ArrowIntervalUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    Int64Type, IntervalUnit as ArrowIntervalUnit, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType,
 };
-use chrono::{Datelike, NaiveDate, Offset};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Offset, TimeZone, Timelike, Utc};
 use datafusion_common::types::{NativeType, logical_date};
 use num_traits::AsPrimitive;
 
@@ -43,12 +48,11 @@ use datafusion_common::{
     cast::{
         as_date32_array, as_date64_array, as_duration_microsecond_array,
         as_duration_millisecond_array, as_duration_nanosecond_array,
-        as_duration_second_array, as_int32_array, as_interval_dt_array,
-        as_interval_mdn_array, as_interval_ym_array, as_primitive_array,
-        as_time32_millisecond_array, as_time32_second_array, as_time64_microsecond_array,
-        as_time64_nanosecond_array, as_timestamp_microsecond_array,
-        as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
-        as_timestamp_second_array,
+        as_duration_second_array, as_interval_dt_array, as_interval_mdn_array,
+        as_interval_ym_array, as_primitive_array, as_time32_millisecond_array,
+        as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
+        as_timestamp_microsecond_array, as_timestamp_millisecond_array,
+        as_timestamp_nanosecond_array, as_timestamp_second_array,
     },
     exec_err, internal_err,
     types::logical_string,
@@ -509,9 +513,10 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
 /// minute for timestamps, times and intervals, and the total length for
 /// durations.
 ///
-/// `nanosecond` returns an Int64 rather than Int32 because there are 1 billion
-/// `nanosecond`s in each second, so representing up to 60 seconds as
-/// nanoseconds can be values up to 60 billion, which does not fit in Int32.
+/// `nanosecond` returns Int64, because 60 seconds are 60 billion nanoseconds
+/// and a duration can be up to `i64::MAX` nanoseconds long. `millisecond` and
+/// `microsecond` return Int32. A duration whose length overflows the return
+/// type is NULL.
 fn subsecond_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef> {
     let len = array.len();
     let nulls = array.nulls().cloned();
@@ -552,9 +557,8 @@ fn subsecond_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef> {
     })
 }
 
-/// Combine arrow's seconds of the minute with its fraction of the second in
-/// `part` units, for types where arrow returns them separately (timestamps
-/// and times).
+/// Return the seconds of the minute of timestamps (in their timezone) and
+/// times, with their fraction, in units of `1 / PER_SECOND` seconds.
 fn seconds_with_fraction<O, const PER_SECOND: i64>(
     array: &dyn Array,
     part: DatePart,
@@ -563,16 +567,128 @@ where
     O: ArrowPrimitiveType,
     i64: AsPrimitive<O::Native>,
 {
-    let secs = date_part(array, DatePart::Second)?;
-    // This assumes array is primitive and not a dictionary
-    let secs = as_int32_array(secs.as_ref())?;
-    let fraction = date_part(array, part)?;
-    let fraction = as_int32_array(fraction.as_ref())?;
-    // At most 60 seconds, which fits in Int32 for milliseconds and
-    // microseconds, so the narrowing `as_` never truncates
-    let r: PrimitiveArray<O> = binary(secs, fraction, |secs, fraction| {
-        (secs as i64 * PER_SECOND + fraction as i64).as_()
-    })?;
+    Ok(match array.data_type() {
+        Timestamp(unit, tz) => {
+            let tz = parse_tz(tz.as_ref())?;
+            match unit {
+                Second => timestamp_seconds_with_fraction::<
+                    TimestampSecondType,
+                    O,
+                    PER_SECOND,
+                >(array, tz, timestamp_s_to_datetime)?,
+                Millisecond => timestamp_seconds_with_fraction::<
+                    TimestampMillisecondType,
+                    O,
+                    PER_SECOND,
+                >(array, tz, timestamp_ms_to_datetime)?,
+                Microsecond => timestamp_seconds_with_fraction::<
+                    TimestampMicrosecondType,
+                    O,
+                    PER_SECOND,
+                >(array, tz, timestamp_us_to_datetime)?,
+                Nanosecond => timestamp_seconds_with_fraction::<
+                    TimestampNanosecondType,
+                    O,
+                    PER_SECOND,
+                >(array, tz, timestamp_ns_to_datetime)?,
+            }
+        }
+        Time32(Second) => {
+            time_seconds_with_fraction::<Time32SecondType, O, 1, PER_SECOND>(array)?
+        }
+        Time32(Millisecond) => {
+            time_seconds_with_fraction::<Time32MillisecondType, O, 1_000, PER_SECOND>(
+                array,
+            )?
+        }
+        Time64(Microsecond) => {
+            time_seconds_with_fraction::<Time64MicrosecondType, O, 1_000_000, PER_SECOND>(
+                array,
+            )?
+        }
+        Time64(Nanosecond) => time_seconds_with_fraction::<
+            Time64NanosecondType,
+            O,
+            1_000_000_000,
+            PER_SECOND,
+        >(array)?,
+        other => return exec_err!("{part} does not support {other}"),
+    })
+}
+
+fn timestamp_seconds_with_fraction<T, O, const PER_SECOND: i64>(
+    array: &dyn Array,
+    tz: Option<Tz>,
+    // arrow's converter for `T`, as its `date_part` uses. The generic
+    // `as_datetime::<T>` measured about 1.5x slower.
+    to_datetime: impl Fn(i64) -> Option<NaiveDateTime>,
+) -> Result<ArrayRef>
+where
+    T: ArrowTimestampType,
+    O: ArrowPrimitiveType,
+    i64: AsPrimitive<O::Native>,
+{
+    // Like arrow's `date_part`, but one chrono conversion per row instead of
+    // one each for the seconds and the fraction
+    fn seconds<O: ArrowPrimitiveType, const PER_SECOND: i64>(
+        t: &impl Timelike,
+    ) -> O::Native
+    where
+        i64: AsPrimitive<O::Native>,
+    {
+        // At most 60 seconds, which fits in Int32 for milliseconds and
+        // microseconds, so the narrowing `as_` never truncates
+        (t.second() as i64 * PER_SECOND
+            + t.nanosecond() as i64 / (1_000_000_000 / PER_SECOND))
+            .as_()
+    }
+
+    let array = as_primitive_array::<T>(array)?;
+    // `unary_opt` keeps the input nulls and additionally nulls out any value
+    // that cannot be represented as a `DateTime` (out of chrono's range).
+    let r: PrimitiveArray<O> = match tz {
+        Some(tz) => array.unary_opt(|v| {
+            to_datetime(v).map(|naive| {
+                seconds::<O, PER_SECOND>(
+                    &Utc.from_utc_datetime(&naive).with_timezone(&tz),
+                )
+            })
+        }),
+        None => array
+            .unary_opt(|v| to_datetime(v).map(|naive| seconds::<O, PER_SECOND>(&naive))),
+    };
+    Ok(Arc::new(r))
+}
+
+/// Like [`timestamp_seconds_with_fraction`] for times, which count
+/// `1 / UNITS_PER_SECOND` seconds since midnight.
+fn time_seconds_with_fraction<T, O, const UNITS_PER_SECOND: i64, const PER_SECOND: i64>(
+    array: &dyn Array,
+) -> Result<ArrayRef>
+where
+    T: ArrowPrimitiveType,
+    T::Native: AsPrimitive<i64>,
+    O: ArrowPrimitiveType,
+    i64: AsPrimitive<O::Native>,
+{
+    const SECONDS_PER_DAY: i64 = 86_400;
+    let array = as_primitive_array::<T>(array)?;
+    // Values outside one day are NULL, as in arrow's `date_part`. arrow's
+    // `as_time` would wrap some of them around to a valid time instead.
+    let r: PrimitiveArray<O> = array.unary_opt(|v| {
+        let v: i64 = v.as_();
+        (0..SECONDS_PER_DAY * UNITS_PER_SECOND)
+            .contains(&v)
+            .then(|| {
+                let v = v % (60 * UNITS_PER_SECOND);
+                if PER_SECOND >= UNITS_PER_SECOND {
+                    v * (PER_SECOND / UNITS_PER_SECOND)
+                } else {
+                    v / (UNITS_PER_SECOND / PER_SECOND)
+                }
+                .as_()
+            })
+    });
     Ok(Arc::new(r))
 }
 
