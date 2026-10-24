@@ -55,6 +55,11 @@ pub struct PullUpCorrelatedExpr {
     /// Correlated inner columns collected across the subquery, including their
     /// re-qualified names after passing through [`LogicalPlan::SubqueryAlias`].
     pub correlated_subquery_cols: BTreeSet<Column>,
+    /// Deprecated: use [`Self::correlated_subquery_cols`] instead.
+    ///
+    /// Kept for SemVer compatibility; populated with the root plan's
+    /// correlated columns when the rewrite finishes.
+    pub correlated_subquery_cols_map: HashMap<LogicalPlan, BTreeSet<Column>>,
     pub in_predicate_opt: Option<Expr>,
     /// Is this an Exists(Not Exists) SubQuery. Defaults to **FALSE**
     pub exists_sub_query: bool,
@@ -78,8 +83,10 @@ pub struct PullUpCorrelatedExpr {
     ///
     /// [the count bug]: https://github.com/apache/datafusion/issues/10553
     pub need_handle_count_bug: bool,
+    /// mapping from the plan to its expressions' evaluation result on empty batch
+    pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
     /// The root plan's expressions' evaluation result on an empty batch.
-    pub collected_count_expr_map: Option<ExprResultMap>,
+    pub root_count_expr_map: Option<ExprResultMap>,
     /// pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
@@ -136,13 +143,15 @@ impl PullUpCorrelatedExpr {
         Self {
             join_filters: vec![],
             correlated_subquery_cols: BTreeSet::new(),
+            correlated_subquery_cols_map: HashMap::new(),
             in_predicate_opt: None,
             exists_sub_query: false,
             can_pull_up: true,
             can_pull_over_aggregation: true,
             can_extend_partition_by: true,
             need_handle_count_bug: false,
-            collected_count_expr_map: None,
+            collected_count_expr_map: HashMap::new(),
+            root_count_expr_map: None,
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
@@ -764,7 +773,15 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 parent.count_expr_map = out_count_expr_map;
             }
         } else {
-            self.collected_count_expr_map = out_count_expr_map;
+            self.correlated_subquery_cols_map.insert(
+                transformed.data.clone(),
+                self.correlated_subquery_cols.clone(),
+            );
+            if let Some(ref map) = out_count_expr_map {
+                self.collected_count_expr_map
+                    .insert(transformed.data.clone(), map.clone());
+            }
+            self.root_count_expr_map = out_count_expr_map;
         }
         Ok(transformed)
     }

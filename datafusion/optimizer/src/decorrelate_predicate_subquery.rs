@@ -821,10 +821,8 @@ fn build_join(
         };
     let (mut new_plan, mut pull_up) = rewrite(exists_sub_query)?;
 
-    let mut count_bug_compensation = pull_up
-        .collected_count_expr_map
-        .take()
-        .filter(|m| !m.is_empty());
+    let mut count_bug_compensation =
+        pull_up.root_count_expr_map.take().filter(|m| !m.is_empty());
     // A HAVING-failure miss looks identical to an absent group once compensated, so bail if the join filter reads the aggregate's own output.
     let reads_agg_output = count_bug_compensation.as_ref().is_some_and(|expr_map| {
         pull_up

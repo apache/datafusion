@@ -123,7 +123,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
 
     // Look up each aggregate's default value on empty input (e.g., COUNT → 0,
     // SUM → NULL).
-    let collected_count_expr_map = pull_up.collected_count_expr_map.take();
+    let collected_count_expr_map = pull_up.root_count_expr_map.take();
 
     // Re-wrap in SubqueryAlias if the original had one, preserving the alias name.
     // The SubqueryAlias re-qualifies all columns with the alias, so we must also

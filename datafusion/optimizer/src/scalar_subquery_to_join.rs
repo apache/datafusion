@@ -354,7 +354,7 @@ fn build_join(
         return Ok(None);
     }
 
-    let collected_count_expr_map = pull_up.collected_count_expr_map.take();
+    let collected_count_expr_map = pull_up.root_count_expr_map.take();
     let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
         .alias(subquery_alias.to_string())?
         .build()?;
