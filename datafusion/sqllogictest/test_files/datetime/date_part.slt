@@ -1178,6 +1178,78 @@ SELECT extract(epoch from arrow_cast(2, 'Duration(Second)'))
 ----
 2
 
+# epoch keeps the fraction of a duration whose total sub-second units exceed i32::MAX
+query RR
+SELECT extract(epoch from arrow_cast(2147483647, 'Duration(Nanosecond)')),
+       extract(epoch from arrow_cast(2147483648, 'Duration(Nanosecond)'))
+----
+2.147483647 2.147483648
+
+# Reproducer from https://github.com/apache/datafusion/issues/26673: every row keeps its fraction.
+# Before the fix, the rows at or above 2^31 ns (2.147483648 s) lost their fraction.
+query TTR
+SELECT description,
+       arrow_typeof(finished_at - started_at),
+       extract(epoch from finished_at - started_at)
+FROM (VALUES
+  ('1.25 seconds',      timestamp '2025-01-01 00:00:00', timestamp '2025-01-01 00:00:01.250000'),
+  ('2.10 seconds',      timestamp '2025-01-01 00:00:00', timestamp '2025-01-01 00:00:02.100000'),
+  ('2.50 seconds',      timestamp '2025-01-01 00:00:00', timestamp '2025-01-01 00:00:02.500000'),
+  ('4.763 seconds',     timestamp '2025-01-01 00:00:00', timestamp '2025-01-01 00:00:04.763000'),
+  ('12.923350 seconds', timestamp '2025-01-01 00:00:00', timestamp '2025-01-01 00:00:12.923350')
+) AS t(description, started_at, finished_at)
+----
+1.25 seconds Duration(ns) 1.25
+2.10 seconds Duration(ns) 2.1
+2.50 seconds Duration(ns) 2.5
+4.763 seconds Duration(ns) 4.763
+12.923350 seconds Duration(ns) 12.92335
+
+query R
+SELECT extract(epoch from arrow_cast(2147483648, 'Duration(Microsecond)'))
+----
+2147.483648
+
+query R
+SELECT extract(epoch from arrow_cast(2147483648, 'Duration(Millisecond)'))
+----
+2147483.648
+
+query R
+SELECT extract(epoch from arrow_cast(2147483648, 'Duration(Second)'))
+----
+2147483648
+
+query R
+SELECT extract(epoch from arrow_cast(-2500000000, 'Duration(Nanosecond)'))
+----
+-2.5
+
+query R
+SELECT extract(epoch from arrow_cast(NULL, 'Duration(Nanosecond)'))
+----
+NULL
+
+# NULLs stay NULL and don't change the other rows of the batch
+query R
+SELECT extract(epoch from d) FROM (VALUES
+  (arrow_cast(2500000000, 'Duration(Nanosecond)')),
+  (NULL),
+  (arrow_cast(1500000000, 'Duration(Nanosecond)'))
+) AS t(d)
+----
+2.5
+NULL
+1.5
+
+query RRRR
+SELECT extract(epoch from arrow_cast(9223372036854775807, 'Duration(Nanosecond)')),
+       extract(epoch from arrow_cast(-9223372036854775807, 'Duration(Nanosecond)')),
+       extract(epoch from arrow_cast(9223372036854775807, 'Duration(Second)')),
+       extract(epoch from arrow_cast(-9223372036854775807, 'Duration(Second)'))
+----
+9223372036.854776 -9223372036.854776 9223372036854776000 -9223372036854776000
+
 query I
 SELECT extract(millisecond from arrow_cast(2, 'Duration(Second)'))
 ----

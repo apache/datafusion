@@ -34,7 +34,7 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
-async-recursion = "1.0"
+async-recursion = "1.2"
 async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true, features = ["sql"] }

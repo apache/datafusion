@@ -1500,7 +1500,10 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::{AggregateMetric, AggregateMetrics};
     use datafusion_functions_aggregate::{array_agg::array_agg_udaf, count::count_udaf};
-    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::GroupsAccumulatorAdapter;
+    use datafusion_physical_expr::aggregate::{
+        AggregateExprBuilder, AggregateFunctionExpr,
+    };
     use datafusion_physical_expr::expressions::col;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -1527,6 +1530,18 @@ mod tests {
         }
     }
 
+    /// `array_agg(DISTINCT)` has a native groups accumulator, so build the
+    /// per-group adapter explicitly to cover its metric handling.
+    fn distinct_adapter(
+        aggregate_expr: Arc<AggregateFunctionExpr>,
+        metrics: Arc<dyn AggregateMetrics>,
+    ) -> GroupsAccumulatorAdapter {
+        let mut adapter =
+            GroupsAccumulatorAdapter::new(move || aggregate_expr.create_accumulator());
+        adapter.set_metrics(metrics);
+        adapter
+    }
+
     #[test]
     fn legacy_grouped_distinct_installs_metrics_for_conversion_and_update() -> Result<()>
     {
@@ -1544,13 +1559,13 @@ mod tests {
         );
         let metric_resolutions = Arc::new(AtomicUsize::new(0));
         let metric_durations = Arc::new(AtomicUsize::new(0));
-        let mut accumulator = create_group_accumulator(
-            &aggregate_expr,
+        let mut accumulator = distinct_adapter(
+            aggregate_expr,
             Arc::new(CountingMetrics {
                 resolutions: Arc::clone(&metric_resolutions),
                 durations: Arc::clone(&metric_durations),
             }),
-        )?;
+        );
         let values: ArrayRef = Arc::new(UInt32Array::from(vec![1, 2, 3]));
 
         accumulator.convert_to_state(&[Arc::clone(&values)], None)?;
@@ -1579,13 +1594,13 @@ mod tests {
         );
         let metric_resolutions = Arc::new(AtomicUsize::new(0));
         let metric_durations = Arc::new(AtomicUsize::new(0));
-        let mut accumulator = create_group_accumulator(
-            &aggregate_expr,
+        let mut accumulator = distinct_adapter(
+            aggregate_expr,
             Arc::new(CountingMetrics {
                 resolutions: Arc::clone(&metric_resolutions),
                 durations: Arc::clone(&metric_durations),
             }),
-        )?;
+        );
 
         let mut state = ListBuilder::new(UInt32Builder::new());
         for value in [1, 2, 3] {
