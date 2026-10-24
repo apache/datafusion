@@ -1802,7 +1802,7 @@ impl AggregateExec {
                 .downcast_ref::<AggregateExec>()
                 .is_some_and(|partial| {
                     partial.mode == AggregateMode::Partial
-                        && datafusion_physical_expr::physical_exprs_equal(
+                        && physical_exprs_equal(
                             &partial.output_group_expr(),
                             &self.group_by().input_exprs(),
                         )
