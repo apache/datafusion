@@ -10914,8 +10914,11 @@ mod tests {
     /// A correlated null-aware join whose build value keys are all NULL: under
     /// `NullEqualsNothing` its full-key map is empty, but the UNKNOWN marks
     /// still depend on each scope. `NULL NOT IN (5)` and `NULL NOT IN (7)` are
-    /// UNKNOWN; `NULL NOT IN (empty)`, in scope 3, is TRUE. The probe side
-    /// arrives in two batches.
+    /// UNKNOWN; `NULL NOT IN (empty)`, in scope 3, is TRUE. For `RightAnti`,
+    /// `5 NOT IN (NULL)` and `7 NOT IN (NULL)` are UNKNOWN and `9 NOT IN
+    /// (empty)`, in scope 4, is TRUE: only `(9, 4)` is emitted, from the same
+    /// probe batch as the dropped `(7, 2)`. The probe side arrives in two
+    /// batches.
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn test_null_aware_correlated_all_null_build_values(
@@ -10938,11 +10941,11 @@ mod tests {
         let build = table(vec![None, None, None], vec![Some(1), Some(2), Some(3)]);
         let probe = [
             table(vec![Some(5)], vec![Some(1)]),
-            table(vec![Some(7)], vec![Some(2)]),
+            table(vec![Some(7), Some(9)], vec![Some(2), Some(4)]),
         ];
 
         let mut results = vec![];
-        for join_type in [JoinType::LeftAnti, JoinType::LeftMark] {
+        for join_type in [JoinType::LeftAnti, JoinType::LeftMark, JoinType::RightAnti] {
             let task_ctx = prepare_task_ctx(batch_size, false);
             let left = TestMemoryExec::try_new_exec(
                 &[vec![build.clone()]],
@@ -10989,6 +10992,11 @@ mod tests {
             |    | 2 |       |
             |    | 3 | false |
             +----+---+-------+
+            +----+---+
+            | id | g |
+            +----+---+
+            | 9  | 4 |
+            +----+---+
             ");
         }
         Ok(())
