@@ -51,4 +51,4 @@ pub use disk_manager::DiskManager;
 pub use registry::FunctionRegistry;
 pub use spill_file::{AsyncSpillWriter, SpillFile, SpillWriter, TempFileFactory};
 pub use stream::{RecordBatchStream, SendableRecordBatchStream};
-pub use task::{TaskContext, TaskContextProvider};
+pub use task::{RunState, TaskContext, TaskContextProvider};

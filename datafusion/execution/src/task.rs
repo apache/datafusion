@@ -22,7 +22,10 @@ use crate::{
 use datafusion_common::{Result, internal_datafusion_err, plan_datafusion_err};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
+use parking_lot::Mutex;
+use std::any::{Any, TypeId};
 use std::collections::HashSet;
+use std::fmt;
 use std::{collections::HashMap, sync::Arc};
 
 /// Task Execution Context
@@ -48,7 +51,7 @@ use std::{collections::HashMap, sync::Arc};
 ///
 /// [`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
 /// [`ExecutionProps`]: datafusion_expr::execution_props::ExecutionProps
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TaskContext {
     /// Session Id
     session_id: String,
@@ -66,6 +69,71 @@ pub struct TaskContext {
     window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Runtime environment associated with this task context
     runtime: Arc<RuntimeEnv>,
+    /// State that operators keep for one run of a plan
+    run_state: Arc<RunState>,
+}
+
+/// State that the operators of a plan keep for one run of that plan.
+///
+/// An operator must not keep the result of a run in its plan node when another
+/// node reads that result, because the plan can be executed again, or two
+/// times at the same time. Such an operator keeps the result here. All
+/// `execute` calls of one run get the same [`TaskContext`], so they share one
+/// [`RunState`]. A different [`TaskContext`] is a different run.
+///
+/// A [`RunState`] holds at most one value of each type. An operator defines
+/// its own type, for example a map from an operator id to a result.
+///
+/// An operator that executes a part of the plan more than one time in a run
+/// (such as the recursive term of a recursive query) can give each execution a
+/// child state. See [`RunState::new_child`].
+#[derive(Default)]
+pub struct RunState {
+    /// Types that are not in `values` are read from the parent.
+    parent: Option<Arc<RunState>>,
+    values: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
+}
+
+impl fmt::Debug for RunState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RunState")
+            .field("parent", &self.parent)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RunState {
+    /// Create an empty state.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a state in which `value` replaces the value of type `T` of
+    /// `parent`. The values of all other types are those of `parent`.
+    pub fn new_child<T: Send + Sync + 'static>(
+        parent: Arc<RunState>,
+        value: Arc<T>,
+    ) -> Self {
+        let value = value as Arc<dyn Any + Send + Sync>;
+        Self {
+            parent: Some(parent),
+            values: Mutex::new(HashMap::from([(TypeId::of::<T>(), value)])),
+        }
+    }
+
+    /// Return the value of type `T`. The first call creates it.
+    pub fn get_or_init<T: Default + Send + Sync + 'static>(&self) -> Arc<T> {
+        let mut values = self.values.lock();
+        let id = TypeId::of::<T>();
+        let value = match (values.get(&id), &self.parent) {
+            (Some(value), _) => Arc::clone(value),
+            (None, Some(parent)) => return parent.get_or_init(),
+            (None, None) => {
+                Arc::clone(values.entry(id).or_insert_with(|| Arc::new(T::default())))
+            }
+        };
+        value.downcast().expect("the value has the type of its key")
+    }
 }
 
 impl Default for TaskContext {
@@ -82,6 +150,7 @@ impl Default for TaskContext {
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             runtime,
+            run_state: Arc::default(),
         }
     }
 }
@@ -112,6 +181,7 @@ impl TaskContext {
             aggregate_functions,
             window_functions,
             runtime,
+            run_state: Arc::default(),
         }
     }
 
@@ -165,6 +235,17 @@ impl TaskContext {
     /// Update the [`RuntimeEnv`]
     pub fn with_runtime(mut self, runtime: Arc<RuntimeEnv>) -> Self {
         self.runtime = runtime;
+        self
+    }
+
+    /// Return the [`RunState`] of the run that this [`TaskContext`] is for
+    pub fn run_state(&self) -> &Arc<RunState> {
+        &self.run_state
+    }
+
+    /// Update the [`RunState`]
+    pub fn with_run_state(mut self, run_state: Arc<RunState>) -> Self {
+        self.run_state = run_state;
         self
     }
 
@@ -292,6 +373,28 @@ mod tests {
 
     impl ConfigExtension for TestExtension {
         const PREFIX: &'static str = "test";
+    }
+
+    #[test]
+    fn run_state_child_replaces_one_type() {
+        let context = TaskContext::default();
+        let state = context.run_state();
+        let number: Arc<Mutex<usize>> = state.get_or_init();
+        *number.lock() = 1;
+        // A copy of the context is the same run.
+        let copy = context.clone();
+        assert_eq!(*copy.run_state().get_or_init::<Mutex<usize>>().lock(), 1);
+
+        let child = RunState::new_child(Arc::clone(state), Arc::new(Mutex::new(2_usize)));
+        assert_eq!(*child.get_or_init::<Mutex<usize>>().lock(), 2);
+        assert_eq!(*state.get_or_init::<Mutex<usize>>().lock(), 1);
+        // The child reads all other types from the parent.
+        *child.get_or_init::<Mutex<String>>().lock() = "a".to_string();
+        assert_eq!(*state.get_or_init::<Mutex<String>>().lock(), "a");
+
+        // A new context is a new run.
+        let other = TaskContext::default();
+        assert_eq!(*other.run_state().get_or_init::<Mutex<usize>>().lock(), 0);
     }
 
     #[test]
