@@ -168,14 +168,14 @@ impl PhysicalOptimizerRule for JoinSelection {
     }
 }
 
-/// Determines whether it is possible to swap inputs of a hash join - for null-aware joins, we can only swap an uncorrelated `LeftAnti`
-/// (a single join key and no filter), because the swapped `RightAnti` has no per-row NULL handling
+/// Determines whether it is possible to swap inputs of a hash join. Of the
+/// null-aware joins only a `LeftAnti` can be swapped: the resulting `RightAnti`
+/// decides `NOT IN` per probe row, including multi-column and correlated
+/// (scope keys or a join filter) shapes. A null-aware `LeftMark` has no
+/// null-aware `RightMark` counterpart.
 fn can_swap_hash_join(hash_join: &HashJoinExec) -> bool {
     hash_join.join_type().supports_swap()
-        && (!hash_join.null_aware
-            || (*hash_join.join_type() == JoinType::LeftAnti
-                && hash_join.on().len() == 1
-                && hash_join.filter().is_none()))
+        && (!hash_join.null_aware || *hash_join.join_type() == JoinType::LeftAnti)
 }
 
 /// Tries to create a [`HashJoinExec`] in [`PartitionMode::CollectLeft`] when possible.
@@ -319,13 +319,12 @@ fn statistical_join_selection_subrule(
                     if can_swap_hash_join(hash_join)
                         && should_swap_join_order(left, right, context)?
                     {
-                        // Null-aware RightAnti only supports CollectLeft
-                        let partition_mode = if hash_join.null_aware {
-                            PartitionMode::CollectLeft
-                        } else {
-                            PartitionMode::Partitioned
-                        };
-                        hash_join.swap_inputs(partition_mode).map(Some)?
+                        // A null-aware join is never in `Partitioned` mode
+                        // (`NotIn::try_new` rejects it), so the swap
+                        // keeps the mode this arm matched on.
+                        hash_join
+                            .swap_inputs(PartitionMode::Partitioned)
+                            .map(Some)?
                     } else {
                         None
                     }

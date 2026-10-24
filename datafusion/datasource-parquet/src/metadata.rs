@@ -19,6 +19,7 @@
 //! and schema information.
 
 use crate::file_format::ObjectStoreFetch;
+use crate::leaf_resolver::LeafResolver;
 use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp::eq;
@@ -42,7 +43,7 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
+use parquet::arrow::parquet_to_arrow_schema;
 use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
@@ -611,26 +612,27 @@ impl<'a> DFParquetMetadata<'a> {
             physical_file_schema = merged;
         }
 
-        statistics.column_statistics =
-            if has_statistics {
-                let (mut max_accs, mut min_accs) =
-                    create_max_min_accs(logical_file_schema);
-                let mut null_counts_array =
-                    vec![Precision::Absent; logical_file_schema.fields().len()];
-                let mut column_byte_sizes =
-                    vec![Precision::Absent; logical_file_schema.fields().len()];
-                let mut is_max_value_exact =
-                    vec![Some(true); logical_file_schema.fields().len()];
-                let mut is_min_value_exact =
-                    vec![Some(true); logical_file_schema.fields().len()];
-                let mut distinct_counts_array =
-                    vec![Precision::Absent; logical_file_schema.fields().len()];
-                logical_file_schema.fields().iter().enumerate().for_each(
-                    |(idx, field)| match StatisticsConverter::try_new(
-                        field.name(),
-                        &physical_file_schema,
-                        file_metadata.schema_descr(),
-                    ) {
+        let leaf_resolver =
+            LeafResolver::new(file_metadata.schema_descr(), &physical_file_schema);
+
+        statistics.column_statistics = if has_statistics {
+            let (mut max_accs, mut min_accs) = create_max_min_accs(logical_file_schema);
+            let mut null_counts_array =
+                vec![Precision::Absent; logical_file_schema.fields().len()];
+            let mut column_byte_sizes =
+                vec![Precision::Absent; logical_file_schema.fields().len()];
+            let mut is_max_value_exact =
+                vec![Some(true); logical_file_schema.fields().len()];
+            let mut is_min_value_exact =
+                vec![Some(true); logical_file_schema.fields().len()];
+            let mut distinct_counts_array =
+                vec![Precision::Absent; logical_file_schema.fields().len()];
+            logical_file_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .for_each(|(idx, field)| {
+                    match leaf_resolver.converter(field.name()) {
                         Ok(stats_converter) => {
                             // An omitted count must not become an exact zero in
                             // file statistics used for pruning and aggregates.
@@ -676,44 +678,39 @@ impl<'a> DFParquetMetadata<'a> {
                             debug!("Failed to create statistics converter: {e}");
                             null_counts_array[idx] = Precision::Exact(num_rows);
                         }
-                    },
-                );
+                    }
+                });
 
-                let mut accumulators = StatisticsAccumulators {
-                    min_accs: &mut min_accs,
-                    max_accs: &mut max_accs,
-                    null_counts_array: &mut null_counts_array,
-                    is_min_value_exact: &mut is_min_value_exact,
-                    is_max_value_exact: &mut is_max_value_exact,
-                    column_byte_sizes: &mut column_byte_sizes,
-                    distinct_counts_array: &mut distinct_counts_array,
-                };
-                accumulators.build_column_statistics(logical_file_schema)
-            } else {
-                // Record column sizes
-                logical_file_schema
-                    .fields()
-                    .iter()
-                    .enumerate()
-                    .map(|(logical_file_schema_index, field)| {
-                        let arrow_field =
-                            logical_file_schema.field(logical_file_schema_index);
-                        let parquet_idx = parquet_column(
-                            file_metadata.schema_descr(),
-                            &physical_file_schema,
-                            arrow_field.name(),
-                        )
-                        .map(|(idx, _)| idx);
-                        let byte_size = compute_arrow_column_size(
-                            field.data_type(),
-                            row_groups_metadata,
-                            parquet_idx,
-                            num_rows,
-                        );
-                        ColumnStatistics::new_unknown().with_byte_size(byte_size)
-                    })
-                    .collect()
+            let mut accumulators = StatisticsAccumulators {
+                min_accs: &mut min_accs,
+                max_accs: &mut max_accs,
+                null_counts_array: &mut null_counts_array,
+                is_min_value_exact: &mut is_min_value_exact,
+                is_max_value_exact: &mut is_max_value_exact,
+                column_byte_sizes: &mut column_byte_sizes,
+                distinct_counts_array: &mut distinct_counts_array,
             };
+            accumulators.build_column_statistics(logical_file_schema)
+        } else {
+            // Record column sizes
+            logical_file_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(logical_file_schema_index, field)| {
+                    let arrow_field =
+                        logical_file_schema.field(logical_file_schema_index);
+                    let parquet_idx = leaf_resolver.leaf_index(arrow_field.name());
+                    let byte_size = compute_arrow_column_size(
+                        field.data_type(),
+                        row_groups_metadata,
+                        parquet_idx,
+                        num_rows,
+                    );
+                    ColumnStatistics::new_unknown().with_byte_size(byte_size)
+                })
+                .collect()
+        };
 
         #[cfg(debug_assertions)]
         {

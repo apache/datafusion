@@ -158,6 +158,25 @@ impl ScalarFunctionExpr {
         &self.config_options
     }
 
+    /// Returns whether this function expression's argument types have been
+    /// explicitly audited as candidates for range-key locality analysis.
+    ///
+    /// See [`ScalarUDFImpl::supports_range_key_locality_analysis`] for the safety
+    /// requirements.
+    pub(crate) fn supports_range_key_locality_analysis(
+        &self,
+        input_schema: &Schema,
+    ) -> Result<bool> {
+        let argument_types = self
+            .args
+            .iter()
+            .map(|argument| argument.data_type(input_schema))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(self
+            .fun
+            .supports_range_key_locality_analysis(&argument_types))
+    }
+
     /// Given an arbitrary PhysicalExpr attempt to downcast it to a ScalarFunctionExpr
     /// and verify that its inner function is of type T.
     /// If the downcast fails, or the function is not of type T, returns `None`.
