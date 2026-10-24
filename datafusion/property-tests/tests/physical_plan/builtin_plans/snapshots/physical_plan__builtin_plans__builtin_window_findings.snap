@@ -1,0 +1,236 @@
+---
+source: datafusion/property-tests/tests/physical_plan/builtin_plans/mod.rs
+expression: output
+---
+## BoundedWindowAggExec ROW_NUMBER
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
+
+## BoundedWindowAggExec RANK, DENSE_RANK and a running SUM
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
+
+## BoundedWindowAggExec LAG and LEAD
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
+
+## BoundedWindowAggExec SUM over a RANGE frame
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
+
+## BoundedWindowAggExec ROW_NUMBER without PARTITION BY
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
+
+## BoundedWindowAggExec PartiallySorted
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
+
+## BoundedWindowAggExec Linear
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
+
+## WindowAggExec SUM over the whole window partition
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
+
+## WindowAggExec NTILE and CUME_DIST
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
+
+## WindowAggExec SUM without PARTITION BY
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
+
+## PartitionedTopKExec ROW_NUMBER
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default:
+    BoundedWindowAggExec: wdw=[row_number() PARTITION BY [g] ORDER BY [v]: Field { "row_number() PARTITION BY [g] ORDER BY [v]": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=row_number, fetch=5, partition=[g@0], order=[v@2 ASC]
+        MockSourceExec: partitioning=Hash([g@0], 3), partition_rows=[146, 236, 218], statistics=Exact
+    [invariant] boundedness_holds at PartitionedTopKExec (root/0): rebuilt with child 0 unbounded, the node reports Boundedness::Bounded, but its output did not end while the child kept delivering rows
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in batches of 1 row: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in random batches of up to 3 rows and empty batches: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in one batch per partition: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+  case single partition: no violations
+  case inexact statistics:
+    BoundedWindowAggExec: wdw=[row_number() PARTITION BY [g] ORDER BY [v]: Field { "row_number() PARTITION BY [g] ORDER BY [v]": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=row_number, fetch=5, partition=[g@0], order=[v@2 ASC]
+        MockSourceExec: partitioning=Hash([g@0], 3), partition_rows=[146, 236, 218], statistics=Inexact
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in batches of 1 row: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in random batches of up to 3 rows and empty batches: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in one batch per partition: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+  case absent statistics:
+    BoundedWindowAggExec: wdw=[row_number() PARTITION BY [g] ORDER BY [v]: Field { "row_number() PARTITION BY [g] ORDER BY [v]": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=row_number, fetch=5, partition=[g@0], order=[v@2 ASC]
+        MockSourceExec: partitioning=Hash([g@0], 3), partition_rows=[146, 236, 218], statistics=Absent
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in batches of 1 row: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in random batches of up to 3 rows and empty batches: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in one batch per partition: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns:
+    BoundedWindowAggExec: wdw=[row_number() PARTITION BY [g] ORDER BY [v]: Field { "row_number() PARTITION BY [g] ORDER BY [v]": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=row_number, fetch=5, partition=[g@0], order=[v@2 ASC]
+        MockSourceExec: partitioning=Hash([g@0], 3), partition_rows=[146, 236, 218], statistics=Exact, equalities=[g@0 = g__copy@4, h@1 = h__copy@5, v@2 = v__copy@6, f@3 = f__copy@7]
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in batches of 1 row: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in random batches of up to 3 rows and empty batches: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in one batch per partition: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+  case sorted by row id:
+    BoundedWindowAggExec: wdw=[row_number() PARTITION BY [g] ORDER BY [v]: Field { "row_number() PARTITION BY [g] ORDER BY [v]": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=row_number, fetch=5, partition=[g@0], order=[v@2 ASC]
+        MockSourceExec: partitioning=Hash([g@0], 3), partition_rows=[146, 236, 218], statistics=Exact, output_ordering=[__row_id@4 ASC]
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in batches of 1 row: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in random batches of up to 3 rows and empty batches: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in one batch per partition: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+  case sorted by columns:
+    BoundedWindowAggExec: wdw=[row_number() PARTITION BY [g] ORDER BY [v]: Field { "row_number() PARTITION BY [g] ORDER BY [v]": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=row_number, fetch=5, partition=[g@0], order=[v@2 ASC]
+        MockSourceExec: partitioning=Hash([g@0], 3), partition_rows=[146, 236, 218], statistics=Exact, output_ordering=[g@0 ASC, h@1 ASC, v@2 ASC, f@3 ASC]
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in batches of 1 row: the node produced 80 rows, 1 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in random batches of up to 3 rows and empty batches: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in one batch per partition: the node produced 80 rows, 1 of which do not appear in the normal output, instead of the 80 rows it produces normally
+  case hash partitioned:
+    BoundedWindowAggExec: wdw=[row_number() PARTITION BY [g] ORDER BY [v]: Field { "row_number() PARTITION BY [g] ORDER BY [v]": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=row_number, fetch=5, partition=[g@0], order=[v@2 ASC]
+        MockSourceExec: partitioning=Hash([g@0], 3), partition_rows=[146, 236, 218], statistics=Exact
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in batches of 1 row: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in random batches of up to 3 rows and empty batches: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in one batch per partition: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+
+## PartitionedTopKExec RANK
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default:
+    BoundedWindowAggExec: wdw=[rank() PARTITION BY [g] ORDER BY [v]: Field { "rank() PARTITION BY [g] ORDER BY [v]": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=rank, fetch=5, partition=[g@0], order=[v@2 ASC]
+        MockSourceExec: partitioning=Hash([g@0], 3), partition_rows=[146, 236, 218], statistics=Exact
+    [invariant] boundedness_holds at PartitionedTopKExec (root/0): rebuilt with child 0 unbounded, the node reports Boundedness::Bounded, but its output did not end while the child kept delivering rows
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
+
+## PartitionedTopKExec DENSE_RANK
+  allowed limit_pushdown_missed: a window function can need later rows, as LEAD, NTILE, CUME_DIST and frames that end after the current row do, so a window operator cannot support limit pushdown in general; limit_pushdown_past_window pushes limits past the windows that only read earlier rows
+  case default:
+    BoundedWindowAggExec: wdw=[dense_rank() PARTITION BY [g] ORDER BY [v]: Field { "dense_rank() PARTITION BY [g] ORDER BY [v]": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=dense_rank, fetch=5, partition=[g@0], order=[v@2 ASC]
+        MockSourceExec: partitioning=Hash([g@0], 3), partition_rows=[146, 236, 218], statistics=Exact
+    [invariant] boundedness_holds at PartitionedTopKExec (root/0): rebuilt with child 0 unbounded, the node reports Boundedness::Bounded, but its output did not end while the child kept delivering rows
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case sorted by columns: no violations
+  case hash partitioned: no violations
