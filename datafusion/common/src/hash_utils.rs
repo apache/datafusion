@@ -1869,11 +1869,11 @@ mod tests {
         use crate::utils::MAX_DICTIONARY_VALUES_PER_ROW;
 
         let values: ArrayRef = Arc::new(StringArray::from_iter(
-            (0..20).map(|i| (i != 2).then(|| format!("v{i}"))),
+            (0..40).map(|i| (i != 2).then(|| format!("v{i}"))),
         ));
-        let keys = Int8Array::from_iter((0..24).map(|i| (i % 7 != 1).then_some(i % 20)));
+        let keys = Int8Array::from_iter((0..48).map(|i| (i % 7 != 1).then_some(i % 40)));
         let dict: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
-        let ints: ArrayRef = Arc::new(Int32Array::from_iter_values(0..24));
+        let ints: ArrayRef = Arc::new(Int32Array::from_iter_values(0..48));
         let random_state = RandomState::with_seed(0);
 
         let mut single = vec![0; dict.len()];
@@ -1881,7 +1881,7 @@ mod tests {
         let mut multi = vec![0; dict.len()];
         create_hashes([&ints, &dict], &random_state, &mut multi).unwrap();
 
-        for (offset, len) in [(0, 2), (1, 2), (8, 1), (22, 2)] {
+        for (offset, len) in [(0, 2), (1, 2), (8, 1), (46, 2)] {
             let slice = dict.slice(offset, len);
             assert!(
                 slice.as_any_dictionary().values().len()
