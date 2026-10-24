@@ -496,4 +496,91 @@ mod tests {
         assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
         Ok(())
     }
+
+    use arrow::array::ArrayRef;
+
+    const ROWS: usize = 8192;
+
+    /// Runs a partial `SUM(v) GROUP BY <keys>` over three batches sorted on all
+    /// keys, where every row is a distinct group. Each batch completes all but
+    /// its last group.
+    async fn run_distinct_keys(
+        num_keys: usize,
+        pool: Arc<dyn MemoryPool>,
+    ) -> Result<Vec<RecordBatch>> {
+        let mut fields: Vec<_> = (0..num_keys)
+            .map(|i| Field::new(format!("k{i}"), DataType::Int64, false))
+            .collect();
+        fields.push(Field::new("v", DataType::Int64, false));
+        let schema = Arc::new(Schema::new(fields));
+        let batches = (0..3)
+            .map(|b| {
+                let ids = (b * ROWS) as i64..((b + 1) * ROWS) as i64;
+                let cols: Vec<ArrayRef> = (0..=num_keys)
+                    .map(|_| {
+                        Arc::new(Int64Array::from_iter_values(ids.clone())) as ArrayRef
+                    })
+                    .collect();
+                RecordBatch::try_new(Arc::clone(&schema), cols)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let keys = (0..num_keys)
+            .map(|i| Ok((col(&format!("k{i}"), &schema)?, format!("k{i}"))))
+            .collect::<Result<Vec<_>>>()?;
+        let ordering = LexOrdering::new(
+            keys.iter()
+                .map(|(expr, _)| PhysicalSortExpr::new_default(Arc::clone(expr))),
+        )
+        .unwrap();
+        let input = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(keys),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(input),
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(aggregate.group_clustering_mode, GroupClusteringMode::Full);
+        let context = Arc::new(
+            TaskContext::default().with_runtime(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(pool)
+                    .build_arc()?,
+            ),
+        );
+        let mut stream =
+            ClusteredPartialAggregateStream::new(&aggregate, &context, 0)?.into_stream();
+        let mut output = vec![];
+        while let Some(batch) = stream.next().await.transpose()? {
+            output.push(batch);
+        }
+        Ok(output)
+    }
+
+    /// After the completed groups are emitted on memory pressure only one group
+    /// remains, but the table keeps the capacity it grew for the whole batch:
+    /// the single-key hash table (~272 KB for 8192 keys), the clustered
+    /// `new_groups` scratch and `group_indices` (64 KB each). Re-reserving that
+    /// retained size fails, although the active group fits easily.
+    #[tokio::test]
+    async fn completed_groups_under_memory_pressure_retained_capacity() -> Result<()> {
+        for num_keys in [1, 2] {
+            let expected =
+                run_distinct_keys(num_keys, Arc::new(UnboundedMemoryPool::default()))
+                    .await?;
+            let actual =
+                run_distinct_keys(num_keys, Arc::new(GreedyMemoryPool::new(100 * 1024)))
+                    .await
+                    .map_err(|e| e.context(format!("num_keys = {num_keys}")))?;
+            assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
+        }
+        Ok(())
+    }
 }
