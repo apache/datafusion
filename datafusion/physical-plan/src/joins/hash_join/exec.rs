@@ -32,6 +32,7 @@ use crate::filter_pushdown::{
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
+use crate::joins::hash_join::not_in::{NotIn, NotInBuild};
 use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
@@ -70,8 +71,7 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt64Array};
-use arrow::buffer::NullBuffer;
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -99,7 +99,7 @@ use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, l
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use datafusion_common::hash_utils::{RandomState, create_hashes};
+use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
@@ -202,152 +202,6 @@ fn array_map_key_range(
     Ok(Some((min_val, max_val)))
 }
 
-/// The build rows with a NULL `NOT IN` value key (in any element of a
-/// multi-column key), used by correlated null-aware joins (see
-/// [`NullAwareMode`]).
-///
-/// Such rows make `NOT IN` UNKNOWN whenever *any* probe row in their
-/// correlation scope passes the join filter (unless another element is a
-/// definite mismatch), so every probe row must be tested against them.
-/// Restricting this lookup to the NULL-valued build rows keeps it
-/// proportional to the number of NULLs instead of enumerating every scope
-/// match of every probe row.
-pub(super) struct NullValueBuildRows {
-    /// Hash table keyed by the correlation scope values of the NULL-valued
-    /// build rows. Stored positions index into `scope_values`/`build_indices`,
-    /// not the full build batch. `None` when the join has no correlation
-    /// scope keys, so every probe row is in scope.
-    pub(super) scope_map: Option<Box<dyn JoinHashMapType>>,
-    /// Correlation scope key values of the NULL-valued build rows.
-    pub(super) scope_values: Vec<ArrayRef>,
-    /// Maps positions in `map`/`scope_values` back to row indices in the full
-    /// build batch.
-    pub(super) build_indices: UInt64Array,
-}
-
-/// Returns the rows where at least one of `value_keys` is NULL, or `None` when
-/// there is no such row.
-pub(super) fn null_value_key_mask(value_keys: &[ArrayRef]) -> Option<BooleanArray> {
-    let logical_nulls: Vec<_> = value_keys.iter().map(|v| v.logical_nulls()).collect();
-    let valid = NullBuffer::union_many(logical_nulls.iter().map(Option::as_ref))?;
-    (valid.null_count() > 0).then(|| BooleanArray::new(!valid.inner(), None))
-}
-
-/// Null-aware (`NOT IN`) semantics of a hash join, derived from
-/// [`HashJoinExec::null_aware`] and the join type.
-///
-/// Only these combinations are legal (see [`Self::try_new`]), so the
-/// stream matches on this instead of re-checking `null_aware && join_type == ..`.
-///
-/// A `correlated` join has more than one key — correlation scope keys
-/// (`on[V..]`, see [`HashJoinExec::null_aware`]), a multi-column value key, or
-/// both — or a join filter. A NULL then makes `NOT IN` UNKNOWN only for the
-/// rows whose scope, filter and other tuple elements keep that NULL. `LeftAnti`
-/// and `LeftMark` record the decision per build row in the null-indices bitmap
-/// instead of in shared probe-side flags; `RightAnti` decides it per probe row
-/// within each probe batch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NullAwareMode {
-    /// `build.key NOT IN (probe.key)`: emits build rows. When uncorrelated,
-    /// none of them are emitted once any probe key is NULL.
-    ///
-    /// `value_keys` is the number of `NOT IN` value keys, see
-    /// [`HashJoinExec::null_aware_value_keys`].
-    LeftAnti { correlated: bool, value_keys: usize },
-    /// `probe.key NOT IN (build.key)`: emits probe rows. When uncorrelated,
-    /// none of them are emitted once any build key is NULL. When correlated,
-    /// a probe row is dropped when some build row in its correlation scope
-    /// matches it exactly or has no definite mismatch with it; `value_keys`
-    /// as for `LeftAnti`.
-    RightAnti { correlated: bool, value_keys: usize },
-    /// `NOT IN` as a nullable mark column on the build rows; `value_keys` as
-    /// for `LeftAnti`.
-    LeftMark { correlated: bool, value_keys: usize },
-}
-
-impl NullAwareMode {
-    /// Validates that `null_aware` may be set for this join and returns its mode.
-    pub(super) fn try_new(
-        join_type: JoinType,
-        partition_mode: PartitionMode,
-        num_keys: usize,
-        num_value_keys: usize,
-        has_filter: bool,
-    ) -> Result<Self> {
-        if num_value_keys == 0 || num_value_keys > num_keys {
-            return plan_err!(
-                "null_aware {join_type} join needs between 1 and {num_keys} `NOT IN` value keys, got {num_value_keys}"
-            );
-        }
-        // `num_keys > 1` also covers a multi-column value key without any
-        // correlation: a NULL in one tuple element leaves the comparison FALSE
-        // whenever another element is a definite mismatch, so it too must be
-        // decided per build row.
-        let correlated = num_keys > 1 || has_filter;
-        let mode = match (join_type, partition_mode) {
-            (JoinType::LeftAnti, _) => Self::LeftAnti {
-                correlated,
-                value_keys: num_value_keys,
-            },
-            // `PartitionMode::CollectLeft` is safe because `RightAnti` is
-            // probe-driven: every probe row sees the whole build side.
-            (JoinType::RightAnti, PartitionMode::CollectLeft) => Self::RightAnti {
-                correlated,
-                value_keys: num_value_keys,
-            },
-            (JoinType::LeftMark, _) => Self::LeftMark {
-                correlated,
-                value_keys: num_value_keys,
-            },
-            _ => {
-                return plan_err!(
-                    "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, or LeftMark joins, got {join_type} with {partition_mode}"
-                );
-            }
-        };
-        match mode {
-            // Build-driven joins decide in the final stage from state shared
-            // across the probe partitions: the per-build-row null bitmap for
-            // the correlated forms, and the probe-side NULL flag for the
-            // uncorrelated ones. `Partitioned` gives each output partition its
-            // own build side, so neither is global there.
-            Self::LeftMark { .. } | Self::LeftAnti { .. }
-                if partition_mode == PartitionMode::Partitioned =>
-            {
-                plan_err!(
-                    "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
-                )
-            }
-            _ => Ok(mode),
-        }
-    }
-
-    /// Whether this join decides UNKNOWN per row (see [`NullAwareMode`]).
-    pub(super) fn is_correlated(self) -> bool {
-        match self {
-            Self::LeftAnti { correlated, .. }
-            | Self::RightAnti { correlated, .. }
-            | Self::LeftMark { correlated, .. } => correlated,
-        }
-    }
-
-    /// Whether this join records UNKNOWN per build row in the shared
-    /// null-indices bitmap: a correlated `LeftAnti` or `LeftMark`.
-    pub(super) fn marks_build_rows(self) -> bool {
-        self.is_correlated() && !matches!(self, Self::RightAnti { .. })
-    }
-
-    /// Number of leading keys that are `NOT IN` value keys; the keys after
-    /// them are correlation scope keys.
-    pub(super) fn value_keys(self) -> usize {
-        match self {
-            Self::LeftAnti { value_keys, .. }
-            | Self::RightAnti { value_keys, .. }
-            | Self::LeftMark { value_keys, .. } => value_keys,
-        }
-    }
-}
-
 /// Immutable build buffers and their durable reservation.
 struct JoinBuildData {
     /// Hash table with row indices into `batch`, also shared with dynamic filters.
@@ -357,15 +211,9 @@ struct JoinBuildData {
     /// Evaluated build-side key expressions, with float `-0.0` rewritten to
     /// `+0.0` so probe batches can compare against them without scanning the
     /// build side again. The dynamic filters (`bounds`, `membership`) and
-    /// `build_side_has_null` were computed from the original keys in
+    /// the `NOT IN` NULL masks were computed from the original keys in
     /// `collect_left_input`.
     values: Vec<ArrayRef>,
-    /// Logical nulls of the scalar key for uncorrelated null-aware `LeftMark`
-    /// and `LeftAnti`.
-    ///
-    /// Computed once while collecting the build side because dictionary
-    /// logical-null discovery can scan nested dictionary values.
-    null_aware_build_key_nulls: Option<NullBuffer>,
     /// Bounds computed from the build side; absent for an empty partition.
     bounds: Option<PartitionBounds>,
     /// IN-list values or a hash-table reference used for filter pushdown.
@@ -376,26 +224,13 @@ struct JoinBuildData {
 
 /// A build lease and mutable bookkeeping for one join execution.
 pub(super) struct JoinLeftData {
-    /// Hash table over correlated scope keys for correlated null-aware joins.
-    ///
-    /// Keys `..V` are the `NOT IN` value keys and keys `V..` the correlated
-    /// equality scope keys, where `V` is `null_aware_value_keys`. This map covers all build rows and is probed only
-    /// with NULL-valued probe rows; the complementary direction uses
-    /// `null_value_build_rows`. `None` when there are no scope keys.
-    null_aware_scope_map: Option<Box<dyn JoinHashMapType>>,
-    /// The build rows with a NULL value key (see [`NullValueBuildRows`]).
-    /// `None` when the build side has no NULL value keys.
-    null_value_build_rows: Option<NullValueBuildRows>,
+    /// The `NOT IN` state of a null-aware join, see [`NotInBuild`].
+    not_in: Option<NotInBuild>,
     /// Shared bitmap for visited left indices within this consuming join.
     visited_indices_bitmap: SharedBitmapBuilder,
-    /// Shared bitmap for NULL marks within this consuming join.
-    null_indices_bitmap: SharedBitmapBuilder,
     /// Tracks the final probe partition and what every partition observed.
     /// See [`ProbeCompletion`] for the completion invariant.
     probe_completion: ProbeCompletion,
-    /// Whether the subquery of an uncorrelated null-aware `RightAnti` join
-    /// contains a NULL key.
-    pub(super) build_side_has_null: bool,
     // Drop the reservation after the mutable state it also accounts for.
     build: Arc<JoinBuildData>,
 }
@@ -406,12 +241,9 @@ impl JoinLeftData {
         &self.build.map
     }
 
-    pub(super) fn null_aware_scope_map(&self) -> Option<&dyn JoinHashMapType> {
-        self.null_aware_scope_map.as_deref()
-    }
-
-    pub(super) fn null_value_build_rows(&self) -> Option<&NullValueBuildRows> {
-        self.null_value_build_rows.as_ref()
+    /// This build's `NOT IN` state, for a null-aware join.
+    pub(super) fn not_in(&self) -> Option<&NotInBuild> {
+        self.not_in.as_ref()
     }
 
     /// returns a reference to the build side batch
@@ -437,23 +269,15 @@ impl JoinLeftData {
     }
 
     /// Returns the build side key values, with float `-0.0` already rewritten
-    /// to `+0.0` for key comparison. The dynamic filters and
-    /// `build_side_has_null` were derived from the original keys instead.
+    /// to `+0.0` for key comparison. The dynamic filters and the `NOT IN`
+    /// NULL masks were derived from the original keys instead.
     pub(super) fn values(&self) -> &[ArrayRef] {
         &self.build.values
-    }
-
-    pub(super) fn null_aware_build_key_nulls(&self) -> Option<&NullBuffer> {
-        self.build.null_aware_build_key_nulls.as_ref()
     }
 
     /// returns a reference to the visited indices bitmap
     pub(super) fn visited_indices_bitmap(&self) -> &SharedBitmapBuilder {
         &self.visited_indices_bitmap
-    }
-
-    pub(super) fn null_indices_bitmap(&self) -> &SharedBitmapBuilder {
-        &self.null_indices_bitmap
     }
 
     /// returns a reference to the InList values for filter pushdown
@@ -667,7 +491,7 @@ impl HashJoinExecBuilder {
             }
         }
         // Validate null_aware flag
-        exec.null_aware_mode()?;
+        exec.not_in()?;
 
         if preserve_properties {
             return Ok(exec);
@@ -1375,10 +1199,10 @@ impl HashJoinExec {
     /// The null-aware semantics of this join, if [`Self::null_aware`] is set.
     ///
     /// Errors if `null_aware` is set on a join that does not support it.
-    pub(super) fn null_aware_mode(&self) -> Result<Option<NullAwareMode>> {
+    pub(super) fn not_in(&self) -> Result<Option<NotIn>> {
         self.null_aware
             .then(|| {
-                NullAwareMode::try_new(
+                NotIn::try_new(
                     self.join_type,
                     self.mode,
                     self.on.len(),
@@ -1840,7 +1664,7 @@ impl ExecutionPlan for HashJoinExec {
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
-        let null_aware = self.null_aware_mode()?;
+        let not_in = self.not_in()?;
 
         let array_map_created_count = MetricBuilder::new(&self.metrics)
             .with_category(MetricCategory::Rows)
@@ -1867,7 +1691,7 @@ impl ExecutionPlan for HashJoinExec {
                             on_right,
                             repartition_random_state,
                             self.null_equality,
-                            null_aware,
+                            not_in,
                         ))
                     })))
                 })
@@ -1901,7 +1725,7 @@ impl ExecutionPlan for HashJoinExec {
                     enable_dynamic_filter_pushdown,
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
-                    null_aware,
+                    not_in,
                     array_map_created_count,
                     BuildMode::Ordinary,
                 ))
@@ -1923,7 +1747,7 @@ impl ExecutionPlan for HashJoinExec {
                     enable_dynamic_filter_pushdown,
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
-                    null_aware,
+                    not_in,
                     array_map_created_count,
                     BuildMode::Ordinary,
                 ))
@@ -1975,7 +1799,6 @@ impl ExecutionPlan for HashJoinExec {
             self.right.output_ordering().is_some(),
             build_accumulator,
             self.mode,
-            null_aware,
             self.fetch,
         )))
     }
@@ -3092,7 +2915,7 @@ fn is_perfect_hash_join_candidate(
     Ok(ArrayMap::is_supported_type(&data_type))
 }
 
-fn new_join_hashmap(
+pub(super) fn new_join_hashmap(
     num_rows: usize,
     reservation: &mut MemoryReservation,
     metrics: &BuildProbeJoinMetrics,
@@ -3249,7 +3072,7 @@ async fn collect_left_input(
     should_compute_dynamic_filters: bool,
     config: Arc<ConfigOptions>,
     null_equality: NullEquality,
-    null_aware: Option<NullAwareMode>,
+    not_in: Option<NotIn>,
     array_map_created_count: Count,
     mode: BuildMode,
 ) -> Result<JoinLeftData> {
@@ -3342,7 +3165,7 @@ async fn collect_left_input(
         should_compute_dynamic_filters,
         &config,
         null_equality,
-        null_aware,
+        not_in,
         &array_map_created_count,
         prepared,
     )
@@ -3373,20 +3196,10 @@ fn build_in_memory(
     should_compute_dynamic_filters: bool,
     config: &ConfigOptions,
     null_equality: NullEquality,
-    null_aware: Option<NullAwareMode>,
+    not_in: Option<NotIn>,
     array_map_created_count: &Count,
     prepared: bool,
 ) -> Result<JoinLeftData> {
-    // Correlated null-aware joins (see `NullAwareMode`), multi-column value
-    // keys without scope keys included, pair NULL-valued rows with the other
-    // side to find UNKNOWN rows: they need the NULL-valued build rows and, with
-    // scope keys, the scope map. Of those, only the ones that decide build rows
-    // also need the per-build-row UNKNOWN bitmap.
-    let with_null_candidate_state = null_aware.is_some_and(NullAwareMode::is_correlated);
-    let with_build_unknown_bitmap =
-        null_aware.is_some_and(NullAwareMode::marks_build_rows);
-    let null_aware_value_keys = null_aware.map_or(1, NullAwareMode::value_keys);
-
     let is_phj_candidate = is_perfect_hash_join_candidate(on_left, schema)?;
 
     let (join_hash_map, batch, left_values) = if let Some((min_val, max_val)) =
@@ -3512,86 +3325,20 @@ fn build_in_memory(
         BooleanBufferBuilder::new(0)
     };
 
-    let null_indices_bitmap = if with_build_unknown_bitmap {
-        allocate_bitmap()?
-    } else {
-        BooleanBufferBuilder::new(0)
-    };
-
-    let (null_aware_scope_map, null_value_build_rows) = if with_null_candidate_state {
-        // Null-aware convention: `on_left[..V]` are the value keys and
-        // `on_left[V..]` the (possibly empty) correlation scope keys.
-        let scope_keys = &on_left[null_aware_value_keys..];
-        let scope_map = if scope_keys.is_empty() {
-            None
-        } else {
-            // Scope-only NULL marking uses a HashMap (the primary join map may
-            // use ArrayMap for full-key matches, but scope keys have arbitrary
-            // shape).
-            let mut scope_map = new_join_hashmap(num_rows, &mut reservation, metrics)?;
-
-            let mut hashes_buffer = vec![0; batch.num_rows()];
-            update_hash(
-                scope_keys,
+    let not_in = not_in
+        .map(|not_in| {
+            NotInBuild::try_new(
+                not_in,
+                on_left,
                 &batch,
-                &mut *scope_map,
-                0,
+                &left_values,
+                &normalized_values,
                 random_state,
-                &mut hashes_buffer,
-                0,
-                true,
-                NullEquality::NullEqualsNothing,
-            )?;
-            Some(scope_map)
-        };
-
-        // Collect the NULL-valued build rows (see `NullValueBuildRows`).
-        let null_value_build_rows = if let Some(null_mask) =
-            null_value_key_mask(&left_values[..null_aware_value_keys])
-        {
-            let build_indices = UInt64Array::from_iter_values(
-                null_mask.values().set_indices().map(|i| i as u64),
-            );
-            let scope_values = normalized_values[null_aware_value_keys..]
-                .iter()
-                .map(|values| Ok(arrow::compute::filter(values.as_ref(), &null_mask)?))
-                .collect::<Result<Vec<_>>>()?;
-
-            // `scope_values` and `build_indices` are retained for the lifetime
-            // of the join, so charge them to the reservation like the maps and
-            // bitmaps above.
-            let retained_size = build_indices.get_array_memory_size()
-                + scope_values
-                    .iter()
-                    .map(|values| values.get_array_memory_size())
-                    .sum::<usize>();
-            reservation.try_grow(retained_size)?;
-            metrics.build_mem_used.add(retained_size);
-
-            let scope_map = if scope_values.is_empty() {
-                None
-            } else {
-                let null_rows = build_indices.len();
-                let mut map = new_join_hashmap(null_rows, &mut reservation, metrics)?;
-                let mut hashes_buffer = vec![0; null_rows];
-                create_hashes(&scope_values, random_state, &mut hashes_buffer)?;
-                map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
-                Some(map)
-            };
-
-            Some(NullValueBuildRows {
-                scope_map,
-                scope_values,
-                build_indices,
-            })
-        } else {
-            None
-        };
-
-        (scope_map, null_value_build_rows)
-    } else {
-        (None, None)
-    };
+                &mut reservation,
+                metrics,
+            )
+        })
+        .transpose()?;
 
     let map = Arc::new(join_hash_map);
 
@@ -3654,47 +3401,6 @@ fn build_in_memory(
         bounds = None;
     }
 
-    let build_has_null = matches!(
-        null_aware,
-        Some(NullAwareMode::RightAnti {
-            correlated: false,
-            ..
-        })
-    ) && !left_values.is_empty()
-        && left_values[0].logical_null_count() > 0;
-
-    let null_aware_build_key_nulls = if matches!(
-        null_aware,
-        Some(
-            NullAwareMode::LeftMark {
-                correlated: false,
-                ..
-            } | NullAwareMode::LeftAnti {
-                correlated: false,
-                ..
-            }
-        )
-    ) {
-        left_values[0]
-            .logical_nulls()
-            .filter(|nulls| nulls.null_count() > 0)
-    } else {
-        None
-    };
-    if let Some(nulls) = &null_aware_build_key_nulls {
-        // `logical_nulls` reuses an array's physical null buffer when it can.
-        // Only charge newly materialized buffers, such as dictionary logical
-        // nulls, because the build batch's buffers were reserved above.
-        let reuses_input_buffer = left_values[0]
-            .nulls()
-            .is_some_and(|input| input.inner().ptr_eq(nulls.inner()));
-        if !reuses_input_buffer {
-            let retained_size = nulls.buffer().capacity();
-            reservation.try_grow(retained_size)?;
-            metrics.build_mem_used.add(retained_size);
-        }
-    }
-
     if prepared {
         batches.clear();
         // Prepared keys are direct columns. IN-list arrays share these batch
@@ -3713,17 +3419,13 @@ fn build_in_memory(
             map,
             batch,
             values: normalized_values,
-            null_aware_build_key_nulls,
             bounds,
             membership,
             reservation,
         }),
-        null_aware_scope_map,
-        null_value_build_rows,
+        not_in,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
-        null_indices_bitmap: Mutex::new(null_indices_bitmap),
         probe_completion: ProbeCompletion::new(probe_threads_count),
-        build_side_has_null: build_has_null,
     };
 
     Ok(data)
@@ -3732,6 +3434,7 @@ fn build_in_memory(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::joins::hash_join::not_in::{NotInOutput, NotInScope};
 
     fn assert_phj_used(metrics: &MetricsSet, use_phj: bool) {
         if use_phj {
@@ -9451,7 +9154,7 @@ mod tests {
     ///
     /// A dictionary key that points at a NULL dictionary value has
     /// `null_count() == 0`, so only the `logical_null_count()` check in
-    /// `null_aware_skip_probe_batch` records it. This pins that check to the
+    /// `NotInProbe::before_lookup` records it. This pins that check to the
     /// cross-partition summary: the partition holding the logical NULL is not
     /// the one that emits the build rows, in either drain order.
     #[apply(hash_join_exec_configs)]
@@ -10452,17 +10155,15 @@ mod tests {
             NullEquality::NullEqualsNothing,
             true,
         )?;
+        let scope = NotInScope::Correlated { value_keys: 1 };
         let expected = match join_type {
-            JoinType::RightAnti => NullAwareMode::RightAnti {
-                correlated: true,
-                value_keys: 1,
-            },
-            _ => NullAwareMode::LeftAnti {
-                correlated: true,
-                value_keys: 1,
+            JoinType::RightAnti => NotIn::ProbeRows { scope },
+            _ => NotIn::BuildRows {
+                scope,
+                output: NotInOutput::Rows,
             },
         };
-        assert_eq!(join.null_aware_mode()?, Some(expected));
+        assert_eq!(join.not_in()?, Some(expected));
         Ok(())
     }
 
@@ -11208,6 +10909,97 @@ mod tests {
         let swapped = left_anti.swap_inputs(PartitionMode::CollectLeft)?;
         let swapped = swapped.downcast_ref::<HashJoinExec>().unwrap();
         Ok(Arc::new(swapped.builder().reset_state().build()?))
+    }
+
+    /// A correlated null-aware join whose build value keys are all NULL: under
+    /// `NullEqualsNothing` its full-key map is empty, but the UNKNOWN marks
+    /// still depend on each scope. `NULL NOT IN (5)` and `NULL NOT IN (7)` are
+    /// UNKNOWN; `NULL NOT IN (empty)`, in scope 3, is TRUE. For `RightAnti`,
+    /// `5 NOT IN (NULL)` and `7 NOT IN (NULL)` are UNKNOWN and `9 NOT IN
+    /// (empty)`, in scope 4, is TRUE: only `(9, 4)` is emitted, from the same
+    /// probe batch as the dropped `(7, 2)`. The probe side arrives in two
+    /// batches.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_correlated_all_null_build_values(
+        batch_size: usize,
+    ) -> Result<()> {
+        fn table(id: Vec<Option<i32>>, g: Vec<Option<i32>>) -> RecordBatch {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, true),
+                Field::new("g", DataType::Int32, true),
+            ]));
+            RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int32Array::from(id)),
+                    Arc::new(Int32Array::from(g)),
+                ],
+            )
+            .unwrap()
+        }
+        let build = table(vec![None, None, None], vec![Some(1), Some(2), Some(3)]);
+        let probe = [
+            table(vec![Some(5)], vec![Some(1)]),
+            table(vec![Some(7), Some(9)], vec![Some(2), Some(4)]),
+        ];
+
+        let mut results = vec![];
+        for join_type in [JoinType::LeftAnti, JoinType::LeftMark, JoinType::RightAnti] {
+            let task_ctx = prepare_task_ctx(batch_size, false);
+            let left = TestMemoryExec::try_new_exec(
+                &[vec![build.clone()]],
+                build.schema(),
+                None,
+            )?;
+            let right =
+                TestMemoryExec::try_new_exec(&[probe.to_vec()], probe[0].schema(), None)?;
+            let on = ["id", "g"]
+                .into_iter()
+                .map(|name| {
+                    Ok((
+                        Arc::new(Column::new_with_schema(name, &left.schema())?) as _,
+                        Arc::new(Column::new_with_schema(name, &right.schema())?) as _,
+                    ))
+                })
+                .collect::<Result<JoinOn>>()?;
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &join_type,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true,
+            )?;
+            let batches = common::collect(join.execute(0, task_ctx)?).await?;
+            results.push(batches_to_sort_string(&batches));
+        }
+
+        allow_duplicates! {
+            assert_snapshot!(results.join("\n"), @r"
+            +----+---+
+            | id | g |
+            +----+---+
+            |    | 3 |
+            +----+---+
+            +----+---+-------+
+            | id | g | mark  |
+            +----+---+-------+
+            |    | 1 |       |
+            |    | 2 |       |
+            |    | 3 | false |
+            +----+---+-------+
+            +----+---+
+            | id | g |
+            +----+---+
+            | 9  | 4 |
+            +----+---+
+            ");
+        }
+        Ok(())
     }
 
     /// Correlated null-aware `LeftAnti` whose two scope keys are Float64, with
