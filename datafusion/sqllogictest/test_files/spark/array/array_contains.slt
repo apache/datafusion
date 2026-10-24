@@ -138,3 +138,58 @@ query B
 SELECT array_contains(array(array(1, 2), array(3, 4)), array(5, 6));
 ----
 false
+
+
+###
+### Float equality: -0.0 equals 0.0 and all NaNs are equal
+###
+
+query B
+SELECT array_contains(array(-0.0::double), 0.0::double);
+----
+true
+
+query B
+SELECT array_contains(array(0.0::double), -0.0::double);
+----
+true
+
+query B
+SELECT array_contains(array(-0.0::float), 0.0::float);
+----
+true
+
+query B
+SELECT array_contains(array('NaN'::double), -'NaN'::double);
+----
+true
+
+query B
+SELECT array_contains(array(1.5::double, 'NaN'::double), 'NaN'::double);
+----
+true
+
+query B
+SELECT array_contains(array(array(-0.0::double)), array(0.0::double));
+----
+true
+
+query B
+SELECT array_contains(array(1.5::double), 2.5::double);
+----
+false
+
+query B
+SELECT array_contains(array(named_struct('v', -'NaN'::double)), named_struct('v', 'NaN'::double));
+----
+true
+
+query B
+SELECT array_contains(array(named_struct('v', -'NaN'::double), NULL), named_struct('v', 'NaN'::double));
+----
+true
+
+query B
+SELECT array_contains(array(named_struct('v', 1.5::double)), named_struct('v', 2.5::double));
+----
+false
