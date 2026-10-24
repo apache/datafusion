@@ -963,6 +963,63 @@ mod test {
     }
 
     #[test]
+    fn test_remap_parent_before_descendant_and_recurse_unmatched_parent() {
+        use datafusion_expr::Operator;
+
+        let schema = Schema::new(
+            ["a", "b", "c", "d"]
+                .into_iter()
+                .map(|name| Field::new(name, DataType::Int32, false))
+                .collect::<Vec<_>>(),
+        );
+        let original_child = col("b", &schema).unwrap();
+        let original_parent = Arc::new(BinaryExpr::new(
+            col("a", &schema).unwrap(),
+            Operator::Plus,
+            Arc::clone(&original_child),
+        )) as Arc<dyn PhysicalExpr>;
+        let remapped_child = col("d", &schema).unwrap();
+        let remapped_parent = Arc::new(BinaryExpr::new(
+            col("c", &schema).unwrap(),
+            Operator::Plus,
+            Arc::clone(&remapped_child),
+        )) as Arc<dyn PhysicalExpr>;
+        let children = vec![Arc::clone(&original_parent), Arc::clone(&original_child)];
+        let remapped_children = vec![remapped_parent, Arc::clone(&remapped_child)];
+
+        let remapped = DynamicFilterPhysicalExpr::remap_children(
+            &children,
+            Some(&remapped_children),
+            Arc::clone(&original_parent),
+        )
+        .unwrap();
+        assert_eq!(
+            format!("{remapped}"),
+            format!("{}", remapped_children[0]),
+            "a matched parent must be replaced before its registered descendant",
+        );
+
+        let unmatched_parent = Arc::new(BinaryExpr::new(
+            col("a", &schema).unwrap(),
+            Operator::Minus,
+            Arc::clone(&original_child),
+        )) as Arc<dyn PhysicalExpr>;
+        let expected_unmatched_parent =
+            BinaryExpr::new(col("a", &schema).unwrap(), Operator::Minus, remapped_child);
+        let remapped = DynamicFilterPhysicalExpr::remap_children(
+            &children,
+            Some(&remapped_children),
+            unmatched_parent,
+        )
+        .unwrap();
+        assert_eq!(
+            format!("{remapped}"),
+            format!("{expected_unmatched_parent}"),
+            "an unmatched parent must still recurse into its descendants",
+        );
+    }
+
+    #[test]
     fn test_snapshot() {
         let expr = lit(42) as Arc<dyn PhysicalExpr>;
         let dynamic_filter = DynamicFilterPhysicalExpr::new(vec![], Arc::clone(&expr));
