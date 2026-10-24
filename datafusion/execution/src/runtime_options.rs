@@ -47,13 +47,43 @@ pub const RUNTIME_CONFIG_PREFIX: &str = "datafusion.runtime";
 /// A byte capacity written as a plain number of bytes (`0`) or a number with a
 /// `K`, `M` or `G` suffix (`512K`, `100M`, `1.5G`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct CapacityLimit(pub usize);
+///
+/// Held as `u64` so a disk size is representable on any target. In-memory sizes
+/// convert with [`From<usize>`] (lossless) and back with [`Self::as_usize`]
+/// (checked).
+pub struct CapacityLimit(u64);
+
+impl CapacityLimit {
+    pub const fn from_bytes(bytes: u64) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_u64(&self) -> u64 {
+        self.0
+    }
+
+    /// The limit as an in-memory size, or an error if it does not fit this
+    /// target's `usize`.
+    pub fn as_usize(&self) -> Result<usize> {
+        usize::try_from(self.0).map_err(|_| {
+            plan_datafusion_err!(
+                "Capacity {self} does not fit in this platform's address space"
+            )
+        })
+    }
+}
+
+impl From<usize> for CapacityLimit {
+    fn from(bytes: usize) -> Self {
+        Self(bytes as u64)
+    }
+}
 
 impl Display for CapacityLimit {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        const GB: usize = 1024 * 1024 * 1024;
-        const MB: usize = 1024 * 1024;
-        const KB: usize = 1024;
+        const GB: u64 = 1024 * 1024 * 1024;
+        const MB: u64 = 1024 * 1024;
+        const KB: u64 = 1024;
 
         match self.0 {
             s if s >= GB => write!(f, "{}G", s / GB),
@@ -64,7 +94,7 @@ impl Display for CapacityLimit {
     }
 }
 
-config_field!(CapacityLimit, value => CapacityLimit(parse_capacity(value)?));
+config_field!(CapacityLimit, value => CapacityLimit(parse_bytes(value)?));
 
 /// A cache time-to-live written as minutes and/or seconds (`90s`, `2m`, `1m30s`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -107,7 +137,7 @@ config_namespace! {
         pub memory_limit: Option<CapacityLimit>, default = None
 
         /// Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.
-        pub max_temp_directory_size: CapacityLimit, default = CapacityLimit(DEFAULT_MAX_TEMP_DIRECTORY_SIZE as usize)
+        pub max_temp_directory_size: CapacityLimit, default = CapacityLimit::from_bytes(DEFAULT_MAX_TEMP_DIRECTORY_SIZE)
 
         /// Maximum number of spill files opened by one external merge pass. Use 0 for unlimited. Values below 2 still use 2 so a merge can make progress.
         pub max_spill_merge_fan_in: NonNegativeCount, default = NonNegativeCount(DEFAULT_MAX_SPILL_MERGE_FAN_IN)
@@ -116,16 +146,16 @@ config_namespace! {
         pub temp_directory: Option<String>, default = None
 
         /// Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.
-        pub metadata_cache_limit: CapacityLimit, default = CapacityLimit(DEFAULT_METADATA_CACHE_LIMIT)
+        pub metadata_cache_limit: CapacityLimit, default = CapacityLimit::from(DEFAULT_METADATA_CACHE_LIMIT)
 
         /// Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.
-        pub list_files_cache_limit: CapacityLimit, default = CapacityLimit(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT)
+        pub list_files_cache_limit: CapacityLimit, default = CapacityLimit::from(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT)
 
         /// TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.
         pub list_files_cache_ttl: Option<CacheTtl>, default = DEFAULT_LIST_FILES_CACHE_TTL.map(CacheTtl)
 
         /// Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.
-        pub file_statistics_cache_limit: CapacityLimit, default = CapacityLimit(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT)
+        pub file_statistics_cache_limit: CapacityLimit, default = CapacityLimit::from(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT)
     }
 }
 
@@ -195,7 +225,7 @@ impl RuntimeOptions {
     /// [`Self::env_entries`] handles it separately.
     fn from_runtime_env(env: &RuntimeEnv) -> Self {
         let memory_limit = match env.memory_pool.memory_limit() {
-            MemoryLimit::Finite(size) => Some(CapacityLimit(size)),
+            MemoryLimit::Finite(size) => Some(CapacityLimit::from(size)),
             MemoryLimit::Infinite | MemoryLimit::Unknown => None,
         };
 
@@ -210,24 +240,24 @@ impl RuntimeOptions {
 
         Self {
             memory_limit,
-            max_temp_directory_size: CapacityLimit(
-                env.disk_manager.max_temp_directory_size() as usize,
+            max_temp_directory_size: CapacityLimit::from_bytes(
+                env.disk_manager.max_temp_directory_size(),
             ),
             max_spill_merge_fan_in: NonNegativeCount(
                 env.disk_manager.max_spill_merge_fan_in(),
             ),
             temp_directory,
-            metadata_cache_limit: CapacityLimit(
+            metadata_cache_limit: CapacityLimit::from(
                 env.cache_manager.get_metadata_cache_limit(),
             ),
-            list_files_cache_limit: CapacityLimit(
+            list_files_cache_limit: CapacityLimit::from(
                 env.cache_manager.get_list_files_cache_limit(),
             ),
             list_files_cache_ttl: env
                 .cache_manager
                 .get_list_files_cache_ttl()
                 .map(CacheTtl),
-            file_statistics_cache_limit: CapacityLimit(
+            file_statistics_cache_limit: CapacityLimit::from(
                 env.cache_manager.get_file_statistic_cache_limit(),
             ),
         }
@@ -244,14 +274,14 @@ impl RuntimeOptions {
     ) -> Result<RuntimeEnvBuilder> {
         builder = match key {
             "memory_limit" => match self.memory_limit {
-                Some(limit) => builder.with_memory_limit(limit.0, 1.0),
+                Some(limit) => builder.with_memory_limit(limit.as_usize()?, 1.0),
                 None => {
                     builder.memory_pool = None;
                     builder
                 }
             },
             "max_temp_directory_size" => builder
-                .with_max_temp_directory_size(self.max_temp_directory_size.0 as u64),
+                .with_max_temp_directory_size(self.max_temp_directory_size.as_u64()),
             "max_spill_merge_fan_in" => {
                 builder.with_max_spill_merge_fan_in(self.max_spill_merge_fan_in.0)
             }
@@ -263,15 +293,15 @@ impl RuntimeOptions {
                 }
             },
             "metadata_cache_limit" => {
-                builder.with_metadata_cache_limit(self.metadata_cache_limit.0)
+                builder.with_metadata_cache_limit(self.metadata_cache_limit.as_usize()?)
             }
-            "list_files_cache_limit" => {
-                builder.with_object_list_cache_limit(self.list_files_cache_limit.0)
-            }
+            "list_files_cache_limit" => builder
+                .with_object_list_cache_limit(self.list_files_cache_limit.as_usize()?),
             "list_files_cache_ttl" => builder
                 .with_object_list_cache_ttl(self.list_files_cache_ttl.map(|ttl| ttl.0)),
-            "file_statistics_cache_limit" => builder
-                .with_file_statistics_cache_limit(self.file_statistics_cache_limit.0),
+            "file_statistics_cache_limit" => builder.with_file_statistics_cache_limit(
+                self.file_statistics_cache_limit.as_usize()?,
+            ),
             _ => return Err(unknown_key(key)),
         };
         Ok(builder)
@@ -315,6 +345,10 @@ pub fn parse_duration(config_name: &str, duration: &str) -> Result<Duration> {
 
 /// Parse a byte capacity: `0`, or a number with a `K`, `M` or `G` suffix.
 pub fn parse_capacity(limit: &str) -> Result<usize> {
+    CapacityLimit(parse_bytes(limit)?).as_usize()
+}
+
+fn parse_bytes(limit: &str) -> Result<u64> {
     if limit.trim().is_empty() {
         return plan_err!("Empty limit value found");
     }
@@ -333,9 +367,9 @@ pub fn parse_capacity(limit: &str) -> Result<usize> {
     }
 
     match unit {
-        'K' => Ok((number * 1024.0) as usize),
-        'M' => Ok((number * 1024.0 * 1024.0) as usize),
-        'G' => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
+        'K' => Ok((number * 1024.0) as u64),
+        'M' => Ok((number * 1024.0 * 1024.0) as u64),
+        'G' => Ok((number * 1024.0 * 1024.0 * 1024.0) as u64),
         _ => plan_err!(
             "Unsupported unit '{unit}' in limit '{limit}'. \
              Unit must be one of: 'K', 'M', 'G'"
@@ -454,10 +488,21 @@ mod tests {
         options.set_entry("memory_limit", "1.5G").unwrap();
         assert_eq!(
             options.memory_limit,
-            Some(CapacityLimit((1.5 * 1024.0 * 1024.0 * 1024.0) as usize))
+            Some(CapacityLimit::from_bytes(1_610_612_736))
         );
         options.reset_entry("memory_limit").unwrap();
         assert_eq!(options.memory_limit, None);
+    }
+
+    #[test]
+    fn capacity_limit_converts_without_truncating() {
+        let disk = CapacityLimit::from_bytes(DEFAULT_MAX_TEMP_DIRECTORY_SIZE);
+        assert_eq!(disk.as_u64(), DEFAULT_MAX_TEMP_DIRECTORY_SIZE);
+        assert_eq!(disk.to_string(), "100G");
+
+        let memory = CapacityLimit::from(1024usize);
+        assert_eq!(memory.as_u64(), 1024);
+        assert_eq!(memory.as_usize().unwrap(), 1024);
     }
 
     #[test]
