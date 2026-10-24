@@ -4215,3 +4215,51 @@ SELECT * FROM (VALUES (1)) AS x(d)
 WHERE x.d IN (SELECT t.c FROM (SELECT * FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0);
 ----
 1
+
+# Regression test for #26692: decorrelation must not lose correlated columns
+# when a subquery contains two structurally equal subplans.
+statement ok
+CREATE TABLE sq_dup_t(a INT);
+
+statement ok
+CREATE TABLE sq_dup_t2(a INT);
+
+statement ok
+INSERT INTO sq_dup_t VALUES (1), (2), (3);
+
+statement ok
+INSERT INTO sq_dup_t2 VALUES (1), (2);
+
+query I rowsort
+SELECT a FROM sq_dup_t WHERE EXISTS (
+  SELECT 1 FROM (SELECT s.a AS x FROM sq_dup_t2 AS s WHERE s.a = sq_dup_t.a)
+  CROSS JOIN (SELECT s.a AS y FROM sq_dup_t2 AS s)
+);
+----
+1
+2
+
+query I rowsort
+SELECT (
+  SELECT count(*) FROM (SELECT * FROM sq_dup_t2 WHERE sq_dup_t2.a = sq_dup_t.a) AS s1
+  CROSS JOIN (SELECT * FROM sq_dup_t2) AS s2
+) FROM sq_dup_t;
+----
+0
+2
+2
+
+query I rowsort
+SELECT a FROM sq_dup_t WHERE EXISTS (
+  SELECT 1 FROM (SELECT sq_dup_t2.a FROM sq_dup_t2 WHERE sq_dup_t2.a = sq_dup_t.a) AS x
+  CROSS JOIN LATERAL (SELECT sq_dup_t2.a FROM sq_dup_t2 WHERE sq_dup_t2.a = x.a) AS l
+);
+----
+1
+2
+
+statement ok
+DROP TABLE sq_dup_t;
+
+statement ok
+DROP TABLE sq_dup_t2;

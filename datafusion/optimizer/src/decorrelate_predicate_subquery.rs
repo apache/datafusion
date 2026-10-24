@@ -821,11 +821,8 @@ fn build_join(
         };
     let (mut new_plan, mut pull_up) = rewrite(exists_sub_query)?;
 
-    let mut count_bug_compensation = pull_up
-        .collected_count_expr_map
-        .get(&new_plan)
-        .filter(|m| !m.is_empty())
-        .cloned();
+    let mut count_bug_compensation =
+        pull_up.root_count_expr_map.take().filter(|m| !m.is_empty());
     // A HAVING-failure miss looks identical to an absent group once compensated, so bail if the join filter reads the aggregate's own output.
     let reads_agg_output = count_bug_compensation.as_ref().is_some_and(|expr_map| {
         pull_up
@@ -834,14 +831,11 @@ fn build_join(
             .flat_map(|f| f.column_refs())
             .any(|c| expr_map.contains_key(&c.name))
     });
-    let subquery_cols: BTreeSet<Column> = pull_up
-        .correlated_subquery_cols_map
-        .values()
-        .flatten()
-        .cloned()
-        .collect();
     let keys_are_bare = count_bug_compensation.is_none()
-        || subquery_operands_are_bare_columns(&pull_up.join_filters, &subquery_cols);
+        || subquery_operands_are_bare_columns(
+            &pull_up.join_filters,
+            &pull_up.correlated_subquery_cols,
+        );
     // Fall back to the uncompensated rewrite whenever compensation can't safely apply, so a HAVING never gets silently dropped.
     let compensable = pull_up.can_pull_up
         && !reads_agg_output
@@ -860,7 +854,7 @@ fn build_join(
         .build()?;
     let join_filter_opt = build_join_filter(
         pull_up.join_filters,
-        pull_up.correlated_subquery_cols_map.values().flatten(),
+        &pull_up.correlated_subquery_cols,
         alias,
     )?;
 
