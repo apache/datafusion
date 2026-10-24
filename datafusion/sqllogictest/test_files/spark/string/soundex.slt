@@ -20,10 +20,20 @@ SELECT soundex('Miller');
 ----
 M460
 
+query TTT
+DESCRIBE SELECT soundex('Miller') AS soundex_code;
+----
+soundex_code Utf8 NO
+
 query T
 SELECT soundex(NULL);
 ----
 NULL
+
+query TTT
+DESCRIBE SELECT soundex(NULL) AS soundex_code;
+----
+soundex_code Utf8 YES
 
 query T
 SELECT soundex('');
@@ -207,6 +217,11 @@ SELECT soundex(arrow_cast('Miller', 'LargeUtf8'));
 ----
 M460
 
+query TTT
+DESCRIBE SELECT soundex(arrow_cast('Miller', 'LargeUtf8')) AS soundex_code;
+----
+soundex_code LargeUtf8 NO
+
 query T
 SELECT soundex(arrow_cast('123', 'LargeUtf8'));
 ----
@@ -216,6 +231,11 @@ query T
 SELECT soundex(arrow_cast('Miller', 'Utf8View'));
 ----
 M460
+
+query TTT
+DESCRIBE SELECT soundex(arrow_cast('Miller', 'Utf8View')) AS soundex_code;
+----
+soundex_code Utf8 NO
 
 query T
 SELECT soundex(arrow_cast('123', 'Utf8View'));
@@ -237,6 +257,17 @@ SELECT soundex('Éclair');
 # Multi-row batches, so the output builder is reused across rows
 
 query T
+SELECT soundex(c) FROM VALUES ('Miller'), ('Robert') AS t(c);
+----
+M460
+R163
+
+query TTT
+DESCRIBE SELECT soundex(c) AS soundex_code FROM VALUES ('Miller'), ('Robert') AS t(c);
+----
+soundex_code Utf8 NO
+
+query T
 SELECT soundex(c) FROM VALUES ('Miller'), (NULL), (''), ('Ñoño'), ('123'), ('Robert') AS t(c);
 ----
 M460
@@ -245,6 +276,11 @@ NULL
 Ñoño
 123
 R163
+
+query TTT
+DESCRIBE SELECT soundex(c) AS soundex_code FROM VALUES ('Miller'), (NULL), (''), ('Ñoño'), ('123'), ('Robert') AS t(c);
+----
+soundex_code Utf8 YES
 
 query T
 SELECT soundex(arrow_cast(c, 'Utf8View')) FROM VALUES ('Miller'), (NULL), ('Ñoño') AS t(c);
