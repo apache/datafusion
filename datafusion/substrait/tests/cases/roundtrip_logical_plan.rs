@@ -44,7 +44,7 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::expr::{Exists, SetComparison, SetQuantifier};
 use datafusion::logical_expr::{
     EmptyRelation, Extension, InvariantLevel, LogicalPlan, Operator, PartitionEvaluator,
-    Repartition, Subquery, UserDefinedLogicalNode, Values, Volatility,
+    Repartition, Subquery, UserDefinedLogicalNode, Values, Volatility, create_udf,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -1665,6 +1665,51 @@ async fn multiset_intersect_all_consume() -> Result<()> {
 }
 
 #[tokio::test]
+async fn multiset_intersect_all_uses_builtin_functions_when_registry_names_are_shadowed()
+-> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/intersect_multiset_all.substrait.json");
+    let expected_ctx = create_context().await?;
+    let expected_plan = from_substrait_plan(&expected_ctx.state(), &proto_plan).await?;
+    let expected = expected_ctx
+        .execute_logical_plan(expected_plan)
+        .await?
+        .collect()
+        .await?;
+
+    let ctx = create_context().await?;
+    ctx.register_udaf(
+        datafusion_functions_aggregate::min_max::min_udaf()
+            .as_ref()
+            .clone()
+            .with_aliases(["count"]),
+    );
+    ctx.register_udf(create_udf(
+        "range",
+        vec![DataType::Int64],
+        DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+        Volatility::Immutable,
+        Arc::new(|_| {
+            Err(datafusion::error::DataFusionError::Execution(
+                "shadow range called".to_string(),
+            ))
+        }),
+    ));
+    let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+    let actual = ctx.execute_logical_plan(plan).await?.collect().await?;
+
+    datafusion::assert_batches_sorted_eq!(
+        ["+---+", "| a |", "+---+", "| 1 |", "| 3 |", "+---+"],
+        &actual
+    );
+    datafusion::assert_batches_sorted_eq!(
+        ["+---+", "| a |", "+---+", "| 1 |", "| 3 |", "+---+"],
+        &expected
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn primary_except_consume() -> Result<()> {
     let proto_plan = read_json("tests/testdata/test_plans/minus_primary.substrait.json");
 
@@ -1803,44 +1848,35 @@ async fn self_referential_except() -> Result<()> {
     .await
 }
 
+// `INTERSECT ALL` and `EXCEPT ALL` are planned with `unnest(range(..))` to
+// repeat each row, and the producer cannot serialize `Unnest` yet, so these
+// plans cannot be sent to Substrait. Consuming Substrait multiset set
+// operations still works (see `multiset_intersect_all_consume`).
 #[tokio::test]
 async fn self_referential_intersect_all() -> Result<()> {
-    // Test INTERSECT ALL with the same table on both sides
-    // INTERSECT ALL preserves duplicates and does not include DISTINCT
-    // Uses **LeftSemi** join (returns rows from left that exist in right)
-    // The requalification ensures no duplicate field name errors
-    assert_expected_plan(
+    assert_unnest_not_supported(
         "SELECT a FROM data WHERE a > 0 INTERSECT ALL SELECT a FROM data WHERE a < 5",
-        "LeftSemi Join: left.a = right.a\
-        \n  SubqueryAlias: left\
-        \n    Filter: data.a > Int64(0)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
-        \n  SubqueryAlias: right\
-        \n    Filter: data.a < Int64(5)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
-        true,
     )
     .await
 }
 
 #[tokio::test]
 async fn self_referential_except_all() -> Result<()> {
-    // Test EXCEPT ALL with the same table on both sides
-    // EXCEPT ALL preserves duplicates and does not include DISTINCT
-    // Uses **LeftAnti** join (returns rows from left that don't exist in right)
-    // The requalification ensures no duplicate field name errors
-    assert_expected_plan(
+    assert_unnest_not_supported(
         "SELECT a FROM data WHERE a > 0 EXCEPT ALL SELECT a FROM data WHERE a < 5",
-        "LeftAnti Join: left.a = right.a\
-        \n  SubqueryAlias: left\
-        \n    Filter: data.a > Int64(0)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
-        \n  SubqueryAlias: right\
-        \n    Filter: data.a < Int64(5)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
-        true,
     )
     .await
+}
+
+async fn assert_unnest_not_supported(sql: &str) -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let err = to_substrait_plan(&plan, &ctx.state()).unwrap_err();
+    assert!(
+        err.to_string().contains("Unsupported plan type: Unnest"),
+        "{err}"
+    );
+    Ok(())
 }
 
 #[tokio::test]

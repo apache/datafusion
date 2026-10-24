@@ -70,6 +70,7 @@ mod path_partition;
 mod runtime_config;
 pub mod select;
 mod set_comparison;
+mod set_operations;
 mod sql_api;
 mod tpcds_planning;
 mod union_comparison;

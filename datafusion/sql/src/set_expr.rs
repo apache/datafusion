@@ -162,13 +162,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .union_by_name_distinct(right_plan)?
                 .build(),
             (SetOperator::Intersect, SetQuantifier::All) => {
-                LogicalPlanBuilder::intersect(left_plan, right_plan, true)
+                let (count, range) = self.functions_for_set_operation()?;
+                LogicalPlanBuilder::intersect_all(left_plan, right_plan, &count, &range)
             }
             (SetOperator::Intersect, SetQuantifier::Distinct | SetQuantifier::None) => {
                 LogicalPlanBuilder::intersect(left_plan, right_plan, false)
             }
             (SetOperator::Except, SetQuantifier::All) => {
-                LogicalPlanBuilder::except(left_plan, right_plan, true)
+                let (count, range) = self.functions_for_set_operation()?;
+                LogicalPlanBuilder::except_all(left_plan, right_plan, &count, &range)
             }
             (SetOperator::Except, SetQuantifier::Distinct | SetQuantifier::None) => {
                 LogicalPlanBuilder::except(left_plan, right_plan, false)
@@ -177,5 +179,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 not_impl_err!("{op} {quantifier} not implemented")
             }
         }
+    }
+
+    fn functions_for_set_operation(
+        &self,
+    ) -> Result<(
+        Arc<datafusion_expr::AggregateUDF>,
+        Arc<datafusion_expr::ScalarUDF>,
+    )> {
+        let Some((count, range)) = self.context_provider.get_set_operation_functions()
+        else {
+            return plan_err!(
+                "INTERSECT ALL and EXCEPT ALL require the built-in count and range functions to be available"
+            );
+        };
+        Ok((count, range))
     }
 }

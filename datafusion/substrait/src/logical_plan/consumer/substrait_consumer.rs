@@ -35,7 +35,7 @@ use datafusion::common::{
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::LambdaVariable;
-use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
+use datafusion::logical_expr::{AggregateUDF, Expr, Extension, LogicalPlan, ScalarUDF};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use substrait::proto::expression as substrait_expression;
@@ -203,6 +203,14 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     //   See: https://github.com/apache/datafusion/issues/13863
     fn get_extensions(&self) -> &Extensions;
     fn get_function_registry(&self) -> &impl FunctionRegistry;
+
+    /// Return the built-in functions used for multiset set operations, if available.
+    ///
+    /// Consumers that support these operations must return the canonical functions,
+    /// rather than looking them up by name in the user-overridable registry.
+    fn get_set_operation_functions(&self) -> Option<(Arc<AggregateUDF>, Arc<ScalarUDF>)> {
+        None
+    }
 
     // Relation Methods
     // There is one method per Substrait relation to allow for easy overriding of consumer behaviour.
@@ -613,6 +621,10 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
 
     fn get_function_registry(&self) -> &impl FunctionRegistry {
         self.state
+    }
+
+    fn get_set_operation_functions(&self) -> Option<(Arc<AggregateUDF>, Arc<ScalarUDF>)> {
+        self.state.set_operation_functions()
     }
 
     fn push_outer_schema(&self, schema: Arc<DFSchema>) {
