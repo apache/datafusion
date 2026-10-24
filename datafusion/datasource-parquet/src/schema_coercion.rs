@@ -40,7 +40,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, TimeUnit};
 use parquet::basic::Type;
-use parquet::schema::types::SchemaDescriptor;
+use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
 /// Apply necessary schema type coercions to make file schema match table schema.
 ///
@@ -535,6 +535,67 @@ impl<'a> Int96Coercer<'a> {
     }
 }
 
+/// Helper to determine Parquet column path segments and child Parquet type for a list field.
+///
+/// Handles standard 3-level list layouts (`<list_name>.list.element`), legacy Spark 3-level
+/// layouts (`<list_name>.bag.array`), legacy Hive 3-level layouts (`<list_name>.bag.array_element`),
+/// 2-level list layouts (`<list_name>.array` or `<list_name>.element`), and repeated primitive
+/// fields where the list name is already the leaf column path.
+fn get_parquet_list_element_info<'a>(
+    parquet_type: Option<&'a ParquetType>,
+    unprocessed_child_name: &'a str,
+) -> (Vec<&'a str>, Option<&'a ParquetType>) {
+    match parquet_type {
+        Some(pt) if pt.is_primitive() => {
+            // Primitive repeated field at current level (e.g., `repeated int96 arr;`).
+            // The leaf column path already matches this field name, so no extra segments are needed.
+            (vec![], Some(pt))
+        }
+        Some(pt) if pt.is_group() => {
+            let fields = pt.get_fields();
+            let repeated = fields
+                .iter()
+                .find(|f| {
+                    f.get_basic_info().has_repetition()
+                        && f.get_basic_info().repetition()
+                            == parquet::basic::Repetition::REPEATED
+                })
+                .or_else(|| fields.first());
+
+            match repeated {
+                Some(rep) if rep.is_primitive() => {
+                    // 2-level list of primitives: `<list_name>.<repeated_name>`.
+                    (vec![".", rep.name()], Some(rep.as_ref()))
+                }
+                Some(rep) if rep.is_group() => {
+                    let rep_fields = rep.get_fields();
+                    if rep_fields.len() == 1 {
+                        // 3-level list (standard, Spark legacy `bag/array`, or Hive `bag/array_element`):
+                        // `<list_name>.<repeated_name>.<element_name>`.
+                        let element = &rep_fields[0];
+                        (
+                            vec![".", rep.name(), ".", element.name()],
+                            Some(element.as_ref()),
+                        )
+                    } else {
+                        // 2-level list of structs where the repeated group is the struct element:
+                        // `<list_name>.<repeated_name>`.
+                        (vec![".", rep.name()], Some(rep.as_ref()))
+                    }
+                }
+                _ => {
+                    // Fallback to standard conventions if Parquet group has no fields.
+                    (vec![".list.", unprocessed_child_name], None)
+                }
+            }
+        }
+        _ => {
+            // Fallback when Parquet type descriptor is unavailable.
+            (vec![".list.", unprocessed_child_name], None)
+        }
+    }
+}
+
 fn coerce_int96_to_resolution_impl(
     parquet_schema: &SchemaDescriptor,
     file_schema: &Schema,
@@ -565,12 +626,13 @@ fn coerce_int96_to_resolution_impl(
         NestedFields, // The parent's fields that this field will be (possibly) type-coerced and
         // inserted into. All fields have a parent, so this is not an Option type.
         Option<NestedFields>, // Nested types need to create their own vector of fields for their
-                              // children. For primitive types this will remain None. For nested
-                              // types it is None the first time they are processed. Then, we
-                              // instantiate a vector for its children, push the field back onto the
-                              // stack to be processed again, and DFS into its children. The next
-                              // time we process the field, we know we have DFS'd into the children
-                              // because this field is Some.
+        // children. For primitive types this will remain None. For nested
+        // types it is None the first time they are processed. Then, we
+        // instantiate a vector for its children, push the field back onto the
+        // stack to be processed again, and DFS into its children. The next
+        // time we process the field, we know we have DFS'd into the children
+        // because this field is Some.
+        Option<&'a ParquetType>, // The corresponding Parquet schema type, if available.
     );
 
     // This is our top-level fields from which we will construct our schema. We pass this into our
@@ -586,12 +648,31 @@ fn coerce_int96_to_resolution_impl(
             .fields()
             .iter()
             .rev()
-            .map(|f| (vec![f.name().as_str()], f, Rc::clone(&fields), None))
+            .map(|f| {
+                let parquet_type = parquet_schema
+                    .root_schema()
+                    .get_fields()
+                    .iter()
+                    .find(|p| p.name() == f.name())
+                    .map(|p| p.as_ref());
+                (
+                    vec![f.name().as_str()],
+                    f,
+                    Rc::clone(&fields),
+                    None,
+                    parquet_type,
+                )
+            })
             .collect();
 
         // Pop fields to DFS into until we have exhausted the stack.
-        while let Some((parquet_path, current_field, parent_fields, child_fields)) =
-            stack.pop()
+        while let Some((
+            parquet_path,
+            current_field,
+            parent_fields,
+            child_fields,
+            current_parquet_type,
+        )) = stack.pop()
         {
             match (current_field.data_type(), child_fields) {
                 (DataType::Struct(unprocessed_children), None) => {
@@ -609,6 +690,7 @@ fn coerce_int96_to_resolution_impl(
                         current_field,
                         parent_fields,
                         Some(Rc::clone(&child_fields)),
+                        current_parquet_type,
                     ));
                     // Push all the children in reverse to maintain original schema order due to
                     // stack processing.
@@ -618,9 +700,25 @@ fn coerce_int96_to_resolution_impl(
                         // int96_fields set above to test if this originated as int96.
                         child_path.push(".");
                         child_path.push(child.name());
+                        let child_parquet_type = current_parquet_type.and_then(|pt| {
+                            if pt.is_group() {
+                                pt.get_fields()
+                                    .iter()
+                                    .find(|p| p.name() == child.name())
+                                    .map(|p| p.as_ref())
+                            } else {
+                                None
+                            }
+                        });
                         // Note that here we push the field onto the stack using the struct's
                         // new child_fields vector as the field's parent_fields.
-                        stack.push((child_path, child, Rc::clone(&child_fields), None));
+                        stack.push((
+                            child_path,
+                            child,
+                            Rc::clone(&child_fields),
+                            None,
+                            child_parquet_type,
+                        ));
                     }
                 }
                 (DataType::Struct(unprocessed_children), Some(processed_children)) => {
@@ -637,7 +735,12 @@ fn coerce_int96_to_resolution_impl(
                     .with_metadata(current_field.metadata().clone());
                     parent_fields.borrow_mut().push(Arc::new(processed_struct));
                 }
-                (DataType::List(unprocessed_child), None) => {
+                (
+                    DataType::List(unprocessed_child)
+                    | DataType::LargeList(unprocessed_child)
+                    | DataType::FixedSizeList(unprocessed_child, _),
+                    None,
+                ) => {
                     // This is the first time popping off this list. See struct docs above.
                     let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
                     stack.push((
@@ -645,31 +748,54 @@ fn coerce_int96_to_resolution_impl(
                         current_field,
                         parent_fields,
                         Some(Rc::clone(&child_fields)),
+                        current_parquet_type,
                     ));
+                    let (path_segments, child_parquet_type) =
+                        get_parquet_list_element_info(
+                            current_parquet_type,
+                            unprocessed_child.name(),
+                        );
                     let mut child_path = parquet_path.clone();
-                    // Spark uses a definition for arrays/lists that results in a group
-                    // named "list" that is not maintained when parsing to Arrow. We just push
-                    // this name into the path.
-                    child_path.push(".list.");
-                    child_path.push(unprocessed_child.name());
+                    child_path.extend(path_segments);
                     stack.push((
-                        child_path.clone(),
+                        child_path,
                         unprocessed_child,
                         Rc::clone(&child_fields),
                         None,
+                        child_parquet_type,
                     ));
                 }
-                (DataType::List(_), Some(processed_children)) => {
+                (
+                    DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::FixedSizeList(_, _),
+                    Some(processed_children),
+                ) => {
                     // This is the second time popping off this list. See struct docs above.
                     let processed_children = processed_children.borrow();
                     assert_eq!(processed_children.len(), 1);
-                    let processed_list = Field::new_list(
-                        current_field.name(),
-                        Arc::clone(&processed_children[0]),
-                        current_field.is_nullable(),
-                    )
+                    let child = Arc::clone(&processed_children[0]);
+                    let processed_field = match current_field.data_type() {
+                        DataType::List(_) => Field::new_list(
+                            current_field.name(),
+                            child,
+                            current_field.is_nullable(),
+                        ),
+                        DataType::LargeList(_) => Field::new_large_list(
+                            current_field.name(),
+                            child,
+                            current_field.is_nullable(),
+                        ),
+                        DataType::FixedSizeList(_, len) => Field::new_fixed_size_list(
+                            current_field.name(),
+                            child,
+                            *len,
+                            current_field.is_nullable(),
+                        ),
+                        _ => unreachable!(),
+                    }
                     .with_metadata(current_field.metadata().clone());
-                    parent_fields.borrow_mut().push(Arc::new(processed_list));
+                    parent_fields.borrow_mut().push(Arc::new(processed_field));
                 }
                 (DataType::Map(unprocessed_child, _), None) => {
                     // This is the first time popping off this map. See struct docs above.
@@ -679,15 +805,28 @@ fn coerce_int96_to_resolution_impl(
                         current_field,
                         parent_fields,
                         Some(Rc::clone(&child_fields)),
+                        current_parquet_type,
                     ));
                     let mut child_path = parquet_path.clone();
                     child_path.push(".");
                     child_path.push(unprocessed_child.name());
+                    let child_parquet_type = current_parquet_type.and_then(|pt| {
+                        if pt.is_group() {
+                            pt.get_fields()
+                                .iter()
+                                .find(|p| p.name() == unprocessed_child.name())
+                                .or_else(|| pt.get_fields().first())
+                                .map(|p| p.as_ref())
+                        } else {
+                            None
+                        }
+                    });
                     stack.push((
-                        child_path.clone(),
+                        child_path,
                         unprocessed_child,
                         Rc::clone(&child_fields),
                         None,
+                        child_parquet_type,
                     ));
                 }
                 (DataType::Map(_, sorted), Some(processed_children)) => {
@@ -703,7 +842,10 @@ fn coerce_int96_to_resolution_impl(
                     parent_fields.borrow_mut().push(Arc::new(processed_map));
                 }
                 (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
-                    if int96_fields.contains(parquet_path.concat().as_str()) =>
+                    if int96_fields.contains(parquet_path.concat().as_str())
+                        || current_parquet_type.is_some_and(|pt| {
+                            pt.is_primitive() && pt.get_physical_type() == Type::INT96
+                        }) =>
                 // We found a timestamp(nanos) and it originated as int96. Coerce it to the correct
                 // time_unit, optionally attaching the requested timezone.
                 {
@@ -2200,5 +2342,129 @@ mod tests {
         );
         // Plain Binary is converted as before
         assert_eq!(result.field(4).data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn coerce_int96_to_resolution_with_legacy_list_layouts() {
+        for (name, spark_schema) in [
+            (
+                "standard",
+                "message m { optional group at (LIST) { repeated group list { optional int96 element; } } }",
+            ),
+            (
+                "spark_legacy",
+                "message m { optional group at (LIST) { repeated group bag { optional int96 array; } } }",
+            ),
+            (
+                "hive",
+                "message m { optional group at (LIST) { repeated group bag { optional int96 array_element; } } }",
+            ),
+            (
+                "two_level",
+                "message m { optional group at (LIST) { repeated int96 array; } }",
+            ),
+            (
+                "two_level_struct",
+                "message m { optional group at (LIST) { repeated group array { optional int96 ts; optional int32 id; } } }",
+            ),
+            (
+                "repeated_primitive_root",
+                "message m { repeated int96 at; }",
+            ),
+            (
+                "nested_lists_legacy",
+                "message m { optional group matrix (LIST) { repeated group bag { optional group array (LIST) { repeated group bag { optional int96 array; } } } } }",
+            ),
+        ] {
+            let schema = parse_message_type(spark_schema).expect("should parse schema");
+            let descr = SchemaDescriptor::new(Arc::new(schema));
+            let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+
+            let result = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+                .coerce()
+                .unwrap_or_else(|| panic!("failed to coerce {name}"));
+
+            let expected_element_type = DataType::Timestamp(TimeUnit::Microsecond, None);
+            match result.field(0).data_type() {
+                DataType::List(field) => match field.data_type() {
+                    DataType::Timestamp(TimeUnit::Microsecond, None) => {}
+                    DataType::Struct(struct_fields) => {
+                        let ts_field = struct_fields
+                            .iter()
+                            .find(|f| f.name() == "ts")
+                            .expect("ts field");
+                        assert_eq!(
+                            ts_field.data_type(),
+                            &expected_element_type,
+                            "layout {name} expected microsecond timestamp in struct"
+                        );
+                    }
+                    DataType::List(inner_field) => {
+                        assert_eq!(
+                            inner_field.data_type(),
+                            &expected_element_type,
+                            "layout {name} expected microsecond timestamp in nested list"
+                        );
+                    }
+                    other => {
+                        panic!("layout {name} unexpected child data type: {other:?}")
+                    }
+                },
+                other => panic!("expected List, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn coerce_int96_to_resolution_with_large_and_fixed_lists() {
+        let spark_schema = "message m { optional group at (LIST) { repeated group bag { optional int96 array; } } }";
+        let schema = parse_message_type(spark_schema).expect("should parse schema");
+        let descr = SchemaDescriptor::new(Arc::new(schema));
+
+        // Test with LargeList
+        let item_field = Arc::new(Field::new(
+            "array",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        ));
+        let large_list_schema = Schema::new(vec![Field::new_large_list(
+            "at",
+            Arc::clone(&item_field),
+            true,
+        )]);
+
+        let result =
+            Int96Coercer::new(&descr, &large_list_schema, &TimeUnit::Microsecond)
+                .coerce()
+                .expect("should coerce LargeList");
+
+        match result.field(0).data_type() {
+            DataType::LargeList(f) => {
+                assert_eq!(
+                    f.data_type(),
+                    &DataType::Timestamp(TimeUnit::Microsecond, None)
+                );
+            }
+            other => panic!("expected LargeList, got {other:?}"),
+        }
+
+        // Test with FixedSizeList
+        let fixed_list_schema =
+            Schema::new(vec![Field::new_fixed_size_list("at", item_field, 5, true)]);
+
+        let result =
+            Int96Coercer::new(&descr, &fixed_list_schema, &TimeUnit::Microsecond)
+                .coerce()
+                .expect("should coerce FixedSizeList");
+
+        match result.field(0).data_type() {
+            DataType::FixedSizeList(f, 5) => {
+                assert_eq!(
+                    f.data_type(),
+                    &DataType::Timestamp(TimeUnit::Microsecond, None)
+                );
+            }
+            other => panic!("expected FixedSizeList, got {other:?}"),
+        }
     }
 }
