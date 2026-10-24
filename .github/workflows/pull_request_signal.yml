@@ -1,0 +1,42 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Signal for the workflows that need a write token on a pull request.
+#
+# ASF infra policy disables `pull_request_target`
+# (https://infra.apache.org/github-actions-policy.html), and GitHub is adding a
+# default policy that blocks it. The `workflow_run` workflows below run from the
+# default branch with a write token and never check out or run pull request
+# code. They trigger on the `requested` event of this workflow, which GitHub
+# sends at once for every run, even for a first-time contributor whose run waits
+# for approval:
+#   - labeler.yml
+#   - fork_ci_status.yml
+name: Pull request signal
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  signal:
+    name: Signal pull request update
+    runs-on: ubuntu-slim
+    steps:
+      - run: echo "This run triggers the workflow_run workflows that handle the pull request."
