@@ -17,9 +17,10 @@
 
 use crate::string::common::*;
 use crate::utils::make_scalar_function;
-use arrow::array::{ArrayRef, AsArray};
+use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use datafusion_common::types::logical_string;
+use datafusion_common::utils::map_dictionary_values;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
@@ -43,9 +44,7 @@ fn btrim(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeUtf8 => general_trim::<i64, TrimBoth>(&args, false),
         DataType::Utf8View => general_trim::<i32, TrimBoth>(&args, true),
         DataType::Dictionary(_, _) => {
-            let dictionary = args[0].as_any_dictionary();
-            let trimmed = btrim(&[Arc::clone(dictionary.values())])?;
-            Ok(dictionary.with_values(trimmed))
+            map_dictionary_values(&args[0], |values| btrim(&[Arc::clone(values)]))
         }
         other => exec_err!(
             "Unsupported data type {other:?} for function btrim, expected Utf8, LargeUtf8 or Utf8View."

@@ -26,7 +26,8 @@ pub mod string_utils;
 
 use crate::assert_or_internal_err;
 use crate::error::{
-    _exec_datafusion_err, _exec_err, _internal_datafusion_err, _plan_datafusion_err,
+    _exec_datafusion_err, _exec_err, _internal_datafusion_err, _internal_err,
+    _plan_datafusion_err,
 };
 use crate::{Result, ScalarValue};
 use arrow::array::{
@@ -34,17 +35,19 @@ use arrow::array::{
     cast::AsArray,
 };
 use arrow::array::{
-    ArrowPrimitiveType, BooleanArray, Datum, GenericListArray, Int32Array, Int64Array,
-    MutableArrayData, PrimitiveArray, layout, make_array,
+    ArrowPrimitiveType, BooleanArray, Datum, DictionaryArray, GenericListArray,
+    Int32Array, Int64Array, MutableArrayData, PrimitiveArray, layout, make_array,
 };
 use arrow::array::{LargeListViewArray, ListViewArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
-use arrow::compute::{SortColumn, SortOptions, nullif, partition};
+use arrow::compute::{SortColumn, SortOptions, nullif, partition, take};
 use arrow::datatypes::{
-    ArrowNativeType, DataType, Field, Int32Type, Int64Type, Metadata, SchemaRef,
+    ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Int32Type, Int64Type,
+    Metadata, SchemaRef,
 };
+use arrow::downcast_dictionary_array;
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
@@ -414,6 +417,48 @@ pub fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
         let remaining = vec.split_off(n);
         std::mem::replace(vec, remaining)
     }
+}
+
+/// Applies `f` to the values of the dictionary `array` and keeps its keys.
+///
+/// Slices, filters and repartitioned batches keep the whole values array of
+/// the dictionary they came from, so running `f` on every value can cost far
+/// more than the batch has rows. `f` never runs on more than
+/// [`MAX_DICTIONARY_VALUES_PER_ROW`] values per row: past that, it runs on the
+/// values the rows reference instead.
+pub fn map_dictionary_values<F>(array: &ArrayRef, f: F) -> Result<ArrayRef>
+where
+    F: FnOnce(&ArrayRef) -> Result<ArrayRef>,
+{
+    let compacted = downcast_dictionary_array! {
+        array => compact_oversized_dictionary(array)?.map(|d| Arc::new(d) as ArrayRef),
+        dt => return _internal_err!("expected a dictionary array, got {dt}"),
+    };
+    let dictionary = compacted.as_ref().unwrap_or(array).as_any_dictionary();
+    Ok(dictionary.with_values(f(dictionary.values())?))
+}
+
+/// The most dictionary values per row that code processing every value of a
+/// dictionary should handle. Past this, taking the values the rows reference
+/// is cheaper than processing all of them, even for values that are cheap to
+/// process such as short strings or integers being hashed.
+pub const MAX_DICTIONARY_VALUES_PER_ROW: usize = 8;
+
+/// Returns `None` when `array` has at most [`MAX_DICTIONARY_VALUES_PER_ROW`]
+/// values per row, and otherwise a copy whose values are `take(values, keys)`
+/// and whose keys are `0..len`, so that work over its values costs O(rows).
+pub(crate) fn compact_oversized_dictionary<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+) -> Result<Option<DictionaryArray<K>>> {
+    if array.values().len() <= MAX_DICTIONARY_VALUES_PER_ROW * array.len() {
+        return Ok(None);
+    }
+    let values = take(array.values().as_ref(), array.keys(), None)?;
+    // `len < values.len()`, so every row index fits in the key type
+    let keys: ScalarBuffer<K::Native> =
+        (0..array.len()).map(K::Native::usize_as).collect();
+    let keys = PrimitiveArray::<K>::new(keys, array.keys().nulls().cloned());
+    Ok(Some(DictionaryArray::try_new(keys, values)?))
 }
 
 #[cfg(test)]
@@ -2105,5 +2150,30 @@ mod tests {
 
         fsl_values_row_number(-1, 2).unwrap_err();
         fsl_values_row_number(-1, 0).unwrap_err();
+    }
+
+    #[test]
+    fn map_dictionary_values_bounds_values_per_row() -> Result<()> {
+        let strings = (0..12)
+            .map(|i| (i % 5 != 1).then(|| "x".repeat(i)))
+            .collect::<Vec<_>>();
+        let dict: DictionaryArray<Int32Type> =
+            strings.iter().map(|s| s.as_deref()).collect();
+        let dict: ArrayRef = Arc::new(dict);
+        for (offset, len) in [(0, 12), (1, 1), (6, 1)] {
+            let slice = dict.slice(offset, len);
+            let mut seen = 0;
+            let mapped = map_dictionary_values(&slice, |values| {
+                seen = values.len();
+                Ok(length(values)?)
+            })?;
+            assert!(
+                seen <= MAX_DICTIONARY_VALUES_PER_ROW * len,
+                "{seen} values for {len} rows"
+            );
+            let expected = length(&arrow::compute::cast(&slice, &DataType::Utf8)?)?;
+            assert_eq!(&arrow::compute::cast(&mapped, &DataType::Int32)?, &expected);
+        }
+        Ok(())
     }
 }

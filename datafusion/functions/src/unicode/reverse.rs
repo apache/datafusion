@@ -26,6 +26,7 @@ use arrow::array::{Array, ArrayRef, AsArray, StringArrayType};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::types::logical_string;
+use datafusion_common::utils::map_dictionary_values;
 use datafusion_common::utils::offset_span_len;
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
@@ -128,9 +129,7 @@ fn reverse(args: &[ArrayRef]) -> Result<ArrayRef> {
             StringViewArrayBuilder::with_capacity(len),
         ),
         DataType::Dictionary(_, _) => {
-            let dictionary = args[0].as_any_dictionary();
-            let converted = reverse(&[Arc::clone(dictionary.values())])?;
-            Ok(dictionary.with_values(converted))
+            map_dictionary_values(&args[0], |values| reverse(&[Arc::clone(values)]))
         }
         _ => unreachable!(
             "Reverse can only be applied to Utf8View, Utf8 and LargeUtf8 types"

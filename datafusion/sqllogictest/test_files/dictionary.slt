@@ -674,3 +674,62 @@ SELECT min(dict_of_ree), max(dict_of_ree), arrow_typeof(max(dict_of_ree)) FROM d
 
 statement ok
 DROP TABLE dict_encoded_values;
+
+# Aggregate output is emitted in `batch_size` slices that keep every group's
+# dictionary value, so these batches have many more dictionary values than
+# rows. Hashing them and running string functions on them must give the same
+# results as on the decoded values.
+statement ok
+set datafusion.execution.batch_size = 1;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+create table padded_groups as
+select arrow_cast(
+  case when value % 13 = 0 then null else ' Grp' || (value % 40) || ' ' end,
+  'Dictionary(Int32, Utf8)'
+) as p
+from generate_series(1, 400);
+
+query I
+select count(*) from (select p from padded_groups group by p);
+----
+41
+
+# Each function on the grouped dictionary must match the same function on the
+# decoded value
+query I
+select count(*)
+from (
+  select p, arrow_cast(p, 'Utf8') as u
+  from (select p from padded_groups group by p)
+)
+where lower(p) is distinct from lower(u)
+  or upper(p) is distinct from upper(u)
+  or reverse(p) is distinct from reverse(u)
+  or character_length(p) is distinct from character_length(u)
+  or ascii(p) is distinct from ascii(u)
+  or initcap(p) is distinct from initcap(u)
+  or btrim(p) is distinct from btrim(u)
+  or ltrim(p) is distinct from ltrim(u)
+  or rtrim(p) is distinct from rtrim(u);
+----
+0
+
+query T
+select distinct arrow_typeof(lower(p)) from (select p from padded_groups group by p);
+----
+Dictionary(Int32, Utf8)
+
+statement ok
+drop table padded_groups;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.execution.batch_size;

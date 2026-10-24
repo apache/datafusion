@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, AsArray};
+use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use std::sync::Arc;
 
 use crate::string::common::*;
 use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
+use datafusion_common::utils::map_dictionary_values;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
@@ -44,9 +45,7 @@ fn rtrim(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeUtf8 => general_trim::<i64, TrimRight>(&args, false),
         DataType::Utf8View => general_trim::<i32, TrimRight>(&args, true),
         DataType::Dictionary(_, _) => {
-            let dictionary = args[0].as_any_dictionary();
-            let trimmed = rtrim(&[Arc::clone(dictionary.values())])?;
-            Ok(dictionary.with_values(trimmed))
+            map_dictionary_values(&args[0], |values| rtrim(&[Arc::clone(values)]))
         }
         other => exec_err!(
             "Unsupported data type {other:?} for function rtrim, expected Utf8, LargeUtf8 or Utf8View."

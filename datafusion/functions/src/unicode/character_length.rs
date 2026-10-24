@@ -25,6 +25,7 @@ use arrow::array::{
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::Result;
 use datafusion_common::types::{NativeType, logical_string};
+use datafusion_common::utils::map_dictionary_values;
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
@@ -124,11 +125,9 @@ fn character_length(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string_view();
             character_length_general::<Int32Type, _>(&string_array)
         }
-        DataType::Dictionary(_, _) => {
-            let dictionary = args[0].as_any_dictionary();
-            let converted = character_length(&[Arc::clone(dictionary.values())])?;
-            Ok(dictionary.with_values(converted))
-        }
+        DataType::Dictionary(_, _) => map_dictionary_values(&args[0], |values| {
+            character_length(&[Arc::clone(values)])
+        }),
         _ => unreachable!("CharacterLengthFunc"),
     }
 }

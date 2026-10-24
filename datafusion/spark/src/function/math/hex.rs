@@ -19,16 +19,14 @@ use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayAccessor, ArrayRef, StringArray, StringBuilder};
+use arrow::array::{as_largestring_array, as_string_array};
 use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::datatypes::DataType;
-use arrow::{
-    array::{as_dictionary_array, as_largestring_array, as_string_array},
-    datatypes::Int32Type,
-};
 use datafusion_common::cast::as_large_binary_array;
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::types::{NativeType, logical_int64, logical_string};
 use datafusion_common::utils::hex::{HexCase, ToHex, encode_bytes_into};
+use datafusion_common::utils::map_dictionary_values;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     DataFusionError,
@@ -271,48 +269,45 @@ pub fn compute_hex(
                     );
                 }
 
-                let dict = as_dictionary_array::<Int32Type>(&array);
-                let dict_values = dict.values();
-
-                let encoded_values = match dict_values.data_type() {
-                    DataType::Int64 => {
-                        let arr = as_int64_array(dict_values)?;
-                        hex_encode_int64(arr.iter(), arr.len())?
-                    }
-                    DataType::Utf8 => {
-                        let arr = as_string_array(dict_values);
-                        hex_encode_bytes(&arr, lowercase)?
-                    }
-                    DataType::LargeUtf8 => {
-                        let arr = as_largestring_array(dict_values);
-                        hex_encode_bytes(&arr, lowercase)?
-                    }
-                    DataType::Utf8View => {
-                        let arr = as_string_view_array(dict_values)?;
-                        hex_encode_bytes(&arr, lowercase)?
-                    }
-                    DataType::Binary => {
-                        let arr = as_binary_array(dict_values)?;
-                        hex_encode_bytes(&arr, lowercase)?
-                    }
-                    DataType::LargeBinary => {
-                        let arr = as_large_binary_array(dict_values)?;
-                        hex_encode_bytes(&arr, lowercase)?
-                    }
-                    DataType::FixedSizeBinary(_) => {
-                        let arr = as_fixed_size_binary_array(dict_values)?;
-                        hex_encode_bytes(&arr, lowercase)?
-                    }
-                    _ => {
-                        return exec_err!(
-                            "hex got an unexpected argument type: {}",
-                            dict_values.data_type()
-                        );
-                    }
-                };
-
-                let new_dict = dict.with_values(encoded_values);
-                Ok(ColumnarValue::Array(Arc::new(new_dict)))
+                let encoded = map_dictionary_values(array, |dict_values| {
+                    Ok(match dict_values.data_type() {
+                        DataType::Int64 => {
+                            let arr = as_int64_array(dict_values)?;
+                            hex_encode_int64(arr.iter(), arr.len())?
+                        }
+                        DataType::Utf8 => {
+                            let arr = as_string_array(dict_values);
+                            hex_encode_bytes(&arr, lowercase)?
+                        }
+                        DataType::LargeUtf8 => {
+                            let arr = as_largestring_array(dict_values);
+                            hex_encode_bytes(&arr, lowercase)?
+                        }
+                        DataType::Utf8View => {
+                            let arr = as_string_view_array(dict_values)?;
+                            hex_encode_bytes(&arr, lowercase)?
+                        }
+                        DataType::Binary => {
+                            let arr = as_binary_array(dict_values)?;
+                            hex_encode_bytes(&arr, lowercase)?
+                        }
+                        DataType::LargeBinary => {
+                            let arr = as_large_binary_array(dict_values)?;
+                            hex_encode_bytes(&arr, lowercase)?
+                        }
+                        DataType::FixedSizeBinary(_) => {
+                            let arr = as_fixed_size_binary_array(dict_values)?;
+                            hex_encode_bytes(&arr, lowercase)?
+                        }
+                        _ => {
+                            return exec_err!(
+                                "hex got an unexpected argument type: {}",
+                                dict_values.data_type()
+                            );
+                        }
+                    })
+                })?;
+                Ok(ColumnarValue::Array(encoded))
             }
             _ => exec_err!("hex got an unexpected argument type: {}", array.data_type()),
         },
