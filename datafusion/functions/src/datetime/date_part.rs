@@ -531,21 +531,14 @@ fn subsecond_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef> {
             as_interval_mdn_array(array)?
                 .unary::<_, Int64Type>(|x| x.nanoseconds % 60_000_000_000),
         ),
-        (Duration(Nanosecond), DatePart::Nanosecond) => {
-            Arc::new(as_duration_nanosecond_array(array)?.reinterpret_cast::<Int64Type>())
+        // arrow's cast returns NULL on overflow, like its `date_part`, and
+        // reinterprets `Duration(Nanosecond)` as Int64 without copying
+        (Duration(_), DatePart::Nanosecond) => {
+            cast(&cast(array, &Duration(Nanosecond))?, &DataType::Int64)?
         }
-        // arrow's cast returns NULL on overflow, like its `date_part`
-        (Duration(_), DatePart::Nanosecond) => Arc::new(
-            as_duration_nanosecond_array(&cast(array, &Duration(Nanosecond))?)?
-                .reinterpret_cast::<Int64Type>(),
-        ),
         // arrow's sub-second parts of intervals and durations already include
-        // the whole seconds
-        (
-            Interval(ArrowIntervalUnit::DayTime | ArrowIntervalUnit::MonthDayNano)
-            | Duration(_),
-            _,
-        ) => date_part(array, part)?,
+        // the whole seconds, and it rejects them for `Interval(YearMonth)`
+        (Interval(_) | Duration(_), _) => date_part(array, part)?,
         (_, DatePart::Millisecond) => {
             seconds_with_fraction::<Int32Type, 1_000>(array, part)?
         }
@@ -863,38 +856,6 @@ mod tests {
                 err.contains("failed on timezone"),
                 "error for {part} must keep the parse context: {err}"
             );
-        }
-    }
-
-    /// `epoch` is NULL only for a NULL input, but the integer parts can be NULL
-    /// for a non-null input, so they are always nullable.
-    #[test]
-    fn return_field_nullability() {
-        for input_nullable in [false, true] {
-            let arg_fields: Vec<FieldRef> = vec![
-                Field::new("a", DataType::Utf8, false).into(),
-                Field::new(
-                    "b",
-                    DataType::Timestamp(TimeUnit::Second, None),
-                    input_nullable,
-                )
-                .into(),
-            ];
-            for (part, nullable) in [
-                ("epoch", input_nullable),
-                ("second", true),
-                ("millisecond", true),
-                ("nanosecond", true),
-            ] {
-                let part = ScalarValue::from(part);
-                let field = DatePartFunc::new()
-                    .return_field_from_args(ReturnFieldArgs {
-                        arg_fields: &arg_fields,
-                        scalar_arguments: &[Some(&part), None],
-                    })
-                    .unwrap();
-                assert_eq!(field.is_nullable(), nullable, "{part}, {input_nullable}");
-            }
         }
     }
 

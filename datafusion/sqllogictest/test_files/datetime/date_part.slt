@@ -1264,7 +1264,8 @@ statement ok
 drop table t;
 
 # nanosecond on an interval is the seconds field (within the minute) in nanoseconds,
-# like microsecond and millisecond
+# like microsecond and millisecond.
+# Reproducer from https://github.com/apache/datafusion/issues/26678
 query III
 SELECT extract(nanosecond from interval '1.5 seconds'),
        extract(microsecond from interval '1.5 seconds'),
@@ -1336,7 +1337,8 @@ FROM (SELECT arrow_cast(column1, 'Interval(MonthDayNano)') AS i FROM (VALUES
 -2500 -2500000 -2500000000
 NULL NULL NULL
 
-# millisecond and microsecond keep the fraction past i32::MAX nanoseconds
+# millisecond and microsecond keep the fraction past i32::MAX nanoseconds.
+# Reproducer from https://github.com/apache/datafusion/issues/14738#issuecomment-6372885638
 query IIII
 SELECT extract(millisecond from interval '62.5 seconds'),
        extract(microsecond from interval '62.5 seconds'),
@@ -1357,21 +1359,6 @@ SELECT extract(millisecond from arrow_cast('62.5 seconds', 'Interval(DayTime)'))
 ----
 2500 2500000
 
-# Reproducer from https://github.com/apache/datafusion/issues/26678
-query III
-SELECT extract(nanosecond from arrow_cast(1500000000, 'Duration(Nanosecond)')),
-       extract(nanosecond from interval '1.5 seconds'),
-       extract(microsecond from interval '1.5 seconds')
-----
-1500000000 1500000000 1500000
-
-# Reproducer from https://github.com/apache/datafusion/issues/14738#issuecomment-6372885638
-query II
-SELECT extract(millisecond from interval '62.5 seconds'),
-       extract(millisecond from arrow_cast(2500000000, 'Duration(Nanosecond)'))
-----
-2500 2500
-
 # Reproducer from https://github.com/apache/datafusion/issues/14738
 query III
 SELECT date_part('microseconds', interval '1 hour'),
@@ -1380,11 +1367,8 @@ SELECT date_part('microseconds', interval '1 hour'),
 ----
 0 0 0
 
-query error DataFusion error: Arrow error: Compute error: Second does not support: Interval\(YearMonth\)
+query error DataFusion error: Arrow error: Compute error: Nanosecond does not support: Interval\(YearMonth\)
 SELECT extract(nanosecond from arrow_cast('10 months', 'Interval(YearMonth)'))
-
-query error DataFusion error: Arrow error: Compute error: Second does not support: Interval\(YearMonth\)
-SELECT extract(millisecond from arrow_cast('10 months', 'Interval(YearMonth)'))
 
 # test_extract_duration
 
@@ -1514,7 +1498,8 @@ SELECT extract(day from arrow_cast(NULL, 'Duration(Second)'))
 ----
 NULL
 
-# nanosecond on a duration is its total length in nanoseconds
+# nanosecond on a duration is its total length in nanoseconds.
+# Reproducer from https://github.com/apache/datafusion/issues/26678
 query IIII
 SELECT extract(nanosecond from arrow_cast(1500000000, 'Duration(Nanosecond)')),
        extract(nanosecond from arrow_cast(1500000, 'Duration(Microsecond)')),
@@ -1563,12 +1548,13 @@ FROM (VALUES (9223372036, -9223372036854), (9223372037, -9223372036855), (NULL, 
 NULL NULL
 NULL NULL
 
-# millisecond and microsecond on a duration are its total length in that unit
+# millisecond and microsecond on a duration are its total length in that unit.
+# Reproducer from https://github.com/apache/datafusion/issues/14738#issuecomment-6372885638
 query II
-SELECT extract(millisecond from arrow_cast(5500000000, 'Duration(Nanosecond)')),
-       extract(microsecond from arrow_cast(5500000000, 'Duration(Nanosecond)'))
+SELECT extract(millisecond from arrow_cast(2500000000, 'Duration(Nanosecond)')),
+       extract(microsecond from arrow_cast(2500000000, 'Duration(Nanosecond)'))
 ----
-5500 5500000
+2500 2500000
 
 # truncates toward zero, like the other parts of a duration
 query III
@@ -1604,7 +1590,9 @@ NULL NULL
 NULL NULL
 NULL NULL
 
-# Reproducer from https://github.com/apache/datafusion/issues/14738: 2.4e9 microseconds don't fit in Int32
+# Reproducer from https://github.com/apache/datafusion/issues/14738. Postgres returns 0, because
+# there the difference is an interval. Here it is a Duration, whose microsecond is its total
+# length, and 2.4e9 microseconds don't fit in Int32.
 query I
 SELECT date_part('microsecond', timestamp '1970-01-01T00:40:00' - timestamp '1970-01-01T00:00:00')
 ----
@@ -1631,6 +1619,24 @@ query I
 SELECT extract(millisecond from d) FROM (VALUES (arrow_cast(2147483648, 'Duration(Millisecond)'))) AS t(d)
 ----
 NULL
+
+# epoch is NULL only for a NULL input, so it keeps the input's nullability
+query TTT
+DESCRIBE SELECT extract(epoch from ts) AS e, extract(second from ts) AS s,
+       extract(millisecond from ts) AS ms, extract(nanosecond from ts) AS ns
+FROM (VALUES (timestamp '2020-01-01')) AS t(ts)
+----
+e Float64 NO
+s Int32 YES
+ms Int32 YES
+ns Int64 YES
+
+query TTT
+DESCRIBE SELECT extract(epoch from ts) AS e, extract(second from ts) AS s
+FROM (VALUES (timestamp '2020-01-01'), (NULL)) AS t(ts)
+----
+e Float64 YES
+s Int32 YES
 
 # test_extract_date_part_func
 

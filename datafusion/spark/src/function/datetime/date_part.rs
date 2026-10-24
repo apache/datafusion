@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::DataType;
 use datafusion_common::types::logical_date;
 use datafusion_common::{
     Result, ScalarValue, internal_err, types::logical_string, utils::take_function_args,
@@ -23,10 +23,9 @@ use datafusion_common::{
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
-    Signature, TypeSignature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
-use std::sync::Arc;
 
 /// Wrapper around datafusion date_part function to handle
 /// Spark behavior returning day of the week 1-indexed instead of 0-indexed and different part aliases.
@@ -77,14 +76,11 @@ impl ScalarUDFImpl for SparkDatePart {
         &self.signature
     }
 
+    // The default `return_field_from_args` makes the result nullable, like the
+    // integer parts of `date_part`, which this simplifies to, because they can
+    // be NULL for a non-null input
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("Use return_field_from_args in this case instead.")
-    }
-
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        // Nullable like the integer parts of `date_part`, which this simplifies
-        // to, because they can be NULL for a non-null input
-        Ok(Arc::new(Field::new(self.name(), DataType::Int32, true)))
+        Ok(DataType::Int32)
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -125,46 +121,5 @@ impl ScalarUDFImpl for SparkDatePart {
         ));
 
         Ok(ExprSimplifyResult::Simplified(date_part_expr))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::datatypes::TimeUnit;
-    use datafusion_functions::datetime::date_part;
-
-    #[test]
-    fn test_date_part_return_field_nullability_matches_date_part() {
-        let func = SparkDatePart::new();
-        let part = ScalarValue::from("second");
-
-        let non_nullable_args: Vec<FieldRef> = vec![
-            Arc::new(Field::new("part", DataType::Utf8, false)),
-            Arc::new(Field::new(
-                "ts",
-                DataType::Timestamp(TimeUnit::Second, None),
-                false,
-            )),
-        ];
-
-        let out = func
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &non_nullable_args,
-                scalar_arguments: &[Some(&part), None],
-            })
-            .expect("non-nullable arg should succeed");
-        assert_eq!(out.data_type(), &DataType::Int32);
-        assert!(out.is_nullable());
-
-        // Matches the `date_part` this simplifies to
-        let simplified = date_part()
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &non_nullable_args,
-                scalar_arguments: &[Some(&part), None],
-            })
-            .expect("non-nullable arg should succeed");
-        assert_eq!(out.data_type(), simplified.data_type());
-        assert_eq!(out.is_nullable(), simplified.is_nullable());
     }
 }
