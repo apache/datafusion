@@ -32,7 +32,9 @@ use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{ExprSchemable, LogicalPlanBuilder, table_scan};
-use datafusion_functions_aggregate::expr_fn::{approx_median, approx_percentile_cont};
+use datafusion_functions_aggregate::expr_fn::{
+    approx_median, approx_percentile_cont, approx_top_k,
+};
 use datafusion_functions_nested::map::map;
 use insta::assert_snapshot;
 
@@ -404,6 +406,28 @@ async fn test_fn_approx_median() -> Result<()> {
     +-----------------------+
     | 10.0                  |
     +-----------------------+
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_approx_top_k() -> Result<()> {
+    // Column b has values [1, 10, 10, 100] -- 10 appears twice, others once.
+    // Use k=1 to avoid non-deterministic ordering among tied items.
+    let expr = approx_top_k(vec![col("b"), lit(1)]);
+
+    let df = create_test_table().await?;
+    let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&batches),
+        @r"
+    +-------------------------------+
+    | approx_top_k(test.b,Int32(1)) |
+    +-------------------------------+
+    | [{value: 10, count: 2}]       |
+    +-------------------------------+
     ");
 
     Ok(())
