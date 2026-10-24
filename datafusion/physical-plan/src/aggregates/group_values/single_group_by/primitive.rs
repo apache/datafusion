@@ -176,6 +176,13 @@ where
         Ok(())
     }
 
+    fn reserve_groups(&mut self, capacity: usize) {
+        self.map
+            .reserve(capacity.saturating_sub(self.map.len()), |entry| entry.1);
+        self.values
+            .reserve_exact(capacity.saturating_sub(self.values.len()));
+    }
+
     fn size(&self) -> usize {
         size_of::<Self>() + self.map.allocation_size() + self.values.allocated_size()
     }

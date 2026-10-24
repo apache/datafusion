@@ -30,7 +30,11 @@ use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::{Result, exec_err};
 use std::fmt::Debug;
+use std::mem;
 use std::sync::Arc;
+
+const BYTE_VIEW_STARTING_BLOCK_SIZE: usize = 8 * 1024;
+const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
 
 /// HashSet optimized for storing string or binary values that can produce that
 /// the final set as a `GenericBinaryViewArray` with minimal copies.
@@ -125,9 +129,6 @@ impl ArrowBytesViewSet {
 /// This map is used by the special `COUNT DISTINCT` aggregate function to
 /// store the distinct values, and by the `GROUP BY` operator to store
 /// group values when they are a single string array.
-/// Max size of the in-progress buffer before flushing to completed buffers
-const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
-
 pub struct ArrowBytesViewMap<V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
@@ -147,6 +148,9 @@ where
     in_progress: Vec<u8>,
     /// Completed buffers containing string data
     completed: Vec<Buffer>,
+    /// Allocation target, doubled for each new payload block up to 2 MiB.
+    /// Zero keeps lazy payload growth for the small per-group distinct maps.
+    block_size: usize,
 
     /// random state used to generate hashes
     random_state: RandomState,
@@ -191,10 +195,43 @@ where
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
+            block_size: if map_capacity == 0 {
+                0
+            } else {
+                BYTE_VIEW_STARTING_BLOCK_SIZE
+            },
             random_state: RandomState::default(),
             hashes_buffer: vec![],
             null: None,
         }
+    }
+
+    /// Reserves group slots without preallocating variable-length string payloads.
+    pub fn reserve_groups(&mut self, capacity: usize) {
+        if self.block_size == 0 && capacity != 0 {
+            self.block_size = BYTE_VIEW_STARTING_BLOCK_SIZE;
+        }
+        self.map
+            .reserve(capacity.saturating_sub(self.map.len()), |entry| entry.hash);
+        self.views
+            .reserve_exact(capacity.saturating_sub(self.views.len()));
+        self.hashes_buffer
+            .reserve_exact(capacity.saturating_sub(self.hashes_buffer.len()));
+    }
+
+    /// Emits keys, retains the hash table and scratch buffer, and reserves fixed
+    /// view capacity. Payload blocks restart their exponential allocation growth.
+    pub fn take_with_capacity(&mut self, capacity: usize) -> ArrayRef {
+        let mut outgoing = Self::new(self.output_type);
+        mem::swap(self, &mut outgoing);
+        mem::swap(&mut self.map, &mut outgoing.map);
+        self.map.clear();
+        mem::swap(&mut self.hashes_buffer, &mut outgoing.hashes_buffer);
+        self.hashes_buffer.clear();
+        self.initial_map_capacity = outgoing.initial_map_capacity;
+        mem::swap(&mut self.random_state, &mut outgoing.random_state);
+        self.reserve_groups(capacity);
+        outgoing.into_state()
     }
 
     /// Return the contents of this map and replace it with a new empty map with
@@ -202,7 +239,7 @@ where
     pub fn take(&mut self) -> Self {
         let mut new_self =
             Self::with_capacity(self.output_type, self.initial_map_capacity);
-        std::mem::swap(self, &mut new_self);
+        mem::swap(self, &mut new_self);
         new_self
     }
 
@@ -445,7 +482,7 @@ where
     pub fn into_state(mut self) -> ArrayRef {
         // Flush any remaining in-progress buffer
         if !self.in_progress.is_empty() {
-            let flushed = std::mem::take(&mut self.in_progress);
+            let flushed = mem::take(&mut self.in_progress);
             self.completed.push(Buffer::from_vec(flushed));
         }
 
@@ -537,13 +574,23 @@ where
         let view = if len <= 12 {
             make_view(value, 0, 0)
         } else {
-            // Ensure buffer is big enough
-            if self.in_progress.len() + len > BYTE_VIEW_MAX_BLOCK_SIZE {
-                let flushed = std::mem::replace(
-                    &mut self.in_progress,
-                    Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE),
-                );
-                self.completed.push(Buffer::from_vec(flushed));
+            let block_limit = if self.block_size == 0 {
+                BYTE_VIEW_MAX_BLOCK_SIZE
+            } else {
+                self.in_progress.capacity()
+            };
+            if self.in_progress.len() + len > block_limit {
+                if !self.in_progress.is_empty() {
+                    let flushed = mem::take(&mut self.in_progress);
+                    self.completed.push(Buffer::from_vec(flushed));
+                }
+                let capacity = if self.block_size == 0 {
+                    BYTE_VIEW_MAX_BLOCK_SIZE
+                } else {
+                    self.block_size = (self.block_size * 2).min(BYTE_VIEW_MAX_BLOCK_SIZE);
+                    len.max(self.block_size)
+                };
+                self.in_progress = Vec::with_capacity(capacity);
             }
 
             let buffer_index = self.completed.len() as u32;
@@ -947,6 +994,10 @@ mod tests {
         map.views.reserve_exact(1);
         map.completed.shrink_to_fit();
         map.completed.reserve_exact(1);
+        let completed = &mut map.completed[0];
+        let mut padded = Vec::with_capacity(completed.len() + 16);
+        padded.extend_from_slice(completed);
+        *completed = Buffer::from_vec(padded);
 
         // The map owns these allocations; `values` and its Arrow buffers remain external.
         assert!(map.views.capacity() > map.views.len());

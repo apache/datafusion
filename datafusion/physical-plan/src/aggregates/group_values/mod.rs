@@ -111,6 +111,18 @@ pub trait GroupValues: Send {
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
+    /// Reserves room for at least `capacity` groups in supported storage layouts.
+    /// Does not change the number of groups or the string payload growth policy.
+    fn reserve_groups(&mut self, _capacity: usize) {}
+
+    /// Emits all keys and reserves a fixed capacity for the next table.
+    fn emit_with_capacity(&mut self, capacity: usize) -> Result<Vec<ArrayRef>> {
+        let output = self.emit(EmitTo::All)?;
+        self.clear_shrink(capacity);
+        self.reserve_groups(capacity);
+        Ok(output)
+    }
+
     /// Materializes selected group values without changing the stored values or
     /// their group indices.
     ///
