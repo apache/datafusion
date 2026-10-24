@@ -486,10 +486,11 @@ impl LexOrdering {
     /// If the vector is empty, returns `None`.
     pub fn new(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> Option<Self> {
         let exprs = exprs.into_iter();
+        let capacity = exprs.size_hint().0;
         let mut candidate = Self {
             // not valid yet; valid publicly-returned instance must be non-empty
-            exprs: Vec::new(),
-            set: IndexSet::new(),
+            exprs: Vec::with_capacity(capacity),
+            set: IndexSet::with_capacity(capacity),
         };
         for expr in exprs {
             candidate.push(expr);
@@ -736,9 +737,9 @@ impl LexRequirement {
     fn construct(
         reqs: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> (bool, Self) {
-        let mut set = HashSet::new();
+        let reqs = reqs.into_iter();
+        let mut set = HashSet::with_capacity(reqs.size_hint().0);
         let reqs = reqs
-            .into_iter()
             .filter_map(|r| set.insert(Arc::clone(&r.expr)).then_some(r))
             .collect();
         (!set.is_empty(), Self { reqs })

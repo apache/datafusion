@@ -590,7 +590,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let filters =
                     from_proto::parse_exprs(&scan.filters, ctx, extension_codec)?;
 
-                let mut all_sort_orders = vec![];
+                let mut all_sort_orders = Vec::with_capacity(scan.file_sort_order.len());
                 for order in &scan.file_sort_order {
                     all_sort_orders.push(from_proto::parse_sorts(
                         &order.sort_expr_nodes,
@@ -649,7 +649,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             }
                         }
                         FileFormatType::Arrow(..) => {
-                            Arc::new(ArrowFormat)
+                            Arc::new(ArrowFormat::default())
                         }
                     };
 
@@ -805,7 +805,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .build()
             }
             LogicalPlanType::EmptyRelation(empty_relation) => {
-                LogicalPlanBuilder::empty(empty_relation.produce_one_row).build()
+                if let Some(schema) = &empty_relation.schema {
+                    Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: empty_relation.produce_one_row,
+                        schema: Arc::new(schema.try_into()?),
+                    }))
+                } else {
+                    LogicalPlanBuilder::empty(empty_relation.produce_one_row).build()
+                }
             }
             LogicalPlanType::CreateExternalTable(create_extern_table) => {
                 let pb_schema = (create_extern_table.schema.clone()).ok_or_else(|| {
@@ -825,7 +832,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                let mut order_exprs = vec![];
+                let mut order_exprs =
+                    Vec::with_capacity(create_extern_table.order_exprs.len());
                 for expr in &create_extern_table.order_exprs {
                     order_exprs.push(from_proto::parse_sorts(
                         &expr.sort_expr_nodes,
@@ -1062,16 +1070,28 @@ impl AsLogicalPlan for LogicalPlanNode {
                 // them silently loses both fields. Both sides of the round
                 // trip should already have validated keys, so we don't need
                 // the builder's normalization / equijoin-pair checks.
-                Ok(LogicalPlan::Join(Join::try_new(
-                    Arc::new(left),
-                    Arc::new(right),
-                    on,
-                    filter,
-                    datafusion_expr::JoinType::from(join_type),
-                    JoinConstraint::from(join_constraint),
-                    NullEquality::from(null_equality),
-                    join.null_aware,
-                )?))
+                Ok(LogicalPlan::Join(
+                    Join::try_new(
+                        Arc::new(left),
+                        Arc::new(right),
+                        on,
+                        filter,
+                        datafusion_expr::JoinType::from(join_type),
+                        JoinConstraint::from(join_constraint),
+                        NullEquality::from(null_equality),
+                        join.null_aware,
+                    )?
+                    // Plans encoded before the field existed decode it as 0; they
+                    // could only hold scalar `NOT IN` joins.
+                    .with_null_aware_value_keys(
+                        usize_from_wire(
+                            join.null_aware_value_keys,
+                            "JoinNode",
+                            "null_aware_value_keys",
+                        )?
+                        .max(1),
+                    ),
+                ))
             }
             LogicalPlanType::AsOfJoin(join) => {
                 let left_keys =
@@ -1513,7 +1533,8 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                     let schema: protobuf::Schema = (&schema).try_into()?;
 
-                    let mut exprs_vec: Vec<SortExprNodeCollection> = vec![];
+                    let mut exprs_vec: Vec<SortExprNodeCollection> =
+                        Vec::with_capacity(options.file_sort_order.len());
                     for order in &options.file_sort_order {
                         let expr_vec = SortExprNodeCollection {
                             sort_expr_nodes: serialize_sorts(order, extension_codec)?,
@@ -1756,6 +1777,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 join_constraint,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
                 // Not encoded; recomputed by `Join::try_new` on decode.
                 schema: _,
             }) => {
@@ -1799,6 +1821,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                             null_equality: null_equality.into(),
                             filter,
                             null_aware: *null_aware,
+                            null_aware_value_keys: u32::try_from(
+                                *null_aware_value_keys,
+                            )
+                            .map_err(|_| {
+                                internal_datafusion_err!(
+                                    "JoinNode: null_aware_value_keys {null_aware_value_keys} does not fit in u32"
+                                )
+                            })?,
                         },
                     ))),
                 })
@@ -1989,11 +2019,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 })
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
-                produce_one_row, ..
+                produce_one_row,
+                schema,
             }) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::EmptyRelation(
                     protobuf::EmptyRelationNode {
                         produce_one_row: *produce_one_row,
+                        schema: Some(schema.try_into()?),
                     },
                 )),
             }),
@@ -2014,7 +2046,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     column_defaults,
                     temporary,
                 } = ce.as_ref();
-                let mut converted_order_exprs: Vec<SortExprNodeCollection> = vec![];
+                let mut converted_order_exprs: Vec<SortExprNodeCollection> =
+                    Vec::with_capacity(order_exprs.len());
                 for order in order_exprs {
                     let temp = SortExprNodeCollection {
                         sort_expr_nodes: serialize_sorts(order, extension_codec)?,

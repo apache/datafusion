@@ -88,9 +88,11 @@ pub type FileExtensions = datafusion_common::extensions::Extensions;
 pub type PartitionedFileStream =
     Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
 
-/// Only scan a subset of Row Groups from the Parquet file whose data "midpoint"
-/// lies within the [start, end) byte offsets. This option can be used to scan non-overlapping
-/// sections of a Parquet file in parallel.
+/// A `[start, end)` byte range of a file. Non-overlapping ranges can be scanned
+/// in parallel. For Parquet, [`RowGroupRangeAssignment`] picks the row groups a
+/// range reads.
+///
+/// [`RowGroupRangeAssignment`]: datafusion_common::parquet_config::RowGroupRangeAssignment
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct FileRange {
     /// Range start

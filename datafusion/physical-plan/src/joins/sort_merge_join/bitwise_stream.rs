@@ -467,11 +467,20 @@ impl BitwiseSortMergeJoinStream {
 
     /// Clear inner key group state after processing. Does not resize the
     /// reservation — the next key group will resize when buffering, or
-    /// the stream's Drop will free it. This avoids unnecessary memory
+    /// [`Self::release_inner`] will free it. This avoids unnecessary memory
     /// pool interactions (see apache/datafusion#20729).
     fn clear_inner_key_group(&mut self) {
         self.inner_key_buffer.clear();
         self.inner_buffer_size = 0;
+    }
+
+    /// Drops the inner input and frees the inner key group reservation once no outer row can
+    /// match any more, so that memory is back in the pool before the remaining output is
+    /// emitted rather than when the stream is dropped.
+    fn release_inner(&mut self) {
+        self.clear_inner_key_group();
+        self.reservation.free();
+        self.inner = Box::pin(EmptyRecordBatchStream::new(self.inner.schema()));
     }
 
     /// Fetch the next outer batch. Returns true if a batch was loaded.
@@ -660,7 +669,17 @@ impl BitwiseSortMergeJoinStream {
 
             let inner_batch = self.inner_batch.as_ref().unwrap();
             let slice = inner_batch.slice(from, group_end - from);
-            self.inner_buffer_size += slice.get_array_memory_size();
+            // A slice reports its parent's full buffers, so a group ending
+            // inside the batch is charged its share of the parent by row
+            // count (rounded up per row, which cannot overflow). A group
+            // reaching the batch end keeps the whole parent alive once the
+            // cursor advances, so charge all of it.
+            let parent_size = slice.get_array_memory_size();
+            self.inner_buffer_size += if group_end < num_inner {
+                parent_size.div_ceil(num_inner) * slice.num_rows()
+            } else {
+                parent_size
+            };
             self.inner_key_buffer.push(slice);
 
             // Reserve memory for the newly buffered slice. If the pool
@@ -1050,12 +1069,17 @@ impl BitwiseSortMergeJoinStream {
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
+        // The remaining outer rows can no longer match. Anti and mark joins still emit
+        // them; a semi join is finished without reading them and drops the outer input too.
+        let is_semi = matches!(self.join_type, JoinType::LeftSemi | JoinType::RightSemi);
+        self.release_inner();
+        if is_semi {
+            self.outer = Box::pin(EmptyRecordBatchStream::new(self.outer.schema()));
+        }
         loop {
             self.emit_outer_batch()?;
             self.emit_completed_batches(emitter).await;
-            // The remaining outer rows can no longer match. Anti and mark joins still emit
-            // them; a semi join is finished without reading them.
-            if matches!(self.join_type, JoinType::LeftSemi | JoinType::RightSemi) {
+            if is_semi {
                 break;
             }
             if !self.next_outer_batch().await? {
@@ -1115,6 +1139,10 @@ impl BitwiseSortMergeJoinStream {
                 self.emit_completed_batches(emitter).await;
             }
         }
+
+        // The outer input is exhausted or dropped by now; when it ran out first, the inner
+        // input and the last inner key group are still held.
+        self.release_inner();
 
         // Flush whatever is still buffered in the coalescer.
         self.coalescer.finish_buffered_batch()?;

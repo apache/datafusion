@@ -244,17 +244,17 @@ select generate_series(arrow_cast('2021-01-01T00:00:00', 'Timestamp(Nanosecond, 
 [2021-01-01T00:00:00-05:00, 2021-01-01T01:29:54.500-05:00, 2021-01-01T02:59:49-05:00, 2021-01-01T04:29:43.500-05:00, 2021-01-01T05:59:38-05:00]
 
 ## mixing types for timestamps is not supported
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+query error DataFusion error: Error during planning: Function 'generate_series' failed to match any signature
 select generate_series(arrow_cast('2021-01-01T00:00:00', 'Timestamp(Nanosecond, Some("-05:00"))'), DATE '2021-01-02', INTERVAL '1' HOUR);
 
 ## mixing types not allowed even if an argument is null
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+query error DataFusion error: Error during planning: Function 'generate_series' failed to match any signature
 select generate_series(TIMESTAMP '1992-09-01', DATE '1993-03-01', NULL);
 
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+query error DataFusion error: Error during planning: Function 'generate_series' failed to match any signature
 select generate_series(1, '2024-01-01', '2025-01-02');
 
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+query error DataFusion error: Error during planning: Function 'generate_series' failed to match any signature
 select generate_series('2024-01-01'::timestamp, '2025-01-02', interval '1 day');
 
 ## should return NULL

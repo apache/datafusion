@@ -202,7 +202,11 @@ fn run_criterion_groups(
     Ok(())
 }
 
-fn validate_criterion_namespace(namespace: Option<&str>) -> Result<()> {
+/// Validates an optional Criterion namespace.
+///
+/// Namespaces must be nonempty and contain only lowercase ASCII letters,
+/// digits, underscores, or hyphens.
+pub fn validate_criterion_namespace(namespace: Option<&str>) -> Result<()> {
     let Some(namespace) = namespace else {
         return Ok(());
     };
@@ -674,6 +678,7 @@ pub async fn prepare_benchmark(
     benchmark: &mut SqlBenchmark,
     config: &SqlRunConfig,
 ) -> Result<()> {
+    benchmark.set_debug(config.common.debug);
     benchmark.initialize(ctx).await?;
     record_pool_peak_after_init(ctx)?;
     benchmark.assert(ctx).await?;

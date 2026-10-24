@@ -31,10 +31,9 @@ use datafusion_common::{
     Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err,
 };
 use log::debug;
-use std::cell::RefCell;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::ptr::from_ref;
-use std::rc::Rc;
 use std::sync::Arc;
 
 type CacheKey = (usize, Option<usize>);
@@ -158,7 +157,14 @@ pub enum ChildStats {
 /// plan rewrites. Each entry holds a strong reference to the plan node it was
 /// computed for, so cached nodes (and their per-partition statistics) stay
 /// alive until [`Self::reset_cache`] is called or the context is dropped. Reset
-/// a long-lived context at a lifecycle boundary to bound its memory.
+/// a long-lived context at a lifecycle boundary to bound its memory (see
+/// [`Self::reset_cache`]).
+///
+/// Cached statistics are served for as long as the context lives, so a plan
+/// node must not change its statistics in place (for example through interior
+/// mutability) while a context holds it: the cache would return stale values.
+/// Optimizer rules satisfy this because they replace nodes instead of changing
+/// them.
 ///
 /// An optional [`StatisticsRegistry`] plugs providers into the walk: at each node
 /// they are consulted before the operator's built-in
@@ -173,7 +179,7 @@ pub enum ChildStats {
 /// [`Self::compute_extended`] observes extensions; [`Self::compute`] returns core
 /// [`Statistics`] only.
 pub struct StatisticsContext {
-    cache: Rc<RefCell<StatsCache>>,
+    cache: Mutex<StatsCache>,
     registry: StatisticsRegistry,
 }
 
@@ -192,7 +198,7 @@ impl StatisticsContext {
     /// Creates a context whose walk consults `registry`'s provider chain.
     pub fn new_with_registry(registry: StatisticsRegistry) -> Self {
         Self {
-            cache: Rc::new(RefCell::new(StatsCache::default())),
+            cache: Mutex::new(StatsCache::default()),
             registry,
         }
     }
@@ -200,10 +206,12 @@ impl StatisticsContext {
     /// Clears the memoization cache and releases its retained plan nodes.
     ///
     /// Resetting is optional for correctness: each cache entry retains the plan
-    /// node that supplied its pointer key. Use it to bound memory at a logical
-    /// lifecycle boundary, such as after an optimizer pass.
+    /// node that supplied its pointer key. Use it to bound memory at a
+    /// lifecycle boundary, such as the end of a query's physical optimization.
+    /// Do not reset a context that several optimizer rules share between those
+    /// rules: that discards the statistics that later rules would reuse.
     pub fn reset_cache(&self) {
-        let mut cache = self.cache.borrow_mut();
+        let mut cache = self.cache.lock();
         cache.statistics.clear();
         cache.extensions.clear();
     }
@@ -307,6 +315,74 @@ impl StatisticsContext {
     /// for how extensions propagate up the tree). As with [`Self::compute`],
     /// the root is not memoized and must be a standalone plan node; see
     /// [`Self::compute_extended_arc`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion_common::{ColumnStatistics, Result, Statistics};
+    /// # use datafusion_common::stats::Precision;
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// # use datafusion_physical_plan::operator_statistics::{
+    /// #     ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
+    /// # };
+    /// # use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+    /// # use datafusion_physical_plan::test::exec::StatisticsExec;
+    ///
+    /// // Pearson correlation between two columns, identified by schema index.
+    /// #[derive(Debug, Clone)]
+    /// struct ColumnCorrelation {
+    ///     columns: (usize, usize),
+    ///     coefficient: f64,
+    /// }
+    ///
+    /// #[derive(Debug)]
+    /// struct CorrelationProvider;
+    ///
+    /// impl StatisticsProvider for CorrelationProvider {
+    ///     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+    ///         plan.downcast_ref::<StatisticsExec>().is_some()
+    ///     }
+    ///
+    ///     fn compute_statistics(
+    ///         &self,
+    ///         plan: &dyn ExecutionPlan,
+    ///         _child_stats: &[ExtendedStatistics],
+    ///     ) -> Result<StatisticsResult> {
+    ///         let base = plan.statistics_from_inputs(&[], &StatisticsArgs::new())?;
+    ///         let mut extended = ExtendedStatistics::new_arc(base);
+    ///         extended.set_extension(ColumnCorrelation {
+    ///             columns: (0, 1),
+    ///             coefficient: 0.92,
+    ///         });
+    ///         Ok(StatisticsResult::Computed(extended))
+    ///     }
+    /// }
+    ///
+    /// let schema = Schema::new(vec![
+    ///     Field::new("city", DataType::Utf8, false),
+    ///     Field::new("zip_code", DataType::Utf8, false),
+    /// ]);
+    /// let stats = Statistics {
+    ///     num_rows: Precision::Exact(1000),
+    ///     total_byte_size: Precision::Absent,
+    ///     column_statistics: vec![ColumnStatistics::new_unknown(); 2],
+    /// };
+    /// let plan = StatisticsExec::new(stats, schema);
+    ///
+    /// let mut registry = StatisticsRegistry::new();
+    /// registry.register(Arc::new(CorrelationProvider));
+    /// let context = StatisticsContext::new_with_registry(registry);
+    ///
+    /// let extended = context.compute_extended(&plan, &StatisticsArgs::new())?;
+    /// assert_eq!(extended.base().num_rows, Precision::Exact(1000));
+    ///
+    /// let correlation = extended.get_extension::<ColumnCorrelation>().unwrap();
+    /// assert_eq!(correlation.columns, (0, 1));
+    /// assert_eq!(correlation.coefficient, 0.92);
+    /// # Ok::<(), datafusion_common::DataFusionError>(())
+    /// ```
     pub fn compute_extended(
         &self,
         plan: &dyn ExecutionPlan,
@@ -569,7 +645,7 @@ impl StatisticsContext {
         partition: Option<usize>,
     ) -> Option<Arc<Statistics>> {
         self.cache
-            .borrow()
+            .lock()
             .statistics
             .get(&cache_key(plan, partition))
             .map(|entry| Arc::clone(&entry.value))
@@ -599,7 +675,7 @@ impl StatisticsContext {
         statistics: Arc<Statistics>,
     ) {
         Self::store_cache_entry(
-            &mut self.cache.borrow_mut().statistics,
+            &mut self.cache.lock().statistics,
             owner,
             partition,
             statistics,
@@ -612,7 +688,7 @@ impl StatisticsContext {
         partition: Option<usize>,
     ) -> Option<Extensions> {
         self.cache
-            .borrow()
+            .lock()
             .extensions
             .get(&cache_key(plan, partition))
             .map(|entry| entry.value.clone())
@@ -625,7 +701,7 @@ impl StatisticsContext {
         extensions: Extensions,
     ) {
         Self::store_cache_entry(
-            &mut self.cache.borrow_mut().extensions,
+            &mut self.cache.lock().extensions,
             owner,
             partition,
             extensions,
@@ -773,7 +849,7 @@ mod tests {
         let args = StatisticsArgs::new();
 
         let s1 = ctx.compute_arc(&leaf, &args).unwrap();
-        assert!(!ctx.cache.borrow().statistics.is_empty());
+        assert!(!ctx.cache.lock().statistics.is_empty());
 
         let s2 = ctx.compute_arc(&leaf, &args).unwrap();
         assert!(Arc::ptr_eq(&s1, &s2));
@@ -847,7 +923,7 @@ mod tests {
             .compute(parent.as_ref(), &StatisticsArgs::new())
             .unwrap();
         assert!(
-            !ctx.cache.borrow().statistics.contains_key(&parent_key),
+            !ctx.cache.lock().statistics.contains_key(&parent_key),
             "borrowed roots must not be memoized"
         );
 
@@ -879,7 +955,7 @@ mod tests {
         let _ = ctx
             .compute_extended_arc(&leaf, &StatisticsArgs::new())
             .unwrap();
-        ctx.cache.borrow_mut().statistics.clear();
+        ctx.cache.lock().statistics.clear();
         drop(leaf);
         assert!(weak.upgrade().is_some());
 
@@ -892,9 +968,9 @@ mod tests {
         let leaf = make_stats_leaf(10);
         let ctx = StatisticsContext::new();
         let _ = ctx.compute_arc(&leaf, &StatisticsArgs::new()).unwrap();
-        assert!(!ctx.cache.borrow().statistics.is_empty());
+        assert!(!ctx.cache.lock().statistics.is_empty());
         ctx.reset_cache();
-        assert!(ctx.cache.borrow().statistics.is_empty());
+        assert!(ctx.cache.lock().statistics.is_empty());
     }
 
     #[test]
@@ -969,7 +1045,7 @@ mod tests {
         assert_eq!(extensions.unwrap().get::<Tag>(), Some(&Tag(7)));
         assert!(
             ctx.cache
-                .borrow()
+                .lock()
                 .extensions
                 .contains_key(&cache_key(leaf.as_ref(), None))
         );
