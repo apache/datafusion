@@ -1029,3 +1029,45 @@ FROM (VALUES ('abc')) t(s);
 
 statement ok
 DROP VIEW guarded_cast;
+
+# Struct field accesses in CASE branches are evaluated ahead of the branches,
+# while fallible branch expressions over them are still guarded.
+statement ok
+CREATE TABLE struct_case AS VALUES
+    (1, named_struct('a', 0, 'b', 'zero', 'l', [named_struct('x', 1)])),
+    (2, named_struct('a', 2, 'b', 'two', 'l', [named_struct('x', 2)])),
+    (3, named_struct('a', NULL, 'b', 'null', 'l', NULL)),
+    (4, named_struct('a', 5, 'b', 'five', 'l', [])),
+    (5, NULL);
+
+query IT?I
+SELECT column1,
+       CASE WHEN column2['a'] = 0 THEN column2['b']
+            WHEN column2['a'] > 1 THEN upper(column2['b'])
+            ELSE 'other' END,
+       CASE column2['a'] WHEN 2 THEN column2['l'] WHEN 5 THEN [named_struct('x', 5)] END,
+       CASE WHEN column2['a'] <> 0 THEN 10 / column2['a'] ELSE column1 END
+FROM struct_case
+ORDER BY column1;
+----
+1 zero NULL 1
+2 TWO [{x: 2}] 5
+3 other NULL 3
+4 FIVE [{x: 5}] 2
+5 other NULL 5
+
+# A struct used as a whole alongside its fields
+query I?
+SELECT column1,
+       CASE WHEN column2['a'] = 2 THEN column2 WHEN column2['a'] = 5 THEN NULL END
+FROM struct_case
+ORDER BY column1;
+----
+1 NULL
+2 {a: 2, b: two, l: [{x: 2}]}
+3 NULL
+4 NULL
+5 NULL
+
+statement ok
+DROP TABLE struct_case;
