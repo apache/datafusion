@@ -59,6 +59,18 @@ SELECT x, y FROM t_uniq;
 NULL 1
 NULL 2
 
+# `x` is UNIQUE but declared NOT NULL, so there are no NULL rows to worry about.
+statement ok
+CREATE TABLE t_uniq_not_null (x INT NOT NULL UNIQUE, y INT) AS VALUES (1, 10), (2, 20);
+
+# `t_right_pk` is the NULL-padded side of `t_left LEFT JOIN t_right_pk`:
+# `k = 3` and `k = 4` match nothing, so `p.a` and `p.b` are both NULL there.
+statement ok
+CREATE TABLE t_left (k INT) AS VALUES (1), (3), (4);
+
+statement ok
+CREATE TABLE t_right_pk (a INT, b INT, PRIMARY KEY (a)) AS VALUES (1, 10), (2, 20);
+
 
 # 1.1 PRIMARY KEY: rows are unique;  the DISTINCT is removed and no
 # Aggregate appears in the plan.
@@ -69,21 +81,18 @@ logical_plan TableScan: t_pk projection=[x]
 
 # 1.2 Nullable UNIQUE: the DISTINCT must be KEPT. UNIQUE allows several NULL
 # rows, but DISTINCT treats NULLs as equal and has to collapse them into one.
-#
-# BUG: the DISTINCT is removed and both NULL rows are returned.
-# Expected: `1`, `NULL`.
-# Issue: https://github.com/apache/datafusion/issues/23634
 query I
 SELECT DISTINCT x FROM t_uniq ORDER BY x NULLS LAST;
 ----
 1
 NULL
-NULL
 
 query TT
 EXPLAIN SELECT DISTINCT x FROM t_uniq;
 ----
-logical_plan TableScan: t_uniq projection=[x]
+logical_plan
+01)Aggregate: groupBy=[[t_uniq.x]], aggr=[[]]
+02)--TableScan: t_uniq projection=[x]
 
 # 1.3 A PRIMARY KEY downgraded to a non-unique dependency by a LEFT JOIN
 # so the DISTINCT must be KEPT.
@@ -124,6 +133,61 @@ logical_plan
 02)--TableScan: t_uniq projection=[x]
 
 
+# 1.5 GROUP BY x, y keeps separate groups for the two NULL rows, so the
+# projected x is not unique. DISTINCT must still collapse the NULL values.
+query I
+SELECT DISTINCT x FROM t_uniq GROUP BY x, y ORDER BY x NULLS LAST;
+----
+1
+NULL
+
+# Aliases and subqueries must not turn the nullable dependency into a proof
+# that the projected values are unique.
+query I
+SELECT DISTINCT x AS k FROM t_uniq GROUP BY x, y ORDER BY k NULLS LAST;
+----
+1
+NULL
+
+query I
+SELECT DISTINCT x FROM (SELECT x, y FROM t_uniq GROUP BY x, y) g ORDER BY x NULLS LAST;
+----
+1
+NULL
+
+# An outer aggregate must count distinct x values, not the inner (x, y) groups.
+query I
+SELECT count(*) FROM (SELECT DISTINCT x FROM t_uniq GROUP BY x, y) g;
+----
+2
+
+# 1.6 A composite UNIQUE key is also unsafe when only one component is nullable.
+statement ok
+CREATE TABLE t_uniq_composite (x INT NOT NULL, y INT, z INT, UNIQUE (x, y))
+AS VALUES (1, NULL, 10), (1, NULL, 20), (1, 1, 30);
+
+query II
+SELECT DISTINCT x, y FROM t_uniq_composite GROUP BY x, y, z ORDER BY x, y NULLS LAST;
+----
+1 1
+1 NULL
+
+statement ok
+drop table t_uniq_composite;
+
+# 1.7 NOT NULL UNIQUE still guarantees uniqueness, so DISTINCT is redundant.
+query I
+SELECT DISTINCT x FROM t_uniq_not_null ORDER BY x;
+----
+1
+2
+
+query TT
+EXPLAIN SELECT DISTINCT x FROM t_uniq_not_null;
+----
+logical_plan TableScan: t_uniq_not_null projection=[x]
+
+
 # 2.1 PRIMARY KEY: `x` determines `y`, so `ORDER BY x, y` is equivalent to
 # `ORDER BY x` and the `y` key is dropped from the plan.
 query TT
@@ -151,18 +215,12 @@ logical_plan
 02)--TableScan: t_uniq projection=[x, y]
 
 # 2.3 A UNIQUE determinant remains usable when its source column is NOT NULL.
-statement ok
-CREATE TABLE t_uniq_not_null (x INT NOT NULL UNIQUE, y INT) AS VALUES (1, 10), (2, 20);
-
 query TT
 EXPLAIN SELECT x, y FROM t_uniq_not_null ORDER BY x, y;
 ----
 logical_plan
 01)Sort: t_uniq_not_null.x ASC NULLS LAST
 02)--TableScan: t_uniq_not_null projection=[x, y]
-
-statement ok
-drop table t_uniq_not_null;
 
 # 2.4 After `GROUP BY x` the `x` does determine `cnt`, so can drop `cnt` from sort
 query TT
@@ -177,12 +235,6 @@ logical_plan
 # 2.5 A PRIMARY KEY on the NULL-padded side of a LEFT JOIN: every new NULL in
 # `p.a` comes from a padded row, where `p.b` is NULL too. So `p.a` still
 # determines `p.b` and the `p.b` sort key can be dropped.
-statement ok
-CREATE TABLE t_left (k INT) AS VALUES (1), (3), (4);
-
-statement ok
-CREATE TABLE t_right_pk (a INT, b INT, PRIMARY KEY (a)) AS VALUES (1, 10), (2, 20);
-
 query II
 SELECT p.a, p.b FROM t_left l LEFT JOIN t_right_pk p ON l.k = p.a ORDER BY p.a, p.b DESC;
 ----
@@ -200,12 +252,6 @@ logical_plan
 04)------TableScan: t_left projection=[k]
 05)----SubqueryAlias: p
 06)------TableScan: t_right_pk projection=[a, b]
-
-statement ok
-drop table t_left;
-
-statement ok
-drop table t_right_pk;
 
 # 2.6 After `GROUP BY x, y` the pair `(x, y)` is unique (NULLs included), so
 # it determines `cnt` even though the nullable UNIQUE `x` alone does not.
@@ -236,27 +282,54 @@ logical_plan
 02)--TableScan: t_pk projection=[x]
 
 # 3.2 Nullable UNIQUE: grouping by `x, y` is NOT the same as grouping by
-# `x` -- two NULL rows differ in `y` and belong in separate groups.
-#
-# BUG: `y` is dropped from the GROUP BY and the two NULL groups are merged,
-# so one row goes missing.
-# Expected: `1`, `NULL`, `NULL` (three rows).
-# Issue: https://github.com/apache/datafusion/issues/23819
+# `x` -- two NULL rows differ in `y` and belong in separate groups, so the
+# `y` grouping key must be kept.
 query I rowsort
 SELECT x FROM t_uniq GROUP BY x, y;
 ----
 1
+NULL
 NULL
 
 query TT
 EXPLAIN SELECT x FROM t_uniq GROUP BY x, y;
 ----
 logical_plan
-01)Aggregate: groupBy=[[t_uniq.x]], aggr=[[]]
-02)--TableScan: t_uniq projection=[x]
+01)Projection: t_uniq.x
+02)--Aggregate: groupBy=[[t_uniq.x, t_uniq.y]], aggr=[[]]
+03)----TableScan: t_uniq projection=[x, y]
 
-# 3.3 The same grouping, but with `y` selected so the parent needs it: no
-# column can be dropped and the answer is right.
+# 3.3 A UNIQUE determinant remains usable when its source column is NOT NULL.
+query TT
+EXPLAIN SELECT x FROM t_uniq_not_null GROUP BY x, y;
+----
+logical_plan
+01)Aggregate: groupBy=[[t_uniq_not_null.x]], aggr=[[]]
+02)--TableScan: t_uniq_not_null projection=[x]
+
+# 3.4 A PRIMARY KEY on the NULL-padded side of a LEFT JOIN: every new NULL in
+# `p.a` comes from a padded row, where `p.b` is NULL too. So `p.a` still
+# determines `p.b` and the `p.b` grouping key can be dropped.
+query I
+SELECT p.a FROM t_left l LEFT JOIN t_right_pk p ON l.k = p.a GROUP BY p.a, p.b ORDER BY p.a;
+----
+1
+NULL
+
+query TT
+EXPLAIN SELECT p.a FROM t_left l LEFT JOIN t_right_pk p ON l.k = p.a GROUP BY p.a, p.b;
+----
+logical_plan
+01)Aggregate: groupBy=[[p.a]], aggr=[[]]
+02)--Projection: p.a
+03)----Left Join: l.k = p.a
+04)------SubqueryAlias: l
+05)--------TableScan: t_left projection=[k]
+06)------SubqueryAlias: p
+07)--------TableScan: t_right_pk projection=[a]
+
+# 3.5 The same grouping as 3.2, but with `y` selected so the parent needs it:
+# no column can be dropped and the answer is right.
 query II rowsort
 SELECT x, y FROM t_uniq GROUP BY x, y;
 ----
@@ -280,26 +353,46 @@ logical_plan
 02)--TableScan: t_pk projection=[x, y]
 
 # 4.2 Nullable UNIQUE: `x` does NOT determine `y`, so there is no
-# well-defined `y` for the `x = NULL` group.
-#
-# BUG: `y` is appended to the GROUP BY anyway, so `GROUP BY x` returns TWO
-# rows for `x = NULL`.
-# Expected: one row per distinct `x` (or a planning error -- postgres
-# rejects this query, and accepts the 4.1 PRIMARY KEY form).
-# Issue: https://github.com/apache/datafusion/issues/23820
-query II rowsort
+# well-defined `y` for the `x = NULL` group and `y` is not added to the
+# GROUP BY. The query is rejected, as postgres does (it accepts the 4.1
+# PRIMARY KEY form).
+query error column "t_uniq.y" must appear in the GROUP BY clause or must be part of an aggregate function
 SELECT x, y FROM t_uniq GROUP BY x;
+
+# 4.3 A UNIQUE determinant remains usable when its source column is NOT NULL.
+query II rowsort
+SELECT x, y FROM t_uniq_not_null GROUP BY x;
 ----
-1 3
-NULL 1
-NULL 2
+1 10
+2 20
 
 query TT
-EXPLAIN SELECT x, y FROM t_uniq GROUP BY x;
+EXPLAIN SELECT x, y FROM t_uniq_not_null GROUP BY x;
 ----
 logical_plan
-01)Aggregate: groupBy=[[t_uniq.x, t_uniq.y]], aggr=[[]]
-02)--TableScan: t_uniq projection=[x, y]
+01)Aggregate: groupBy=[[t_uniq_not_null.x, t_uniq_not_null.y]], aggr=[[]]
+02)--TableScan: t_uniq_not_null projection=[x, y]
+
+# 4.4 A PRIMARY KEY on the NULL-padded side of a LEFT JOIN still determines
+# its other columns (padded rows are NULL in all of them), so `p.b` can be
+# selected when grouping by `p.a` alone.
+query II
+SELECT p.a, p.b FROM t_left l LEFT JOIN t_right_pk p ON l.k = p.a GROUP BY p.a ORDER BY p.a;
+----
+1 10
+NULL NULL
+
+query TT
+EXPLAIN SELECT p.a, p.b FROM t_left l LEFT JOIN t_right_pk p ON l.k = p.a GROUP BY p.a;
+----
+logical_plan
+01)Aggregate: groupBy=[[p.a, p.b]], aggr=[[]]
+02)--Projection: p.a, p.b
+03)----Left Join: l.k = p.a
+04)------SubqueryAlias: l
+05)--------TableScan: t_left projection=[k]
+06)------SubqueryAlias: p
+07)--------TableScan: t_right_pk projection=[a, b]
 
 
 statement ok
@@ -358,6 +451,201 @@ drop table t_null;
 statement ok
 drop table t_probe;
 
+
+# 6. Only a column reference carries a dependency. `CAST(x AS INT)` is named
+# `t_cast.x`, like the PRIMARY KEY column, but it does not determine `y`:
+# 1.1 and 1.2 both cast to 1.
+statement ok
+CREATE TABLE t_cast (x DOUBLE, y VARCHAR, PRIMARY KEY (x)) AS VALUES (1.1, 'b'), (1.2, 'a'), (2.1, 'c');
+
+# 6.1 ORDER BY: `y` is the tie-breaker within `CAST(x AS INT) = 1` and is kept.
+query RT
+SELECT x, y FROM t_cast ORDER BY CAST(x AS INT), y;
+----
+1.2 a
+1.1 b
+2.1 c
+
+query TT
+EXPLAIN SELECT x, y FROM t_cast ORDER BY CAST(x AS INT), y;
+----
+logical_plan
+01)Sort: CAST(t_cast.x AS Int32) ASC NULLS LAST, t_cast.y ASC NULLS LAST
+02)--TableScan: t_cast projection=[x, y]
+
+# 6.2 GROUP BY: `y` is not selected but still splits the groups.
+query II rowsort
+SELECT CAST(x AS INT) k, count(*) n FROM t_cast GROUP BY CAST(x AS INT), y;
+----
+1 1
+1 1
+2 1
+
+# 6.3 GROUP BY output: the dependency `k -> y` does not exist, so `y` still
+# orders the rows within `k = 1`.
+query IT
+SELECT CAST(x AS INT) k, y FROM t_cast GROUP BY CAST(x AS INT), y ORDER BY k, y;
+----
+1 a
+1 b
+2 c
+
+# 6.4 `y` is not determined by the GROUP BY expression, so it can't be selected.
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function
+SELECT y, count(*) FROM t_cast GROUP BY CAST(x AS INT);
+
+statement ok
+drop table t_cast;
+
+# 6.5 Only the key column itself carries the dependency, even when the cast
+# keeps distinct values distinct, like INT to BIGINT. PostgreSQL and DuckDB
+# reject this too.
+statement ok
+CREATE TABLE t_wide (x INT, y VARCHAR, PRIMARY KEY (x)) AS VALUES (1, 'b'), (2, 'a');
+
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function
+SELECT y, count(*) FROM t_wide GROUP BY CAST(x AS BIGINT);
+
+statement ok
+drop table t_wide;
+
+# 6.6 The same with `TRY_CAST` over a `UNIQUE NOT NULL` key: 'bad-a' and
+# 'bad-b' both cast to NULL.
+statement ok
+CREATE TABLE t_try_cast (x VARCHAR NOT NULL UNIQUE, y VARCHAR) AS VALUES ('bad-a', 'b'), ('bad-b', 'a'), ('1', 'c');
+
+query TT
+SELECT x, y FROM t_try_cast ORDER BY TRY_CAST(x AS INT), y;
+----
+1 c
+bad-b a
+bad-a b
+
+query IT rowsort
+SELECT TRY_CAST(x AS INT) k, y FROM t_try_cast GROUP BY TRY_CAST(x AS INT), y;
+----
+1 c
+NULL a
+NULL b
+
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function
+SELECT y, count(*) FROM t_try_cast GROUP BY TRY_CAST(x AS INT);
+
+statement ok
+drop table t_try_cast;
+
+# 6.7 A key that comes from an inner GROUP BY: `x` is unique in the subquery,
+# but `CAST(x AS INT)` is not.
+statement ok
+CREATE TABLE t_inner (x DOUBLE, y VARCHAR) AS VALUES (1.1, 'b'), (1.2, 'a'), (2.1, 'c');
+
+query RT
+SELECT x, y FROM (SELECT x, max(y) AS y FROM t_inner GROUP BY x) ORDER BY CAST(x AS INT), y;
+----
+1.2 a
+1.1 b
+2.1 c
+
+query II rowsort
+SELECT CAST(x AS INT) k, count(*) n FROM (SELECT x, max(y) AS y FROM t_inner GROUP BY x) GROUP BY CAST(x AS INT), y;
+----
+1 1
+1 1
+2 1
+
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function
+SELECT y, count(*) FROM (SELECT x, max(y) AS y FROM t_inner GROUP BY x) GROUP BY CAST(x AS INT);
+
+statement ok
+drop table t_inner;
+
+##########
+## List unnest invalidates dependencies on the input row
+##########
+
+statement ok
+CREATE TABLE t_unnest_fd (k VARCHAR, v INT) AS VALUES ('a', 1), ('a', 2), ('b', 3);
+
+# DISTINCT must retain the unnested value in its grouping key.
+query I
+WITH g AS (SELECT k, array_agg(v) AS vs FROM t_unnest_fd GROUP BY k),
+     u AS (SELECT k, unnest(vs) AS v FROM g)
+SELECT count(*) AS n FROM (SELECT DISTINCT k, v FROM u);
+----
+3
+
+# The equivalent GROUP BY must also retain the unnested value.
+query I
+WITH g AS (SELECT k, array_agg(v) AS vs FROM t_unnest_fd GROUP BY k),
+     u AS (SELECT k, unnest(vs) AS v FROM g)
+SELECT count(*) AS n FROM (SELECT k, v FROM u GROUP BY k, v);
+----
+3
+
+# There is no projection between Unnest and DISTINCT to discard a stale target.
+query I
+WITH g AS (SELECT k, array_agg(v) AS vs FROM t_unnest_fd GROUP BY k)
+SELECT count(*) AS n FROM (SELECT DISTINCT * FROM (SELECT k, unnest(vs) FROM g));
+----
+3
+
+# An unnested list of structs also creates multiple values per input key.
+query I
+WITH g AS (
+    SELECT k, array_agg(named_struct('id', v)) AS rs
+    FROM t_unnest_fd GROUP BY k
+), u AS (SELECT k, unnest(rs) AS r FROM g)
+SELECT count(*) AS n FROM (SELECT DISTINCT k, r['id'] FROM u);
+----
+3
+
+# Struct expansion shifts the following list output onto an old dependency
+# target index. DISTINCT must still include the list output.
+query I
+WITH g AS (
+    SELECT k, named_struct('x', min(v), 'y', max(v)) AS s,
+           array_agg(v) AS vs, sum(v) AS n
+    FROM t_unnest_fd GROUP BY k
+)
+SELECT count(*) FROM (
+    SELECT DISTINCT * FROM (SELECT k, unnest(s), unnest(vs), n FROM g)
+);
+----
+3
+
+# ORDER BY k has ties after unnest. Its default RANGE frame includes both rows with k = 'a'.
+query I
+WITH g AS (SELECT k, array_agg(v) AS vs FROM t_unnest_fd GROUP BY k),
+     u AS (SELECT k, unnest(vs) AS v FROM g)
+SELECT count(DISTINCT s) AS n FROM (SELECT sum(v) OVER (ORDER BY k) AS s FROM u);
+----
+2
+
+# Expanding a struct before k shifts the inherited dependency's column indices.
+# The two sy values tie, so their default RANGE frames have the same sum.
+query I
+WITH g AS (
+    SELECT named_struct('x', min(v), 'y', length(k)) AS s,
+           k, sum(v) AS n
+    FROM t_unnest_fd GROUP BY k
+), u(sx, sy, k, n) AS (SELECT unnest(s), k, n FROM g)
+SELECT count(DISTINCT running_sum) FROM (
+    SELECT sum(n) OVER (ORDER BY sy) AS running_sum FROM u
+);
+----
+1
+
+# A row-preserving, single-element unnest remains correct.
+query I
+SELECT count(*) AS n
+FROM (SELECT DISTINCT k, v
+      FROM (SELECT k, unnest(make_array(v)) AS v FROM t_unnest_fd));
+----
+3
+
+statement ok
+drop table t_unnest_fd;
+
 ##########
 ## Cleanup
 ##########
@@ -367,6 +655,15 @@ drop table t_pk;
 
 statement ok
 drop table t_uniq;
+
+statement ok
+drop table t_uniq_not_null;
+
+statement ok
+drop table t_left;
+
+statement ok
+drop table t_right_pk;
 
 statement ok
 RESET datafusion.explain.logical_plan_only;

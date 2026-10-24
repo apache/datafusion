@@ -102,8 +102,11 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     // is a no-op and we can simply remove it. The dependency mode
                     // must be `Single`: a `Multi` dependence (e.g. a former key
                     // downgraded by a join) means equal rows may occur multiple
-                    // times, so the DISTINCT still has work to do.
+                    // times, so the DISTINCT still has work to do. Uniqueness
+                    // must also hold across NULLs: a nullable UNIQUE key can
+                    // contain multiple NULL rows that DISTINCT must collapse.
                     if dep.mode == Dependency::Single
+                        && dep.is_valid_across_nulls(input.schema())
                         && dep.source_indices.len() >= field_count
                         && dep.source_indices[..field_count]
                             .iter()

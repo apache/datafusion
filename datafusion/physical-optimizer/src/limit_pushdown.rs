@@ -100,7 +100,6 @@ pub struct GlobalRequirements {
     fetch: Option<usize>,
     skip: usize,
     satisfied: bool,
-    preserve_order: bool,
 }
 
 impl LimitPushdown {
@@ -128,7 +127,6 @@ impl PhysicalOptimizerRule for LimitPushdown {
             fetch: None,
             skip: 0,
             satisfied: false,
-            preserve_order: false,
         };
         with_statistics_context(context, |stats_ctx| {
             pushdown_limits(plan, global_state, stats_ctx)
@@ -148,7 +146,6 @@ struct LimitInfo {
     input: Arc<dyn ExecutionPlan>,
     fetch: Option<usize>,
     skip: usize,
-    preserve_order: bool,
 }
 
 /// This function is the main helper function of the `LimitPushDown` rule.
@@ -198,7 +195,6 @@ pub fn pushdown_limit_helper_with_stats(
         );
         global_state.skip = skip;
         global_state.fetch = fetch;
-        global_state.preserve_order = limit_info.preserve_order;
         global_state.satisfied = false;
 
         if let Some(fetch) = fetch
@@ -315,28 +311,17 @@ pub fn pushdown_limit_helper_with_stats(
         let maybe_fetchable = pushdown_plan.with_fetch(skip_and_fetch);
         if global_state.satisfied {
             if let Some(plan_with_fetch) = maybe_fetchable {
-                let plan_with_preserve_order = plan_with_fetch
-                    .with_preserve_order(global_state.preserve_order)
-                    .unwrap_or(plan_with_fetch);
-                Ok((Transformed::yes(plan_with_preserve_order), global_state))
+                Ok((Transformed::yes(plan_with_fetch), global_state))
             } else {
                 Ok((Transformed::no(pushdown_plan), global_state))
             }
         } else {
             global_state.satisfied = true;
             pushdown_plan = if let Some(plan_with_fetch) = maybe_fetchable {
-                let plan_with_preserve_order = plan_with_fetch
-                    .with_preserve_order(global_state.preserve_order)
-                    .unwrap_or(plan_with_fetch);
-
                 if global_skip > 0 {
-                    add_global_limit(
-                        plan_with_preserve_order,
-                        global_skip,
-                        Some(global_fetch),
-                    )
+                    add_global_limit(plan_with_fetch, global_skip, Some(global_fetch))
                 } else {
-                    plan_with_preserve_order
+                    plan_with_fetch
                 }
             } else {
                 add_limit(pushdown_plan, global_skip, global_fetch)
@@ -460,7 +445,6 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
             input: Arc::clone(global_limit.input()),
             fetch: global_limit.fetch(),
             skip: global_limit.skip(),
-            preserve_order: global_limit.required_ordering().is_some(),
         })
     } else {
         plan.downcast_ref::<LocalLimitExec>()
@@ -468,7 +452,6 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
                 input: Arc::clone(local_limit.input()),
                 fetch: Some(local_limit.fetch()),
                 skip: 0,
-                preserve_order: local_limit.required_ordering().is_some(),
             })
     }
 }

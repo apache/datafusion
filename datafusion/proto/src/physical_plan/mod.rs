@@ -21,12 +21,10 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
+use arrow::datatypes::Schema;
 use datafusion_catalog::memory::MemorySourceConfig;
-use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err,
 };
 use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
@@ -42,9 +40,7 @@ use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
-use datafusion_functions_table::generate_series::{
-    Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
-};
+use datafusion_functions_table::generate_series;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_physical_plan::aggregates::AggregateExec;
@@ -71,7 +67,8 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::proto::{
     ExecutionPlanDecode, ExecutionPlanDecodeCtx, ExecutionPlanEncode,
-    ExecutionPlanEncodeCtx,
+    ExecutionPlanEncodeCtx, ProtoDecoderRegistry, decode_execution_plan,
+    execution_plan_names,
 };
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::scalar_subquery::ScalarSubqueryExec;
@@ -84,7 +81,6 @@ use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use prost::Message;
 use prost::bytes::BufMut;
 
-use crate::convert_required;
 use crate::physical_plan::from_proto::parse_physical_expr_with_converter;
 use crate::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
@@ -423,7 +419,10 @@ mod file_scan_config_serde {
         assert!(!do_not_preserve_with_ordering.output_ordering.is_empty());
         let mut encoded = serde.encode(&do_not_preserve_with_ordering)?;
         assert_eq!(encoded.preserve_order, Some(false));
-        assert!(!serde.decode(&encoded)?.preserve_order);
+        let decoded = serde.decode(&encoded)?;
+        assert!(!decoded.preserve_order);
+        // The output ordering alone keeps the files in order.
+        assert!(decoded.preserves_file_order());
 
         // Older payloads had no flag and derived it from the ordering.
         encoded.preserve_order = None;
@@ -1152,6 +1151,48 @@ pub trait PhysicalPlanNodeExt: Sized {
     /// Returns a reference to the underlying [`protobuf::PhysicalPlanNode`].
     fn node(&self) -> &protobuf::PhysicalPlanNode;
 
+    /// Compatibility helper for callers migrating to generator-owned encoding.
+    #[deprecated(note = "Match GenerateSeriesName directly instead")]
+    fn generate_series_name_to_str(name: protobuf::GenerateSeriesName) -> &'static str {
+        match name {
+            protobuf::GenerateSeriesName::GsGenerateSeries => "generate_series",
+            protobuf::GenerateSeriesName::GsRange => "range",
+        }
+    }
+
+    /// Decode the legacy payload through the generator-owned implementation.
+    #[deprecated(note = "Use generate_series::proto::try_from_proto instead")]
+    fn try_into_generate_series_physical_plan(
+        &self,
+        generate_series: &protobuf::GenerateSeriesNode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        generate_series::proto::try_from_proto(generate_series)
+    }
+
+    /// Compatibility helper for callers migrating to generator-owned encoding.
+    #[deprecated(note = "Use GenerateSeriesName variants directly instead")]
+    fn str_to_generate_series_name(name: &str) -> Result<protobuf::GenerateSeriesName> {
+        match name {
+            "generate_series" => Ok(protobuf::GenerateSeriesName::GsGenerateSeries),
+            "range" => Ok(protobuf::GenerateSeriesName::GsRange),
+            _ => internal_err!("unknown name: {name}"),
+        }
+    }
+
+    /// Encode through the plan hook, preserving unsupported-generator fallback.
+    #[deprecated(
+        note = "Use ExecutionPlan::try_to_proto or AsExecutionPlan::try_from_physical_plan instead"
+    )]
+    fn try_from_lazy_memory_exec(
+        exec: &LazyMemoryExec,
+    ) -> Result<Option<protobuf::PhysicalPlanNode>> {
+        let encoder = ConverterPlanEncoder {
+            codec: &DefaultPhysicalExtensionCodec {},
+            proto_converter: &DefaultPhysicalProtoConverter {},
+        };
+        exec.try_to_proto(&ExecutionPlanEncodeCtx::new(&encoder))
+    }
+
     fn try_into_physical_plan_with_converter(
         &self,
         ctx: &TaskContext,
@@ -1305,7 +1346,7 @@ pub trait PhysicalPlanNodeExt: Sized {
                 CooperativeExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::GenerateSeries(generate_series) => {
-                self.try_into_generate_series_physical_plan(generate_series)
+                generate_series::proto::try_from_proto(generate_series)
             }
             PhysicalPlanType::SortMergeJoin(_) => {
                 SortMergeJoinExec::try_from_proto(self.node(), &decode_ctx)
@@ -1335,31 +1376,19 @@ pub trait PhysicalPlanNodeExt: Sized {
     ) -> Result<protobuf::PhysicalPlanNode> {
         let plan_clone = Arc::clone(&plan);
         let mut plan = plan.as_ref();
-        // Resolve the downcast identity first so wrapper plans serialize as
-        // their delegate, matching how the `downcast_ref` chain below sees
-        // them. Without this a wrapper around a migrated plan would hit the
-        // wrapper's default `try_to_proto` (`Ok(None)`) and find no fallback
-        // arm for the delegate.
+        // Resolve wrapper plans to their delegate before calling its hook.
         while let Some(delegate) = plan.downcast_delegate() {
             plan = delegate;
         }
 
-        // Self-serializing plans handle themselves via the `try_to_proto` hook
-        // (#22419). `Ok(None)` means "not migrated" and falls through to the
-        // central downcast chain below.
+        // Built-in plans serialize through their `try_to_proto` hook.
+        // `Ok(None)` falls through to the extension codec.
         let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
         };
         let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
         if let Some(node) = plan.try_to_proto(&encode_ctx)? {
-            return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>()
-            && let Some(node) =
-                protobuf::PhysicalPlanNode::try_from_lazy_memory_exec(exec)?
-        {
             return Ok(node);
         }
 
@@ -1381,7 +1410,13 @@ pub trait PhysicalPlanNodeExt: Sized {
 
                 Ok(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::Extension(
-                        protobuf::PhysicalExtensionNode { node: buf, inputs },
+                        protobuf::PhysicalExtensionNode {
+                            node: buf,
+                            inputs,
+                            // Codec-encoded plans stay anonymous on the wire:
+                            // the codec that wrote them decodes them back.
+                            plan_name: None,
+                        },
                     )),
                 })
             }
@@ -1397,235 +1432,57 @@ pub trait PhysicalPlanNodeExt: Sized {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Lookup-order policy, mirroring the one function decode already uses a
+        // layer down (payload -> codec; else registry -> codec fallback): a
+        // plan that named itself on the wire and is registered on this session
+        // decodes itself, no codec involved. Anything else — an unnamed node
+        // from a codec-encoded writer, or a name this session does not know —
+        // takes the codec chain exactly as before.
+        let registry = ctx
+            .task_ctx()
+            .session_config()
+            .get_extension::<ProtoDecoderRegistry>();
+        if let Some(registry) = registry.as_ref() {
+            let plan_decoder = ConverterPlanDecoder {
+                ctx,
+                proto_converter,
+            };
+            // The decoder receives the whole node, like every built-in
+            // `try_from_proto`, reads its own name off it and decodes its own
+            // children through the ctx. `None` here means no decoder claims
+            // the node; a decode *failure* is returned as-is rather than
+            // falling through to the codec.
+            if let Some(decoded) = decode_execution_plan(
+                registry,
+                self.node(),
+                &ExecutionPlanDecodeCtx::new(&plan_decoder),
+            ) {
+                return decoded;
+            }
+        }
+
         let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
             .inputs
             .iter()
             .map(|i| proto_converter.proto_to_execution_plan(i, ctx))
             .collect::<Result<_>>()?;
 
-        let extension_node = ctx.codec().try_decode(
-            extension.node.as_slice(),
-            &inputs,
-            ctx.task_ctx(),
-            proto_converter,
-        )?;
-
-        Ok(extension_node)
-    }
-
-    fn generate_series_name_to_str(name: protobuf::GenerateSeriesName) -> &'static str {
-        match name {
-            protobuf::GenerateSeriesName::GsGenerateSeries => "generate_series",
-            protobuf::GenerateSeriesName::GsRange => "range",
-        }
-    }
-
-    fn try_into_generate_series_physical_plan(
-        &self,
-        generate_series: &protobuf::GenerateSeriesNode,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema: SchemaRef = Arc::new(convert_required!(generate_series.schema)?);
-
-        let args = match &generate_series.args {
-            Some(protobuf::generate_series_node::Args::ContainsNull(args)) => {
-                GenSeriesArgs::ContainsNull {
-                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
-                        args.name(),
-                    ),
+        ctx.codec()
+            .try_decode(
+                extension.node.as_slice(),
+                &inputs,
+                ctx.task_ctx(),
+                proto_converter,
+            )
+            .map_err(|e| match extension.plan_name.as_deref() {
+                // The writer named the plan but this session has no decoder for
+                // it. Add that as context, rather than leaving only the codec's
+                // "unsupported plan" error to explain a missing registration.
+                Some(plan_name) => {
+                    unregistered_extension_plan_context(plan_name, registry.as_deref(), e)
                 }
-            }
-            Some(protobuf::generate_series_node::Args::Int64Args(args)) => {
-                GenSeriesArgs::Int64Args {
-                    start: args.start,
-                    end: args.end,
-                    step: args.step,
-                    include_end: args.include_end,
-                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
-                        args.name(),
-                    ),
-                }
-            }
-            Some(protobuf::generate_series_node::Args::TimestampArgs(args)) => {
-                let step_proto = args.step.as_ref().ok_or_else(|| {
-                    internal_datafusion_err!("Missing step in TimestampArgs")
-                })?;
-                let step = IntervalMonthDayNanoType::make_value(
-                    step_proto.months,
-                    step_proto.days,
-                    step_proto.nanos,
-                );
-                GenSeriesArgs::TimestampArgs {
-                    start: args.start,
-                    end: args.end,
-                    step,
-                    tz: args.tz.as_ref().map(|s| Arc::from(s.as_str())),
-                    include_end: args.include_end,
-                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
-                        args.name(),
-                    ),
-                }
-            }
-            Some(protobuf::generate_series_node::Args::DateArgs(args)) => {
-                let step_proto = args.step.as_ref().ok_or_else(|| {
-                    internal_datafusion_err!("Missing step in DateArgs")
-                })?;
-                let step = IntervalMonthDayNanoType::make_value(
-                    step_proto.months,
-                    step_proto.days,
-                    step_proto.nanos,
-                );
-                GenSeriesArgs::DateArgs {
-                    start: args.start,
-                    end: args.end,
-                    step,
-                    include_end: args.include_end,
-                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
-                        args.name(),
-                    ),
-                }
-            }
-            None => return internal_err!("Missing args in GenerateSeriesNode"),
-        };
-
-        let table = GenerateSeriesTable::new(Arc::clone(&schema), args);
-        let target_batch_size = usize_from_wire(
-            generate_series.target_batch_size,
-            "GenerateSeriesNode",
-            "target_batch_size",
-        )?;
-        if target_batch_size == 0 {
-            return plan_err!(
-                "GenerateSeriesNode: target_batch_size must be greater than 0"
-            );
-        }
-        let generator = table.as_generator(target_batch_size)?;
-
-        Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
-    }
-
-    fn str_to_generate_series_name(name: &str) -> Result<protobuf::GenerateSeriesName> {
-        match name {
-            "generate_series" => Ok(protobuf::GenerateSeriesName::GsGenerateSeries),
-            "range" => Ok(protobuf::GenerateSeriesName::GsRange),
-            _ => internal_err!("unknown name: {name}"),
-        }
-    }
-
-    fn try_from_lazy_memory_exec(
-        exec: &LazyMemoryExec,
-    ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        let generators = exec.generators();
-
-        // ensure we only have one generator
-        let [generator] = generators.as_slice() else {
-            return Ok(None);
-        };
-
-        let generator_guard = generator.read();
-
-        // Try to downcast to different generate_series types
-        if let Some(empty_gen) = generator_guard.as_any().downcast_ref::<Empty>() {
-            let schema = exec.schema();
-            let node = protobuf::GenerateSeriesNode {
-                schema: Some(schema.as_ref().try_into()?),
-                target_batch_size: 8192, // Default batch size
-                args: Some(protobuf::generate_series_node::Args::ContainsNull(
-                    protobuf::GenerateSeriesArgsContainsNull {
-                        name: protobuf::PhysicalPlanNode::str_to_generate_series_name(
-                            empty_gen.name(),
-                        )? as i32,
-                    },
-                )),
-            };
-
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::GenerateSeries(node)),
-            }));
-        }
-
-        let encode_target_batch_size =
-            |size| usize_to_wire::<u32>(size, "GenerateSeriesNode", "target_batch_size");
-        if let Some(int_64) = generator_guard
-            .as_any()
-            .downcast_ref::<GenericSeriesState<i64>>()
-        {
-            let schema = exec.schema();
-            let node = protobuf::GenerateSeriesNode {
-                schema: Some(schema.as_ref().try_into()?),
-                target_batch_size: encode_target_batch_size(int_64.batch_size())?,
-                args: Some(protobuf::generate_series_node::Args::Int64Args(
-                    protobuf::GenerateSeriesArgsInt64 {
-                        start: *int_64.start(),
-                        end: *int_64.end(),
-                        step: *int_64.step(),
-                        include_end: int_64.include_end(),
-                        name: protobuf::PhysicalPlanNode::str_to_generate_series_name(
-                            int_64.name(),
-                        )? as i32,
-                    },
-                )),
-            };
-
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::GenerateSeries(node)),
-            }));
-        }
-
-        if let Some(timestamp_args) = generator_guard
-            .as_any()
-            .downcast_ref::<GenericSeriesState<TimestampValue>>()
-        {
-            let schema = exec.schema();
-
-            let start = timestamp_args.start().value();
-            let end = timestamp_args.end().value();
-
-            let step_value = timestamp_args.step();
-
-            let step = Some(datafusion_proto_common::IntervalMonthDayNanoValue {
-                months: step_value.months,
-                days: step_value.days,
-                nanos: step_value.nanoseconds,
-            });
-            let include_end = timestamp_args.include_end();
-            let name = protobuf::PhysicalPlanNode::str_to_generate_series_name(
-                timestamp_args.name(),
-            )? as i32;
-
-            let args = match timestamp_args.current().tz_str() {
-                Some(tz) => protobuf::generate_series_node::Args::TimestampArgs(
-                    protobuf::GenerateSeriesArgsTimestamp {
-                        start,
-                        end,
-                        step,
-                        include_end,
-                        name,
-                        tz: Some(tz.to_string()),
-                    },
-                ),
-                None => protobuf::generate_series_node::Args::DateArgs(
-                    protobuf::GenerateSeriesArgsDate {
-                        start,
-                        end,
-                        step,
-                        include_end,
-                        name,
-                    },
-                ),
-            };
-
-            let node = protobuf::GenerateSeriesNode {
-                schema: Some(schema.as_ref().try_into()?),
-                target_batch_size: encode_target_batch_size(timestamp_args.batch_size())?,
-                args: Some(args),
-            };
-
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::GenerateSeries(node)),
-            }));
-        }
-
-        Ok(None)
+                None => e,
+            })
     }
 }
 
@@ -1704,6 +1561,13 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
 
     /// Decode a custom extension expression from `buf`.
     ///
+    /// Expressions can instead name themselves on the wire and be decoded by a
+    /// per-type decoder registered on the session — see
+    /// [`ExtensionExprFromProto`] and [`register_physical_expr`]. That path
+    /// resolves by name rather than by codec registration order, so two crates
+    /// claiming the same name collide at registration. This method stays the
+    /// fallback for everything unnamed or unregistered.
+    ///
     /// `inputs` holds the already-decoded children carried in the
     /// `PhysicalExtensionExprNode.inputs` field. If the codec instead embeds
     /// nested `PhysicalExprNode`s *inside* `buf`, decode them through
@@ -1716,6 +1580,8 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     /// cache-hits on its `expr_id` and re-shares one `Arc<dyn PhysicalExpr>`.
     ///
     /// [`parse_physical_expr`]: crate::physical_plan::from_proto::parse_physical_expr
+    /// [`ExtensionExprFromProto`]: datafusion_physical_plan::proto::ExtensionExprFromProto
+    /// [`register_physical_expr`]: datafusion_physical_plan::proto::register_physical_expr
     fn try_decode_expr(
         &self,
         _buf: &[u8],
@@ -2138,6 +2004,36 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         self.encode_protobuf(buf, |codec, data| codec.try_encode_udaf(node, data))
     }
+}
+
+/// Add "nothing is registered under this name" context to the error a
+/// `PhysicalExtensionCodec` returned for a node that *does* name its plan type.
+///
+/// Lists what *is* registered, because the usual cause is a session configured
+/// on the writing side but not on the reading one. The codec's own error is
+/// kept as the cause rather than reworded: the codec may have failed for a
+/// reason that has nothing to do with the missing registration, and a caller
+/// matching on the error kind must still see the kind the codec chose.
+fn unregistered_extension_plan_context(
+    plan_name: &str,
+    registry: Option<&ProtoDecoderRegistry>,
+    codec_error: DataFusionError,
+) -> DataFusionError {
+    let mut registered: Vec<&str> = registry
+        .map(|registry| execution_plan_names(registry).collect())
+        .unwrap_or_default();
+    registered.sort_unstable();
+    let registered = if registered.is_empty() {
+        "none".to_string()
+    } else {
+        registered.join(", ")
+    };
+    codec_error.context(format!(
+        "No decoder is registered for the extension ExecutionPlan '{plan_name}'. Register \
+         the plan in the ProtoDecoderRegistry attached to the decoding session's \
+         SessionConfig, or supply a PhysicalExtensionCodec that handles it. Registered \
+         extension plans: {registered}"
+    ))
 }
 
 /// Adapter backing [`ExecutionPlanEncodeCtx`] for plans migrated to the

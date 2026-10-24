@@ -245,7 +245,8 @@ impl EquivalenceClass {
     }
 
     /// Adds the given offset to all columns in the expressions inside this
-    /// class. This is used when schemas are appended, e.g. in joins.
+    /// class, keeping its constant value. This is used when schemas are
+    /// appended, e.g. in joins.
     pub fn try_with_offset(&self, offset: isize) -> Result<Self> {
         let mut cls = Self::default();
         for expr_result in self
@@ -256,6 +257,7 @@ impl EquivalenceClass {
         {
             cls.push(expr_result?);
         }
+        cls.constant.clone_from(&self.constant);
         Ok(cls)
     }
 }
@@ -823,7 +825,16 @@ impl EquivalenceGroup {
                     self.iter().cloned().chain(
                         right_equivalences
                             .iter()
-                            .map(|cls| cls.try_with_offset(left_size as _))
+                            .map(|cls| {
+                                let mut cls = cls.try_with_offset(left_size as _)?;
+                                // Rows without a match on the right side are
+                                // padded with NULLs, so its constants no
+                                // longer hold.
+                                if matches!(join_type, JoinType::Left | JoinType::Full) {
+                                    cls.constant = None;
+                                }
+                                Ok(cls)
+                            })
                             .collect::<Result<Vec<_>>>()?,
                     ),
                 );
@@ -1347,6 +1358,34 @@ mod tests {
             !group_of(&schema, &[("a", "b")])?
                 .has_same_classes(&group_of(&schema, &[("a", "b"), ("b", "c")])?)
         );
+
+        Ok(())
+    }
+
+    /// A constant on the right side of a join stays constant in the join
+    /// output, unless unmatched rows pad the right side with NULLs.
+    /// <https://github.com/apache/datafusion/issues/26283>
+    #[test]
+    fn test_join_keeps_right_constants() -> Result<()> {
+        let schema = abc_schema();
+        let mut right = EquivalenceGroup::default();
+        right.add_constant(ConstExpr::from(col("a", &schema)?));
+        // `a` of the right side is column 4 of the join output
+        let right_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 4));
+
+        for (join_type, expected) in [
+            (JoinType::Inner, true),
+            (JoinType::Right, true),
+            (JoinType::Left, false),
+            (JoinType::Full, false),
+        ] {
+            let joined = EquivalenceGroup::default().join(&right, &join_type, 4, &[])?;
+            assert_eq!(
+                joined.is_expr_constant(&right_a).is_some(),
+                expected,
+                "{join_type}"
+            );
+        }
 
         Ok(())
     }
