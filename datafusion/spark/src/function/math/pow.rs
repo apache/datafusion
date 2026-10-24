@@ -18,7 +18,8 @@
 //! Spark-compatible `pow` / `power` function.
 //!
 //! Unlike the default DataFusion (PostgreSQL) implementation, Spark returns
-//! `Infinity` for `pow(0, <negative>)` rather than raising an error.
+//! `Infinity` for `pow(0, <negative>)` rather than raising an error, and
+//! follows `java.lang.StrictMath.pow` for the special cases.
 
 use std::sync::Arc;
 
@@ -34,10 +35,12 @@ use datafusion_functions::math::power::PowerFunc;
 
 /// Spark-compatible implementation of `pow` / `power`.
 ///
-/// Behavioural difference from the DataFusion default:
+/// Behavioural differences from the DataFusion default:
 /// - `pow(0, <negative>)` → `Infinity`  (IEEE 754 / Spark semantics)
 ///   The default raises `"zero raised to a negative power is undefined"` to
 ///   match PostgreSQL.
+/// - A `NaN` exponent, or a base of `1` or `-1` with an infinite exponent,
+///   gives `NaN` (`StrictMath.pow` semantics) instead of `1`.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkPow {
     inner: PowerFunc,
@@ -100,13 +103,7 @@ impl ScalarUDFImpl for SparkPow {
         ] = args.args.as_slice()
         {
             // base and exp are &Option<f64>; Option<f64> is Copy.
-            let result = (*base).zip(*exp).map(|(base, exp)| {
-                if base == 0.0 && exp < 0.0 {
-                    f64::INFINITY
-                } else {
-                    base.powf(exp)
-                }
-            });
+            let result = (*base).zip(*exp).map(|(base, exp)| spark_pow(base, exp));
             return Ok(ColumnarValue::Scalar(ScalarValue::Float64(result)));
         }
 
@@ -125,20 +122,11 @@ impl ScalarUDFImpl for SparkPow {
             .downcast_ref::<Float64Array>()
             .expect("exponent must be Float64Array");
 
-        // Spark: 0^negative = +Infinity (covers both 0.0 and -0.0)
-        // IEEE 754: 0.0^-1.0 = +Infinity, -0.0^-1.0 = -Infinity
-        // Thus we need an explicit guard for base == 0.0 to ensure +Infinity.
         let result: Float64Array = base_f64
             .iter()
             .zip(exp_f64.iter())
             .map(|(base, exp)| match (base, exp) {
-                (Some(base), Some(exp)) => {
-                    if base == 0.0 && exp < 0.0 {
-                        Some(f64::INFINITY)
-                    } else {
-                        Some(base.powf(exp))
-                    }
-                }
+                (Some(base), Some(exp)) => Some(spark_pow(base, exp)),
                 _ => None,
             })
             .collect();
@@ -148,5 +136,19 @@ impl ScalarUDFImpl for SparkPow {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
+    }
+}
+
+/// `pow` with the special cases of Java's `StrictMath.pow`, which Spark uses.
+///
+/// `f64::powf` follows C99, which agrees with Java except that C99 returns `1`
+/// for `pow(1, NaN)` and `pow(±1, ±Infinity)`, where Java returns `NaN`.
+/// Both give `+Infinity` for `pow(0.0, <negative>)` and `-Infinity` for
+/// `pow(-0.0, <negative odd integer>)`.
+fn spark_pow(base: f64, exp: f64) -> f64 {
+    if exp.is_nan() || (base.abs() == 1.0 && exp.is_infinite()) {
+        f64::NAN
+    } else {
+        base.powf(exp)
     }
 }
