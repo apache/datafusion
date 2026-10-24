@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example execution_monitoring -- [all|mem_pool_exec_plan|mem_pool_tracking|tracing]
+//! cargo run --example execution_monitoring -- [all|mem_pool_exec_plan|mem_pool_tracking|stage_pause|stage_admission|stage_dependencies|tracing]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -33,11 +33,21 @@
 //! - `mem_pool_tracking`
 //!   (file: memory_pool_tracking.rs, desc: Demonstrates memory tracking)
 //!
+//! - `stage_pause`
+//!   (file: staged_execution.rs, desc: Pause and resume a boundary and measure its drain time)
+//!
+//! - `stage_admission`
+//!   (file: staged_execution.rs, desc: Await a shared memory budget before starting a boundary)
+//!
+//! - `stage_dependencies`
+//!   (file: staged_execution.rs, desc: Execute dependent boundaries in plan order)
+//!
 //! - `tracing`
 //!   (file: tracing.rs, desc: Demonstrates tracing integration)
 
 mod memory_pool_execution_plan;
 mod memory_pool_tracking;
+mod staged_execution;
 mod tracing;
 
 use datafusion::error::{DataFusionError, Result};
@@ -50,6 +60,9 @@ enum ExampleKind {
     All,
     MemPoolExecPlan,
     MemPoolTracking,
+    StagePause,
+    StageAdmission,
+    StageDependencies,
     Tracing,
 }
 
@@ -73,6 +86,11 @@ impl ExampleKind {
             }
             ExampleKind::MemPoolTracking => {
                 memory_pool_tracking::mem_pool_tracking().await?
+            }
+            ExampleKind::StagePause => staged_execution::pause_and_resume().await?,
+            ExampleKind::StageAdmission => staged_execution::memory_admission().await?,
+            ExampleKind::StageDependencies => {
+                staged_execution::dependent_boundaries().await?
             }
             ExampleKind::Tracing => tracing::tracing().await?,
         }
