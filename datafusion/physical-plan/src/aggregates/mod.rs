@@ -1161,8 +1161,9 @@ impl AggregateExec {
         Some(Transformed::yes(self))
     }
 
-    /// Combine adjacent partial and final aggregates in the given plan if they are
-    /// compatible. See comments at [`CombinePartialFinalAggregate`] for background.
+    /// Combines adjacent partial and final aggregates in the given plan if they are
+    /// compatible. See [`CombinePartialFinalAggregate`] for the invariants required
+    /// by this transformation.
     ///
     /// If input plan is not aggregate, this function will short-circuit with
     /// `Transformed::No`.
