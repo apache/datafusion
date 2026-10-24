@@ -53,7 +53,7 @@ use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan, Exec
 use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion_physical_optimizer::enforce_sorting::{PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort, parallelize_sorts, ensure_sorting};
-use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
+use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
@@ -306,7 +306,7 @@ async fn test_hash_join_interleaved_projection_preserves_parent_sort() -> Result
     config.execution.target_partitions = 10;
     let optimized_plan =
         EnsureRequirements::new().optimize(Arc::clone(&physical_plan), &config)?;
-    let optimized_plan = SanityCheckPlan::new().optimize(optimized_plan, &config)?;
+    check_plan_tree_sanity(&optimized_plan, &config.optimizer)?;
 
     assert_snapshot!(displayable(optimized_plan.as_ref()).indent(true), @r"
     SortPreservingMergeExec: [nullable_col@1 ASC]
@@ -3092,8 +3092,7 @@ async fn test_parallelize_sorts_remaps_index_through_reordering_projection() -> 
     // but kept the key `score@1` (valid only in the projection output), while its
     // child schema `[a, b, score]` has `score` at index 2 — so `SanityCheckPlan`
     // reports `does not satisfy order requirements: [...]. Child-0 order: []`.
-    SanityCheckPlan::new()
-        .optimize(Arc::clone(&optimized), &ConfigOptions::default())
+    check_plan_tree_sanity(&optimized, &ConfigOptions::default().optimizer)
         .unwrap_or_else(|e| {
             panic!(
                 "Sort enforcement produced a plan that fails SanityCheckPlan \
