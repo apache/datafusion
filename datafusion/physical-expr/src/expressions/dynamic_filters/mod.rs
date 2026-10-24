@@ -26,7 +26,7 @@ use arrow::datatypes::{DataType, Schema};
 use datafusion_common::internal_datafusion_err;
 use datafusion_common::{
     Result,
-    tree_node::{Transformed, TransformedResult, TreeNode},
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion},
 };
 
 use datafusion_expr::ColumnarValue;
@@ -80,7 +80,7 @@ pub struct DynamicFilterPhysicalExpr {
     /// when the inner generation hasn't changed (common — updates fire once
     /// per HashJoin build or once per TopK threshold refresh, but `evaluate`
     /// is called per batch), the cache serves the remapped expression
-    /// without re-running the `transform_up` tree walk in
+    /// without re-running the `transform_down` tree walk in
     /// [`Self::remap_children`]. Reset on `update()` (by generation bump)
     /// and populated with `None` on `with_new_children` (each derived
     /// filter owns its own cache).
@@ -234,7 +234,7 @@ impl DynamicFilterPhysicalExpr {
         if let Some(remapped_children) = remapped_children {
             // Remap the children to the new children
             // of the expression.
-            expr.transform_up(|child| {
+            expr.transform_down(|child| {
                 // Check if this is any of our original children
                 if let Some(pos) =
                     children.iter().position(|c| c.as_ref() == child.as_ref())
@@ -242,7 +242,9 @@ impl DynamicFilterPhysicalExpr {
                     // If so, remap it to the current children
                     // of the expression.
                     let new_child = Arc::clone(&remapped_children[pos]);
-                    Ok(Transformed::yes(new_child))
+                    // The replacement is already in the target schema. Do not
+                    // traverse it or remap any of its descendants again.
+                    Ok(Transformed::new(new_child, true, TreeNodeRecursion::Jump))
                 } else {
                     // Otherwise, just return the expression
                     Ok(Transformed::no(child))
