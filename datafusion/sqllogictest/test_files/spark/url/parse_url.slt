@@ -343,8 +343,28 @@ NULL
 statement error 'parse_url' does not support zero arguments
 SELECT parse_url();
 
+# A malformed URL is NULL unless ANSI mode is on, as in Spark
+query T
+SELECT parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');
+----
+NULL
+
+query T
+SELECT parse_url('http://example.com:99999/', 'HOST');
+----
+NULL
+
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
 query error DataFusion error: Execution error: The url is invalid: inva lid://spark\.apache\.org/path\?query=1\. Use `try_parse_url` to tolerate invalid URL and return NULL instead\. SQLSTATE: 22P02
 SELECT parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');
+
+query error DataFusion error: Execution error: InvalidPort
+SELECT parse_url('http://example.com:99999/', 'HOST');
+
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
 
 # NULL argument handling (Sail PR #1393)
 # NULL URL should return NULL
