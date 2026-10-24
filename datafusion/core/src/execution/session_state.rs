@@ -1733,14 +1733,24 @@ impl SessionStateBuilder {
                 Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>
             }),
             table_functions: table_functions.unwrap_or_default(),
-            scalar_functions: HashMap::new(),
-            higher_order_functions: HashMap::new(),
-            aggregate_functions: HashMap::new(),
-            window_functions: HashMap::new(),
+            scalar_functions: HashMap::with_capacity(
+                scalar_functions.as_ref().map_or(0, Vec::len),
+            ),
+            higher_order_functions: HashMap::with_capacity(
+                higher_order_functions.as_ref().map_or(0, Vec::len),
+            ),
+            aggregate_functions: HashMap::with_capacity(
+                aggregate_functions.as_ref().map_or(0, Vec::len),
+            ),
+            window_functions: HashMap::with_capacity(
+                window_functions.as_ref().map_or(0, Vec::len),
+            ),
             extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
             serializer_registry: serializer_registry
                 .unwrap_or_else(|| Arc::new(EmptySerializerRegistry)),
-            file_formats: HashMap::new(),
+            file_formats: HashMap::with_capacity(
+                file_formats.as_ref().map_or(0, Vec::len),
+            ),
             table_options: table_options.unwrap_or_else(|| {
                 TableOptions::default_from_session_config(config.options())
             }),

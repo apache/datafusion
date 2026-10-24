@@ -203,17 +203,10 @@ fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
     ctx
 }
 
-fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
+fn register_clickbench_hits_table(rt: &Runtime, path: &str) -> SessionContext {
     let ctx = SessionContext::new();
 
     // use an external table for clickbench benchmarks
-    let path =
-        if PathBuf::from(format!("{BENCHMARKS_PATH_1}{CLICKBENCH_DATA_PATH}")).exists() {
-            format!("{BENCHMARKS_PATH_1}{CLICKBENCH_DATA_PATH}")
-        } else {
-            format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")
-        };
-
     let sql =
         format!("CREATE EXTERNAL TABLE hits_raw STORED AS PARQUET LOCATION '{path}'");
 
@@ -355,15 +348,23 @@ fn union_orderby_query(n: usize) -> String {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    // CI uses the small checked-in fixture; performance runs use the full dataset.
+    let clickbench_data_path =
+        std::env::var("CLICKBENCH_DATA_PATH").unwrap_or_else(|_| {
+            let path = format!("{BENCHMARKS_PATH_1}{CLICKBENCH_DATA_PATH}");
+            if PathBuf::from(&path).exists() {
+                path
+            } else {
+                format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")
+            }
+        });
     // verify that we can load the clickbench data prior to running the benchmark
-    if !PathBuf::from(format!("{BENCHMARKS_PATH_1}{CLICKBENCH_DATA_PATH}")).exists()
-        && !PathBuf::from(format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")).exists()
-    {
-        panic!(
-            "benchmarks/data/hits_partitioned/ could not be loaded. Please run \
-         'benchmarks/bench.sh data clickbench_partitioned' prior to running this benchmark"
-        )
-    }
+    assert!(
+        PathBuf::from(&clickbench_data_path).exists(),
+        "{clickbench_data_path} could not be loaded. Please run \
+         'benchmarks/bench.sh data clickbench_partitioned' prior to running this benchmark \
+         or set CLICKBENCH_DATA_PATH to an existing dataset"
+    );
 
     let ctx = create_context();
     let rt = Runtime::new().unwrap();
@@ -693,7 +694,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             )))
             .collect::<Vec<_>>();
 
-    let clickbench_ctx = register_clickbench_hits_table(&rt);
+    let clickbench_ctx = register_clickbench_hits_table(&rt, &clickbench_data_path);
 
     // for (i, sql) in clickbench_queries.iter().enumerate() {
     //     c.bench_function(&format!("logical_plan_clickbench_q{}", i + 1), |b| {

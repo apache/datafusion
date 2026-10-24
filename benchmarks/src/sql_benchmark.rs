@@ -22,7 +22,7 @@ use arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::MemTable;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{ExecutionPlan, execute_stream};
+use datafusion::physical_plan::{ExecutionPlan, collect, execute_stream};
 use datafusion::prelude::{CsvReadOptions, DataFrame, SessionContext};
 use datafusion_common::config::CsvOptions;
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
@@ -71,6 +71,10 @@ pub struct SqlBenchmark {
     plans_validated: bool,
     /// Stores the last run results if needed so they can be compared or persisted.
     last_results: Option<Vec<RecordBatch>>,
+    /// Print plans and execution metrics for each run query.
+    debug: bool,
+    /// Whether diagnostics have been printed for a successful run.
+    diagnostics_printed: bool,
     /// echo statements
     echo: Vec<String>,
 }
@@ -111,6 +115,8 @@ impl SqlBenchmark {
             assert_queries: vec![],
             is_loaded: false,
             last_results: None,
+            debug: false,
+            diagnostics_printed: false,
             echo: vec![],
         };
         insert_replacement(
@@ -123,6 +129,13 @@ impl SqlBenchmark {
         bm.process_file(ctx, &path).await?;
 
         Ok(bm)
+    }
+
+    /// Enable plan diagnostics for run queries, including post-execution metrics.
+    /// Output occurs on the first successful run, including preparation or warm-up,
+    /// and affects that execution's timing.
+    pub fn set_debug(&mut self, debug: bool) {
+        self.debug = debug;
     }
 
     /// Initializes the benchmark by executing `load` and `init` queries.
@@ -246,13 +259,18 @@ impl SqlBenchmark {
                         );
 
                         let df = ctx.sql(query).await?;
-                        if !self.expect.is_empty() && !self.plans_validated {
-                            let physical_plan = df.create_physical_plan().await?;
+                        let result_schema = Arc::new(df.schema().as_arrow().clone());
+                        let physical_plan = self.create_physical_plan(df).await?;
+
+                        if !self.plans_validated {
                             self.validate_expected_plan(&physical_plan)?;
                         }
 
-                        let result_schema = Arc::new(df.schema().as_arrow().clone());
-                        let mut batches = df.collect().await?;
+                        let mut batches =
+                            collect(Arc::clone(&physical_plan), ctx.task_ctx()).await?;
+
+                        self.print_plan_metrics(&physical_plan);
+
                         // save the output for select/with queries
                         if is_result_statement(query) {
                             if batches.is_empty() {
@@ -299,6 +317,7 @@ impl SqlBenchmark {
         // Every `run` query was planned and checked above, and a plan does not
         // change between iterations, so later iterations skip the check.
         self.plans_validated = true;
+        self.diagnostics_printed |= self.debug;
 
         // Store results for verification
         self.last_results = Some(result);
@@ -615,6 +634,36 @@ impl SqlBenchmark {
         Ok(())
     }
 
+    async fn create_physical_plan(
+        &self,
+        df: DataFrame,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if !self.debug || self.diagnostics_printed {
+            return df.create_physical_plan().await;
+        }
+
+        let (state, plan) = df.into_parts();
+        println!("=== Logical plan ===\n{plan}\n");
+        let plan = state.optimize(&plan)?;
+        println!("=== Optimized logical plan ===\n{plan}\n");
+        let physical_plan = state.create_physical_plan(&plan).await?;
+        println!(
+            "=== Physical plan ===\n{}\n",
+            DisplayableExecutionPlan::new(physical_plan.as_ref()).indent(true)
+        );
+        Ok(physical_plan)
+    }
+
+    fn print_plan_metrics(&self, physical_plan: &Arc<dyn ExecutionPlan>) {
+        if self.debug && !self.diagnostics_printed {
+            println!(
+                "=== Physical plan with metrics ===\n{}\n",
+                DisplayableExecutionPlan::with_metrics(physical_plan.as_ref())
+                    .indent(true)
+            );
+        }
+    }
+
     async fn execute_sql_without_result_buffering(
         &self,
         sql: &str,
@@ -624,12 +673,12 @@ impl SqlBenchmark {
         let mut row_count = 0;
 
         let df = ctx.sql(sql).await?;
-        let physical_plan = df.create_physical_plan().await?;
+        let physical_plan = self.create_physical_plan(df).await?;
 
         if validate_plan {
             self.validate_expected_plan(&physical_plan)?;
         }
-        let mut stream = execute_stream(physical_plan, ctx.task_ctx())?;
+        let mut stream = execute_stream(Arc::clone(&physical_plan), ctx.task_ctx())?;
 
         while let Some(batch) = stream.next().await {
             row_count += batch?.num_rows();
@@ -638,6 +687,7 @@ impl SqlBenchmark {
             // to reduce memory pressure
         }
 
+        self.print_plan_metrics(&physical_plan);
         Ok(row_count)
     }
 
