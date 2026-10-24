@@ -56,6 +56,12 @@ The extension planners intercept specific parts of the SQL AST during the
 `SqlToRel` phase and allow you to customize how they are converted to DataFusion's
 logical plan.
 
+The `Parser` stage checks syntax only, and validation that depends on schemas,
+types, or the catalog belongs on the `LogicalPlan` rather than in the parser or
+the SQL planner. See [Syntax vs Semantics] for where to put such checks.
+
+[syntax vs semantics]: ../contributor-guide/specification/syntax-vs-semantics.md
+
 ## Extension Points
 
 DataFusion provides three planner traits for extending SQL:

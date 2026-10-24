@@ -33,3 +33,4 @@ specifications:
 
    invariants
    output-field-name-semantic
+   syntax-vs-semantics
