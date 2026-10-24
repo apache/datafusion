@@ -113,7 +113,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let arg_field = Field::new("a", DataType::Utf8, false).into();
     let arg_fields = vec![arg_field];
     let mut options = ConfigOptions::default();
-    options.execution.time_zone = Some("UTC".into());
+    options.execution.time_zone = Some("UTC".parse().unwrap());
     let config_options = Arc::new(options);
 
     let to_timestamp_udf = to_timestamp(config_options.as_ref());

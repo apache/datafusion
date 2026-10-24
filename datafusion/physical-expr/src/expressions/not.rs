@@ -189,11 +189,12 @@ impl PhysicalExpr for NotExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self { arg } = self;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(Box::new(
                 protobuf::PhysicalNot {
-                    expr: Some(Box::new(ctx.encode_child(&self.arg)?)),
+                    expr: Some(Box::new(ctx.encode_child(arg)?)),
                 },
             ))),
         }))
@@ -215,8 +216,8 @@ impl NotExpr {
             protobuf::physical_expr_node::ExprType::NotExpr,
             "NotExpr",
         );
-        let expr =
-            ctx.decode_required_expression(not_expr.expr.as_deref(), "NotExpr", "expr")?;
+        let protobuf::PhysicalNot { expr } = not_expr.as_ref();
+        let expr = ctx.decode_required_expression(expr.as_deref(), "NotExpr", "expr")?;
 
         Ok(Arc::new(NotExpr::new(expr)))
     }

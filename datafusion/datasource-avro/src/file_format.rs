@@ -134,7 +134,7 @@ impl FileFormat for AvroFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        let mut schemas = vec![];
+        let mut schemas = Vec::with_capacity(objects.len());
         for object in objects {
             let r = store.as_ref().get(&object.location).await?;
             let schema = match r.payload {

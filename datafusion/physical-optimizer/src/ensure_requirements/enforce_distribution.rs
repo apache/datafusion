@@ -48,7 +48,7 @@ use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     EquivalenceProperties, OrderingRequirements, PhysicalExpr, PhysicalExprRef,
-    physical_exprs_equal,
+    PhysicalSortExpr, physical_exprs_equal,
 };
 use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::aggregates::{
@@ -444,10 +444,10 @@ fn shift_right_required(
 ///         bottom left join on(b, a, c)
 ///         bottom right join on(c, b, a)
 ///
-/// Compared to the Top-Down reordering process, this Bottom-Up approach is much simpler, but might not reach a best result.
-/// The Bottom-Up approach will be useful in future if we plan to support storage partition-wised Joins.
-/// In that case, the datasources/tables might be pre-partitioned and we can't adjust the key ordering of the datasources
-/// and then can't apply the Top-Down reordering process.
+/// This bottom-up pass aligns join keys with existing hash partitioning.
+/// Range alignment happens in [`ensure_distribution_with_stats`], independently
+/// of the configured join-key reordering strategy, using the children's
+/// partitioning after bottom-up enforcement.
 pub fn reorder_join_keys_to_inputs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -554,6 +554,159 @@ fn reorder_current_join_keys(
     }
 }
 
+/// Finds the permutation that aligns this input's join keys with its range keys.
+fn range_join_key_positions(
+    input: &dyn ExecutionPlan,
+    join_keys: &[PhysicalExprRef],
+) -> Option<Vec<usize>> {
+    let Partitioning::Range(range) = input.output_partitioning() else {
+        return None;
+    };
+
+    if range.partition_count() <= 1 || join_keys.len() != range.ordering().len() {
+        return None;
+    }
+
+    let expected = range
+        .ordering()
+        .iter()
+        .map(|sort_expr| Arc::clone(&sort_expr.expr))
+        .collect::<Vec<_>>();
+
+    expected_expr_positions(join_keys, &expected).or_else(|| {
+        let eq_group = input.equivalence_properties().eq_group();
+        if eq_group.is_empty() {
+            return None;
+        }
+
+        let normalized_keys = join_keys
+            .iter()
+            .map(|expr| eq_group.normalize_expr(Arc::clone(expr)))
+            .collect::<Vec<_>>();
+        let normalized_expected = expected
+            .iter()
+            .map(|expr| eq_group.normalize_expr(Arc::clone(expr)))
+            .collect::<Vec<_>>();
+
+        expected_expr_positions(&normalized_keys, &normalized_expected)
+    })
+}
+
+/// Returns true when an unbounded input does not already satisfy the
+/// proposed ordering. Conservatively avoid adding sorting requirements
+/// to unbounded inputs during join-key alignment.
+fn forces_unbounded_sort<'a>(
+    input: &Arc<dyn ExecutionPlan>,
+    keys: impl Iterator<Item = &'a PhysicalExprRef>,
+    sort_options: &[SortOptions],
+) -> Result<bool> {
+    if !input.boundedness().is_unbounded() {
+        return Ok(false);
+    }
+    let sort_exprs = keys
+        .zip(sort_options)
+        .map(|(expr, options)| PhysicalSortExpr::new(Arc::clone(expr), *options));
+    // A repartition of a multi-partition input drops its per-partition
+    // constants, so do not rely on them to satisfy the ordering.
+    let mut eq_properties = input.equivalence_properties().clone();
+    if input.output_partitioning().partition_count() > 1 {
+        eq_properties.clear_per_partition_constants();
+    }
+    Ok(!eq_properties.ordering_satisfy(sort_exprs)?)
+}
+
+/// Returns the non-identity permutation that aligns `on` with a
+/// range-partitioned input, trying the left input first and then the right.
+fn range_aligned_join_key_positions(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
+) -> Option<Vec<usize>> {
+    if !matches!(left.output_partitioning(), Partitioning::Range(_))
+        && !matches!(right.output_partitioning(), Partitioning::Range(_))
+    {
+        return None;
+    }
+
+    let keys = extract_join_keys(on);
+    let positions = range_join_key_positions(left.as_ref(), &keys.left_keys)
+        .or_else(|| range_join_key_positions(right.as_ref(), &keys.right_keys))?;
+
+    if positions.iter().copied().eq(0..positions.len()) {
+        return None;
+    }
+
+    Some(positions)
+}
+
+/// Aligns a partitioned join's equi-key pairs with an existing input range
+/// ordering, so compatible Range inputs satisfy the join's co-partitioning
+/// requirement without a repartition. Covers partitioned hash joins and
+/// sort-merge joins. The permutation moves whole key pairs and, for
+/// sort-merge joins, the matching `sort_options`.
+fn reorder_join_keys_to_range_inputs(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
+        if join.mode != PartitionMode::Partitioned {
+            return Ok(plan);
+        }
+        let Some(positions) =
+            range_aligned_join_key_positions(&join.left, &join.right, &join.on)
+        else {
+            return Ok(plan);
+        };
+        let new_on = positions
+            .into_iter()
+            .map(|index| join.on[index].clone())
+            .collect();
+        return join.builder().with_on(new_on).build_exec();
+    }
+
+    if let Some(join) = plan.downcast_ref::<SortMergeJoinExec>() {
+        let Some(positions) =
+            range_aligned_join_key_positions(&join.left, &join.right, &join.on)
+        else {
+            return Ok(plan);
+        };
+        let new_on: Vec<_> = positions
+            .iter()
+            .map(|&index| join.on[index].clone())
+            .collect();
+        let new_sort_options: Vec<_> = positions
+            .iter()
+            .map(|&index| join.sort_options[index])
+            .collect();
+        // Keep the original key order unless every unbounded input already
+        // satisfies the reordered requirements, avoiding a potentially blocking sort.
+        if forces_unbounded_sort(
+            &join.left,
+            new_on.iter().map(|(left_key, _)| left_key),
+            &new_sort_options,
+        )? || forces_unbounded_sort(
+            &join.right,
+            new_on.iter().map(|(_, right_key)| right_key),
+            &new_sort_options,
+        )? {
+            return Ok(plan);
+        }
+        // `try_new` resets `projection`; restore it so the output schema is unchanged.
+        let reordered = SortMergeJoinExec::try_new(
+            Arc::clone(&join.left),
+            Arc::clone(&join.right),
+            new_on,
+            join.filter.clone(),
+            join.join_type,
+            new_sort_options,
+            join.null_equality,
+        )?
+        .with_projection(join.projection.clone())?;
+        return Ok(Arc::new(reordered) as _);
+    }
+
+    Ok(plan)
+}
+
 fn try_reorder(
     join_keys: JoinKeyPairs,
     expected: &[Arc<dyn PhysicalExpr>],
@@ -605,8 +758,8 @@ fn try_reorder(
         return (join_keys, None);
     };
 
-    let mut new_left_keys = vec![];
-    let mut new_right_keys = vec![];
+    let mut new_left_keys = Vec::with_capacity(positions.len());
+    let mut new_right_keys = Vec::with_capacity(positions.len());
     for pos in positions.iter() {
         new_left_keys.push(Arc::clone(&join_keys.left_keys[*pos]));
         new_right_keys.push(Arc::clone(&join_keys.right_keys[*pos]));
@@ -1003,14 +1156,14 @@ fn get_repartition_requirement_status(
     let children = plan.children();
     let rr_beneficial = plan.benefits_from_input_partitioning();
     let requirements = plan.input_distribution_requirements().into_per_child();
-    let mut repartition_status_flags = vec![];
+    let mut repartition_status_flags = Vec::with_capacity(children.len());
     for (child, requirement, roundrobin_beneficial) in
         izip!(children.into_iter(), requirements, rr_beneficial)
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
         let roundrobin_beneficial_stats = match stats_ctx
-            .compute(child.as_ref(), &StatisticsArgs::new())?
+            .compute_arc(child, &StatisticsArgs::new())?
             .num_rows
         {
             Precision::Exact(n_rows) => n_rows > batch_size,
@@ -1063,10 +1216,8 @@ struct PlanSize {
 }
 
 impl PlanSize {
-    fn from_plan(plan: &dyn ExecutionPlan) -> Self {
-        let stats = StatisticsContext::new()
-            .compute(plan, &StatisticsArgs::new())
-            .ok();
+    fn from_plan(plan: &Arc<dyn ExecutionPlan>, stats_ctx: &StatisticsContext) -> Self {
+        let stats = stats_ctx.compute_arc(plan, &StatisticsArgs::new()).ok();
         Self {
             byte_size: stats
                 .as_ref()
@@ -1124,6 +1275,7 @@ fn enforce_distribution_relationships(
     input_distributions: &InputDistributionRequirements,
     children: &mut [DistributionChildState],
     target_partitions: usize,
+    stats_ctx: &StatisticsContext,
 ) -> Result<()> {
     let mut repartitioned_for_relationship = vec![false; children.len()];
 
@@ -1162,53 +1314,52 @@ fn enforce_distribution_relationships(
             }
         }
 
-        let best_satisfied_child: Option<(usize, Partitioning)> = match satisfied_children
-            .len()
-        {
-            0 => None,
-            1 => satisfied_children
-                .into_iter()
-                .next()
-                .map(|(i, p, _)| (i, p)),
-            _ => {
-                // Prefer native partitioned children over newly repartitioned ones
-                let native_children: Vec<_> = satisfied_children
-                    .iter()
-                    .filter(|(_, _, is_native)| *is_native)
-                    .collect();
-                if native_children.len() == 1 {
-                    let (i, p, _) = native_children[0];
-                    Some((*i, p.clone()))
-                } else {
-                    let pool = if !native_children.is_empty() {
-                        native_children
-                    } else {
-                        satisfied_children.iter().collect()
-                    };
-                    let candidates: Vec<_> = pool
-                        .into_iter()
-                        .map(|(idx, part, _)| {
-                            let size =
-                                PlanSize::from_plan(children[*idx].context.plan.as_ref());
-                            (size, *idx, part.clone())
-                        })
-                        .collect();
-
-                    // Prefer a unique, strictly larger winner (`size_a > size_b`).
-                    // Otherwise, fall back to standard distribution rather
-                    // than choosing an arbitrary reference.
-                    candidates
+        let best_satisfied_child: Option<(usize, Partitioning)> =
+            match satisfied_children.len() {
+                0 => None,
+                1 => satisfied_children
+                    .into_iter()
+                    .next()
+                    .map(|(i, p, _)| (i, p)),
+                _ => {
+                    // Prefer native partitioned children over newly repartitioned ones
+                    let native_children: Vec<_> = satisfied_children
                         .iter()
-                        .find(|(size_a, idx_a, _)| {
-                            size_a.is_known()
-                                && candidates.iter().all(|(size_b, idx_b, _)| {
-                                    idx_a == idx_b || size_a > size_b
-                                })
-                        })
-                        .map(|(_, idx, part)| (*idx, part.clone()))
+                        .filter(|(_, _, is_native)| *is_native)
+                        .collect();
+                    if native_children.len() == 1 {
+                        let (i, p, _) = native_children[0];
+                        Some((*i, p.clone()))
+                    } else {
+                        let pool = if !native_children.is_empty() {
+                            native_children
+                        } else {
+                            satisfied_children.iter().collect()
+                        };
+                        let candidates: Vec<_> = pool
+                            .into_iter()
+                            .map(|(idx, part, _)| {
+                                let plan = &children[*idx].context.plan;
+                                let size = PlanSize::from_plan(plan, stats_ctx);
+                                (size, *idx, part.clone())
+                            })
+                            .collect();
+
+                        // Prefer a unique, strictly larger winner (`size_a > size_b`).
+                        // Otherwise, fall back to standard distribution rather
+                        // than choosing an arbitrary reference.
+                        candidates
+                            .iter()
+                            .find(|(size_a, idx_a, _)| {
+                                size_a.is_known()
+                                    && candidates.iter().all(|(size_b, idx_b, _)| {
+                                        idx_a == idx_b || size_a > size_b
+                                    })
+                            })
+                            .map(|(_, idx, part)| (*idx, part.clone()))
+                    }
                 }
-            }
-        };
+            };
 
         // Validate that best_satisfied_child can be adapted across all unsatisfied children in the group
         let best_satisfied_child =
@@ -1350,12 +1501,16 @@ pub fn ensure_distribution(
 /// can first repartition (or newly partition) at the datasources -- these
 /// source partitions may be later repartitioned with additional data exchange operators.
 ///
+/// Before reading distribution requirements, this function aligns partitioned
+/// hash-join and sort-merge-join keys with an existing input Range ordering.
+/// Reordering whole key pairs preserves the join condition while allowing
+/// compatible Range inputs to avoid repartitioning. Distribution satisfaction
+/// remains positional, so incompatible layouts still require repartitioning.
+///
 /// `stats_ctx` carries the memoization cache used to answer the child
 /// statistics queries behind the repartition decisions. Share one context
 /// across the whole traversal so each subtree is computed once rather than
-/// once per ancestor. The cache is keyed by raw plan-node pointers, so reset
-/// it (via [`StatisticsContext::reset_cache`]) after any node whose plan
-/// pointer actually changed.
+/// once per ancestor.
 #[expect(
     deprecated,
     reason = "HashPartitioned is accepted during the KeyPartitioned migration"
@@ -1419,6 +1574,10 @@ pub fn ensure_distribution_with_stats(
     {
         plan = updated_window;
     }
+
+    // Align against the children's current range partitioning before deriving
+    // requirements that could otherwise introduce unnecessary repartitioning.
+    plan = reorder_join_keys_to_range_inputs(plan)?;
 
     // For joins in partitioned mode, we need exact hash matching between
     // both sides, so subset partitioning logic must be disabled.
@@ -1668,6 +1827,7 @@ pub fn ensure_distribution_with_stats(
         &input_distributions,
         &mut children,
         target_partitions,
+        stats_ctx,
     )?;
 
     let children = children

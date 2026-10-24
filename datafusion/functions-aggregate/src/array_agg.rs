@@ -631,7 +631,12 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             None
         };
 
-        let mut entries = Vec::new();
+        // Without a filter or nulls to skip, every row becomes an entry
+        let mut entries = if opt_filter.is_none() && nulls.is_none() {
+            Vec::with_capacity(group_indices.len())
+        } else {
+            Vec::new()
+        };
 
         for (row_idx, &group_idx) in group_indices.iter().enumerate() {
             // Skip filtered rows
@@ -757,7 +762,12 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         let list_values = input_list.values();
         let list_offsets = input_list.offsets();
 
-        let mut entries = Vec::new();
+        // Without null rows, every value in the offset span becomes an entry
+        let mut entries = if input_list.null_count() == 0 {
+            Vec::with_capacity(offset_span(list_offsets).1)
+        } else {
+            Vec::new()
+        };
 
         for (row_idx, &group_idx) in group_indices.iter().enumerate() {
             if input_list.is_null(row_idx) {
@@ -1682,6 +1692,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                     "ordered array_agg ordering state must contain Struct values"
                 )
             })?;
+        let mut ordering_columns = Vec::with_capacity(ordering_struct.num_columns());
         for row_idx in 0..array_agg_values.len() {
             let payload_len = if array_agg_values.is_null(row_idx) {
                 0
@@ -1701,11 +1712,13 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             let payload = array_agg_values.value(row_idx);
             let ordering_start = agg_orderings.value_offsets()[row_idx] as usize;
             let len = payload.len();
-            let ordering_columns = ordering_struct
-                .columns()
-                .iter()
-                .map(|column| column.slice(ordering_start, len))
-                .collect::<Vec<_>>();
+            ordering_columns.clear();
+            ordering_columns.extend(
+                ordering_struct
+                    .columns()
+                    .iter()
+                    .map(|column| column.slice(ordering_start, len)),
+            );
             self.append_sorted_run(&payload, &ordering_columns)?;
         }
         self.can_extend_preordered_run = false;

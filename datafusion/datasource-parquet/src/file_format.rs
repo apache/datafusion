@@ -17,7 +17,7 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -45,6 +45,7 @@ use datafusion_datasource::file_format::{
 use datafusion_common::Statistics;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::encryption::FileDecryptionProperties;
+use datafusion_common::parquet_config::DFTimeUnit;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     DEFAULT_PARQUET_EXTENSION, DataFusionError, GetExt, Result, internal_datafusion_err,
@@ -61,9 +62,7 @@ use datafusion_session::Session;
 
 use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
 use crate::reader::CachedParquetFileReaderFactory;
-use crate::source::{
-    ParquetSource, parse_coerce_int96_string, parse_coerce_int96_tz_string,
-};
+use crate::source::{ParquetSource, parse_coerce_int96_tz_string};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
@@ -99,7 +98,7 @@ impl FileFormatFactory for ParquetFormatFactory {
     fn create(
         &self,
         state: &dyn Session,
-        format_options: &std::collections::HashMap<String, String>,
+        format_options: &HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         let parquet_options = match &self.options {
             None => {
@@ -242,14 +241,14 @@ impl ParquetFormat {
     /// Get [`coerce_int96`]
     ///
     /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
-    pub fn coerce_int96(&self) -> Option<String> {
-        self.options.global.coerce_int96.clone()
+    pub fn coerce_int96(&self) -> Option<DFTimeUnit> {
+        self.options.global.coerce_int96
     }
 
     /// Set [`coerce_int96`]
     ///
     /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
-    pub fn with_coerce_int96(mut self, time_unit: Option<String>) -> Self {
+    pub fn with_coerce_int96(mut self, time_unit: Option<DFTimeUnit>) -> Self {
         self.options.global.coerce_int96 = time_unit;
         self
     }
@@ -270,6 +269,34 @@ fn clear_metadata(
             .collect::<Fields>();
         Schema::new(fields)
     })
+}
+
+/// Marks every field that is missing from at least one of the `file_count`
+/// files as nullable: reading such a file yields nulls for that column.
+fn mark_partially_present_fields_nullable(
+    schema: Schema,
+    presence: &HashMap<String, usize>,
+    file_count: usize,
+) -> Schema {
+    if presence.values().all(|&count| count == file_count) {
+        return schema;
+    }
+    let metadata = schema.metadata().clone();
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let present_everywhere = presence
+                .get(field.name())
+                .is_some_and(|&count| count == file_count);
+            if present_everywhere || field.is_nullable() {
+                Arc::clone(field)
+            } else {
+                Arc::new(field.as_ref().clone().with_nullable(true))
+            }
+        })
+        .collect::<Vec<_>>();
+    Schema::new_with_metadata(fields, metadata)
 }
 
 #[cfg(feature = "parquet_encryption")]
@@ -333,10 +360,7 @@ impl FileFormat for ParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        let coerce_int96 = match self.coerce_int96() {
-            Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
-            None => None,
-        };
+        let coerce_int96 = self.coerce_int96().map(arrow::datatypes::TimeUnit::from);
         let coerce_int96_tz = self
             .options
             .global
@@ -356,14 +380,16 @@ impl FileFormat for ParquetFormat {
                     &object.location,
                 )
                 .await?;
-                let result = DFParquetMetadata::new(store.as_ref(), object)
+                let meta = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(self.metadata_size_hint())
                     .with_decryption_properties(file_decryption_properties)
                     .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
                     .with_coerce_int96(coerce_int96)
                     .with_coerce_int96_tz(coerce_int96_tz.clone())
-                    .fetch_schema_with_location()
-                    .await?;
+                    .with_enable_rle_to_dictionary(
+                        self.options.global.enable_rle_to_dictionary,
+                    );
+                let result = meta.fetch_schema_with_location().await?;
                 Ok::<_, DataFusionError>(result)
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -398,13 +424,34 @@ impl FileFormat for ParquetFormat {
         }
         drop(seen);
 
-        let schemas = schemas.into_iter().map(|(_, schema)| schema);
+        // A column that some files do not have is read as all-null from those
+        // files, so the merged table schema must declare it nullable even
+        // when every file that has it declares it required. `Schema::try_merge`
+        // only widens nullability for fields that appear in more than one
+        // schema, so track presence separately.
+        let file_count = schemas.len();
+        let mut presence: HashMap<String, usize> = HashMap::new();
+        for (_, schema) in &schemas {
+            for field in schema.fields() {
+                *presence.entry(field.name().clone()).or_insert(0) += 1;
+            }
+        }
+
+        // Normalize dict-promoted schemas before merging so mixed dict/plain files merge cleanly.
+        let mut schemas: Vec<Schema> =
+            schemas.into_iter().map(|(_, schema)| schema).collect();
+        if self.options.global.enable_rle_to_dictionary {
+            schemas = crate::schema_coercion::uniform_dict_schemas(schemas);
+        }
 
         let schema = if self.skip_metadata() {
             Schema::try_merge(clear_metadata(schemas))
         } else {
             Schema::try_merge(schemas)
         }?;
+
+        let schema =
+            mark_partially_present_fields_nullable(schema, &presence, file_count);
 
         let schema = if self.binary_as_string() {
             transform_binary_to_string(&schema)
@@ -520,7 +567,7 @@ impl FileFormat for ParquetFormat {
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
         if let Some(metadata_size_hint) = metadata_size_hint {
-            source = source.with_metadata_size_hint(metadata_size_hint)
+            source = source.with_metadata_size_hint(metadata_size_hint);
         }
 
         source = self.set_source_encryption_factory(source, state)?;
@@ -672,6 +719,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             compression_opt: global_options.global.compression.map(|compression| {
                 parquet_options::CompressionOpt::Compression(compression.to_string())
             }),
+            enable_rle_to_dictionary: global_options.global.enable_rle_to_dictionary,
             dictionary_enabled_opt: global_options.global.dictionary_enabled.map(|enabled| {
                 parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
             }),
@@ -681,6 +729,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             }),
             max_row_group_size: global_options.global.max_row_group_size as u64,
             max_in_list_size: global_options.global.max_in_list_size as u64,
+            row_group_range_assignment: global_options.global.row_group_range_assignment.to_string(),
             created_by: global_options.global.created_by.clone(),
             column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
                 parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)
@@ -690,7 +739,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             }),
             data_page_row_count_limit: global_options.global.data_page_row_count_limit as u64,
             encoding_opt: global_options.global.encoding.map(|encoding| {
-                parquet_options::EncodingOpt::Encoding(encoding)
+                parquet_options::EncodingOpt::Encoding(encoding.to_string())
             }),
             bloom_filter_on_read: global_options.global.bloom_filter_on_read,
             bloom_filter_on_write: global_options.global.bloom_filter_on_write,
@@ -706,8 +755,11 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             schema_force_view_types: global_options.global.schema_force_view_types,
             binary_as_string: global_options.global.binary_as_string,
             skip_arrow_metadata: global_options.global.skip_arrow_metadata,
-            coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
-                parquet_options::CoerceInt96Opt::CoerceInt96(compression)
+            write_row_group_number_distinct_values: global_options
+                .global
+                .write_row_group_number_distinct_values,
+            coerce_int96_opt: global_options.global.coerce_int96.map(|time_unit| {
+                parquet_options::CoerceInt96Opt::CoerceInt96(time_unit.to_string())
             }),
             coerce_int96_tz_opt: global_options.global.coerce_int96_tz.map(|tz| {
                 parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz)

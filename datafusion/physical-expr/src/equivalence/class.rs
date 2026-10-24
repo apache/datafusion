@@ -737,7 +737,8 @@ impl EquivalenceGroup {
         // The key is the source expression, and the value is the equivalence
         // class that contains the corresponding target expression.
         let mut new_constants = vec![];
-        let mut new_classes = IndexMap::<_, EquivalenceClass>::new();
+        let mut new_classes =
+            IndexMap::<_, EquivalenceClass>::with_capacity(mapping.len());
         for (source, targets) in mapping.iter() {
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and

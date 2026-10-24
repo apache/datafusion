@@ -149,7 +149,8 @@ fn general_array_reverse<O: OffsetSizeTrait>(
     field: &FieldRef,
 ) -> Result<ArrayRef> {
     let values = array.values();
-    let mut offsets = vec![O::usize_as(0)];
+    let mut offsets = Vec::with_capacity(array.len() + 1);
+    offsets.push(O::usize_as(0));
     let mut indices: Vec<O> = Vec::with_capacity(offset_span_len(array.offsets()));
 
     for (row_index, (&start, &end)) in array.offsets().iter().tuple_windows().enumerate()

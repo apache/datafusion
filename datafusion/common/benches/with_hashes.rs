@@ -18,9 +18,10 @@
 //! Benchmarks for `with_hashes` function
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, GenericStringArray, Int32Array,
-    Int64Array, ListArray, MapArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray,
-    RunArray, StringViewArray, StructArray, UnionArray, make_array,
+    Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, FixedSizeListArray,
+    GenericStringArray, Int32Array, Int64Array, ListArray, ListViewArray, MapArray,
+    NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, RunArray,
+    StringViewArray, StructArray, UnionArray, make_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{
@@ -95,6 +96,24 @@ fn criterion_benchmark(c: &mut Criterion) {
             supports_nulls: false,
         },
         BenchData {
+            name: "sparse_union (2 types)",
+            array: sparse_union_of(
+                (0..2)
+                    .map(|_| primitive_array::<Int64Type>(BATCH_SIZE))
+                    .collect(),
+            ),
+            supports_nulls: false,
+        },
+        BenchData {
+            name: "sparse_union (utf8)",
+            array: sparse_union_of(
+                (0..5)
+                    .map(|_| pool.string_array::<i32>(BATCH_SIZE))
+                    .collect(),
+            ),
+            supports_nulls: false,
+        },
+        BenchData {
             name: "dense_union",
             array: dense_union_array(BATCH_SIZE),
             supports_nulls: false,
@@ -107,6 +126,21 @@ fn criterion_benchmark(c: &mut Criterion) {
         BenchData {
             name: "run_array_int32",
             array: create_run_array::<Int32Type>(BATCH_SIZE),
+            supports_nulls: true,
+        },
+        BenchData {
+            name: "null",
+            array: Arc::new(NullArray::new(BATCH_SIZE)),
+            supports_nulls: false,
+        },
+        BenchData {
+            name: "list_view_array",
+            array: list_view_array(BATCH_SIZE),
+            supports_nulls: true,
+        },
+        BenchData {
+            name: "fixed_size_list_array",
+            array: fixed_size_list_array(BATCH_SIZE),
             supports_nulls: true,
         },
     ];
@@ -354,6 +388,24 @@ fn sliced_array_benchmark(c: &mut Criterion) {
                 },
             );
         }
+
+        // Sliced Dense UnionArray
+        {
+            let full_array = dense_union_array(total_rows);
+            let sliced: ArrayRef = Arc::new(
+                full_array
+                    .as_any()
+                    .downcast_ref::<UnionArray>()
+                    .unwrap()
+                    .slice(slice_offset, slice_len),
+            );
+            c.bench_function(
+                &format!("dense_union_sliced: 1/{ratio} of {total_rows} rows"),
+                |b| {
+                    do_hash_test_with_len(b, std::slice::from_ref(&sliced), slice_len);
+                },
+            );
+        }
     }
 }
 
@@ -430,23 +482,25 @@ fn map_array(num_rows: usize) -> ArrayRef {
 }
 
 fn sparse_union_array(num_rows: usize) -> ArrayRef {
-    let mut rng = make_rng();
-    let num_types = 5;
+    sparse_union_of(
+        (0..5)
+            .map(|_| primitive_array::<Int64Type>(num_rows))
+            .collect(),
+    )
+}
 
-    let type_ids: Vec<i8> = (0..num_rows)
+/// Sparse union whose rows each select a random child
+fn sparse_union_of(children: Vec<ArrayRef>) -> ArrayRef {
+    let mut rng = make_rng();
+    let num_types = children.len() as i32;
+
+    let type_ids: Vec<i8> = (0..children[0].len())
         .map(|_| rng.random_range(0..num_types) as i8)
         .collect();
-    let (fields, children): (Vec<_>, Vec<_>) = (0..num_types)
-        .map(|i| {
-            (
-                (
-                    i as i8,
-                    Arc::new(Field::new(format!("f{i}"), DataType::Int64, true)),
-                ),
-                primitive_array::<Int64Type>(num_rows),
-            )
-        })
-        .unzip();
+    let fields = children.iter().enumerate().map(|(i, child)| {
+        let field = Field::new(format!("f{i}"), child.data_type().clone(), true);
+        (i as i8, Arc::new(field))
+    });
 
     Arc::new(
         UnionArray::try_new(
@@ -565,5 +619,49 @@ where
     )
 }
 
-criterion_group!(benches, criterion_benchmark, sliced_array_benchmark);
+fn list_view_array(num_rows: usize) -> ArrayRef {
+    let elements_per_row = 5;
+    let values = primitive_array::<Int64Type>(num_rows * elements_per_row);
+    let offsets: ScalarBuffer<i32> = (0..num_rows)
+        .map(|i| (i * elements_per_row) as i32)
+        .collect();
+    let sizes: ScalarBuffer<i32> =
+        (0..num_rows).map(|_| elements_per_row as i32).collect();
+    Arc::new(ListViewArray::new(
+        Arc::new(Field::new("item", DataType::Int64, true)),
+        offsets,
+        sizes,
+        values,
+        None,
+    ))
+}
+
+fn fixed_size_list_array(num_rows: usize) -> ArrayRef {
+    let list_size = 4;
+    Arc::new(FixedSizeListArray::new(
+        Arc::new(Field::new("item", DataType::Int64, true)),
+        list_size as i32,
+        primitive_array::<Int64Type>(num_rows * list_size),
+        None,
+    ))
+}
+
+/// Heterogeneous key columns
+fn mixed_columns_benchmark(c: &mut Criterion) {
+    let pool = StringPool::new(100, 64);
+    let int64 = primitive_array::<Int64Type>(BATCH_SIZE);
+    let utf8 = pool.string_array::<i32>(BATCH_SIZE);
+    let utf8_view = pool.string_view_array(BATCH_SIZE);
+    let arrays = vec![int64, utf8, utf8_view];
+    c.bench_function("mixed: 3 columns (int64, utf8, utf8_view)", |b| {
+        do_hash_test(b, &arrays)
+    });
+}
+
+criterion_group!(
+    benches,
+    criterion_benchmark,
+    sliced_array_benchmark,
+    mixed_columns_benchmark
+);
 criterion_main!(benches);

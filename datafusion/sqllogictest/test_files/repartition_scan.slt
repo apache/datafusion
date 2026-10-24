@@ -147,6 +147,46 @@ DROP TABLE parquet_table;
 statement ok
 DROP TABLE parquet_table_with_order;
 
+## Either row group range assignment reads each row of a split file once
+
+statement ok
+COPY (SELECT v FROM generate_series(1, 4000) AS t(v))
+TO 'test_files/scratch/repartition_scan/multi_row_group/data.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '1000');
+
+statement ok
+CREATE EXTERNAL TABLE multi_row_group(v bigint)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/repartition_scan/multi_row_group/';
+
+query IIII
+SELECT count(*), sum(v), min(v), max(v) FROM multi_row_group WHERE v <> 0;
+----
+4000 8002000 1 4000
+
+statement ok
+set datafusion.execution.parquet.row_group_range_assignment = 'midpoint';
+
+query IIII
+SELECT count(*), sum(v), min(v), max(v) FROM multi_row_group WHERE v <> 0;
+----
+4000 8002000 1 4000
+
+query error
+set datafusion.execution.parquet.row_group_range_assignment = 'middle';
+----
+DataFusion error: Error setting config datafusion.execution.parquet.row_group_range_assignment
+caused by
+Invalid or Unsupported Configuration: Invalid parquet row group range assignment: middle. Expected one of: start_offset, midpoint
+
+
+statement ok
+RESET datafusion.execution.parquet.row_group_range_assignment;
+
+statement ok
+DROP TABLE multi_row_group;
+
 
 ###################
 ### CSV tests

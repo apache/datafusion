@@ -526,10 +526,13 @@ where
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let mut to_remove: HashMap<Hashable<T::Native>, usize, RandomState> =
-            HashMap::default();
-
         let arr = values[0].as_primitive::<T>();
+        let mut to_remove: HashMap<Hashable<T::Native>, usize, RandomState> =
+            HashMap::with_capacity_and_hasher(
+                arr.len() - arr.null_count(),
+                RandomState::default(),
+            );
+
         if arr.null_count() > 0 {
             for value in arr.iter().flatten() {
                 *to_remove.entry(Hashable(value)).or_default() += 1;
@@ -669,7 +672,7 @@ where
         let emit_group_values = emit_to.take_needed(&mut self.group_values);
 
         // Build offsets
-        let mut offsets = Vec::with_capacity(self.group_values.len() + 1);
+        let mut offsets = Vec::with_capacity(emit_group_values.len() + 1);
         offsets.push(0);
         let mut cur_len = 0_i32;
         for group_value in &emit_group_values {
@@ -679,8 +682,9 @@ where
         let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
 
         // Build inner array
-        let flatten_group_values =
-            emit_group_values.into_iter().flatten().collect::<Vec<_>>();
+        let mut flatten_group_values: Vec<T::Native> =
+            Vec::with_capacity(cur_len as usize);
+        flatten_group_values.extend(emit_group_values.into_iter().flatten());
         let group_values_array =
             PrimitiveArray::<T>::new(ScalarBuffer::from(flatten_group_values), None)
                 .with_data_type(self.data_type.clone());

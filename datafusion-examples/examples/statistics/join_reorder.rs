@@ -15,21 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Plug refined cardinality estimation into the optimizer via the `StatisticsRegistry`.
+//! Supply catalog statistics to the optimizer via the `StatisticsRegistry`.
 //!
-//! DataFusion's built-in statistics are intentionally simple defaults; the registry
-//! is the seam for plugging in more refined estimation (formulas or heuristics
-//! suited to your system or data) without changing the core.
+//! The registry is the extension point for statistics the core cannot derive,
+//! such as column statistics a catalog knows.
 //!
-//! `(SELECT user_id FROM events WHERE amount < 50 GROUP BY user_id) JOIN dims`: a
-//! provider supplies the column stats a catalog knows (`amount` range, `user_id`
-//! distinct count); the built-in `FilterStatisticsProvider` then refines the
-//! post-filter distinct count with the survival formula
-//! `NDV * (1 - (1 - selectivity)^(rows / NDV))` (Yao/Cardenas) to ~32, below `dims`
-//! (48), flipping the join build side. Core's simpler `min(NDV, rows)` cap would
-//! give 50 (> 48) and keep the other order; the refinement is the point. The
-//! ground-truth query prints the true surviving distinct count (below 48),
-//! confirming the flip.
+//! `(SELECT user_id FROM events WHERE amount < 50 GROUP BY user_id) JOIN dims`:
+//! the in-memory `events` table has no column statistics, so the grouped side is
+//! estimated at 1000 rows and `dims` (60 rows) becomes the build side. A provider
+//! supplies the `amount` range and the `user_id` distinct count a catalog knows;
+//! with them the operators estimate the grouped side at 50 rows, below `dims`,
+//! which flips the join build side. The ground-truth query prints the true
+//! distinct count (below 60), confirming the flip.
 
 use std::sync::Arc;
 
@@ -111,11 +108,9 @@ fn build_ctx(with_registry: bool) -> Result<SessionContext> {
         .with_config(config)
         .with_default_features();
     if with_registry {
-        let mut registry = StatisticsRegistry::default_with_builtin_providers();
-        registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
-            catalog_matches,
-            catalog_stats,
-        )));
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(
+            ClosureStatisticsProvider::with_matches(catalog_matches, catalog_stats),
+        )]);
         builder = builder.with_statistics_registry(registry);
     }
     let ctx = SessionContext::new_with_state(builder.build());
@@ -135,8 +130,8 @@ fn build_ctx(with_registry: bool) -> Result<SessionContext> {
     ctx.register_table(
         "dims",
         mem_table(&[
-            ("user_id", int_col(&(0..48).collect::<Vec<_>>())),
-            ("label", int_col(&(0..48).collect::<Vec<_>>())),
+            ("user_id", int_col(&(0..60).collect::<Vec<_>>())),
+            ("label", int_col(&(0..60).collect::<Vec<_>>())),
         ])?,
     )?;
     Ok(ctx)
@@ -167,13 +162,13 @@ pub async fn join_reorder() -> Result<()> {
         "A hash join builds its in-memory hash table from one input and probes with\n\
          the other, so the smaller input should be the build side. Default estimation\n\
          sizes the grouped `events` at 1000 rows and builds from `dims`; the\n\
-         registry's refined ~32 estimate is below `dims` (48 rows), so it flips the\n\
-         build side to `events`. The ground-truth count above (also below 48)\n\
+         catalog statistics bring the estimate to 50, below `dims` (60 rows), so the\n\
+         build side flips to `events`. The ground-truth count above (also below 60)\n\
          confirms `events` really is the smaller, cheaper side.\n"
     );
     println!("-- Without the registry (default estimation) --");
     println!("{}\n", explain(&build_ctx(false)?).await?);
-    println!("-- With the registry (built-in refinement) --");
+    println!("-- With the registry (catalog statistics) --");
     println!("{}", explain(&build_ctx(true)?).await?);
     Ok(())
 }

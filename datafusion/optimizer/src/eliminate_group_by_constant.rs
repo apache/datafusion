@@ -39,10 +39,6 @@ impl EliminateGroupByConstant {
 }
 
 impl OptimizerRule for EliminateGroupByConstant {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,

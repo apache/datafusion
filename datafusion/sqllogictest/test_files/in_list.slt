@@ -827,3 +827,34 @@ ORDER BY label
 match true false
 no_match false true
 nulls NULL NULL
+
+####
+## List items that read a column
+####
+
+statement ok
+CREATE TABLE in_list_case_items (n INT, d INT) AS VALUES (2, 0), (10, 2), (5, 2), (7, 1);
+
+# A CASE item with a literal THEN is still evaluated per row, not once on an empty batch.
+query IB
+SELECT n, n IN (2, 100, 101, CASE WHEN d > 5 THEN 1 ELSE d END * 5)
+FROM in_list_case_items
+ORDER BY n
+----
+2 true
+5 false
+7 false
+10 true
+
+query I
+SELECT n
+FROM in_list_case_items
+WHERE n IN (2, 100, 101, CASE WHEN d > 5 THEN 1 ELSE d END * 5)
+ORDER BY n
+----
+2
+10
+
+# Cleanup
+statement ok
+DROP TABLE in_list_case_items;

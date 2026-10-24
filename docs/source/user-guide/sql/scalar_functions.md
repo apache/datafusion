@@ -2384,6 +2384,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [make_date](#make_date)
 - [make_time](#make_time)
 - [now](#now)
+- [timezone](#timezone)
 - [to_char](#to_char)
 - [to_date](#to_date)
 - [to_local_time](#to_local_time)
@@ -2478,7 +2479,7 @@ date_bin(interval, expression[, origin_timestamp])
 
 #### Arguments
 
-- **interval**: Bin interval.
+- **interval**: Bin interval. Must be greater than zero.
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 - **origin_timestamp**: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
 
@@ -2807,6 +2808,44 @@ now()
 
 - current_timestamp
 
+### `timezone`
+
+Converts a timestamp to another timezone. This is the function form of `expression AT TIME ZONE zone`, and it follows PostgreSQL and DuckDB:
+
+- A timestamp **with** a timezone is an instant. The result is the wall-clock time of that instant in `zone`, as a timestamp **without** a timezone.
+- A timestamp **without** a timezone is a wall-clock time. The result is the instant at which that wall-clock time occurs in `zone`, as a timestamp **with** the timezone `zone`.
+- Any other type (for example a string) is converted as for a timestamp without a timezone.
+
+The result keeps the time unit of a timestamp input.
+
+```sql
+timezone(zone, expression)
+```
+
+#### Arguments
+
+- **zone**: Target timezone, as a constant string. An IANA timezone name such as `'America/Denver'`, or a fixed offset such as `'+05:30'`.
+- **expression**: Timestamp expression to convert. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> SET datafusion.execution.time_zone = 'UTC';
+> SELECT timezone('America/Denver', '2024-01-01T12:00:00Z'::timestamptz) AS denver_wall_clock;
++---------------------+
+| denver_wall_clock   |
++---------------------+
+| 2024-01-01T05:00:00 |
++---------------------+
+
+> SELECT timezone('America/Denver', '2024-01-01T12:00:00'::timestamp) AS denver_instant;
++---------------------------+
+| denver_instant            |
++---------------------------+
+| 2024-01-01T12:00:00-07:00 |
++---------------------------+
+```
+
 ### `to_char`
 
 Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.
@@ -2880,6 +2919,10 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 ### `to_local_time`
 
 Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.
+
+A timestamp that already has no timezone is returned unchanged.
+
+`to_local_time` uses the timezone that the value already has. To get the wall-clock time in a timezone that you name in the query, use [`timezone(zone, expression)`](#timezone) or `expression AT TIME ZONE zone`: for a timestamp with a timezone, both return the wall-clock time in `zone`, without a timezone.
 
 ```sql
 to_local_time(expression)
@@ -3644,7 +3687,7 @@ array_distance(array1, array2)
 
 ### `array_distinct`
 
-Returns distinct values from the array after removing duplicates.
+Returns distinct values from the array after removing duplicates, in the order they first appear.
 
 ```sql
 array_distinct(array)
@@ -3658,11 +3701,11 @@ array_distinct(array)
 
 ```sql
 > select array_distinct([1, 3, 2, 3, 1, 2, 4]);
-+---------------------------------+
-| array_distinct(List([1,2,3,4])) |
-+---------------------------------+
-| [1, 2, 3, 4]                    |
-+---------------------------------+
++---------------------------------------+
+| array_distinct(List([1,3,2,3,1,2,4])) |
++---------------------------------------+
+| [1, 3, 2, 4]                          |
++---------------------------------------+
 ```
 
 #### Aliases

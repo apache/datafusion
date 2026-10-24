@@ -169,9 +169,10 @@ impl OrderingEquivalenceCache {
     pub fn new(
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) -> Self {
+        let normal_cls = OrderingEquivalenceClass::new(orderings);
         let mut cache = Self {
-            normal_cls: OrderingEquivalenceClass::new(orderings),
-            leading_map: HashMap::new(),
+            leading_map: HashMap::with_capacity(normal_cls.len()),
+            normal_cls,
         };
         cache.update_map();
         cache
@@ -1431,7 +1432,7 @@ impl EquivalenceProperties {
         }
 
         // Rewrite equivalence classes according to the new schema:
-        let mut eq_classes = vec![];
+        let mut eq_classes = Vec::with_capacity(self.eq_group.len());
         for mut eq_class in self.eq_group {
             // Rewrite the expressions in the equivalence class:
             eq_class.exprs = eq_class
