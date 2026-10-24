@@ -27,6 +27,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
+use datafusion_physical_plan::materialized_cte::MaterializedCteExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use itertools::Itertools;
@@ -64,7 +65,7 @@ impl TopKAggregation {
         let order = order.iter().exactly_one().ok()?;
         let sort_options = order.options;
         let order = order.expr.downcast_ref::<Column>()?;
-        let mut sort_col_name = order.name().to_string();
+        let mut sort_col = order.clone();
         let limit = sort.fetch()?;
 
         let mut cardinality_preserved = true;
@@ -75,20 +76,24 @@ impl TopKAggregation {
             if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
                 match aggr
                     .clone()
-                    .try_optimize_topk(limit, &sort_col_name, sort_options)
+                    .try_optimize_topk(limit, sort_col.name(), sort_options)
                 {
                     None => cardinality_preserved = false,
                     Some(aggr) => return Ok(Transformed::yes(Arc::new(aggr.data))),
                 }
+            } else if plan.downcast_ref::<MaterializedCteExec>().is_some() {
+                // Its body produces rows; the output schema comes from the continuation.
+                cardinality_preserved = false;
             } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
-                // track renames due to successive projections
-                for proj_expr in proj.expr() {
-                    let Some(src_col) = proj_expr.expr.downcast_ref::<Column>() else {
-                        continue;
-                    };
-                    if proj_expr.alias == sort_col_name {
-                        sort_col_name = src_col.name().to_string();
-                    }
+                // Only follow direct columns: computed expressions can change group ranking.
+                let src_col = proj
+                    .expr()
+                    .get(sort_col.index())
+                    .and_then(|proj_expr| proj_expr.expr.downcast_ref::<Column>());
+                if let Some(src_col) = src_col {
+                    sort_col = src_col.clone();
+                } else {
+                    cardinality_preserved = false;
                 }
             } else {
                 // or we continue down through types that don't reduce cardinality
