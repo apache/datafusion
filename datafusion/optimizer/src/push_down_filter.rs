@@ -1027,7 +1027,8 @@ impl OptimizerRule for PushDownFilter {
                         .into_iter()
                         .partition(|expr| has_outer_ref_to_any(expr, &replace_map));
                 let Some(predicate) = conjunction(push_predicates) else {
-                    filter.predicate = conjunction(keep_predicates).unwrap();
+                    filter.predicate = conjunction(keep_predicates)
+                        .expect("every conjunct is kept when none is pushed");
                     filter.input = Arc::new(LogicalPlan::SubqueryAlias(subquery_alias));
                     return Ok(Transformed::no(LogicalPlan::Filter(filter)));
                 };
