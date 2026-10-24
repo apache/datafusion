@@ -25,12 +25,13 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use futures::stream::{Stream, StreamExt};
 
 use super::aggregate_hash_table::{ClusteredAggregateTable, SingleMarker};
 use super::order::GroupClusteringMode;
 use super::spill::AggregateSpill;
+use super::stream_memory::{SlicedOutput, StreamMemory};
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
@@ -103,7 +104,7 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 pub(crate) struct ClusteredSingleAggregateStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
-    reservation: MemoryReservation,
+    memory: StreamMemory,
     baseline_metrics: BaselineMetrics,
     batch_size: usize,
     state: Option<ClusteredSingleAggregateState>,
@@ -125,9 +126,7 @@ enum ClusteredSingleAggregateState {
     /// Emits one materialized batch in `batch_size` slices, then continues
     /// with `next_state` (`ReadingInput`, or `Done` after input is exhausted).
     Outputting {
-        batch: RecordBatch,
-        /// Reserved memory of `batch`, released when handing off the last slice.
-        batch_memory: usize,
+        output: SlicedOutput,
         next_state: Box<ClusteredSingleAggregateState>,
     },
     PreparingMergeInput {
@@ -204,14 +203,13 @@ impl ClusteredSingleAggregateStream {
             MemoryConsumer::new(format!("ClusteredSingleAggregateStream[{partition}]"))
                 .with_can_spill(can_spill)
                 .register(context.memory_pool());
-
-        // Reserve memory for the initial hash table. that we hold for the lifetime of the stream.
-        reservation.try_grow(table.memory_size())?;
+        let memory = StreamMemory::try_new(reservation, table.memory_size())?
+            .with_sort_index_headroom(spill_context.is_some());
 
         Ok(Self {
             schema,
             input,
-            reservation,
+            memory,
             baseline_metrics,
             batch_size,
             state: Some(ClusteredSingleAggregateState::ReadingInput {
@@ -237,45 +235,22 @@ impl ClusteredSingleAggregateStream {
         Self::break_with_err(internal_datafusion_err!("{message}"))
     }
 
-    /// Reserve memory for the current aggregate table.
-    fn reservation_size_for_table(
-        table: &ClusteredAggregateTable<SingleMarker>,
-        spill_context: Option<&AggregateSpill>,
-    ) -> usize {
-        let table_size = table.memory_size();
-        if spill_context.is_some() {
-            // See `ClusteredSingleAggregateStream` comments for how is it estimated
-            table_size.saturating_add(table.num_groups().saturating_mul(size_of::<u32>()))
-        } else {
-            table_size
-        }
-    }
-
-    /// Reserves `batch` on top of `table_memory` and moves to `Outputting`,
-    /// which emits it in `batch_size` slices before continuing with
-    /// `next_state`. If the batch cannot be reserved, hands it off whole.
+    /// Holds `batch` on top of a table of `table_size` bytes and `groups`
+    /// groups (see [`StreamMemory::hold`]) and moves to `Outputting`, which
+    /// emits it before continuing with `next_state`.
     fn start_outputting(
         &mut self,
         batch: RecordBatch,
-        table_memory: usize,
+        table_size: usize,
+        groups: usize,
         next_state: ClusteredSingleAggregateState,
     ) -> ClusteredSingleAggregateStateTransition {
-        let batch_memory = batch.get_array_memory_size();
-        match self.reservation.try_resize(table_memory + batch_memory) {
-            Ok(()) => ControlFlow::Continue(ClusteredSingleAggregateState::Outputting {
-                batch,
-                batch_memory,
-                next_state: Box::new(next_state),
-            }),
-            Err(DataFusionError::ResourcesExhausted(_)) => {
-                // Only the retained table needs to remain reserved.
-                if let Err(e) = self.reservation.try_resize(table_memory) {
-                    return Self::break_with_err(e);
-                }
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
-                ))
+        match self.memory.hold(table_size, groups, batch, self.batch_size) {
+            Ok(output) => {
+                ControlFlow::Continue(ClusteredSingleAggregateState::Outputting {
+                    output,
+                    next_state: Box::new(next_state),
+                })
             }
             Err(e) => Self::break_with_err(e),
         }
@@ -322,12 +297,9 @@ impl ClusteredSingleAggregateStream {
 
                 // Check memory reservation, and potentially spill.
                 let timer = elapsed_compute.timer();
-                let resize_result =
-                    self.reservation
-                        .try_resize(Self::reservation_size_for_table(
-                            &table,
-                            spill_context.as_deref(),
-                        ));
+                let resize_result = self
+                    .memory
+                    .try_fit_table(table.memory_size(), table.num_groups());
                 timer.done();
                 match resize_result {
                     Ok(()) => {}
@@ -371,20 +343,15 @@ impl ClusteredSingleAggregateStream {
                 match result {
                     // Some finalized groups can be emitted. Yield them in
                     // slices, then continue aggregating input.
-                    Ok(Some(batch)) => {
-                        let table_memory = Self::reservation_size_for_table(
-                            &table,
-                            spill_context.as_deref(),
-                        );
-                        self.start_outputting(
-                            batch,
-                            table_memory,
-                            ClusteredSingleAggregateState::ReadingInput {
-                                table,
-                                spill_context,
-                            },
-                        )
-                    }
+                    Ok(Some(batch)) => self.start_outputting(
+                        batch,
+                        table.memory_size(),
+                        table.num_groups(),
+                        ClusteredSingleAggregateState::ReadingInput {
+                            table,
+                            spill_context,
+                        },
+                    ),
                     // Can't do early emit, continue aggregating.
                     Ok(None) => ControlFlow::Continue(
                         ClusteredSingleAggregateState::ReadingInput {
@@ -418,6 +385,7 @@ impl ClusteredSingleAggregateStream {
                         match result {
                             Ok(Some(batch)) => self.start_outputting(
                                 batch,
+                                0,
                                 0,
                                 ClusteredSingleAggregateState::Done,
                             ),
@@ -465,8 +433,10 @@ impl ClusteredSingleAggregateStream {
             .and_then(|batch| spill_context.sort_and_spill(batch));
 
         // Spilling shrinks the aggregate table and releases its accumulated
-        // memory. Update the reservation accordingly.
-        if let Err(e) = self.reservation.try_resize(table.memory_size()) {
+        // memory. Update the reservation accordingly. Unlike
+        // `StreamMemory::shrink_after_spill`, this adds no context to a
+        // failure; kept as it was.
+        if let Err(e) = self.memory.try_resize(table.memory_size()) {
             result = Err(e);
         }
 
@@ -516,14 +486,12 @@ impl ClusteredSingleAggregateStream {
             Ok(()) => {
                 let metrics = table.metrics();
                 drop(table);
-                match self.reservation.try_resize(0) {
-                    Ok(()) => (*spill_context).into_replay_stream(
-                        &self.baseline_metrics,
-                        metrics,
-                        self.reservation.new_empty(),
-                    ),
-                    Err(e) => Err(e),
-                }
+                let replay_reservation = self.memory.release_for_replay();
+                (*spill_context).into_replay_stream(
+                    &self.baseline_metrics,
+                    metrics,
+                    replay_reservation,
+                )
             }
             Err(e) => Err(e),
         };
@@ -583,8 +551,7 @@ impl ClusteredSingleAggregateStream {
         original_state: ClusteredSingleAggregateState,
     ) -> ClusteredSingleAggregateStateTransition {
         let ClusteredSingleAggregateState::Outputting {
-            batch,
-            batch_memory,
+            mut output,
             next_state,
         } = original_state
         else {
@@ -593,27 +560,18 @@ impl ClusteredSingleAggregateStream {
             );
         };
 
-        if batch.num_rows() > self.batch_size {
-            let output = batch.slice(0, self.batch_size);
-            let batch = batch.slice(self.batch_size, batch.num_rows() - self.batch_size);
-            return ControlFlow::Break((
-                Poll::Ready(Some(Ok(output.record_output(&self.baseline_metrics)))),
-                ClusteredSingleAggregateState::Outputting {
-                    batch,
-                    batch_memory,
-                    next_state,
-                },
-            ));
-        }
-
-        // The final slice transfers ownership of the buffers to the consumer.
-        if let Err(e) = self.reservation.try_shrink(batch_memory) {
-            return Self::break_with_err(e);
-        }
-        ControlFlow::Break((
-            Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-            *next_state,
-        ))
+        let slice = match output.next_slice(&self.memory) {
+            Ok(Some(slice)) => slice,
+            Ok(None) => return ControlFlow::Continue(*next_state),
+            Err(e) => return Self::break_with_err(e),
+        };
+        let poll = Poll::Ready(Some(Ok(slice.record_output(&self.baseline_metrics))));
+        let state = if output.is_done() {
+            *next_state
+        } else {
+            ClusteredSingleAggregateState::Outputting { output, next_state }
+        };
+        ControlFlow::Break((poll, state))
     }
 }
 
@@ -715,12 +673,12 @@ impl Stream for ClusteredSingleAggregateStream {
                 }
                 state @ ClusteredSingleAggregateState::Error => {
                     self.close_input();
-                    self.reservation.free();
+                    self.memory.release();
                     self.state = Some(state);
                     return Poll::Ready(None);
                 }
                 state @ ClusteredSingleAggregateState::Done => {
-                    let _ = self.reservation.try_resize(0);
+                    self.memory.release();
                     self.state = Some(state);
                     return Poll::Ready(None);
                 }
@@ -739,7 +697,7 @@ impl Stream for ClusteredSingleAggregateStream {
                     // The handler has already discarded its state-owned resources.
                     // Release the remaining stream-owned resources before returning.
                     self.close_input();
-                    self.reservation.free();
+                    self.memory.release();
                     self.state = Some(ClusteredSingleAggregateState::Error);
                     return Poll::Ready(Some(Err(e)));
                 }
