@@ -1294,8 +1294,10 @@ impl ProjectionMapping {
         input_schema: &SchemaRef,
     ) -> Result<Self> {
         // Construct a map from the input expressions to the output expression of the projection:
-        let mut map = IndexMap::<_, ProjectionTargets>::new();
-        for (expr_idx, (expr, name)) in expr.into_iter().enumerate() {
+        let exprs = expr.into_iter();
+        let mut map =
+            IndexMap::<_, ProjectionTargets>::with_capacity(exprs.size_hint().0);
+        for (expr_idx, (expr, name)) in exprs.enumerate() {
             let target_expr = Arc::new(Column::new(&name, expr_idx)) as _;
             let source_expr = expr.transform_down(|e| match e.downcast_ref::<Column>() {
                 Some(col) => {
@@ -1429,7 +1431,7 @@ pub fn project_orderings(
     orderings: &[LexOrdering],
     schema: &SchemaRef,
 ) -> Vec<LexOrdering> {
-    let mut projected_orderings = vec![];
+    let mut projected_orderings = Vec::with_capacity(orderings.len());
 
     for ordering in orderings {
         projected_orderings.extend(project_ordering(ordering, schema));
@@ -1471,7 +1473,7 @@ pub fn project_ordering(
     ordering: &LexOrdering,
     schema: &SchemaRef,
 ) -> Option<LexOrdering> {
-    let mut projected_exprs = vec![];
+    let mut projected_exprs = Vec::with_capacity(ordering.len());
     for PhysicalSortExpr { expr, options } in ordering.iter() {
         let transformed = Arc::clone(expr).transform_up(|expr| {
             let Some(col) = expr.downcast_ref::<Column>() else {

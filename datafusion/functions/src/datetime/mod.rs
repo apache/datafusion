@@ -32,6 +32,7 @@ pub mod make_date;
 pub mod make_time;
 pub mod now;
 pub mod planner;
+pub mod timezone;
 pub mod to_char;
 pub mod to_date;
 pub mod to_local_time;
@@ -47,6 +48,7 @@ make_udf_function!(date_part::DatePartFunc, date_part);
 make_udf_function!(date_trunc::DateTruncFunc, date_trunc);
 make_udf_function!(make_date::MakeDateFunc, make_date);
 make_udf_function!(make_time::MakeTimeFunc, make_time);
+make_udf_function!(timezone::TimezoneFunc, timezone);
 make_udf_function!(to_char::ToCharFunc, to_char);
 make_udf_function!(to_date::ToDateFunc, to_date);
 make_udf_function!(to_local_time::ToLocalTimeFunc, to_local_time);
@@ -285,6 +287,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         make_date(),
         make_time(),
         now(&config),
+        timezone(),
         to_char(),
         to_date(),
         to_local_time(),

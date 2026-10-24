@@ -213,10 +213,14 @@ impl PartitionSpillWriters {
 }
 
 impl OutputChannel {
-    fn coalesce(&mut self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
+    /// Appends the batches that are ready to send to `out`.
+    fn coalesce(&mut self, batch: RecordBatch, out: &mut Vec<RecordBatch>) -> Result<()> {
         match &self.shared_coalescer {
-            Some(shared) => Ok(shared.push_and_drain(batch)?),
-            None => Ok(vec![batch]),
+            Some(shared) => shared.push_and_drain(batch, out),
+            None => {
+                out.push(batch);
+                Ok(())
+            }
         }
     }
 
@@ -288,15 +292,18 @@ impl SharedCoalescer {
     }
 
     /// Push `batch` into the coalescer and drain any newly completed
-    /// batches. The mutex is held only briefly.
-    fn push_and_drain(&self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
-        let mut acc = Vec::new();
+    /// batches into `out`. The mutex is held only briefly.
+    fn push_and_drain(
+        &self,
+        batch: RecordBatch,
+        out: &mut Vec<RecordBatch>,
+    ) -> Result<()> {
         let mut c = self.inner.lock();
         c.push_batch(batch)?;
         while let Some(b) = c.next_completed_batch() {
-            acc.push(b);
+            out.push(b);
         }
-        Ok(acc)
+        Ok(())
     }
 
     /// Decrement the active-senders counter. If this caller was the last
@@ -1959,7 +1966,7 @@ impl ExecutionPlan for RepartitionExec {
 
         let new_partitioning = match self.partitioning() {
             Partitioning::Hash(partitions, size) => {
-                let mut new_partitions = vec![];
+                let mut new_partitions = Vec::with_capacity(partitions.len());
                 for partition in partitions {
                     let Some(new_partition) =
                         update_expr(partition, projection.expr(), false)?
@@ -2300,6 +2307,7 @@ impl RepartitionExec {
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
+        let mut coalesced = Vec::new();
         while !output_channels.is_empty() {
             // fetch the next batch
             let timer = metrics.fetch_time.timer();
@@ -2323,7 +2331,8 @@ impl RepartitionExec {
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
                 if let Some(output_channel) = output_channels.get_mut(&partition) {
-                    for batch in output_channel.coalesce(batch)? {
+                    output_channel.coalesce(batch, &mut coalesced)?;
+                    for batch in coalesced.drain(..) {
                         if output_channel.send(batch).await.is_err() {
                             // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                             // so ignore this channel from now on.
