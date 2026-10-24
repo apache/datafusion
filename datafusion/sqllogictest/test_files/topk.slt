@@ -397,6 +397,256 @@ set datafusion.explain.physical_plan_only = false
 statement ok
 set datafusion.execution.batch_size = 8192
 
+# A partitioned TopK must not drop a sort key that is constant within each
+# partition but differs between partitions. All partitions of one `SortExec`
+# share a single TopK threshold, so a threshold on `c1` alone, published by the
+# `c0 = 5` arm, would discard rows that the `c0 = 1` arm needs.
+statement ok
+CREATE TABLE heterogeneous_const(id BIGINT, g BIGINT) AS VALUES (0, 0), (1, 0), (2, 1), (3, 1), (4, 1);
+
+statement ok
+set datafusion.explain.physical_plan_only = true
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+physical_plan
+01)SortPreservingMergeExec: [c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[c0@0 ASC NULLS LAST]
+03)----UnionExec
+04)------ProjectionExec: expr=[5 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+07)--------FilterExec: g@1 = 0, projection=[id@0]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+1 0
+1 1
+
+# Control: with LIMIT 3 the `c0 = 1` arm never needs a row the threshold cuts
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 3;
+----
+1 0
+1 1
+5 0
+
+# Same bug without the filter: both arms hold the same `c1` values
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const
+ORDER BY c0, c1 LIMIT 2;
+----
+1 0
+1 1
+
+# Descending on the constant key: the `c0 = 5` arm comes first. Without the
+# fix, whether the query returns wrong rows depends on which arm publishes its
+# threshold first, so the EXPLAIN is what pins the key
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0 DESC, c1 LIMIT 2;
+----
+physical_plan
+01)SortPreservingMergeExec: [c0@0 DESC, c1@1 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[c0@0 DESC, c1@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[c0@0 DESC]
+03)----UnionExec
+04)------ProjectionExec: expr=[5 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+07)--------FilterExec: g@1 = 0, projection=[id@0]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0 DESC, c1 LIMIT 2;
+----
+5 0
+5 1
+
+# The constant is kept when it is not the leading key, where it breaks ties on
+# `c1`. The second arm's `c1` values are shifted so that both arms have `c1 = 1`
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id + 1 AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c1, c0 LIMIT 2;
+----
+physical_plan
+01)SortPreservingMergeExec: [c1@1 ASC NULLS LAST, c0@0 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[c1@1 ASC NULLS LAST, c0@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----UnionExec
+04)------ProjectionExec: expr=[5 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[1 as c0, id@0 + 1 as c1]
+07)--------FilterExec: g@1 = 0, projection=[id@0]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id + 1 AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c1, c0 LIMIT 2;
+----
+5 0
+1 1
+
+# Control: a constant with the same value in every partition stays out of the TopK key
+query TT
+EXPLAIN SELECT 1 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+physical_plan
+01)SortPreservingMergeExec: [c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[c1@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----UnionExec
+04)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+07)--------FilterExec: g@1 = 0, projection=[id@0]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+1 0
+1 0
+
+# Control: without a fetch the sort is pushed into each arm, where `c0` has a
+# single value, and the merge above the union sorts on the full key
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1;
+----
+physical_plan
+01)SortPreservingMergeExec: [c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST]
+02)--UnionExec
+03)----SortExec: expr=[c1@1 ASC NULLS LAST], preserve_partitioning=[false]
+04)------ProjectionExec: expr=[5 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----SortExec: expr=[c1@1 ASC NULLS LAST], preserve_partitioning=[false]
+07)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+08)--------FilterExec: g@1 = 0, projection=[id@0]
+09)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1;
+----
+1 0
+1 1
+5 0
+5 1
+5 2
+5 3
+5 4
+
+# With OFFSET the TopK fetches LIMIT + OFFSET rows. Three `c0 = 1` rows are
+# needed, and a threshold on `c1` alone from the `c0 = 5` arm would cut the third
+statement ok
+CREATE TABLE heterogeneous_const_offset(id BIGINT, g BIGINT) AS VALUES (0, 0), (1, 0), (2, 0), (3, 1), (4, 1);
+
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const_offset
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const_offset WHERE g = 0
+ORDER BY c0, c1 LIMIT 2 OFFSET 1;
+----
+physical_plan
+01)GlobalLimitExec: skip=1, fetch=2
+02)--SortPreservingMergeExec: [c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], fetch=3
+03)----SortExec: TopK(fetch=3), expr=[c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[c0@0 ASC NULLS LAST]
+04)------UnionExec
+05)--------ProjectionExec: expr=[5 as c0, id@0 as c1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------ProjectionExec: expr=[1 as c0, id@0 as c1]
+08)----------FilterExec: g@1 = 0, projection=[id@0]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const_offset
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const_offset WHERE g = 0
+ORDER BY c0, c1 LIMIT 2 OFFSET 1;
+----
+1 1
+1 2
+
+statement ok
+DROP TABLE heterogeneous_const_offset;
+
+# Three arms give the TopK three partitions. The `c0 = 1` arm is the last one,
+# and both other arms would publish a threshold that cuts its rows. The SLT
+# runner uses 4 partitions, so this also restores its setting.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 3 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+physical_plan
+01)SortPreservingMergeExec: [c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[c0@0 ASC NULLS LAST]
+03)----UnionExec
+04)------ProjectionExec: expr=[5 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[3 as c0, id@0 as c1]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+09)--------FilterExec: g@1 = 0, projection=[id@0]
+10)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 3 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+1 0
+1 1
+
+statement ok
+set datafusion.explain.physical_plan_only = false
+
+statement ok
+DROP TABLE heterogeneous_const;
+
 #####################################
 ## TopK with nested sort keys containing NULL elements
 ## The dynamic filter must not drop rows that sort before the current
