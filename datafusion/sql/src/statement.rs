@@ -3029,6 +3029,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         filter: Option<ShowStatementFilter>,
     ) -> Result<LogicalPlan> {
+        let (Some(parameters_table_ref), Some(routines_table_ref)) = (
+            self.resolve_info_table("parameters"),
+            self.resolve_info_table("routines"),
+        ) else {
+            return plan_err!(
+                "SHOW FUNCTIONS is not supported unless information_schema is enabled"
+            );
+        };
+
         let where_clause = if let Some(filter) = filter {
             match filter {
                 ShowStatementFilter::Like(like) => {
@@ -3082,7 +3091,7 @@ FROM (
                      data_type,
                      rid
                  FROM
-                     information_schema.parameters
+                     {parameters_table_ref}
                  WHERE
                      parameter_mode = 'OUT'
              ) o
@@ -3097,7 +3106,7 @@ FROM (
                      data_type,
                      rid
                  FROM
-                     information_schema.parameters
+                     {parameters_table_ref}
                  WHERE
                      parameter_mode = 'IN'
              ) i
@@ -3107,7 +3116,7 @@ FROM (
                  AND i.rid = o.rid
         GROUP BY 1, 2, o.rid
     ) as p
-    JOIN information_schema.routines r
+    JOIN {routines_table_ref} r
       ON p.function_name = r.routine_name
      AND r.function_type <> 'TABLE'
 
@@ -3121,7 +3130,7 @@ FROM (
         function_type,
         description,
         syntax_example
-    FROM information_schema.routines
+    FROM {routines_table_ref}
     WHERE function_type = 'TABLE'
     GROUP BY routine_name, data_type, function_type, description, syntax_example
 ) sc
@@ -3137,7 +3146,7 @@ FROM (
         &self,
         sql_table_name: ObjectName,
     ) -> Result<LogicalPlan> {
-        let Some(tables_table_ref) = self.resolve_info_table("views") else {
+        let Some(views_table_ref) = self.resolve_info_table("views") else {
             return plan_err!(
                 "SHOW CREATE TABLE is not supported unless information_schema is enabled"
             );
@@ -3154,7 +3163,7 @@ FROM (
         let _ = self.context_provider.get_table_source(table_ref)?;
 
         let query = format!(
-            "SELECT table_catalog, table_schema, table_name, definition FROM {tables_table_ref} WHERE {where_clause}"
+            "SELECT table_catalog, table_schema, table_name, definition FROM {views_table_ref} WHERE {where_clause}"
         );
 
         let mut rewrite = DFParser::parse_sql(&query)?;
