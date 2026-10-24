@@ -63,14 +63,25 @@ pub(crate) mod test_util {
             file_schema
         } else {
             format
-                .infer_schema(state, &store, std::slice::from_ref(&meta))
+                .infer_schema(
+                    state,
+                    &store,
+                    &ObjectStoreUrl::local_filesystem(),
+                    std::slice::from_ref(&meta),
+                )
                 .await?
         };
 
         let table_schema = TableSchema::from(&file_schema);
 
         let statistics = format
-            .infer_stats(state, &store, file_schema.clone(), &meta)
+            .infer_stats(
+                state,
+                &store,
+                &ObjectStoreUrl::local_filesystem(),
+                file_schema.clone(),
+                &meta,
+            )
             .await?;
 
         let file_groups = vec![vec![PartitionedFile::new_from_meta(meta)].into()];

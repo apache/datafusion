@@ -44,6 +44,7 @@ mod tests {
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::write::BatchSerializer;
+    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{col, lit};
     use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
     use datafusion_physical_plan::{ExecutionPlan, collect};
@@ -397,6 +398,7 @@ mod tests {
             .infer_schema(
                 &state,
                 &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &ObjectStoreUrl::parse("memory://test")?,
                 &[object_meta],
             )
             .await?;
@@ -458,6 +460,7 @@ mod tests {
             .infer_schema(
                 &state,
                 &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &ObjectStoreUrl::parse("memory://test")?,
                 &[object_meta],
             )
             .await?;
@@ -513,6 +516,7 @@ mod tests {
             .infer_schema(
                 &state,
                 &(chunked_object_store as Arc<dyn ObjectStore>),
+                &ObjectStoreUrl::parse("memory://test")?,
                 &[object_meta],
             )
             .await?;
@@ -1394,6 +1398,7 @@ mod tests {
             .infer_schema(
                 &state,
                 &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &ObjectStoreUrl::parse("memory://test")?,
                 &[object_meta],
             )
             .await?;
@@ -1469,6 +1474,7 @@ mod tests {
             .infer_schema(
                 &state,
                 &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &ObjectStoreUrl::parse("memory://test")?,
                 &[object_meta],
             )
             .await;
@@ -1634,7 +1640,12 @@ mod tests {
         let ctx = SessionContext::new().state();
         let error = CsvFormat::default()
             .with_has_header(true)
-            .infer_schema(&ctx, &store, std::slice::from_ref(&meta))
+            .infer_schema(
+                &ctx,
+                &store,
+                &ObjectStoreUrl::local_filesystem(),
+                std::slice::from_ref(&meta),
+            )
             .await
             .expect_err("duplicate header names must not infer a schema")
             .to_string();

@@ -30,6 +30,8 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
+use crate::object_store::ObjectStoreUrl;
+
 /// Base trait for cache implementations with common operations.
 ///
 /// This trait provides the fundamental cache operations (`get`, `put`, `remove`, etc.)
@@ -143,27 +145,68 @@ impl CacheKey for TableScopedPath {
     }
 }
 
-/// Each entry is scoped to its use within a specific table so that the cache
-/// can differentiate between identical paths in different tables, and
+/// Identifies an object within its registered object store.
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct StoreScopedPath {
+    /// URL identifying the registered object store.
+    pub object_store_url: ObjectStoreUrl,
+    /// Location relative to that store.
+    pub path: Path,
+}
+
+impl StoreScopedPath {
+    /// Create a cache key for a path in the given object store.
+    pub fn new(object_store_url: ObjectStoreUrl, path: Path) -> Self {
+        Self {
+            object_store_url,
+            path,
+        }
+    }
+}
+
+impl CacheKey for StoreScopedPath {
+    fn size(&self) -> usize {
+        self.heap_size(&mut DFHeapSizeCtx::default())
+    }
+
+    fn table_ref(&self) -> Option<&TableReference> {
+        None
+    }
+}
+
+impl DFHeapSize for StoreScopedPath {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.object_store_url.as_str().heap_size(ctx) + self.path.as_ref().heap_size(ctx)
+    }
+}
+
+impl Display for StoreScopedPath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}", self.object_store_url, self.path)
+    }
+}
+
+/// Scopes a path to its object store and optional table, supporting
 /// table-level cache invalidation.
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct TableScopedPath {
     pub table: Option<TableReference>,
-    pub path: Path,
+    /// Object location, including its registered store.
+    pub store_path: StoreScopedPath,
 }
 
 impl DFHeapSize for TableScopedPath {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        self.path.as_ref().heap_size(ctx) + self.table.heap_size(ctx)
+        self.store_path.heap_size(ctx) + self.table.heap_size(ctx)
     }
 }
 
 impl Display for TableScopedPath {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if let Some(table) = &self.table {
-            write!(f, "{}, {}", self.path, table)
+            write!(f, "{}, {}", self.store_path, table)
         } else {
-            write!(f, "{}", self.path)
+            Display::fmt(&self.store_path, f)
         }
     }
 }
@@ -272,5 +315,43 @@ mod schema_fingerprint_tests {
                 .with_metadata(Metadata::new().with("k", "v")),
         );
         assert_eq!(plain, schema_md, "schema metadata must be ignored");
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn scoped_paths_preserve_store_identity_and_table_scope() {
+        let store_path = StoreScopedPath::new(
+            ObjectStoreUrl::parse("s3://bucket").unwrap(),
+            Path::from("data.parquet"),
+        );
+        assert_eq!(store_path.to_string(), "s3://bucket/data.parquet");
+        assert_eq!(store_path.size(), "s3://bucket/data.parquet".len());
+        assert_eq!(store_path.table_ref(), None);
+
+        let unscoped = TableScopedPath {
+            table: None,
+            store_path: store_path.clone(),
+        };
+        let table = TableReference::bare("example");
+        let scoped = TableScopedPath {
+            table: Some(table.clone()),
+            store_path,
+        };
+        assert_eq!(unscoped.to_string(), "s3://bucket/data.parquet");
+        assert_eq!(scoped.to_string(), "s3://bucket/data.parquet, example");
+        assert_eq!(scoped.table_ref(), Some(&table));
+        assert_eq!(
+            scoped.size(),
+            unscoped.size() + 2 * size_of::<usize>() + "example".len()
+        );
+
+        // Entries for the same object can coexist inside and outside a table.
+        let entries = HashMap::from([(unscoped.clone(), 1), (scoped.clone(), 2)]);
+        assert_eq!(entries.get(&unscoped), Some(&1));
+        assert_eq!(entries.get(&scoped), Some(&2));
     }
 }

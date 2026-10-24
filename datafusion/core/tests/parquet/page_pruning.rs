@@ -67,7 +67,12 @@ async fn get_parquet_exec(
     };
 
     let schema = ParquetFormat::default()
-        .infer_schema(state, &store, std::slice::from_ref(&meta))
+        .infer_schema(
+            state,
+            &store,
+            &object_store_url,
+            std::slice::from_ref(&meta),
+        )
         .await
         .unwrap();
 

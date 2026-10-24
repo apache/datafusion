@@ -78,7 +78,12 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &store, std::slice::from_ref(&meta))
+            .infer_schema(
+                &state,
+                &store,
+                &ObjectStoreUrl::local_filesystem(),
+                std::slice::from_ref(&meta),
+            )
             .await?;
 
         let source = Arc::new(AvroSource::new(Arc::clone(&file_schema)));
@@ -143,7 +148,12 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let actual_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, std::slice::from_ref(&meta))
+            .infer_schema(
+                &state,
+                &object_store,
+                &object_store_url,
+                std::slice::from_ref(&meta),
+            )
             .await?;
 
         let mut builder = SchemaBuilder::from(actual_schema.fields());
@@ -216,7 +226,12 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, std::slice::from_ref(&meta))
+            .infer_schema(
+                &state,
+                &object_store,
+                &object_store_url,
+                std::slice::from_ref(&meta),
+            )
             .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);
