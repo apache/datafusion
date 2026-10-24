@@ -31,6 +31,7 @@ use super::{
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
+use crate::execution_plan::LimitBehavior;
 use crate::execution_plan::{
     CardinalityEffect, InvariantLevel, boundedness_from_children,
     check_default_invariants, emission_type_from_children,
@@ -460,6 +461,10 @@ impl ExecutionPlan for UnionExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::CopyToChildren
     }
 
     /// Tries to push `projection` down through `union`. If possible, performs the

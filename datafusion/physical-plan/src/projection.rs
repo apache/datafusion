@@ -26,6 +26,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
+use crate::execution_plan::LimitBehavior;
 use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -502,6 +503,10 @@ impl ExecutionPlan for ProjectionExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::MoveToInput
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
