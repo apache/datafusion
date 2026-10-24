@@ -29,6 +29,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 
+use crate::expressions::lit;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
 
@@ -337,6 +338,31 @@ impl DynamicFilterPhysicalExpr {
         drop(current); // Release the lock before broadcasting
 
         // Broadcast the new state to all waiters
+        let _ = self.state_watch.send(FilterState::InProgress {
+            generation: new_generation,
+        });
+        Ok(())
+    }
+
+    /// Reset this dynamic filter so its producer can publish a new expression
+    /// during a later execution of the same plan.
+    pub fn reset(&self) -> Result<()> {
+        let new_expr = Self::remap_children(
+            &self.children,
+            self.remapped_children.as_ref(),
+            lit(true),
+        )?;
+
+        let mut current = self.inner.write();
+        let new_generation = current.generation + 1;
+        *current = Inner {
+            expression_id: current.expression_id,
+            generation: new_generation,
+            expr: new_expr,
+            is_complete: false,
+        };
+        drop(current);
+
         let _ = self.state_watch.send(FilterState::InProgress {
             generation: new_generation,
         });
@@ -1030,6 +1056,21 @@ mod test {
 
         // wait_complete should return immediately
         dynamic_filter.wait_complete().await;
+    }
+
+    #[test]
+    fn test_reset_reopens_completed_filter() {
+        let dynamic_filter =
+            DynamicFilterPhysicalExpr::new(vec![], lit(false) as Arc<dyn PhysicalExpr>);
+        dynamic_filter.mark_complete();
+        let generation_before_reset = dynamic_filter.inner.read().generation;
+
+        dynamic_filter.reset().unwrap();
+
+        let inner = dynamic_filter.inner.read();
+        assert!(!inner.is_complete);
+        assert!(inner.generation > generation_before_reset);
+        assert_eq!(inner.expr.to_string(), "true");
     }
 
     #[test]
