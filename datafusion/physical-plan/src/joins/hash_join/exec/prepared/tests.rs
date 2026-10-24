@@ -328,7 +328,7 @@ async fn prepared_build_reuses_data_with_independent_dynamic_filters() -> Result
             .build()?;
         let ordinary = task
             .builder()
-            .reset_state()?
+            .reset_state()
             .with_new_children(vec![
                 TestMemoryExec::try_new_exec(
                     &[vec![build.clone()]],
@@ -666,7 +666,7 @@ async fn prepared_build_matches_collect_left() -> Result<()> {
                             .with_batch_size(batch_size),
                     ),
                 );
-                let ordinary = base.builder().reset_state()?.build()?;
+                let ordinary = base.builder().reset_state().build()?;
                 let attached = base
                     .builder()
                     .with_prepared_build(Arc::clone(&prepared))

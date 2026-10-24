@@ -2619,7 +2619,7 @@ impl ExecutionPlan for AggregateExec {
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(dynamic_filter) = &self.dynamic_filter {
-            dynamic_filter.filter.reset()?;
+            dynamic_filter.filter.reset();
             for accumulator_filter in &dynamic_filter.accumulator_dyn_filter_info {
                 *accumulator_filter.shared_bound.lock() = ScalarValue::Null;
             }

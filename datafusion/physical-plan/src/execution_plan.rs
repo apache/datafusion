@@ -1996,7 +1996,9 @@ pub fn check_not_null_constraints(
 ///
 /// While this function enables plan reuse, it does not allow the same plan to be executed if it (OR):
 ///
-/// * uses dynamic filters,
+/// * uses dynamic filters and the original plan (or another reset copy) is still
+///   executing, because operators such as `HashJoinExec` and `AggregateExec`
+///   reset their shared dynamic filter in place,
 /// * represents a recursive query.
 ///
 pub fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {

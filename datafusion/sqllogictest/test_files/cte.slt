@@ -1760,8 +1760,9 @@ statement ok
 DROP TABLE dynamic_filter_recursive;
 
 # Hash join dynamic filters must remain shared with the probe scan across
-# recursive iterations (#26641). Each iteration looks up a different key, so
-# retaining a stale bound would also truncate the recursive result.
+# recursive iterations (#26641). Each iteration looks up a different key; the
+# EXPLAIN ANALYZE below checks that the filter is reset and republished, so the
+# probe scan prunes rows on every iteration.
 statement ok
 SET datafusion.execution.target_partitions = 1;
 

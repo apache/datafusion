@@ -346,19 +346,13 @@ impl DynamicFilterPhysicalExpr {
 
     /// Reset this dynamic filter so its producer can publish a new expression
     /// during a later execution of the same plan.
-    pub fn reset(&self) -> Result<()> {
-        let new_expr = Self::remap_children(
-            &self.children,
-            self.remapped_children.as_ref(),
-            lit(true),
-        )?;
-
+    pub fn reset(&self) {
         let mut current = self.inner.write();
         let new_generation = current.generation + 1;
         *current = Inner {
             expression_id: current.expression_id,
             generation: new_generation,
-            expr: new_expr,
+            expr: lit(true),
             is_complete: false,
         };
         drop(current);
@@ -366,7 +360,6 @@ impl DynamicFilterPhysicalExpr {
         let _ = self.state_watch.send(FilterState::InProgress {
             generation: new_generation,
         });
-        Ok(())
     }
 
     /// Mark this dynamic filter as complete and broadcast to all waiters.
@@ -1065,7 +1058,7 @@ mod test {
         dynamic_filter.mark_complete();
         let generation_before_reset = dynamic_filter.inner.read().generation;
 
-        dynamic_filter.reset().unwrap();
+        dynamic_filter.reset();
 
         let inner = dynamic_filter.inner.read();
         assert!(!inner.is_complete);
