@@ -441,9 +441,9 @@ where
 
 /// The most dictionary values per row that code processing every value of a
 /// dictionary should handle. Past this, taking the values the rows reference
-/// is cheaper than processing all of them, even for values that are cheap to
-/// process such as short strings or integers being hashed.
-pub const MAX_DICTIONARY_VALUES_PER_ROW: usize = 8;
+/// is cheaper than processing all of them, even for the cheapest per-value
+/// work, such as hashing integers or changing the case of ASCII strings.
+pub const MAX_DICTIONARY_VALUES_PER_ROW: usize = 16;
 
 /// Returns `None` when `array` has at most [`MAX_DICTIONARY_VALUES_PER_ROW`]
 /// values per row, and otherwise a copy whose values are `take(values, keys)`
@@ -2155,13 +2155,13 @@ mod tests {
 
     #[test]
     fn map_dictionary_values_bounds_values_per_row() -> Result<()> {
-        let strings = (0..12)
+        let strings = (0..24)
             .map(|i| (i % 5 != 1).then(|| "x".repeat(i)))
             .collect::<Vec<_>>();
         let dict: DictionaryArray<Int32Type> =
             strings.iter().map(|s| s.as_deref()).collect();
         let dict: ArrayRef = Arc::new(dict);
-        for (offset, len) in [(0, 12), (1, 1), (6, 1)] {
+        for (offset, len) in [(0, 24), (1, 1), (6, 1)] {
             let slice = dict.slice(offset, len);
             let mut seen = 0;
             let mapped = map_dictionary_values(&slice, |values| {

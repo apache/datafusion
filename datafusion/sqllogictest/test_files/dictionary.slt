@@ -688,15 +688,15 @@ set datafusion.execution.target_partitions = 2;
 statement ok
 create table padded_groups as
 select arrow_cast(
-  case when value % 13 = 0 then null else ' Grp' || (value % 40) || ' ' end,
+  case when value % 13 = 0 then null else ' Grp' || (value % 100) || ' ' end,
   'Dictionary(Int32, Utf8)'
 ) as p
-from generate_series(1, 400);
+from generate_series(1, 1000);
 
 query I
 select count(*) from (select p from padded_groups group by p);
 ----
-41
+101
 
 # Each function on the grouped dictionary must match the same function on the
 # decoded value
