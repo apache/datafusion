@@ -7822,3 +7822,18 @@ DROP TABLE range_null_peers;
 
 statement ok
 DROP TABLE range_nan_peers;
+
+# Test issue #26626: WindowAggExec replaces children while preserving can_repartition under target_partitions = 1
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+query II
+SELECT count(*) OVER (PARTITION BY a + NULL) AS x,
+       count(*) OVER (PARTITION BY a) AS y
+FROM (SELECT 1 AS a UNION ALL SELECT 2);
+----
+2 1
+2 1
+
+statement ok
+RESET datafusion.execution.target_partitions;
