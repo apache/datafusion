@@ -47,12 +47,10 @@ use datafusion_common::{Column, ScalarValue};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::{BinaryExpr, col, in_list, lit};
-use datafusion_pruning::{
-    MAX_IN_LIST_SIZE, PruningPredicate, PruningPredicateBuilder, PruningStatistics,
-};
+use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder, PruningStatistics};
 
 const DOMAIN_SIZES: [usize; 9] = [1, 2, 4, 8, 16, 20, 21, 256, 1024];
-const CONTAINER_COUNTS: [usize; 3] = [16, 256, 4096];
+const CONTAINER_COUNTS: [usize; 4] = [1, 16, 256, 4096];
 const BASELINE_CONTAINER_COUNT: usize = 4096;
 
 fn value(index: usize) -> String {
@@ -332,7 +330,12 @@ fn assert_equivalent_results(case: &BenchmarkCase, statistics: &IntervalStatisti
         .not_in_list_with_null_predicate
         .prune(statistics)
         .unwrap();
-    if case.size + 1 > MAX_IN_LIST_SIZE {
+    if case
+        .in_list_with_null_predicate
+        .predicate_expr()
+        .to_string()
+        .contains("IN_SET_INTERSECTS")
+    {
         // Compact pruning applies filter semantics: NULL does not change which
         // rows can satisfy IN, while NOT IN (..., NULL) can never be true.
         assert_eq!(in_with_null, expected);
@@ -435,11 +438,11 @@ fn criterion_benchmark(criterion: &mut Criterion) {
         criterion.benchmark_group("string_in_list_pruning/not_in_distributions");
     distributions.throughput(Throughput::Elements(BASELINE_CONTAINER_COUNT as u64));
     let singleton = IntervalStatistics::uniform_singleton();
-    for case in cases.iter().filter(|case| case.size > 20) {
-        let compact = case.not_in_list_predicate.prune(&singleton).unwrap();
-        assert!(compact.iter().all(|keep| !keep));
+    for case in &cases {
+        let actual = case.not_in_list_predicate.prune(&singleton).unwrap();
+        assert!(actual.iter().all(|keep| !keep));
         assert_eq!(
-            compact,
+            actual,
             case.expanded_and_predicate.prune(&singleton).unwrap()
         );
         for (name, predicate) in [
