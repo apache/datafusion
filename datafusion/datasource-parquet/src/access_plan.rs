@@ -819,7 +819,12 @@ impl PreparedAccessPlan {
                 arrow_schema,
                 file_metadata.file_metadata().schema_descr(),
             ) {
-                Ok(c) => c,
+                Ok(c) => c.with_column_orders(
+                    file_metadata
+                        .file_metadata()
+                        .column_orders()
+                        .map(Vec::as_slice),
+                ),
                 Err(e) => {
                     debug_assert!(
                         false,
