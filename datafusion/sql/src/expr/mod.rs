@@ -1310,12 +1310,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
+        if let Some(format) = &format {
+            return not_impl_err!("CAST with format is not supported: {format}");
+        }
+
+        let expr = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
+        self.sql_cast_planned_expr_to_expr(expr, data_type, format, schema)
+    }
+
+    /// Applies a SQL cast to an already-planned expression.
+    ///
+    /// Split out of [`Self::sql_cast_to_expr`] so callers that plan the
+    /// cast operand themselves (for example, unary minus folding its sign
+    /// into a number literal before the cast) share the cast semantics.
+    fn sql_cast_planned_expr_to_expr(
+        &self,
+        expr: Expr,
+        data_type: &SQLDataType,
+        format: Option<CastFormat>,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
         if let Some(format) = format {
             return not_impl_err!("CAST with format is not supported: {format}");
         }
 
         let dt = self.convert_data_type_to_field(data_type)?;
-        let expr = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
 
         // numeric constants are treated as seconds (rather as nanoseconds)
         // to align with postgres / duckdb semantics

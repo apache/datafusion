@@ -24,7 +24,7 @@ use datafusion_expr::{
     binary::BinaryTypeCoercer,
     type_coercion::{is_interval, is_signed_numeric, is_timestamp},
 };
-use sqlparser::ast::{Expr as SQLExpr, UnaryOperator, Value, ValueWithSpan};
+use sqlparser::ast::{CastKind, Expr as SQLExpr, UnaryOperator, Value, ValueWithSpan};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_sql_unary_op(
@@ -92,6 +92,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             }
             UnaryOperator::Minus => {
+                // Optimization: if the operand is a cast of a number literal
+                // (e.g. `-2147483648::INT`), fold the sign into the literal
+                // *before* applying the cast, like the bare-literal case
+                // below. The positive magnitude of a signed type's minimum
+                // value is not representable in that type, so planning
+                // `-(CAST(2147483648 AS Int32))` instead would fail when the
+                // inner cast is evaluated.
+                if let SQLExpr::Cast {
+                    kind: CastKind::Cast | CastKind::DoubleColon,
+                    expr: inner,
+                    data_type,
+                    format,
+                } = &expr
+                    && let SQLExpr::Value(ValueWithSpan {
+                        value: Value::Number(n, _),
+                        ..
+                    }) = inner.as_ref()
+                {
+                    let negated_literal = self.parse_sql_number(n, true)?;
+                    return self.sql_cast_planned_expr_to_expr(
+                        negated_literal,
+                        data_type,
+                        format.clone(),
+                        schema,
+                    );
+                }
                 match expr {
                     // Optimization: if it's a number literal, we apply the negative operator
                     // here directly to calculate the new literal.
