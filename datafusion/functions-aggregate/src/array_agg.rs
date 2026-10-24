@@ -36,6 +36,7 @@ use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::scalar::copy_array_data;
+use datafusion_common::utils::map_dictionary_values;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::utils::proxy::HashTableAllocExt;
 use datafusion_common::utils::{SingleRowListArrayBuilder, offset_span};
@@ -2061,11 +2062,11 @@ fn compact_payload(array: ArrayRef) -> Result<ArrayRef> {
         DataType::BinaryView => Ok(Arc::new(array.as_binary_view().gc())),
         DataType::Dictionary(_, _) => {
             let array = garbage_collect_any_dictionary(array.as_any_dictionary())?;
-            let dictionary = array.as_any_dictionary();
             // GC can return the original values if every entry is referenced.
             // Detach offset slices as well as any nested view/dictionary buffers.
-            let values = make_array(copy_array_data(&dictionary.values().to_data()));
-            Ok(dictionary.with_values(compact_payload(values)?))
+            map_dictionary_values(&array, |values| {
+                compact_payload(make_array(copy_array_data(&values.to_data())))
+            })
         }
         data_type if data_type.is_nested() => {
             let data = array.to_data();

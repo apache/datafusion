@@ -20,7 +20,7 @@
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, FixedSizeListArray,
     GenericStringArray, Int32Array, Int64Array, ListArray, ListViewArray, MapArray,
-    NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, RunArray,
+    NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, RunArray, StringArray,
     StringViewArray, StructArray, UnionArray, make_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
@@ -407,6 +407,22 @@ fn sliced_array_benchmark(c: &mut Criterion) {
             );
         }
     }
+
+    // Sliced DictionaryArray with one value per row of the full array, like the
+    // group keys an aggregation emits in `batch_size` slices. Hashing reduces
+    // it to the referenced values only above 16 values per row, so 1/8 keeps
+    // the full dictionary and 1/32 doesn't.
+    for ratio in [8, 32] {
+        let total_rows = BATCH_SIZE * ratio;
+        let full_array = distinct_dictionary_array(total_rows);
+        let sliced = full_array.slice(BATCH_SIZE * (ratio / 2), BATCH_SIZE);
+        c.bench_function(
+            &format!("dictionary_sliced: 1/{ratio} of {total_rows} values"),
+            |b| {
+                do_hash_test_with_len(b, std::slice::from_ref(&sliced), BATCH_SIZE);
+            },
+        );
+    }
 }
 
 fn do_hash_test_with_len(b: &mut Bencher, arrays: &[ArrayRef], expected_len: usize) {
@@ -418,6 +434,14 @@ fn do_hash_test_with_len(b: &mut Bencher, arrays: &[ArrayRef], expected_len: usi
         })
         .unwrap();
     });
+}
+
+/// A `Dictionary(Int32, Utf8)` with a distinct value for every row
+fn distinct_dictionary_array(num_rows: usize) -> ArrayRef {
+    let values =
+        StringArray::from_iter_values((0..num_rows).map(|i| format!("group_{i}")));
+    let keys = Int32Array::from_iter_values(0..num_rows as i32);
+    Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap())
 }
 
 fn list_array(num_rows: usize) -> ArrayRef {

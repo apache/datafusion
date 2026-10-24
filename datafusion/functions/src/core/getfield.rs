@@ -121,6 +121,8 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
                     )
                 })?;
             let field_col = apply_parent_nulls(field_col, values_struct.nulls())?;
+            #[expect(clippy::disallowed_methods)]
+            // picks a child column, no per-value work
             Ok(ColumnarValue::Array(dict.with_values(field_col)))
         }
         (DataType::Map(_, _), key, _) => {

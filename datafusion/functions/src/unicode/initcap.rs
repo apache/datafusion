@@ -17,13 +17,14 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 
 use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
+use datafusion_common::utils::map_dictionary_values;
 use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
@@ -141,11 +142,7 @@ fn initcap_array(array: &ArrayRef) -> Result<ArrayRef> {
         DataType::Utf8 => initcap::<i32>(&[Arc::clone(array)]),
         DataType::LargeUtf8 => initcap::<i64>(&[Arc::clone(array)]),
         DataType::Utf8View => initcap_utf8view(&[Arc::clone(array)]),
-        DataType::Dictionary(_, _) => {
-            let dictionary = array.as_any_dictionary();
-            let converted = initcap_array(dictionary.values())?;
-            Ok(dictionary.with_values(converted))
-        }
+        DataType::Dictionary(_, _) => map_dictionary_values(array, initcap_array),
         other => {
             exec_err!("Unsupported data type {other:?} for function `initcap`")
         }
