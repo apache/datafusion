@@ -82,8 +82,9 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 /// only the current group remains active after completed groups are emitted, and
 /// memory usage does not grow with the total number of groups.
 ///
-/// If a memory reservation nevertheless fails, the stream returns the error
-/// directly, indicating an unexpected behavior.
+/// If the reservation after an input batch fails, `ClusteredSingleAggregateStream`
+/// still emits the completed groups, and returns the error only when no group is
+/// complete.
 ///
 /// ## Partial group clustering
 ///
@@ -294,7 +295,7 @@ impl ClusteredSingleAggregateStream {
     ) -> ClusteredSingleAggregateStateTransition {
         let ClusteredSingleAggregateState::ReadingInput {
             mut table,
-            spill_context,
+            mut spill_context,
         } = original_state
         else {
             return Self::break_with_internal_err(
@@ -329,30 +330,36 @@ impl ClusteredSingleAggregateStream {
                             spill_context.as_deref(),
                         ));
                 timer.done();
-                match resize_result {
-                    Ok(()) => {}
+                // Check the reservation before taking completed groups, as the partial
+                // stream does, so a refused reservation still triggers spilling.
+                let oom = match resize_result {
+                    Ok(()) => None,
                     Err(e @ DataFusionError::ResourcesExhausted(_)) => {
-                        let Some(spill_context) = spill_context else {
-                            // `None` means spilling is not supported, see comments
-                            // at `ClusteredSingleAggregateState` for details.
-                            return Self::break_with_err(e);
-                        };
-                        if table.is_empty() {
-                            return Self::break_with_internal_err(
-                                "Clustered single aggregate ran out of memory with no aggregated groups",
-                            );
+                        match spill_context.take() {
+                            Some(spill_context) => {
+                                if table.is_empty() {
+                                    return Self::break_with_internal_err(
+                                        "Clustered single aggregate ran out of memory with no aggregated groups",
+                                    );
+                                }
+                                return ControlFlow::Continue(
+                                    ClusteredSingleAggregateState::Spilling {
+                                        table,
+                                        spill_context,
+                                    },
+                                );
+                            }
+                            // Spilling is not supported, see comments at
+                            // `ClusteredSingleAggregateState` for details. Keep
+                            // the refused reservation and return it only if no
+                            // completed group can be emitted below.
+                            None => Some(e),
                         }
-                        return ControlFlow::Continue(
-                            ClusteredSingleAggregateState::Spilling {
-                                table,
-                                spill_context,
-                            },
-                        );
                     }
                     Err(e) => {
                         return Self::break_with_err(e);
                     }
-                }
+                };
 
                 let result = if spill_context
                     .as_ref()
@@ -368,10 +375,10 @@ impl ClusteredSingleAggregateStream {
                     result
                 };
 
-                match result {
+                match (result, oom) {
                     // Some finalized groups can be emitted. Yield them in
                     // slices, then continue aggregating input.
-                    Ok(Some(batch)) => {
+                    (Ok(Some(batch)), _) => {
                         let table_memory = Self::reservation_size_for_table(
                             &table,
                             spill_context.as_deref(),
@@ -385,14 +392,16 @@ impl ClusteredSingleAggregateStream {
                             },
                         )
                     }
+                    // No group is complete, so memory cannot be released.
+                    (Ok(None), Some(oom)) => Self::break_with_err(oom),
                     // Can't do early emit, continue aggregating.
-                    Ok(None) => ControlFlow::Continue(
+                    (Ok(None), None) => ControlFlow::Continue(
                         ClusteredSingleAggregateState::ReadingInput {
                             table,
                             spill_context,
                         },
                     ),
-                    Err(e) => Self::break_with_err(e),
+                    (Err(e), _) => Self::break_with_err(e),
                 }
             }
             Poll::Ready(Some(Err(e))) => Self::break_with_err(e),
@@ -762,6 +771,11 @@ impl RecordBatchStream for ClusteredSingleAggregateStream {
 mod tests {
     use super::*;
     use crate::aggregates::PhysicalGroupBy;
+    use crate::aggregates::clustered_test_util::{
+        assert_completed_groups_emitted_under_limit,
+        assert_resources_exhausted_under_limit, full_batches, held_memory,
+        partial_batches, single_key_batches, sum_over_sorted_input,
+    };
     use crate::collect;
     use crate::test::TestMemoryExec;
     use arrow::array::Int64Array;
@@ -850,5 +864,35 @@ mod tests {
             batches_to_sort_string(&expected)
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn fully_clustered_completed_groups_under_memory_pressure() -> Result<()> {
+        let (plan, mode) =
+            sum_over_sorted_input(AggregateMode::Single, &["k"], full_batches())?;
+        assert_eq!(mode, GroupClusteringMode::Full);
+        assert_completed_groups_emitted_under_limit(&plan).await
+    }
+
+    /// A single key never completes a group before the input ends. The limit
+    /// fits only the initial table.
+    #[tokio::test]
+    async fn memory_pressure_without_completed_groups() -> Result<()> {
+        let (plan, _) =
+            sum_over_sorted_input(AggregateMode::Single, &["k"], single_key_batches())?;
+        let limit = held_memory(&plan).await?;
+        assert_resources_exhausted_under_limit(&plan, limit).await
+    }
+
+    /// Without temporary files, partial group clustering takes the same path as
+    /// full clustering. Its group values keep their capacity after emitting, so
+    /// one byte below the unlimited footprint still fails.
+    #[tokio::test]
+    async fn partially_clustered_memory_pressure_without_spilling() -> Result<()> {
+        let (plan, mode) =
+            sum_over_sorted_input(AggregateMode::Single, &["a", "b"], partial_batches())?;
+        assert_eq!(mode, GroupClusteringMode::Partial(vec![0]));
+        let limit = held_memory(&plan).await? - 1;
+        assert_resources_exhausted_under_limit(&plan, limit).await
     }
 }

@@ -336,12 +336,20 @@ impl Aggregating {
             let timer = elapsed_compute.timer();
             self.table.aggregate_batch(&batch)?;
 
-            match reservation.try_resize(self.reservation_size()) {
-                Ok(()) => {}
-                Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
-                    let Some(spill_context) = self.spill_context.as_mut() else {
-                        return Err(oom);
-                    };
+            // Check the reservation before taking completed groups, as the partial
+            // stream does, so a refused reservation still triggers spilling.
+            let oom = match (
+                reservation.try_resize(self.reservation_size()),
+                self.spill_context.as_mut(),
+            ) {
+                (Ok(()), _) => None,
+                // Without spilling, keep the refused reservation and return it
+                // only if no completed group can be emitted below.
+                (Err(oom @ DataFusionError::ResourcesExhausted(_)), None) => Some(oom),
+                (
+                    Err(oom @ DataFusionError::ResourcesExhausted(_)),
+                    Some(spill_context),
+                ) => {
                     if self.table.is_empty() {
                         return Err(oom);
                     }
@@ -355,8 +363,8 @@ impl Aggregating {
                         })?;
                     continue;
                 }
-                Err(e) => return Err(e),
-            }
+                (Err(e), _) => return Err(e),
+            };
 
             if self.spill_context.as_ref().is_some_and(|s| s.has_spills()) {
                 // Spilled groups may recur, so all remaining states must go
@@ -364,7 +372,11 @@ impl Aggregating {
                 continue;
             }
             let Some(batch) = self.table.take_completed_result_batch()? else {
-                continue;
+                // No group is complete, so memory cannot be released.
+                match oom {
+                    Some(oom) => return Err(oom),
+                    None => continue,
+                }
             };
             timer.done();
             return Ok(Some(ExecutionStage::Outputting(Outputting {
@@ -460,6 +472,11 @@ mod tests {
     use crate::ExecutionPlan;
     use crate::aggregates::GroupClusteringMode;
     use crate::aggregates::PhysicalGroupBy;
+    use crate::aggregates::clustered_test_util::{
+        assert_completed_groups_emitted_under_limit,
+        assert_resources_exhausted_under_limit, full_batches, held_memory,
+        partial_batches, single_key_batches, sum_over_sorted_input,
+    };
     use crate::common::collect;
     use crate::test::TestMemoryExec;
     use arrow::array::{Int64Array, StringViewArray};
@@ -731,5 +748,35 @@ mod tests {
         drop(second);
         assert_eq!(pool.reserved(), 0);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn fully_clustered_completed_groups_under_memory_pressure() -> Result<()> {
+        let (plan, mode) =
+            sum_over_sorted_input(AggregateMode::Final, &["k"], full_batches())?;
+        assert_eq!(mode, GroupClusteringMode::Full);
+        assert_completed_groups_emitted_under_limit(&plan).await
+    }
+
+    /// A single key never completes a group before the input ends. The limit
+    /// fits only the initial table.
+    #[tokio::test]
+    async fn memory_pressure_without_completed_groups() -> Result<()> {
+        let (plan, _) =
+            sum_over_sorted_input(AggregateMode::Final, &["k"], single_key_batches())?;
+        let limit = held_memory(&plan).await?;
+        assert_resources_exhausted_under_limit(&plan, limit).await
+    }
+
+    /// Without temporary files, partial group clustering takes the same path as
+    /// full clustering. Its group values keep their capacity after emitting, so
+    /// one byte below the unlimited footprint still fails.
+    #[tokio::test]
+    async fn partially_clustered_memory_pressure_without_spilling() -> Result<()> {
+        let (plan, mode) =
+            sum_over_sorted_input(AggregateMode::Final, &["a", "b"], partial_batches())?;
+        assert_eq!(mode, GroupClusteringMode::Partial(vec![0]));
+        let limit = held_memory(&plan).await? - 1;
+        assert_resources_exhausted_under_limit(&plan, limit).await
     }
 }
