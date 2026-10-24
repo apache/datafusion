@@ -64,6 +64,16 @@ use datafusion_expr_common::casts::{
     try_cast_literal_to_type,
 };
 
+fn is_timestamp_timezone_change(from_type: &DataType, to_type: &DataType) -> bool {
+    matches!(
+        (from_type, to_type),
+        (
+            DataType::Timestamp(_, from_timezone),
+            DataType::Timestamp(_, to_timezone)
+        ) if from_timezone.is_none() && to_timezone.is_some()
+    )
+}
+
 pub(super) fn unwrap_cast_in_comparison_for_binary(
     info: &SimplifyContext,
     cast_expr: Expr,
@@ -135,6 +145,8 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
 
             if is_timestamp_precision_narrowing_cast(&expr_type, field.data_type())
                 || is_date_narrowing_cast(&expr_type, field.data_type())
+                || (matches!(left_expr.as_ref(), Expr::Column(_))
+                    && is_timestamp_timezone_change(&expr_type, field.data_type()))
             {
                 return false;
             }
@@ -178,6 +190,8 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
 
     if is_timestamp_precision_narrowing_cast(&expr_type, field.data_type())
         || is_date_narrowing_cast(&expr_type, field.data_type())
+        || (matches!(left_expr.as_ref(), Expr::Column(_))
+            && is_timestamp_timezone_change(&expr_type, field.data_type()))
     {
         return false;
     }
@@ -594,15 +608,13 @@ mod tests {
     }
 
     #[test]
-    /// Basic integration test for unwrapping casts with different timezones
+    /// Timezone-changing casts must remain in comparisons.
     fn test_unwrap_cast_with_timestamp_nanos() {
         let schema = expr_test_schema();
         // cast(ts_nano as Timestamp(Nanosecond, UTC)) < 1666612093000000000::Timestamp(Nanosecond, Utc))
         let expr_lt = try_cast(col("ts_nano_none"), timestamp_nano_utc_type())
             .lt(lit_timestamp_nano_utc(1666612093000000000));
-        let expected =
-            col("ts_nano_none").lt(lit_timestamp_nano_none(1666612093000000000));
-        assert_eq!(optimize_test(expr_lt, &schema), expected);
+        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
     }
 
     #[test]
