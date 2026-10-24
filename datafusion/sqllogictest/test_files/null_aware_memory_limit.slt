@@ -1,0 +1,67 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# A multi-column NOT IN over a small subquery builds its null-aware hash join
+# on the subquery, so a large outer table runs under a memory limit that only
+# fits the subquery side. The join used to stay a LeftAnti that builds on the
+# outer side and ran out of memory where the scalar NOT IN ran.
+
+statement ok
+CREATE TABLE na_mem_big AS
+SELECT v AS a, v % 1000 AS b FROM generate_series(1, 200000) AS t(v);
+
+# A NULL-valued subquery row makes NOT IN UNKNOWN for every outer row with
+# `b = 7`.
+statement ok
+CREATE TABLE na_mem_small AS
+SELECT v AS a, v % 1000 AS b FROM generate_series(1, 100) AS t(v)
+UNION ALL
+SELECT NULL, 7;
+
+# Far below the outer side's build state, far above the subquery's.
+statement ok
+SET datafusion.runtime.memory_limit = '2M'
+
+# Rows 1..=100 match exactly; of the rest, those with `b = 7` are UNKNOWN: 199
+# of the 200 values `v % 1000 = 7`, all but `v = 7`.
+query I
+SELECT count(*) FROM na_mem_big
+WHERE (a, b) NOT IN (SELECT a, b FROM na_mem_small);
+----
+199701
+
+# Building on the outer side does not fit, which shows the limit binds.
+statement ok
+SET datafusion.optimizer.join_reordering = false
+
+query error Resources exhausted
+SELECT count(*) FROM na_mem_big
+WHERE (a, b) NOT IN (SELECT a, b FROM na_mem_small);
+
+statement ok
+RESET datafusion.optimizer.join_reordering
+
+statement ok
+DROP TABLE na_mem_big;
+
+statement ok
+DROP TABLE na_mem_small;
+
+# Setting a runtime option rebuilds the session state from the existing one,
+# which turns this option off because the default catalog already exists.
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema
