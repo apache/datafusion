@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example data_io -- [all|catalog|in_memory_object_store|json_shredding|object_store_spill|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog]
+//! cargo run --example data_io -- [all|catalog|in_memory_object_store|json_shredding|object_store_spill|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog|secrets]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -65,6 +65,9 @@
 //!
 //! - `remote_catalog`
 //!   (file: remote_catalog.rs, desc: Interact with a remote catalog)
+//!
+//! - `secrets`
+//!   (file: secrets.rs, desc: Share named credentials between table providers)
 
 mod catalog;
 mod in_memory_object_store;
@@ -79,6 +82,7 @@ mod parquet_index;
 mod partitioned_file_schema;
 mod query_http_csv;
 mod remote_catalog;
+mod secrets;
 
 use datafusion::error::{DataFusionError, Result};
 use strum::{IntoEnumIterator, VariantNames};
@@ -101,6 +105,7 @@ enum ExampleKind {
     PartitionedFileSchema,
     QueryHttpCsv,
     RemoteCatalog,
+    Secrets,
 }
 
 impl ExampleKind {
@@ -145,6 +150,7 @@ impl ExampleKind {
             }
             ExampleKind::QueryHttpCsv => query_http_csv::query_http_csv().await?,
             ExampleKind::RemoteCatalog => remote_catalog::remote_catalog().await?,
+            ExampleKind::Secrets => secrets::secrets().await?,
         }
         Ok(())
     }

@@ -17,7 +17,7 @@
 
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigOptions, TableOptions};
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::{DFSchema, Result, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -35,7 +35,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-use crate::{PhysicalOptimizerRule, QueryPlanner, UnsupportedQueryPlanner};
+use crate::{PhysicalOptimizerRule, QueryPlanner, SecretsStore, UnsupportedQueryPlanner};
 
 /// Interface for accessing [`SessionState`] from the catalog and data source.
 ///
@@ -86,6 +86,14 @@ pub trait Session: Send + Sync {
 
     /// Return the catalogs registered with this session.
     fn catalog_list(&self) -> Arc<dyn CatalogProviderList>;
+
+    /// Return the store for this session's named secrets.
+    ///
+    /// Implementations that support secrets must return the same store across
+    /// calls. The default returns a not-implemented error.
+    fn secrets_store(&self) -> Result<Arc<dyn SecretsStore>> {
+        not_impl_err!("This session does not support secrets")
+    }
 
     /// return the [`ConfigOptions`]
     fn config_options(&self) -> &ConfigOptions {

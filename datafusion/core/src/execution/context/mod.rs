@@ -46,9 +46,10 @@ use crate::{
     logical_expr::ScalarUDF,
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalCatalog, CreateExternalTable,
-        CreateFunction, CreateMemoryTable, CreateView, DropCatalog, DropCatalogSchema,
-        DropFunction, DropTable, DropView, Execute, LogicalPlan, LogicalPlanBuilder,
-        Prepare, ResetVariable, SetVariable, TableType, UNNAMED_TABLE,
+        CreateFunction, CreateMemoryTable, CreateSecret, CreateView, DropCatalog,
+        DropCatalogSchema, DropFunction, DropSecret, DropTable, DropView, Execute,
+        LogicalPlan, LogicalPlanBuilder, Prepare, ResetVariable, SetVariable, TableType,
+        UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
@@ -101,6 +102,7 @@ use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{Analyzer, OptimizerContext};
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use datafusion_session::SessionStore;
+use datafusion_session::secrets::{SecretCreateMode, SecretsStore};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -724,6 +726,12 @@ impl SessionContext {
                             as std::pin::Pin<Box<dyn Future<Output = _> + Send>>)
                             .await
                     }
+                    DdlStatement::CreateSecret(cmd) => {
+                        Box::pin(self.create_secret(cmd)).await
+                    }
+                    DdlStatement::DropSecret(cmd) => {
+                        Box::pin(self.drop_secret(cmd)).await
+                    }
                     DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)).await,
                     DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)).await,
                     DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd),
@@ -998,6 +1006,41 @@ impl SessionContext {
             }
         }
         Ok(())
+    }
+
+    /// Return the named secrets store used by this context's session.
+    ///
+    /// Use this to register credentials outside SQL. The same store is used by
+    /// `CREATE SECRET`, `DROP SECRET`, and providers accessing [`Session`](datafusion_session::Session).
+    pub fn secrets_store(&self) -> Arc<dyn SecretsStore> {
+        Arc::clone(self.state.read().secrets_store())
+    }
+
+    async fn create_secret(&self, cmd: CreateSecret) -> Result<DataFrame> {
+        if cmd.or_replace && cmd.if_not_exists {
+            return plan_err!(
+                "CREATE SECRET cannot specify both OR REPLACE and IF NOT EXISTS"
+            );
+        }
+        let mode = if cmd.or_replace {
+            SecretCreateMode::Replace
+        } else if cmd.if_not_exists {
+            SecretCreateMode::IgnoreIfExists
+        } else {
+            SecretCreateMode::ErrorIfExists
+        };
+        // Clone the handle before awaiting an application-provided store.
+        self.secrets_store()
+            .register(&cmd.name, cmd.secret, mode)
+            .await?;
+        self.return_empty_dataframe()
+    }
+
+    async fn drop_secret(&self, cmd: DropSecret) -> Result<DataFrame> {
+        self.secrets_store()
+            .remove(&cmd.name, cmd.if_exists)
+            .await?;
+        self.return_empty_dataframe()
     }
 
     fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {

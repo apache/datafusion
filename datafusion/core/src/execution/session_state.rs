@@ -78,6 +78,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
+use datafusion_session::secrets::{MemorySecretsStore, SecretsStore};
 use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 #[cfg(feature = "sql")]
 use datafusion_sql::{
@@ -214,6 +215,8 @@ struct SessionStateInner {
     ///
     /// [`CatalogProvider`]: crate::catalog::CatalogProvider
     catalog_factories: HashMap<String, Arc<dyn CatalogProviderFactory>>,
+    /// Named credentials shared by providers within this session.
+    secrets_store: Arc<dyn SecretsStore>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
     /// [FunctionFactory] to support pluggable user defined function handler.
@@ -259,6 +262,7 @@ impl Debug for SessionState {
             .field("table_options", &self.inner.table_options)
             .field("table_factories", &self.inner.table_factories)
             .field("catalog_factories", &self.inner.catalog_factories)
+            .field("secrets_store", &"<redacted>")
             .field("function_factory", &self.inner.function_factory)
             .field("cache_factory", &self.inner.cache_factory)
             .field("expr_planners", &self.inner.expr_planners);
@@ -295,6 +299,10 @@ impl Session for SessionState {
 
     fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
         Arc::clone(self.catalog_list())
+    }
+
+    fn secrets_store(&self) -> datafusion_common::Result<Arc<dyn SecretsStore>> {
+        Ok(Arc::clone(self.secrets_store()))
     }
 
     fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
@@ -493,6 +501,15 @@ impl SessionState {
     /// Get the cache factory
     pub fn cache_factory(&self) -> Option<&Arc<dyn CacheFactory>> {
         self.inner.cache_factory.as_ref()
+    }
+
+    /// Return the named secrets store shared by this session's providers.
+    ///
+    /// Clones of this state and builders created with
+    /// [`SessionStateBuilder::new_from_existing`] share the same store. A new
+    /// state gets an independent in-memory store unless explicitly configured.
+    pub fn secrets_store(&self) -> &Arc<dyn SecretsStore> {
+        &self.inner.secrets_store
     }
 
     /// Get the table factories
@@ -1160,6 +1177,7 @@ pub struct SessionStateBuilder {
     execution_props: Option<ExecutionProps>,
     table_factories: Option<HashMap<String, Arc<dyn TableProviderFactory>>>,
     catalog_factories: Option<HashMap<String, Arc<dyn CatalogProviderFactory>>>,
+    secrets_store: Option<Arc<dyn SecretsStore>>,
     runtime_env: Option<Arc<RuntimeEnv>>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
     cache_factory: Option<Arc<dyn CacheFactory>>,
@@ -1204,6 +1222,7 @@ impl SessionStateBuilder {
             execution_props: None,
             table_factories: None,
             catalog_factories: None,
+            secrets_store: None,
             runtime_env: None,
             function_factory: None,
             cache_factory: None,
@@ -1270,6 +1289,7 @@ impl SessionStateBuilder {
             execution_props: Some(execution_props),
             table_factories: Some(existing.table_factories),
             catalog_factories: Some(existing.catalog_factories),
+            secrets_store: Some(existing.secrets_store),
             runtime_env: Some(existing.runtime_env),
             function_factory: existing.function_factory,
             cache_factory: existing.cache_factory,
@@ -1605,6 +1625,16 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Set the named secrets store available to catalog and table providers.
+    ///
+    /// By default each newly built state owns an independent
+    /// [`MemorySecretsStore`]. Applications can supply a shared store or an
+    /// implementation backed by an external credential manager.
+    pub fn with_secrets_store(mut self, secrets_store: Arc<dyn SecretsStore>) -> Self {
+        self.secrets_store = Some(secrets_store);
+        self
+    }
+
     /// Set the [`RuntimeEnv`]
     pub fn with_runtime_env(mut self, runtime_env: Arc<RuntimeEnv>) -> Self {
         self.runtime_env = Some(runtime_env);
@@ -1705,6 +1735,7 @@ impl SessionStateBuilder {
             execution_props,
             table_factories,
             catalog_factories,
+            secrets_store,
             runtime_env,
             function_factory,
             cache_factory,
@@ -1757,6 +1788,8 @@ impl SessionStateBuilder {
             config,
             table_factories: table_factories.unwrap_or_default(),
             catalog_factories: catalog_factories.unwrap_or_default(),
+            secrets_store: secrets_store
+                .unwrap_or_else(|| Arc::new(MemorySecretsStore::new())),
             runtime_env,
             function_factory,
             cache_factory,
@@ -2005,6 +2038,11 @@ impl SessionStateBuilder {
         &mut self.catalog_factories
     }
 
+    /// Returns the currently configured secrets store.
+    pub fn secrets_store(&mut self) -> &mut Option<Arc<dyn SecretsStore>> {
+        &mut self.secrets_store
+    }
+
     /// Returns the current runtime_env value
     pub fn runtime_env(&mut self) -> &mut Option<Arc<RuntimeEnv>> {
         &mut self.runtime_env
@@ -2058,6 +2096,10 @@ impl Debug for SessionStateBuilder {
             .field("table_options", &self.table_options)
             .field("table_factories", &self.table_factories)
             .field("catalog_factories", &self.catalog_factories)
+            .field(
+                "secrets_store",
+                &self.secrets_store.as_ref().map(|_| "<redacted>"),
+            )
             .field("function_factory", &self.function_factory)
             .field("cache_factory", &self.cache_factory)
             .field("expr_planners", &self.expr_planners);

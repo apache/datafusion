@@ -49,6 +49,7 @@ pub mod catalog;
 pub mod physical_optimizer;
 pub mod planner;
 pub mod schema;
+pub mod secrets;
 pub mod session;
 pub mod table;
 
@@ -63,6 +64,7 @@ pub use crate::planner::{
     ExtensionPlanner, PhysicalPlanner, QueryPlanner, UnsupportedQueryPlanner,
 };
 pub use crate::schema::SchemaProvider;
+pub use crate::secrets::{MemorySecretsStore, SecretCreateMode, SecretsStore};
 pub use crate::session::{Session, SessionStore};
 pub use crate::table::{
     ScanArgs, ScanResult, TableFunction, TableFunctionArgs, TableFunctionImpl,

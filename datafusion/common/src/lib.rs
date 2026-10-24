@@ -58,6 +58,7 @@ pub mod parsers;
 pub mod pruning;
 pub mod rounding;
 pub mod scalar;
+pub mod secret;
 pub mod spans;
 pub mod stats;
 pub mod test_util;

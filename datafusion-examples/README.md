@@ -103,6 +103,7 @@ cargo run --example dataframe -- dataframe
 | partitioned_file_schema | [`data_io/partitioned_file_schema.rs`](examples/data_io/partitioned_file_schema.rs)       | Provide an explicit arrow schema for a PartitionedFile                    |
 | query_http_csv          | [`data_io/query_http_csv.rs`](examples/data_io/query_http_csv.rs)                         | Query CSV files via HTTP                                                  |
 | remote_catalog          | [`data_io/remote_catalog.rs`](examples/data_io/remote_catalog.rs)                         | Interact with a remote catalog                                            |
+| secrets                 | [`data_io/secrets.rs`](examples/data_io/secrets.rs)                                       | Share named credentials between table providers                           |
 
 ## DataFrame Examples
 

@@ -21,6 +21,14 @@ pub mod context;
 pub mod session_state;
 pub use session_state::{SessionState, SessionStateBuilder};
 
+/// Named credential storage available to session providers.
+pub mod secrets {
+    pub use datafusion_common::secret::Secret;
+    pub use datafusion_session::secrets::{
+        MemorySecretsStore, SecretCreateMode, SecretsStore,
+    };
+}
+
 mod session_state_defaults;
 
 pub use session_state_defaults::SessionStateDefaults;

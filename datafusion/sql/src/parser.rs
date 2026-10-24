@@ -23,8 +23,11 @@
 use datafusion_common::DataFusionError;
 use datafusion_common::config::{ConfigNonZeroUsize, SqlParserOptions};
 use datafusion_common::format::{ExplainFormat, ExplainStatementOptions};
+use datafusion_common::secret::Secret;
 use datafusion_common::{Diagnostic, Span, sql_err};
-use sqlparser::ast::{ExprWithAlias, Ident, ObjectType, OrderByOptions, OrderBySort};
+use sqlparser::ast::{
+    ExprWithAlias, Ident, ObjectType, OrderByOptions, OrderBySort, Visit, Visitor,
+};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
@@ -35,8 +38,9 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer, Word},
 };
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
+use std::ops::ControlFlow;
 use std::str::FromStr;
 
 // Use `Parser::expected` instead, if possible
@@ -398,6 +402,55 @@ impl fmt::Display for ResetStatement {
     }
 }
 
+/// DataFusion `CREATE SECRET` extension.
+///
+/// Unlike a raw SQL AST, the retained option collection redacts its values in
+/// debug output. Formatting this statement never reconstructs its secret SQL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateSecret {
+    /// The secret identifier, normalized by the SQL planner.
+    pub name: Ident,
+    /// Session-local secret values.
+    pub secret: Secret,
+    /// Replace an existing secret.
+    pub or_replace: bool,
+    /// Keep an existing secret unchanged.
+    pub if_not_exists: bool,
+}
+
+impl fmt::Display for CreateSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CREATE ")?;
+        if self.or_replace {
+            write!(f, "OR REPLACE ")?;
+        }
+        write!(f, "SECRET ")?;
+        if self.if_not_exists {
+            write!(f, "IF NOT EXISTS ")?;
+        }
+        write!(f, "{} (<redacted>)", self.name)
+    }
+}
+
+/// DataFusion `DROP SECRET` extension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DropSecret {
+    /// The secret identifier, normalized by the SQL planner.
+    pub name: Ident,
+    /// Succeed if the name does not exist.
+    pub if_exists: bool,
+}
+
+impl fmt::Display for DropSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DROP SECRET ")?;
+        if self.if_exists {
+            write!(f, "IF EXISTS ")?;
+        }
+        write!(f, "{}", self.name)
+    }
+}
+
 /// DataFusion SQL Statement.
 ///
 /// This can either be a [`Statement`] from [`sqlparser`] from a
@@ -405,7 +458,7 @@ impl fmt::Display for ResetStatement {
 /// EXTERNAL TABLE`. See [`DFParser`] for more information.
 ///
 /// [`Statement`]: sqlparser::ast::Statement
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Statement {
     /// ANSI SQL AST node (from sqlparser-rs)
     Statement(Box<SQLStatement>),
@@ -413,6 +466,10 @@ pub enum Statement {
     CreateExternalTable(CreateExternalTable),
     /// Extension: `CREATE EXTERNAL CATALOG`
     CreateExternalCatalog(CreateExternalCatalog),
+    /// Extension: `CREATE SECRET`, with redacted formatting.
+    CreateSecret(CreateSecret),
+    /// Extension: `DROP SECRET`.
+    DropSecret(DropSecret),
     /// Extension: `COPY TO`
     CopyTo(CopyToStatement),
     /// EXPLAIN for extensions
@@ -421,12 +478,70 @@ pub enum Statement {
     Reset(ResetStatement),
 }
 
+/// Detect nested native AST secret definitions before any formatter can print
+/// their values (for example an AST supplied directly by an embedding caller).
+pub(crate) fn contains_secret_definition(statement: &SQLStatement) -> bool {
+    // Queries cannot contain secret DDL. Besides avoiding a complete AST walk
+    // for normal SELECT statements, this distinguishes identifiers and aliases
+    // named CREATE / SECRET from an actual secret definition.
+    if matches!(statement, SQLStatement::Query(_)) {
+        return false;
+    }
+    struct SecretDefinitionVisitor;
+    impl Visitor for SecretDefinitionVisitor {
+        type Break = ();
+
+        fn pre_visit_statement(
+            &mut self,
+            statement: &SQLStatement,
+        ) -> ControlFlow<Self::Break> {
+            if matches!(statement, SQLStatement::CreateSecret { .. }) {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        }
+    }
+    statement.visit(&mut SecretDefinitionVisitor).is_break()
+}
+
+impl fmt::Debug for Statement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Statement::Statement(stmt) if contains_secret_definition(stmt) => {
+                f.write_str("Statement(<redacted CREATE SECRET>)")
+            }
+            Statement::Statement(stmt) => f.debug_tuple("Statement").field(stmt).finish(),
+            Statement::CreateExternalTable(stmt) => {
+                f.debug_tuple("CreateExternalTable").field(stmt).finish()
+            }
+            Statement::CreateExternalCatalog(stmt) => {
+                f.debug_tuple("CreateExternalCatalog").field(stmt).finish()
+            }
+            Statement::CreateSecret(stmt) => {
+                f.debug_tuple("CreateSecret").field(stmt).finish()
+            }
+            Statement::DropSecret(stmt) => {
+                f.debug_tuple("DropSecret").field(stmt).finish()
+            }
+            Statement::CopyTo(stmt) => f.debug_tuple("CopyTo").field(stmt).finish(),
+            Statement::Explain(stmt) => f.debug_tuple("Explain").field(stmt).finish(),
+            Statement::Reset(stmt) => f.debug_tuple("Reset").field(stmt).finish(),
+        }
+    }
+}
+
 impl fmt::Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Statement::Statement(stmt) if contains_secret_definition(stmt) => {
+                f.write_str("<redacted CREATE SECRET>")
+            }
             Statement::Statement(stmt) => write!(f, "{stmt}"),
             Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
             Statement::CreateExternalCatalog(stmt) => write!(f, "{stmt}"),
+            Statement::CreateSecret(stmt) => write!(f, "{stmt}"),
+            Statement::DropSecret(stmt) => write!(f, "{stmt}"),
             Statement::CopyTo(stmt) => write!(f, "{stmt}"),
             Statement::Explain(stmt) => write!(f, "{stmt}"),
             Statement::Reset(stmt) => write!(f, "{stmt}"),
@@ -719,6 +834,13 @@ impl<'a> DFParser<'a> {
                     Keyword::DROP
                         if self
                             .parser
+                            .parse_keywords(&[Keyword::DROP, Keyword::SECRET]) =>
+                    {
+                        self.parse_drop_secret()
+                    }
+                    Keyword::DROP
+                        if self
+                            .parser
                             .parse_keywords(&[Keyword::DROP, Keyword::CATALOG]) =>
                     {
                         self.parse_drop_catalog()
@@ -759,21 +881,59 @@ impl<'a> DFParser<'a> {
         Ok(expr)
     }
 
-    /// Helper method to parse a statement and handle errors consistently, especially for recursion limits
+    /// Inspect only an already-failed native statement before returning its
+    /// error. CREATE accepts dialect-specific, variable-length modifiers, so
+    /// this conservative error-only check deliberately does not duplicate its
+    /// prefix grammar. Successful SQL is checked using its actual AST instead.
+    fn failed_native_contains_secret_definition(&self, mut index: usize) -> bool {
+        let mut saw_create = false;
+        loop {
+            match &self.parser.token_at(index).token {
+                Token::EOF | Token::SemiColon => return false,
+                Token::Word(word) if word.keyword == Keyword::CREATE => {
+                    saw_create = true;
+                }
+                Token::Word(word) if saw_create && word.keyword == Keyword::SECRET => {
+                    return true;
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+    }
+
+    fn handle_native_statement(
+        &self,
+        result: Result<SQLStatement, ParserError>,
+        start: usize,
+    ) -> Result<Statement, DataFusionError> {
+        match result {
+            Ok(statement) if contains_secret_definition(&statement) => parser_err!(
+                "Nested CREATE SECRET statements are not supported (secret values redacted)"
+            ),
+            Ok(statement) => Ok(Statement::Statement(Box::new(statement))),
+            Err(_) if self.failed_native_contains_secret_definition(start) => {
+                parser_err!(
+                    "Invalid nested CREATE SECRET syntax (secret values redacted)"
+                )
+            }
+            Err(ParserError::RecursionLimitExceeded) => Err(DataFusionError::SQL(
+                Box::new(ParserError::RecursionLimitExceeded),
+                Some(format!(
+                    " (current limit: {})",
+                    self.options.recursion_limit
+                )),
+            )),
+            Err(other) => Err(DataFusionError::SQL(Box::new(other), None)),
+        }
+    }
+
+    /// Parse first, then inspect the actual AST. Only a native parse error needs
+    /// the value-redacting token fallback, using its original buffer position.
     fn parse_and_handle_statement(&mut self) -> Result<Statement, DataFusionError> {
-        self.parser
-            .parse_statement()
-            .map(|stmt| Statement::Statement(Box::from(stmt)))
-            .map_err(|e| match e {
-                ParserError::RecursionLimitExceeded => DataFusionError::SQL(
-                    Box::new(ParserError::RecursionLimitExceeded),
-                    Some(format!(
-                        " (current limit: {})",
-                        self.options.recursion_limit
-                    )),
-                ),
-                other => DataFusionError::SQL(Box::new(other), None),
-            })
+        let start = self.parser.index();
+        let result = self.parser.parse_statement();
+        self.handle_native_statement(result, start)
     }
 
     /// Parse a SQL `COPY TO` statement
@@ -1015,6 +1175,18 @@ impl<'a> DFParser<'a> {
 
     /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
     pub fn parse_create(&mut self) -> Result<Statement, DataFusionError> {
+        // parse_statement has consumed CREATE. Preserve that actual token for
+        // the error-only fallback, even when native parsing consumes modifiers.
+        let create_start = self.parser.get_current_index();
+        if self
+            .parser
+            .parse_keywords(&[Keyword::OR, Keyword::REPLACE, Keyword::SECRET])
+        {
+            return self.parse_create_secret(true);
+        }
+        if self.parser.parse_keyword(Keyword::SECRET) {
+            return self.parse_create_secret(false);
+        }
         // TODO: Change sql parser to take in `or_replace: bool` inside parse_create()
         if self
             .parser
@@ -1036,12 +1208,88 @@ impl<'a> DFParser<'a> {
         {
             self.parse_create_external(true, false)
         } else if self.parser.parse_keywords(&[Keyword::CATALOG]) {
-            Ok(Statement::Statement(Box::from(
-                self.parser.parse_create_database()?,
-            )))
+            let result = self.parser.parse_create_database();
+            self.handle_native_statement(result, create_start)
         } else {
-            Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
+            let result = self.parser.parse_create();
+            self.handle_native_statement(result, create_start)
         }
+    }
+
+    /// Parse a session-local collection without retaining a printable raw SQL AST.
+    /// Errors deliberately omit unexpected tokens because they may contain values.
+    fn parse_create_secret(
+        &mut self,
+        or_replace: bool,
+    ) -> Result<Statement, DataFusionError> {
+        let invalid = || {
+            DataFusionError::from(ParserError::ParserError(
+                "Invalid CREATE SECRET syntax (secret values redacted)".to_owned(),
+            ))
+        };
+        let if_not_exists =
+            self.parser
+                .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
+        if if_not_exists && or_replace {
+            return parser_err!(
+                "CREATE SECRET cannot combine OR REPLACE and IF NOT EXISTS"
+            );
+        }
+        let name = self.parser.parse_identifier().map_err(|_| invalid())?;
+        if !self.parser.consume_token(&Token::LParen) {
+            return Err(invalid());
+        }
+        let mut options = BTreeMap::new();
+        loop {
+            let key = self.parser.parse_identifier().map_err(|_| invalid())?;
+            let key = crate::utils::normalize_ident(key);
+            let value = match self.parser.next_token().token {
+                Token::SingleQuotedString(value) => value,
+                Token::Word(word) => word.value,
+                _ => return Err(invalid()),
+            };
+            if options.insert(key, value).is_some() {
+                return parser_err!(
+                    "CREATE SECRET contains duplicate option names (values redacted)"
+                );
+            }
+            if self.parser.consume_token(&Token::RParen) {
+                break;
+            }
+            if !self.parser.consume_token(&Token::Comma) {
+                return Err(invalid());
+            }
+        }
+        if !matches!(
+            self.parser.peek_token().token,
+            Token::EOF | Token::SemiColon
+        ) {
+            return Err(invalid());
+        }
+        Ok(Statement::CreateSecret(CreateSecret {
+            name,
+            secret: Secret::new(options),
+            or_replace,
+            if_not_exists,
+        }))
+    }
+
+    /// Parse the session-local identifier after `DROP SECRET`.
+    fn parse_drop_secret(&mut self) -> Result<Statement, DataFusionError> {
+        let invalid = || {
+            DataFusionError::from(ParserError::ParserError(
+                "Invalid DROP SECRET syntax".to_owned(),
+            ))
+        };
+        let if_exists = self.parser.parse_keywords(&[Keyword::IF, Keyword::EXISTS]);
+        let name = self.parser.parse_identifier().map_err(|_| invalid())?;
+        if !matches!(
+            self.parser.peek_token().token,
+            Token::EOF | Token::SemiColon
+        ) {
+            return Err(invalid());
+        }
+        Ok(Statement::DropSecret(DropSecret { name, if_exists }))
     }
 
     /// Dispatches `CREATE [OR REPLACE] [UNBOUNDED] EXTERNAL ...` (with the
@@ -1527,6 +1775,222 @@ mod tests {
     };
     use sqlparser::dialect::SnowflakeDialect;
     use sqlparser::tokenizer::{Location, Span, Whitespace};
+
+    #[test]
+    fn create_secret_preserves_values_and_redacts_ast() {
+        let canary = "canary-secret-value-4962";
+        let sql = format!(
+            "CREATE OR REPLACE SECRET MySecret (TYPE s3, KEY_ID 'public-id', SECRET '{canary}', EMPTY '')"
+        );
+        let statements = DFParser::parse_sql(&sql).unwrap();
+        let Statement::CreateSecret(create) = &statements[0] else {
+            panic!("expected CREATE SECRET")
+        };
+        assert_eq!(create.name.value, "MySecret");
+        assert!(create.or_replace);
+        assert!(!create.if_not_exists);
+        assert_eq!(create.secret.get("type"), Some("s3"));
+        assert_eq!(create.secret.get("secret"), Some(canary));
+        assert_eq!(create.secret.get("empty"), Some(""));
+        for output in [format!("{:?}", statements[0]), statements[0].to_string()] {
+            assert!(
+                !output.contains(canary),
+                "secret escaped through formatting"
+            );
+            assert!(!output.contains("public-id"));
+            assert!(output.contains("redacted"));
+        }
+    }
+
+    #[test]
+    fn explain_create_secret_redacts_nested_statement() {
+        let sql = "EXPLAIN CREATE SECRET sample (TOKEN 'canary-private-token-891')";
+        let statements = DFParser::parse_sql(sql).unwrap();
+        for output in [format!("{:?}", statements[0]), statements[0].to_string()] {
+            assert!(!output.contains("canary-private-token-891"));
+            assert!(output.contains("redacted"));
+        }
+    }
+
+    #[test]
+    fn create_secret_rejects_malformed_syntax_without_values() {
+        let canary = "canary-sensitive-option-237";
+        for sql in [
+            format!("CREATE SECRET s (TOKEN '{canary}', token 'duplicate')"),
+            format!("CREATE SECRET s (TOKEN '{canary}' '{canary}')"),
+            format!("CREATE SECRET s (TOKEN '{canary}',)"),
+            format!("CREATE SECRET s (TOKEN '{canary}') '{canary}'"),
+            format!("CREATE SECRET s (TOKEN '{canary}'"),
+            format!("CREATE SECRET s (TOKEN ['{canary}'])"),
+            format!("CREATE OR REPLACE SECRET IF NOT EXISTS s (TOKEN '{canary}')"),
+            "CREATE SECRET s ()".to_owned(),
+        ] {
+            let error = DFParser::parse_sql(&sql).unwrap_err();
+            for output in [error.to_string(), format!("{error:?}")] {
+                assert!(!output.contains(canary));
+            }
+        }
+    }
+
+    #[test]
+    fn secret_guard_preserves_identifier_aliases_and_normal_ddl() {
+        for sql in [
+            "SELECT create secret FROM t",
+            "SELECT * FROM create secret",
+            "EXPLAIN SELECT create secret FROM t",
+            "CREATE TABLE safe AS SELECT create secret FROM t",
+            "CREATE TEMP TABLE safe AS SELECT create secret FROM t",
+            "CREATE VIEW safe AS SELECT * FROM create secret",
+            "PREPARE p AS SELECT create secret FROM t",
+            "PREPARE p AS SELECT 'CREATE SECRET'",
+        ] {
+            let statements = DFParser::parse_sql(sql).unwrap();
+            assert_eq!(statements.len(), 1);
+            for output in [format!("{:?}", statements[0]), statements[0].to_string()] {
+                assert!(!output.contains("redacted"));
+            }
+        }
+    }
+
+    #[test]
+    fn externally_supplied_native_secret_ast_is_redacted() {
+        for sql in [
+            "CREATE SECRET s (TYPE s3, TOKEN 'canary-external-913')",
+            "PREPARE p AS CREATE SECRET s (TYPE s3, TOKEN 'canary-external-913')",
+            "EXPLAIN CREATE SECRET s (TYPE s3, TOKEN 'canary-external-913')",
+        ] {
+            let statement = Parser::parse_sql(&GenericDialect {}, sql)
+                .unwrap()
+                .remove(0);
+            let statement = Statement::Statement(Box::new(statement));
+            for output in [
+                format!("{statement:?}"),
+                format!("{statement:#?}"),
+                statement.to_string(),
+            ] {
+                assert!(!output.contains("canary-external-913"));
+                assert!(output.contains("redacted"));
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_secret_forms_do_not_reach_printable_native_ast() {
+        let canary = "canary-native-secret-1042";
+        for sql in [
+            format!("CREATE TEMP SECRET s (TYPE s3, TOKEN '{canary}')"),
+            format!("CREATE TEMPORARY SECRET s (TYPE s3, TOKEN '{canary}')"),
+            format!("CREATE PERSISTENT SECRET s (TYPE s3, TOKEN '{canary}')"),
+            format!("CREATE OR REPLACE TEMP SECRET s (TYPE s3, TOKEN '{canary}')"),
+            format!("PREPARE p AS CREATE SECRET s (TYPE s3, TOKEN '{canary}')"),
+            format!("PREPARE p AS CREATE SECRET s (TYPE '{canary}'"),
+            format!("EXPLAIN PREPARE p AS CREATE SECRET s (TYPE s3, TOKEN '{canary}')"),
+            format!("SELECT 1; PREPARE p AS CREATE SECRET s (TYPE '{canary}'"),
+        ] {
+            let error = DFParser::parse_sql(&sql).unwrap_err();
+            assert!(!format!("{error:?}").contains(canary));
+            assert!(!error.to_string().contains(canary));
+        }
+        // Keywords embedded in quoted strings or identifiers are not definitions.
+        assert!(
+            DFParser::parse_sql("SELECT 'CREATE SECRET', \"CREATE\" FROM \"SECRET\"")
+                .is_ok()
+        );
+        assert!(
+            DFParser::parse_sql("CREATE TEMP TABLE t AS SELECT 'CREATE SECRET'").is_ok()
+        );
+    }
+
+    #[test]
+    fn native_create_secret_modifiers_redact_valid_and_malformed_definitions() {
+        let canary = "canary-native-modifier-3927";
+        // These are consumed before SECRET by sqlparser 0.63.0 parse_create,
+        // including variable-length CREATE VIEW parameter syntax.
+        for prefix in [
+            "OR ALTER",
+            "MULTISET",
+            "SET",
+            "LOCAL",
+            "GLOBAL",
+            "TRANSIENT",
+            "TEMP",
+            "TEMPORARY",
+            "VOLATILE",
+            "GLOBAL TEMP",
+            "OR REPLACE GLOBAL TRANSIENT TEMP VOLATILE",
+            "OR REPLACE OR ALTER SET LOCAL GLOBAL TRANSIENT TEMP VOLATILE",
+            "ALGORITHM = UNDEFINED",
+            "ALGORITHM = MERGE",
+            "ALGORITHM = TEMPTABLE",
+            "DEFINER = bob",
+            "SQL SECURITY INVOKER",
+            "SQL SECURITY DEFINER",
+            "ALGORITHM = MERGE DEFINER = bob SQL SECURITY DEFINER",
+        ] {
+            let valid = format!("CREATE {prefix} SECRET s (TYPE s3, TOKEN '{canary}')");
+            assert!(
+                Parser::parse_sql(&GenericDialect {}, &valid).is_ok(),
+                "native prefix should be valid: {prefix}"
+            );
+            for tail in [format!("'{canary}')"), format!("'{canary}' '{canary}')")] {
+                for wrapper in ["", "PREPARE p AS ", "EXPLAIN PREPARE p AS "] {
+                    let sql = format!(
+                        "{wrapper}CREATE {prefix} SECRET s (TYPE s3, TOKEN {tail}"
+                    );
+                    let error = DFParser::parse_sql(&sql).unwrap_err();
+                    for output in [error.to_string(), format!("{error:?}")] {
+                        assert!(!output.contains(canary), "prefix leaked: {prefix}");
+                        assert!(
+                            output.contains("redacted"),
+                            "prefix was not guarded: {prefix}"
+                        );
+                    }
+                }
+            }
+        }
+        let dialect = sqlparser::dialect::DuckDbDialect {};
+        for prefix in ["PERSISTENT", "GLOBAL PERSISTENT", "OR REPLACE PERSISTENT"] {
+            let valid = format!("CREATE {prefix} SECRET s (TYPE s3, TOKEN '{canary}')");
+            assert!(Parser::parse_sql(&dialect, &valid).is_ok());
+            for sql in [
+                valid,
+                format!(
+                    "CREATE {prefix} SECRET s (TYPE s3, TOKEN '{canary}' '{canary}')"
+                ),
+                format!(
+                    "PREPARE p AS CREATE {prefix} SECRET s (TYPE s3, TOKEN '{canary}' '{canary}')"
+                ),
+            ] {
+                let error = DFParser::parse_sql_with_dialect(&sql, &dialect).unwrap_err();
+                assert!(!error.to_string().contains(canary));
+                assert!(!format!("{error:?}").contains(canary));
+                assert!(error.to_string().contains("redacted"));
+            }
+        }
+    }
+
+    #[test]
+    fn create_and_drop_secret_identifier_and_existence_flags() {
+        let statements = DFParser::parse_sql("CREATE SECRET IF NOT EXISTS \"MixedCase\" (\"MixedKey\" 'value'); DROP SECRET IF EXISTS \"MixedCase\"").unwrap();
+        let Statement::CreateSecret(create) = &statements[0] else {
+            panic!("expected CREATE SECRET")
+        };
+        assert!(create.if_not_exists);
+        assert_eq!(create.name.quote_style, Some('"'));
+        assert_eq!(create.secret.get("MixedKey"), Some("value"));
+        let Statement::DropSecret(drop) = &statements[1] else {
+            panic!("expected DROP SECRET")
+        };
+        assert_eq!(drop.name.value, "MixedCase");
+        assert!(drop.if_exists);
+        assert_eq!(
+            statements[1].to_string(),
+            "DROP SECRET IF EXISTS \"MixedCase\""
+        );
+        for sql in ["DROP SECRET s, t", "DROP SECRET", "DROP SECRET s CASCADE"] {
+            assert!(DFParser::parse_sql(sql).is_err());
+        }
+    }
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), DataFusionError> {
         let statements = DFParser::parse_sql(sql)?;

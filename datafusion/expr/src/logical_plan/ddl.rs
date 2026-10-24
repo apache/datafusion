@@ -28,6 +28,7 @@ use crate::expr::Sort;
 #[cfg(not(feature = "sql"))]
 use crate::sql::Ident;
 use arrow::datatypes::DataType;
+use datafusion_common::secret::Secret;
 use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
 use datafusion_common::{
     Constraints, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference,
@@ -52,6 +53,10 @@ pub enum DdlStatement {
     CreateCatalog(CreateCatalog),
     /// Creates a new catalog by invoking a registered `CatalogProviderFactory`.
     CreateExternalCatalog(Box<CreateExternalCatalog>),
+    /// Registers a session-scoped collection of secret values.
+    CreateSecret(CreateSecret),
+    /// Removes a session-scoped secret.
+    DropSecret(DropSecret),
     /// Creates a new index.
     CreateIndex(CreateIndex),
     /// Drops a table.
@@ -81,6 +86,8 @@ impl DdlStatement {
             }
             DdlStatement::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             DdlStatement::CreateExternalCatalog(ce) => &ce.schema,
+            DdlStatement::CreateSecret(CreateSecret { schema, .. }) => schema,
+            DdlStatement::DropSecret(DropSecret { schema, .. }) => schema,
             DdlStatement::CreateIndex(CreateIndex { schema, .. }) => schema,
             DdlStatement::DropTable(DropTable { schema, .. }) => schema,
             DdlStatement::DropView(DropView { schema, .. }) => schema,
@@ -101,6 +108,8 @@ impl DdlStatement {
             DdlStatement::CreateCatalogSchema(_) => "CreateCatalogSchema",
             DdlStatement::CreateCatalog(_) => "CreateCatalog",
             DdlStatement::CreateExternalCatalog(_) => "CreateExternalCatalog",
+            DdlStatement::CreateSecret(_) => "CreateSecret",
+            DdlStatement::DropSecret(_) => "DropSecret",
             DdlStatement::CreateIndex(_) => "CreateIndex",
             DdlStatement::DropTable(_) => "DropTable",
             DdlStatement::DropView(_) => "DropView",
@@ -122,6 +131,7 @@ impl DdlStatement {
                 vec![input]
             }
             DdlStatement::CreateView(CreateView { input, .. }) => vec![input],
+            DdlStatement::CreateSecret(_) | DdlStatement::DropSecret(_) => vec![],
             DdlStatement::CreateIndex(_) => vec![],
             DdlStatement::DropTable(_) => vec![],
             DdlStatement::DropView(_) => vec![],
@@ -178,6 +188,14 @@ impl DdlStatement {
                     }
                     DdlStatement::CreateExternalCatalog(ce) => {
                         write!(f, "CreateExternalCatalog: {:?}", ce.catalog_name)
+                    }
+                    DdlStatement::CreateSecret(CreateSecret { name, .. }) => {
+                        write!(f, "CreateSecret: {name:?}")
+                    }
+                    DdlStatement::DropSecret(DropSecret {
+                        name, if_exists, ..
+                    }) => {
+                        write!(f, "DropSecret: {name:?} if_exists={if_exists}")
                     }
                     DdlStatement::CreateIndex(CreateIndex { name, .. }) => {
                         write!(f, "CreateIndex: {name:?}")
@@ -705,6 +723,61 @@ impl CreateExternalCatalogBuilder {
             options: self.options,
             schema: self.schema,
         }
+    }
+}
+
+/// Registers a session-scoped secret collection.
+///
+/// Secret values are retained for local execution, but are redacted when the
+/// statement is formatted and must not be serialized into a distributed plan.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSecret {
+    /// The normalized, session-local secret name.
+    pub name: String,
+    /// The secret collection. Its debug representation redacts all values.
+    pub secret: Secret,
+    /// Replace an existing collection with the same name.
+    pub or_replace: bool,
+    /// Leave an existing collection unchanged.
+    pub if_not_exists: bool,
+    /// Empty result schema.
+    pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for CreateSecret {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        (
+            &self.name,
+            &self.secret,
+            self.or_replace,
+            self.if_not_exists,
+        )
+            .partial_cmp(&(
+                &other.name,
+                &other.secret,
+                other.or_replace,
+                other.if_not_exists,
+            ))
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
+}
+
+/// Removes a session-scoped secret collection.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropSecret {
+    /// The normalized, session-local secret name.
+    pub name: String,
+    /// Succeed when no collection with this name exists.
+    pub if_exists: bool,
+    /// Empty result schema.
+    pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for DropSecret {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        (&self.name, self.if_exists)
+            .partial_cmp(&(&other.name, other.if_exists))
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
