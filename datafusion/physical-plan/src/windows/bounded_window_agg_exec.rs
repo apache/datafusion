@@ -3037,8 +3037,11 @@ mod tests {
             merged, oracle,
             "merged task states must match single-BWAG oracle — parallel prefix-merge contract"
         );
-        // HLL is approximate but exact for a 5-element universe.
-        assert_eq!(merged, ScalarValue::UInt64(Some(5)));
+        // HLL is approximate but exact for a 5-element universe. Under
+        // `force_hash_collisions` every value hashes alike, so the count is 1.
+        if cfg!(not(feature = "force_hash_collisions")) {
+            assert_eq!(merged, ScalarValue::UInt64(Some(5)));
+        }
         Ok(())
     }
 

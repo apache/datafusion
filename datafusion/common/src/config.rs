@@ -24,8 +24,8 @@ use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::{
-    DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion,
-    RowGroupRangeAssignment,
+    DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFParquetWriterVersion,
+    DFTimeUnit, RowGroupRangeAssignment,
 };
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
@@ -925,29 +925,6 @@ config_namespace! {
         /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
         pub perfect_hash_join_min_key_density: f64, default = 0.15
 
-        /// Enable an exact integer membership prefilter for hash joins with a single
-        /// integer key when the build side uses a hash table and the join is not
-        /// null-aware. It skips lookups for absent keys while retaining NULLs and
-        /// probe rows for the original join logic.
-        pub enable_join_integer_prefilter: bool, default = false
-
-        /// Maximum number of integer values covered by the join prefilter bitmap
-        /// (`max_key - min_key + 1`). Zero disables bitmap construction.
-        /// Larger ranges fall back to normal hash table lookups.
-        pub join_integer_prefilter_max_key_range: u64, default = 262144
-
-        /// The integer prefilter must prune more than this fraction of all sampled
-        /// probe rows, including NULLs, to keep filtering. Must be finite and in
-        /// [0, 1], validated when executing the join.
-        pub join_integer_prefilter_min_pruning_ratio: f64, default = 0.5
-
-        /// Minimum input probe rows in each integer prefilter sampling window,
-        /// including NULLs. Must be greater than zero. Windows end at batch boundaries.
-        /// Unprofitable samples initially pause for 10 times this many input rows;
-        /// consecutive failures double the pause up to 128 times. A profitable
-        /// sample resets the pause to 10 times this many rows.
-        pub join_integer_prefilter_sample_rows: ConfigNonZeroUsize, default = non_zero_usize_default(12288)
-
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
         /// are highly selective filters or joins that could produce tiny output batches. The
@@ -1403,13 +1380,13 @@ config_namespace! {
         /// reading them as binary and then casting to string.
         pub binary_as_string: bool, default = false
 
-        /// (reading) If true, parquet reader will read columns of
-        /// physical type int96 as originating from a different resolution
-        /// than nanosecond. This is useful for reading data from systems like Spark
-        /// which stores microsecond resolution timestamps in an int96 allowing it
-        /// to write values with a larger date range than 64-bit timestamps with
-        /// nanosecond resolution.
-        pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
+        /// (reading) If set, parquet reader will read columns of
+        /// physical type int96 as originating from this resolution instead of
+        /// nanosecond. Valid values are: ns, us, ms, and s. This is useful for
+        /// reading data from systems like Spark which store microsecond
+        /// resolution timestamps in an int96, allowing them to write values with
+        /// a larger date range than 64-bit timestamps with nanosecond resolution.
+        pub coerce_int96: Option<DFTimeUnit>, default = None
 
         /// (reading) Optional timezone applied to INT96 columns when `coerce_int96`
         /// is set. When `Some`, INT96 columns coerce to
@@ -1418,8 +1395,8 @@ config_namespace! {
         /// values as UTC-adjusted instants, so callers that need the resulting
         /// Arrow type to be timezone-aware (e.g. for Spark `TimestampType`
         /// semantics) should set this to `"UTC"`. No effect when `coerce_int96`
-        /// is `None`.
-        pub coerce_int96_tz: Option<String>, default = None
+        /// is `None`, but the value is still validated when it is set.
+        pub coerce_int96_tz: Option<ConfigTimeZone>, default = None
 
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
@@ -1544,7 +1521,7 @@ config_namespace! {
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub encoding: Option<String>, transform = str::to_lowercase, default = None
+        pub encoding: Option<DFParquetEncoding>, default = None
 
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
@@ -2970,6 +2947,7 @@ pub enum ConfigFileType {
     #[cfg(feature = "parquet")]
     PARQUET,
     JSON,
+    ARROW,
 }
 
 /// Represents the configuration options available for handling different table formats within a data processing application.
@@ -2987,6 +2965,10 @@ pub struct TableOptions {
 
     /// Configuration options for JSON file handling.
     pub json: JsonOptions,
+
+    /// Configuration options for Arrow IPC file handling. This includes settings for the
+    /// compression codec used for record batches written to disk.
+    pub arrow: ArrowOptions,
 
     /// The current file format that the table operations should assume. This option allows
     /// for dynamic switching between the supported file types (e.g., CSV, Parquet, JSON).
@@ -3011,11 +2993,13 @@ impl ConfigField for TableOptions {
                 ConfigFileType::PARQUET => self.parquet.visit(v, "format", ""),
                 ConfigFileType::CSV => self.csv.visit(v, "format", ""),
                 ConfigFileType::JSON => self.json.visit(v, "format", ""),
+                ConfigFileType::ARROW => self.arrow.visit(v, "format", ""),
             }
         } else {
             self.csv.visit(v, "csv", "");
             self.parquet.visit(v, "parquet", "");
             self.json.visit(v, "json", "");
+            self.arrow.visit(v, "arrow", "");
         }
     }
 
@@ -3047,6 +3031,7 @@ impl ConfigField for TableOptions {
                     ConfigFileType::PARQUET => self.parquet.set(rem, value),
                     ConfigFileType::CSV => self.csv.set(rem, value),
                     ConfigFileType::JSON => self.json.set(rem, value),
+                    ConfigFileType::ARROW => self.arrow.set(rem, value),
                 }
             }
             _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
@@ -3909,6 +3894,80 @@ impl EncryptionFactoryOptions {
     }
 }
 
+/// Compression codec used for the record batch bodies of Arrow IPC files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrowIpcCompression {
+    /// No compression
+    Uncompressed,
+    /// LZ4 (frame format)
+    Lz4Frame,
+    /// Zstd
+    Zstd,
+}
+
+impl FromStr for ArrowIpcCompression {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.replace('\'', "").to_ascii_lowercase().as_str() {
+            "uncompressed" | "" => Ok(Self::Uncompressed),
+            "lz4_frame" => Ok(Self::Lz4Frame),
+            "zstd" => Ok(Self::Zstd),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid Arrow IPC compression type: {other}. \
+                Expected one of: uncompressed, lz4_frame, zstd"
+            ))),
+        }
+    }
+}
+
+impl Display for ArrowIpcCompression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Uncompressed => "uncompressed",
+            Self::Lz4Frame => "lz4_frame",
+            Self::Zstd => "zstd",
+        };
+        write!(f, "{str}")
+    }
+}
+
+impl ConfigField for ArrowIpcCompression {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = ArrowIpcCompression::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl From<ArrowIpcCompression> for Option<CompressionType> {
+    fn from(c: ArrowIpcCompression) -> Self {
+        match c {
+            ArrowIpcCompression::Uncompressed => None,
+            ArrowIpcCompression::Lz4Frame => Some(CompressionType::LZ4_FRAME),
+            ArrowIpcCompression::Zstd => Some(CompressionType::ZSTD),
+        }
+    }
+}
+
+config_namespace! {
+    /// Options controlling Arrow IPC format
+    pub struct ArrowOptions {
+        /// Compression codec used for the record batch bodies of Arrow IPC files.
+        /// One of: "uncompressed", "lz4_frame", "zstd"
+        pub compression: ArrowIpcCompression, default = ArrowIpcCompression::Lz4Frame
+        /// Compression level to use with the "zstd" codec. Not supported by "lz4_frame"
+        /// or "uncompressed". If not specified, the default zstd compression level is used.
+        pub compression_level: Option<i32>, default = None
+        /// Byte alignment to pad buffers to when writing Arrow IPC files.
+        /// Must be one of 8, 16, 32, or 64.
+        pub alignment: usize, default = 64
+    }
+}
+
 config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {
@@ -4164,7 +4223,7 @@ pub enum OutputFormat {
     #[cfg(feature = "parquet")]
     PARQUET(TableParquetOptions),
     AVRO,
-    ARROW,
+    ARROW(ArrowOptions),
 }
 
 impl Display for OutputFormat {
@@ -4175,7 +4234,7 @@ impl Display for OutputFormat {
             #[cfg(feature = "parquet")]
             OutputFormat::PARQUET(_) => "parquet",
             OutputFormat::AVRO => "avro",
-            OutputFormat::ARROW => "arrow",
+            OutputFormat::ARROW(_) => "arrow",
         };
         write!(f, "{out}")
     }
@@ -4184,6 +4243,7 @@ impl Display for OutputFormat {
 #[cfg(test)]
 mod tests {
     use crate::assert_contains;
+    #[cfg(feature = "parquet")]
     use crate::config::TableParquetOptions;
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
@@ -4935,6 +4995,112 @@ mod tests {
         let mut scalar = DFParquetCompression::Lz4;
         assert!(ConfigField::set(&mut scalar, "typo", "snappy").is_err());
         assert_eq!(scalar, DFParquetCompression::Lz4);
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_coerce_int96_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFTimeUnit};
+
+        let mut config = ConfigOptions::default();
+        assert_eq!(config.execution.parquet.coerce_int96, None);
+
+        for (value, expected) in [
+            ("ns", DFTimeUnit::Nanosecond),
+            ("US", DFTimeUnit::Microsecond),
+            ("ms", DFTimeUnit::Millisecond),
+            ("s", DFTimeUnit::Second),
+        ] {
+            config
+                .set("datafusion.execution.parquet.coerce_int96", value)
+                .unwrap();
+            assert_eq!(config.execution.parquet.coerce_int96, Some(expected));
+        }
+
+        let err = config
+            .set("datafusion.execution.parquet.coerce_int96", "nanos")
+            .unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Invalid parquet coerce_int96 setting: nanos. Expected one of: ns, us, ms, s"
+        );
+        // A rejected value leaves the previous one in place.
+        assert_eq!(
+            config.execution.parquet.coerce_int96,
+            Some(DFTimeUnit::Second)
+        );
+
+        // An invalid update must leave an unset option unset rather than
+        // inserting a default.
+        config.execution.parquet.coerce_int96 = None;
+        assert!(
+            config
+                .set("datafusion.execution.parquet.coerce_int96", "nanos")
+                .is_err()
+        );
+        assert_eq!(config.execution.parquet.coerce_int96, None);
+
+        config.execution.parquet.coerce_int96 = Some(DFTimeUnit::Microsecond);
+        assert!(
+            config
+                .set("datafusion.execution.parquet.coerce_int96.typo", "ns")
+                .is_err()
+        );
+        assert!(
+            config
+                .reset("datafusion.execution.parquet.coerce_int96.typo")
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.coerce_int96,
+            Some(DFTimeUnit::Microsecond)
+        );
+
+        let mut scalar = DFTimeUnit::Microsecond;
+        assert!(ConfigField::set(&mut scalar, "typo", "ns").is_err());
+        assert_eq!(scalar, DFTimeUnit::Microsecond);
+    }
+
+    #[test]
+    fn test_parquet_coerce_int96_tz_validation() {
+        use crate::config::ConfigOptions;
+
+        const KEY: &str = "datafusion.execution.parquet.coerce_int96_tz";
+        let mut config = ConfigOptions::default();
+        let tz = |config: &ConfigOptions| {
+            config
+                .execution
+                .parquet
+                .coerce_int96_tz
+                .as_ref()
+                .map(|tz| tz.to_string())
+        };
+        assert_eq!(tz(&config), None);
+
+        // Valid values are kept exactly as written, with or without coerce_int96.
+        for value in ["UTC", "America/Los_Angeles", "+08:00", "-0530", "+08"] {
+            config.set(KEY, value).unwrap();
+            assert_eq!(tz(&config).as_deref(), Some(value));
+        }
+
+        // A rejected value leaves the previous one in place.
+        for value in ["Not/A_Timezone", "utc", "08:00", ""] {
+            let err = config.set(KEY, value).unwrap_err();
+            assert_contains!(err.to_string(), format!("Invalid time zone: {value}."));
+            assert_eq!(tz(&config).as_deref(), Some("+08"));
+        }
+
+        // Reset restores None, and an invalid update leaves it unset.
+        config.reset(KEY).unwrap();
+        assert_eq!(tz(&config), None);
+        assert!(config.set(KEY, "Not/A_Timezone").is_err());
+        assert_eq!(tz(&config), None);
+
+        // The option has no nested fields.
+        config.set(KEY, "UTC").unwrap();
+        assert!(config.set(&format!("{KEY}.typo"), "UTC").is_err());
+        assert!(config.reset(&format!("{KEY}.typo")).is_err());
+        assert_eq!(tz(&config).as_deref(), Some("UTC"));
     }
 
     #[cfg(feature = "parquet")]

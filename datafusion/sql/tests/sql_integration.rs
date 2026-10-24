@@ -28,10 +28,10 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
-    ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
-    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
-    LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    ValueOrLambda, Volatility, col,
+    ColumnarValue, CreateIndex, DdlStatement, Expr, ExprSchemable,
+    HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility, col,
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
     lambda,
     logical_plan::LogicalPlan,
@@ -46,6 +46,7 @@ use datafusion_sql::{
 
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
+use datafusion_functions::datetime::{self, planner::DatetimeFunctionPlanner};
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf,
     average::avg_udaf,
@@ -910,10 +911,15 @@ fn select_scalar_func_with_literal_no_relation() {
 struct SingleArgumentCoalescePlanner;
 
 impl ExprPlanner for SingleArgumentCoalescePlanner {
-    fn plan_scalar(&self, expr: RawScalarExpr) -> Result<PlannerResult<RawScalarExpr>> {
+    fn plan_scalar(
+        &self,
+        expr: RawScalarExpr,
+        schema: &DFSchema,
+    ) -> Result<PlannerResult<RawScalarExpr>> {
         if expr.func.name() == "coalesce"
             && let [arg] = expr.args.as_slice()
         {
+            assert_eq!(arg.get_type(schema)?, DataType::Int64);
             Ok(PlannerResult::Planned(arg.clone()))
         } else {
             Ok(PlannerResult::Original(expr))
@@ -927,7 +933,7 @@ fn select_scalar_func_with_expr_planner() -> Result<()> {
         .with_scalar_function(core_functions::coalesce())
         .with_expr_planner(Arc::new(SingleArgumentCoalescePlanner));
     let plan = logical_plan_from_state(
-        "SELECT coalesce(42)",
+        "SELECT coalesce(t.a) FROM (SELECT 42 AS a) AS t",
         &GenericDialect {},
         ParserOptions::default(),
         state,
@@ -935,8 +941,10 @@ fn select_scalar_func_with_expr_planner() -> Result<()> {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Int64(42)
-      EmptyRelation: rows=1
+    Projection: t.a
+      SubqueryAlias: t
+        Projection: Int64(42) AS a
+          EmptyRelation: rows=1
     "
     );
     Ok(())
@@ -3990,6 +3998,40 @@ fn plan_merge_into_preserves_target_qualifier_and_quoted_columns() {
     };
     assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
     assert_eq!(values[0].to_string(), "s.j2_id");
+
+    let display = plan.display_indent().to_string();
+    assert_contains!(
+        &display,
+        r#"Dml: op=[MergeInto] table=[person_quoted_cols] on=[t.id = s.j2_id] clauses=[WHEN MATCHED THEN UPDATE SET "First Name" = s.j2_string, WHEN NOT MATCHED THEN INSERT (id, "Age") VALUES (s.j2_id, Int64(42))]"#
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.display_pg_json().to_string()).unwrap();
+    let root = &json[0]["Plan"];
+    assert_eq!(root["Node Type"], "Dml");
+    assert_eq!(root["Operation"], "MergeInto");
+    assert_eq!(root["Table Name"], "person_quoted_cols");
+    assert_eq!(root["On"], "t.id = s.j2_id");
+    assert_eq!(
+        root["Clauses"],
+        serde_json::json!([
+            r#"WHEN MATCHED THEN UPDATE SET "First Name" = s.j2_string"#,
+            r#"WHEN NOT MATCHED THEN INSERT (id, "Age") VALUES (s.j2_id, Int64(42))"#,
+        ])
+    );
+}
+
+#[test]
+fn plan_update_json_has_dml_node_without_merge_fields() {
+    let plan = logical_plan("UPDATE person SET age = 42").unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.display_pg_json().to_string()).unwrap();
+    let root = json[0]["Plan"].as_object().unwrap();
+    assert_eq!(root["Node Type"], "Dml");
+    assert_eq!(root["Operation"], "Update");
+    assert_eq!(root["Table Name"], "person");
+    assert!(!root.contains_key("On"));
+    assert!(!root.contains_key("Clauses"));
 }
 
 #[rstest]
@@ -4052,6 +4094,44 @@ fn plan_merge_into_rejects_invalid_actions_and_structure(
     let err = logical_plan(sql).unwrap_err();
     assert!(
         err.strip_backtrace().contains(expected),
+        "unexpected error: {err}"
+    );
+}
+
+/// With the `DatetimeFunctionPlanner`, `AT TIME ZONE` plans as the `timezone`
+/// function for every input type. The function picks the result type after
+/// type coercion, so the SQL planner does not need the input type.
+#[test]
+fn plan_at_time_zone_with_datetime_planner() {
+    let state = MockSessionState::default()
+        .with_expr_planner(Arc::new(DatetimeFunctionPlanner))
+        .with_scalar_function(datetime::timezone());
+    let plan = logical_plan_from_state(
+        "SELECT birth_date AT TIME ZONE 'America/Denver' FROM person",
+        &GenericDialect {},
+        ParserOptions::default(),
+        state,
+    )
+    .unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: timezone(Utf8("America/Denver"), person.birth_date)
+      TableScan: person
+    "#
+    );
+}
+
+/// Without an `ExprPlanner` for `AT TIME ZONE`, planning fails for every input,
+/// as for `EXTRACT`. The SQL planner does not know the input type after type
+/// coercion, so it cannot choose a lowering on its own.
+#[test]
+fn plan_at_time_zone_without_planner() {
+    let err = logical_plan("SELECT birth_date AT TIME ZONE 'America/Denver' FROM person")
+        .unwrap_err();
+    assert!(
+        err.strip_backtrace()
+            .contains("AT TIME ZONE needs an ExprPlanner"),
         "unexpected error: {err}"
     );
 }

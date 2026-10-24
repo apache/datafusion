@@ -41,7 +41,7 @@ use crate::utils::{
     Columnizer, can_hash, check_all_columns_from_schema, compare_sort_expr,
     expand_qualified_wildcard, expand_wildcard, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
-    split_conjunction_owned,
+    passthrough_field_index, split_conjunction_owned,
 };
 use crate::{
     BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
@@ -1988,22 +1988,20 @@ pub fn add_group_by_exprs_from_dependencies(
         return Ok(group_expr);
     }
 
-    // Names of the fields produced by the GROUP BY exprs for example, `GROUP BY
-    // c1 + 1` produces an output field named `"c1 + 1"`
-    let mut group_by_field_names = group_expr
+    // The input field that each GROUP BY expression passes through, or `None`
+    // for a computed expression such as `c1 + 1`
+    let mut group_by_input_indices = group_expr
         .iter()
-        .map(|e| e.schema_name().to_string())
+        .map(|e| passthrough_field_index(e, schema))
         .collect::<Vec<_>>();
 
     if let Some(target_indices) =
-        get_target_functional_dependencies(schema, &group_by_field_names)
+        get_target_functional_dependencies(schema, &group_by_input_indices)
     {
         for idx in target_indices {
-            let expr = Expr::Column(Column::from(schema.qualified_field(idx)));
-            let expr_name = expr.schema_name().to_string();
-            if !group_by_field_names.contains(&expr_name) {
-                group_by_field_names.push(expr_name);
-                group_expr.push(expr);
+            if !group_by_input_indices.contains(&Some(idx)) {
+                group_by_input_indices.push(Some(idx));
+                group_expr.push(Expr::Column(Column::from(schema.qualified_field(idx))));
             }
         }
     }

@@ -271,4 +271,35 @@ statement ok
 drop table array_repeat_null_slot_table
 
 
+# array_repeat keeps a non-nullable or custom-named element field
+statement ok
+create table array_repeat_field_table as select
+  arrow_cast(make_array(1, 2), 'List(non-null Int64)') as non_null_list,
+  arrow_cast(make_array(1, 2), 'List(Int64, field: ''element'')') as named_list,
+  arrow_cast(make_array(1, 2), 'LargeList(non-null Int64)') as non_null_large_list,
+  arrow_cast(make_array(1, 2), 'LargeList(Int64, field: ''element'')') as named_large_list;
+
+query ????
+select
+  array_repeat(non_null_list, 2),
+  array_repeat(named_list, 2),
+  array_repeat(non_null_large_list, 2),
+  array_repeat(named_large_list, 2)
+from array_repeat_field_table;
+----
+[[1, 2], [1, 2]] [[1, 2], [1, 2]] [[1, 2], [1, 2]] [[1, 2], [1, 2]]
+
+query TTTT
+select
+  arrow_typeof(array_repeat(non_null_list, 2)),
+  arrow_typeof(array_repeat(named_list, 2)),
+  arrow_typeof(array_repeat(non_null_large_list, 2)),
+  arrow_typeof(array_repeat(named_large_list, 2))
+from array_repeat_field_table;
+----
+List(List(non-null Int64)) List(List(Int64, field: 'element')) LargeList(LargeList(non-null Int64)) LargeList(LargeList(Int64, field: 'element'))
+
+statement ok
+drop table array_repeat_field_table
+
 include ./cleanup.slt.part
