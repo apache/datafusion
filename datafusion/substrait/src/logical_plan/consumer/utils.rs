@@ -23,7 +23,7 @@ use datafusion::common::{
 };
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Cast, Expr, ExprSchemable};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use substrait::proto::SortField;
 use substrait::proto::sort_field::SortDirection;
@@ -298,15 +298,36 @@ pub(super) fn ensure_schema_compatibility(
     table_schema: &DFSchema,
     substrait_schema: DFSchema,
 ) -> datafusion::common::Result<()> {
+    let name_index = unqualified_name_index(table_schema);
     substrait_schema
         .strip_qualifiers()
         .fields()
         .iter()
         .try_for_each(|substrait_field| {
-            let df_field =
-                table_schema.field_with_unqualified_name(substrait_field.name())?;
+            let df_field = match name_index.get(substrait_field.name().as_str()) {
+                Some(Some(idx)) => table_schema.field(*idx),
+                // Missing or duplicated names are resolved by DFSchema, which
+                // reports the appropriate error
+                _ => table_schema.field_with_unqualified_name(substrait_field.name())?,
+            };
             ensure_field_compatibility(df_field, substrait_field)
         })
+}
+
+/// Maps each unqualified field name of the schema to its index, or to `None` if
+/// the name occurs more than once.
+///
+/// Used to avoid a linear scan of the schema for every looked up field, which is
+/// quadratic for wide schemas.
+pub(super) fn unqualified_name_index(schema: &DFSchema) -> HashMap<&str, Option<usize>> {
+    let mut index = HashMap::with_capacity(schema.fields().len());
+    for (idx, field) in schema.fields().iter().enumerate() {
+        index
+            .entry(field.name().as_str())
+            .and_modify(|entry| *entry = None)
+            .or_insert(Some(idx));
+    }
+    index
 }
 
 /// Ensures that the given Substrait field is compatible with the given DataFusion field

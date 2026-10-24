@@ -18,7 +18,9 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
-use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
+use crate::logical_plan::consumer::utils::{
+    ensure_schema_compatibility, unqualified_name_index,
+};
 use datafusion::common::{
     DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
     substrait_datafusion_err, substrait_err,
@@ -286,14 +288,17 @@ fn apply_projection(
 
     match plan {
         LogicalPlan::TableScan(mut scan) => {
+            let name_index = unqualified_name_index(&df_schema);
             let column_indices: Vec<usize> = substrait_schema
                 .strip_qualifiers()
                 .fields()
                 .iter()
                 .map(|substrait_field| {
-                    Ok(df_schema
-                        .index_of_column_by_name(None, substrait_field.name().as_str())
-                        .unwrap())
+                    let name = substrait_field.name().as_str();
+                    Ok(match name_index.get(name) {
+                        Some(Some(idx)) => *idx,
+                        _ => df_schema.index_of_column_by_name(None, name).unwrap(),
+                    })
                 })
                 .collect::<datafusion::common::Result<_>>()?;
 
