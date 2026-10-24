@@ -373,7 +373,12 @@ impl PagePruningAccessPlanFilter {
                     );
                     total_skip += rows_skipped;
                     total_select += rows_selected;
-                    access_plan.scan_selection(row_group_index, overall_selection)
+                    // A selection that skips no rows is equal to a full scan.
+                    // Do not install it: a live selection disables runtime
+                    // row-group pruning and row-group reordering.
+                    if rows_skipped > 0 {
+                        access_plan.scan_selection(row_group_index, overall_selection)
+                    }
                 } else {
                     // Selection skips all rows, so skip the entire row group
                     let rows_skipped = groups[row_group_index].num_rows() as usize;
@@ -978,6 +983,68 @@ mod tests {
                 expected_rows
             );
         }
+    }
+
+    /// Page pruning that skips no rows must keep the row group as a full
+    /// scan. A select-all selection disables runtime row-group pruning.
+    #[test]
+    fn page_pruning_that_skips_no_rows_installs_no_selection() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(2)
+            .set_write_batch_size(2)
+            .build();
+        let mut writer =
+            ArrowWriter::try_new(Vec::new(), Arc::clone(&schema), Some(props)).unwrap();
+        // RG 0: every page holds a row with `a > 5`, so no page is pruned.
+        // RG 1: the middle page holds no row with `a > 5`, so it is pruned.
+        for values in [vec![0, 10, 0, 10, 0, 10], vec![0, 10, 0, 0, 0, 10]] {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(values))],
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+            writer.flush().unwrap();
+        }
+        let options =
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            Bytes::from(writer.into_inner().unwrap()),
+            options,
+        )
+        .unwrap();
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            lit(5i32),
+        ));
+        let filter = PagePruningAccessPlanFilter::new(&expr, Arc::clone(&schema));
+        let metrics = ParquetFileMetrics::new(0, "test", &ExecutionPlanMetricsSet::new());
+        let result = filter.prune_plan_with_page_index_and_metrics(
+            ParquetAccessPlan::new_all(2),
+            &schema,
+            reader.parquet_schema(),
+            reader.metadata(),
+            &metrics,
+            None,
+        );
+        assert_eq!(
+            result.access_plan.inner(),
+            &[
+                RowGroupAccess::Scan,
+                RowGroupAccess::Selection(
+                    vec![
+                        RowSelector::select(2),
+                        RowSelector::skip(2),
+                        RowSelector::select(2),
+                    ]
+                    .into()
+                ),
+            ]
+        );
+        assert_eq!(metrics.page_index_rows_pruned.pruned(), 2);
+        assert_eq!(metrics.page_index_rows_pruned.matched(), 10);
     }
 
     #[test]
