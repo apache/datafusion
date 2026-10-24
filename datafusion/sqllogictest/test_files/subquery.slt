@@ -4195,3 +4195,23 @@ DROP TABLE emp;
 
 statement ok
 RESET datafusion.explain.logical_plan_only;
+
+# Regression test for #26504: correlated subquery filtering an aliased derived
+# table on an outer column must preserve the derived table's correlated columns.
+query I
+SELECT * FROM (VALUES (1)) AS x(d)
+WHERE EXISTS (SELECT 1 FROM (SELECT * FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0);
+----
+1
+
+query I
+SELECT (SELECT n FROM (SELECT sum(y.c) AS n FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0) AS v
+FROM (VALUES (1)) AS x(d);
+----
+1
+
+query I
+SELECT * FROM (VALUES (1)) AS x(d)
+WHERE x.d IN (SELECT t.c FROM (SELECT * FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0);
+----
+1
