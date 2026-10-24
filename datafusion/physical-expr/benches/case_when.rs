@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder, StringArray};
-use arrow::datatypes::{ArrowNativeTypeOp, Field, Schema};
+use arrow::compute::cast;
+use arrow::datatypes::{ArrowNativeTypeOp, DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
@@ -99,6 +100,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     run_benchmarks(c, &make_batch(8192, 100));
 
     benchmark_lookup_table_case_when(c, 8192);
+    benchmark_lookup_table_by_number_of_entries(c, 8192);
     benchmark_divide_by_zero_protection(c, 8192);
 }
 
@@ -522,6 +524,68 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
             }
         }
     }
+}
+
+/// `CASE c WHEN 0 THEN 0 WHEN 7 THEN 1 ... ELSE -1 END` over values of a primitive type,
+/// 90% of which match one of the literals, for a range of numbers of literals.
+fn benchmark_lookup_table_by_number_of_entries(c: &mut Criterion, batch_size: usize) {
+    let mut group = c.benchmark_group("lookup_table_case_when_entries");
+
+    /// Converts an `i32` value to a scalar of the benchmarked type
+    type ToScalar = fn(i32) -> ScalarValue;
+    let types: [(&str, DataType, ToScalar); 3] = [
+        ("i32", DataType::Int32, |v| ScalarValue::Int32(Some(v))),
+        ("i64", DataType::Int64, |v| {
+            ScalarValue::Int64(Some(v as i64))
+        }),
+        ("decimal128", DataType::Decimal128(38, 0), |v| {
+            ScalarValue::Decimal128(Some(v as i128), 38, 0)
+        }),
+    ];
+
+    for (type_name, data_type, to_scalar) in types {
+        for num_entries in [2, 4, 8, 12, 16, 24, 32, 64] {
+            let literal = |i: i32| i * 7;
+            let rng = &mut seedable_rng();
+            let array: Int32Array = (0..batch_size)
+                .map(|_| {
+                    if rng.random_bool(0.9) {
+                        Some(literal(rng.random_range(0..num_entries)))
+                    } else {
+                        // Not a multiple of 7, so matching no literal
+                        Some(literal(rng.random_range(0..num_entries)) + 3)
+                    }
+                })
+                .collect();
+            let array = cast(&array, &data_type).unwrap();
+            let batch = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new("c", data_type.clone(), true)])),
+                vec![array],
+            )
+            .unwrap();
+
+            group.bench_function(
+                format!("{batch_size} rows: {type_name} -> i32, {num_entries} entries"),
+                |b| {
+                    let when_thens = (0..num_entries)
+                        .map(|i| (lit(to_scalar(literal(i))), lit(i)))
+                        .collect();
+                    let expr = Arc::new(
+                        case(
+                            Some(col("c", batch.schema_ref()).unwrap()),
+                            when_thens,
+                            Some(lit(-1)),
+                        )
+                        .unwrap(),
+                    );
+
+                    b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+                },
+            );
+        }
+    }
+
+    group.finish();
 }
 
 fn benchmark_divide_by_zero_protection(c: &mut Criterion, batch_size: usize) {
