@@ -1413,6 +1413,7 @@ fn range_join_key_alignment_sort_merge_join() -> Result<()> {
             JoinType::Inner,
             vec![desc, asc],
             NullEquality::NullEqualsNothing,
+            false,
         )?
         .with_projection(Some(vec![0, 5]))?,
     );
@@ -1610,6 +1611,7 @@ fn range_join_key_alignment_keeps_streamable_sort_merge_join_keys() -> Result<()
             JoinType::Inner,
             vec![SortOptions::default(); 2],
             NullEquality::NullEqualsNothing,
+            false,
         )?))
     };
 
