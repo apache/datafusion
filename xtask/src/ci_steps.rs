@@ -30,6 +30,8 @@ type StepRunner = fn(&StepContext, &[String]) -> StepResult<CiCommand>;
 const CI_COMMAND: &str = "cargo xtask ci step";
 const CI_SHORTCUT: &str = "cargo ci-step";
 const TPCH_DATA_DIR: &str = "datafusion/sqllogictest/test_files/tpch/data";
+/// The `datafusion-physical-plan` unit test that the `spill-pool-fuzz` step runs.
+const SPILL_POOL_FUZZ_TEST: &str = "spill::spill_pool::tests::spill_pool_scenario_fuzz";
 
 /// Metadata and implementation for one CI step.
 ///
@@ -428,7 +430,7 @@ impl StepContext {
                         "--lib",
                         "--",
                         "--exact",
-                        "spill::spill_pool::tests::spill_pool_scenario_fuzz",
+                        SPILL_POOL_FUZZ_TEST,
                     ])
                     .env("RUST_BACKTRACE", "1")
                     .env("DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS", "1000");
@@ -708,6 +710,56 @@ mod tests {
             .unwrap();
 
         assert_eq!(error, TEST_USAGE);
+    }
+
+    /// A filter that matches no test passes without running anything, so a
+    /// renamed or moved spill pool fuzzer would silently stop running in CI.
+    #[test]
+    fn spill_pool_fuzz_test_exists() {
+        let (module, test) = SPILL_POOL_FUZZ_TEST
+            .rsplit_once("::tests::")
+            .expect("test path has a `tests` module");
+        let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../datafusion/physical-plan/src")
+            .join(format!("{}.rs", module.replace("::", "/")));
+        let source = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+        assert!(
+            source.contains("mod tests {") && source.contains(&format!("fn {test}(")),
+            "{} has no test `{test}` in `mod tests`; update SPILL_POOL_FUZZ_TEST",
+            file.display()
+        );
+    }
+
+    /// The `extended` step runs only the test targets that require the
+    /// `extended_tests` feature. A test gated on the feature with a `cfg` in any
+    /// other target would never run in CI.
+    #[test]
+    fn extended_tests_feature_only_gates_whole_targets() {
+        fn visit(dir: &Path, found: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    visit(&path, found);
+                } else if path.extension() == Some(OsStr::new("rs"))
+                    && std::fs::read_to_string(&path)
+                        .unwrap()
+                        .contains("feature = \"extended_tests\"")
+                {
+                    found.push(path);
+                }
+            }
+        }
+        let mut found = vec![];
+        visit(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../datafusion"),
+            &mut found,
+        );
+        assert!(
+            found.is_empty(),
+            "put tests behind `extended_tests` in a test target that requires the \
+             feature (see datafusion/core/Cargo.toml), not behind a `cfg` in {found:?}"
+        );
     }
 
     #[test]
