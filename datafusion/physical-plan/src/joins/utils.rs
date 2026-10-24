@@ -5219,8 +5219,10 @@ mod tests {
     #[test]
     fn test_compare_join_arrays_extended_types() -> Result<()> {
         use arrow::array::{
-            Decimal256Array, Time32MillisecondArray, Time64NanosecondArray,
+            Decimal256Array, DictionaryArray, Int32Array, StringArray,
+            Time32MillisecondArray, Time64NanosecondArray,
         };
+        use arrow::datatypes::i256;
         let sort_opts = vec![SortOptions::default()];
 
         // 1. Timezone-aware timestamp
@@ -5232,65 +5234,22 @@ mod tests {
             TimestampMicrosecondArray::from(vec![1_000_000, 3_000_000])
                 .with_timezone("UTC"),
         );
-        assert_eq!(
-            compare_join_arrays(
-                &[Arc::clone(&ts_left)],
-                0,
-                &[Arc::clone(&ts_right)],
-                0,
-                &sort_opts,
-                NullEquality::NullEqualsNothing
-            )?,
-            Ordering::Equal
-        );
-        assert_eq!(
-            compare_join_arrays(
-                &[ts_left],
-                1,
-                &[ts_right],
-                1,
-                &sort_opts,
-                NullEquality::NullEqualsNothing
-            )?,
-            Ordering::Less
-        );
 
-        // 2. Dictionary(Int32, Utf8)
-        let dict_left: ArrayRef = Arc::new(
-            vec![Some("apple"), Some("banana")]
-                .into_iter()
-                .collect::<arrow::array::DictionaryArray<arrow::datatypes::Int32Type>>(),
-        );
-        let dict_right: ArrayRef = Arc::new(
-            vec![Some("apple"), Some("cherry")]
-                .into_iter()
-                .collect::<arrow::array::DictionaryArray<arrow::datatypes::Int32Type>>(),
-        );
-        assert_eq!(
-            compare_join_arrays(
-                &[Arc::clone(&dict_left)],
-                0,
-                &[Arc::clone(&dict_right)],
-                0,
-                &sort_opts,
-                NullEquality::NullEqualsNothing
-            )?,
-            Ordering::Equal
-        );
-        assert_eq!(
-            compare_join_arrays(
-                &[dict_left],
-                1,
-                &[dict_right],
-                1,
-                &sort_opts,
-                NullEquality::NullEqualsNothing
-            )?,
-            Ordering::Less
-        );
+        // 2. Dictionary(Int32, Utf8) with independently ordered codes:
+        // Left:  keys [0, 1] -> ["apple", "banana"] (apple is code 0, banana is code 1)
+        // Right: keys [1, 0] -> ["cherry", "apple"] (apple is code 1, cherry is code 0)
+        // At index 0: "apple" (code 0) == "apple" (code 1) -> tests equality across distinct dictionary encodings
+        // At index 1: "banana" (code 1) < "cherry" (code 0) -> tests value ordering opposite to key code ordering
+        let dict_left: ArrayRef = Arc::new(DictionaryArray::try_new(
+            Int32Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec!["apple", "banana"])),
+        )?);
+        let dict_right: ArrayRef = Arc::new(DictionaryArray::try_new(
+            Int32Array::from(vec![1, 0]),
+            Arc::new(StringArray::from(vec!["cherry", "apple"])),
+        )?);
 
         // 3. Decimal256
-        use arrow::datatypes::i256;
         let dec_left: ArrayRef = Arc::new(
             Decimal256Array::from(vec![Some(i256::from(100)), Some(i256::from(200))])
                 .with_precision_and_scale(40, 2)?,
@@ -5299,80 +5258,52 @@ mod tests {
             Decimal256Array::from(vec![Some(i256::from(100)), Some(i256::from(300))])
                 .with_precision_and_scale(40, 2)?,
         );
-        assert_eq!(
-            compare_join_arrays(
-                &[Arc::clone(&dec_left)],
-                0,
-                &[Arc::clone(&dec_right)],
-                0,
-                &sort_opts,
-                NullEquality::NullEqualsNothing
-            )?,
-            Ordering::Equal
-        );
-        assert_eq!(
-            compare_join_arrays(
-                &[dec_left],
-                1,
-                &[dec_right],
-                1,
-                &sort_opts,
-                NullEquality::NullEqualsNothing
-            )?,
-            Ordering::Less
-        );
 
         // 4. Time64
         let t64_left: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1000, 2000]));
         let t64_right: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1000, 3000]));
-        assert_eq!(
-            compare_join_arrays(
-                &[Arc::clone(&t64_left)],
-                0,
-                &[Arc::clone(&t64_right)],
-                0,
-                &sort_opts,
-                NullEquality::NullEqualsNothing
-            )?,
-            Ordering::Equal
-        );
-        assert_eq!(
-            compare_join_arrays(
-                &[t64_left],
-                1,
-                &[t64_right],
-                1,
-                &sort_opts,
-                NullEquality::NullEqualsNothing
-            )?,
-            Ordering::Less
-        );
 
         // 5. Time32
         let t32_left: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![10, 20]));
         let t32_right: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![10, 30]));
-        assert_eq!(
-            compare_join_arrays(
-                &[Arc::clone(&t32_left)],
+
+        let test_cases: [(&str, ArrayRef, ArrayRef); 5] = [
+            ("timezone_aware_timestamp", ts_left, ts_right),
+            ("dictionary_independent_codes", dict_left, dict_right),
+            ("decimal256", dec_left, dec_right),
+            ("time64", t64_left, t64_right),
+            ("time32", t32_left, t32_right),
+        ];
+
+        for (name, left, right) in test_cases {
+            let eq = compare_join_arrays(
+                &[Arc::clone(&left)],
                 0,
-                &[Arc::clone(&t32_right)],
+                &[Arc::clone(&right)],
                 0,
                 &sort_opts,
-                NullEquality::NullEqualsNothing
-            )?,
-            Ordering::Equal
-        );
-        assert_eq!(
-            compare_join_arrays(
-                &[t32_left],
+                NullEquality::NullEqualsNothing,
+            )?;
+            assert_eq!(
+                eq,
+                Ordering::Equal,
+                "Case '{name}': expected Ordering::Equal at index 0"
+            );
+
+            let less = compare_join_arrays(
+                &[left],
                 1,
-                &[t32_right],
+                &[right],
                 1,
                 &sort_opts,
-                NullEquality::NullEqualsNothing
-            )?,
-            Ordering::Less
-        );
+                NullEquality::NullEqualsNothing,
+            )?;
+            assert_eq!(
+                less,
+                Ordering::Less,
+                "Case '{name}': expected Ordering::Less at index 1"
+            );
+        }
 
         Ok(())
     }
