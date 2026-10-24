@@ -55,7 +55,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         error_message: "Cargo test step failed",
@@ -397,8 +397,8 @@ impl StepContext {
                 }
             }
             "extended" => {
-                // Run only the tests that the `workspace` step does not. The
-                // merge queue runs that step on the same commit.
+                // Tests behind the `extended_tests` feature. The `workspace`
+                // step runs everything else.
                 command
                     .args([
                         "test",
@@ -406,27 +406,31 @@ impl StepContext {
                         "ci",
                         "-p",
                         "datafusion",
-                        "-p",
-                        "datafusion-physical-plan",
-                        "--lib",
                         "--test",
                         "fuzz",
                         "--test",
-                        "core_integration",
+                        "memory_limit_validation",
                         "--features",
                         "avro,backtrace,extended_tests,parquet_encryption",
+                    ])
+                    .env("RUST_BACKTRACE", "1");
+            }
+            "spill-pool-fuzz" => {
+                // Run more random scenarios of the spill pool fuzzer than the
+                // `workspace` step does (about a minute).
+                command
+                    .args([
+                        "test",
+                        "--profile",
+                        "ci",
+                        "-p",
+                        "datafusion-physical-plan",
+                        "--lib",
                         "--",
-                        // Tests behind the `extended_tests` feature. A new test
-                        // behind it needs a filter here too, otherwise it never
-                        // runs in CI.
-                        "fuzz_cases::",
-                        "memory_limit_validation::",
-                        // Runs with more iterations, see below.
-                        "spill_pool_scenario_fuzz",
+                        "--exact",
+                        "spill::spill_pool::tests::spill_pool_scenario_fuzz",
                     ])
                     .env("RUST_BACKTRACE", "1")
-                    // Run more random scenarios of the spill pool fuzzer than the
-                    // default suite does (about a minute).
                     .env("DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS", "1000");
             }
             "hash-collisions" => {
@@ -657,7 +661,7 @@ fn required_env(name: &str) -> Result<String> {
 mod tests {
     use super::*;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -936,17 +940,28 @@ cargo test \
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
 cd /workspace && \
-DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS=1000 \
 RUST_BACKTRACE=1 \
 cargo test \
 --profile ci \
 -p datafusion \
+--test fuzz \
+--test memory_limit_validation \
+--features avro,backtrace,extended_tests,parquet_encryption
+")
+                },
+            },
+            Cmd {
+                command: &["test", "spill-pool-fuzz"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS=1000 \
+RUST_BACKTRACE=1 \
+cargo test \
+--profile ci \
 -p datafusion-physical-plan \
 --lib \
---test fuzz \
---test core_integration \
---features avro,backtrace,extended_tests,parquet_encryption \
--- fuzz_cases:: memory_limit_validation:: spill_pool_scenario_fuzz
+-- --exact spill::spill_pool::tests::spill_pool_scenario_fuzz
 ")
                 },
             },
