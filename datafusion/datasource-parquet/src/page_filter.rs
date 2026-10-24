@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use super::metrics::ParquetFileMetrics;
 use crate::metadata::has_untrusted_min_max_order;
+use crate::nested_pruning::{LeafStatistics, NestedPruning, NestedPruningCall};
 use crate::pruning::build_inverted_predicate;
 use crate::{ParquetAccessPlan, RowGroupAccess};
 
@@ -118,6 +119,9 @@ pub struct PagePruningAccessPlanFilter {
     /// Whether every original conjunct can be evaluated from one column's page
     /// statistics. Otherwise no range can be classified as fully matched.
     all_predicates_supported: bool,
+    /// Placeholder columns standing for nested input access calls in
+    /// `predicates`, if any.
+    nested: Option<Arc<NestedPruning>>,
 }
 
 /// Result of applying page-index pruning to a [`ParquetAccessPlan`].
@@ -195,7 +199,15 @@ impl PagePruningAccessPlanFilter {
         Self {
             predicates,
             all_predicates_supported,
+            nested: None,
         }
+    }
+
+    /// Resolves the placeholder columns of `nested` in the predicates, which
+    /// must have been built against [`NestedPruning::schema`].
+    pub(crate) fn with_nested(mut self, nested: Arc<NestedPruning>) -> Self {
+        self.nested = Some(nested);
+        self
     }
 
     /// Returns an updated [`ParquetAccessPlan`] by applying predicates to the
@@ -331,6 +343,7 @@ impl PagePruningAccessPlanFilter {
                     arrow_schema,
                     parquet_schema,
                     parquet_metadata,
+                    self.nested.as_deref(),
                     file_metrics,
                 );
 
@@ -403,6 +416,7 @@ impl PagePruningAccessPlanFilter {
                         arrow_schema,
                         parquet_schema,
                         parquet_metadata,
+                        self.nested.as_deref(),
                         file_metrics,
                     ) else {
                         complete = false;
@@ -492,6 +506,19 @@ impl PagePruningAccessPlanFilter {
             .iter()
             .filter_map(|p| p.required_columns().single_column())
             .map(|c| c.name())
+    }
+
+    /// Returns the Parquet leaves read by the nested input access call behind
+    /// `name`, if `name` is one of its placeholder columns.
+    pub(crate) fn nested_leaf_indexes(&self, name: &str) -> Option<Vec<usize>> {
+        let call = self.nested.as_ref()?.call(name)?;
+        Some(
+            call.inputs()
+                .iter()
+                .flatten()
+                .map(|leaf| leaf.parquet_index)
+                .collect(),
+        )
     }
 }
 
@@ -613,12 +640,27 @@ fn prune_pages_for_predicate(
     arrow_schema: &Schema,
     parquet_schema: &SchemaDescriptor,
     parquet_metadata: &ParquetMetaData,
+    nested: Option<&NestedPruning>,
     metrics: &ParquetFileMetrics,
 ) -> Option<(RowSelection, Vec<bool>)> {
     #[cfg(test)]
     tests::PAGE_PREDICATE_CALLS.set(tests::PAGE_PREDICATE_CALLS.get() + 1);
 
     let column = predicate.required_columns().single_column()?;
+    if let Some(call) = nested.and_then(|nested| nested.call(column.name())) {
+        let pruning_stats = NestedPagesPruningStatistics::try_new(
+            row_group_index,
+            call,
+            parquet_schema,
+            parquet_metadata,
+        )?;
+        return prune_pages_in_one_row_group(
+            row_group_index,
+            predicate,
+            &pruning_stats,
+            metrics,
+        );
+    }
     let converter =
         match StatisticsConverter::try_new(column.name(), arrow_schema, parquet_schema) {
             Ok(converter) => converter,
@@ -631,13 +673,9 @@ fn prune_pages_for_predicate(
             }
         };
 
-    prune_pages_in_one_row_group(
-        row_group_index,
-        predicate,
-        converter,
-        parquet_metadata,
-        metrics,
-    )
+    let pruning_stats =
+        PagesPruningStatistics::try_new(row_group_index, converter, parquet_metadata)?;
+    prune_pages_in_one_row_group(row_group_index, predicate, &pruning_stats, metrics)
 }
 
 /// Returns a [`RowSelection`] for the rows in this row group to scan, in addition to a vec of
@@ -651,17 +689,13 @@ fn prune_pages_for_predicate(
 fn prune_pages_in_one_row_group(
     row_group_index: usize,
     pruning_predicate: &PruningPredicate,
-    converter: StatisticsConverter<'_>,
-    parquet_metadata: &ParquetMetaData,
+    pruning_stats: &(impl PageStatistics + std::fmt::Debug),
     metrics: &ParquetFileMetrics,
 ) -> Option<(RowSelection, Vec<bool>)> {
-    let pruning_stats =
-        PagesPruningStatistics::try_new(row_group_index, converter, parquet_metadata)?;
-
     // Each element in values is a boolean indicating whether the page may have
     // values that match the predicate (true) or could not possibly have values
     // that match the predicate (false).
-    let values = match pruning_predicate.prune(&pruning_stats) {
+    let values = match pruning_predicate.prune(pruning_stats) {
         Ok(values) => values,
         Err(e) => {
             debug!("Error evaluating page index predicate values {e}");
@@ -772,26 +806,179 @@ impl<'a> PagesPruningStatistics<'a> {
             trusted_min_max,
         })
     }
+}
 
-    /// return the row counts in each data page, if possible.
+/// Page-level statistics of one row group that pages can be pruned with.
+trait PageStatistics: PruningStatistics {
+    /// Returns the row counts in each data page, if possible.
+    fn page_row_counts(&self) -> Option<Vec<usize>>;
+}
+
+impl PageStatistics for PagesPruningStatistics<'_> {
     fn page_row_counts(&self) -> Option<Vec<usize>> {
         let row_group_metadata = self
             .row_group_metadatas
             .get(self.row_group_index)
             // fail fast/panic if row_group_index is out of bounds
             .unwrap();
+        page_row_counts(row_group_metadata, self.page_offsets)
+    }
+}
 
-        let num_rows_in_row_group = row_group_metadata.num_rows() as usize;
+/// Returns the number of rows in each page of a row group, given the pages'
+/// locations.
+fn page_row_counts(
+    row_group_metadata: &RowGroupMetaData,
+    page_offsets: &[PageLocation],
+) -> Option<Vec<usize>> {
+    let num_rows_in_row_group = row_group_metadata.num_rows() as usize;
+    let mut vec = Vec::with_capacity(page_offsets.len());
+    page_offsets.windows(2).for_each(|x| {
+        let start = x[0].first_row_index as usize;
+        let end = x[1].first_row_index as usize;
+        vec.push(end - start);
+    });
+    vec.push(num_rows_in_row_group - page_offsets.last()?.first_row_index as usize);
+    Some(vec)
+}
 
-        let page_offsets = self.page_offsets;
-        let mut vec = Vec::with_capacity(page_offsets.len());
-        page_offsets.windows(2).for_each(|x| {
-            let start = x[0].first_row_index as usize;
-            let end = x[1].first_row_index as usize;
-            vec.push(end - start);
-        });
-        vec.push(num_rows_in_row_group - page_offsets.last()?.first_row_index as usize);
-        Some(vec)
+/// Page-level output statistics of a nested input access call, derived from
+/// the page statistics of the leaves it reads.
+///
+/// Statistics from different leaves can only be combined page by page if
+/// their pages cover the same rows, so this requires every leaf the call
+/// reads to have identical page boundaries in the row group.
+#[derive(Debug)]
+struct NestedPagesPruningStatistics<'a> {
+    call: &'a NestedPruningCall,
+    outputs: Vec<Option<datafusion_common::ColumnStatistics>>,
+    page_row_counts: Vec<usize>,
+}
+
+impl<'a> NestedPagesPruningStatistics<'a> {
+    fn try_new(
+        row_group_index: usize,
+        call: &'a NestedPruningCall,
+        parquet_schema: &SchemaDescriptor,
+        parquet_metadata: &ParquetMetaData,
+    ) -> Option<Self> {
+        let page_index: &dyn PageIndexProvider = parquet_metadata.page_index()?.as_ref();
+        if !page_index.is_complete() {
+            return None;
+        }
+        let row_group_metadatas = parquet_metadata.row_groups();
+        let file_metadata = parquet_metadata.file_metadata();
+
+        // Every leaf must have the same page boundaries.
+        let mut boundaries: Option<Vec<i64>> = None;
+        for leaf in call.inputs().iter().flatten() {
+            let offsets = page_index
+                .offset_index(row_group_index, leaf.parquet_index)?
+                .page_locations();
+            let starts = offsets
+                .iter()
+                .map(|page| page.first_row_index)
+                .collect::<Vec<_>>();
+            match &boundaries {
+                Some(existing) if *existing != starts => return None,
+                Some(_) => {}
+                None => boundaries = Some(starts),
+            }
+        }
+        let first_leaf = call.inputs().iter().flatten().next()?;
+        let page_row_counts = page_row_counts(
+            row_group_metadatas.get(row_group_index)?,
+            page_index
+                .offset_index(row_group_index, first_leaf.parquet_index)?
+                .page_locations(),
+        )?;
+
+        let inputs = call
+            .inputs()
+            .iter()
+            .map(|leaf| {
+                let leaf = leaf.as_ref()?;
+                let converter = StatisticsConverter::from_column_index(
+                    leaf.parquet_index,
+                    &leaf.field,
+                    parquet_schema,
+                )
+                .ok()?;
+                let trusted_order = !has_untrusted_min_max_order(
+                    file_metadata.schema_descr(),
+                    file_metadata.column_orders().map(Vec::as_slice),
+                    leaf.parquet_index,
+                );
+                let bounds = |values: Option<ArrayRef>| values.filter(|_| trusted_order);
+                Some(LeafStatistics {
+                    mins: bounds(
+                        converter
+                            .data_page_mins(page_index, [&row_group_index])
+                            .ok(),
+                    ),
+                    maxes: bounds(
+                        converter
+                            .data_page_maxes(page_index, [&row_group_index])
+                            .ok(),
+                    ),
+                    null_counts: converter
+                        .data_page_null_counts(page_index, [&row_group_index])
+                        .ok(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let num_rows = page_row_counts
+            .iter()
+            .map(|rows| Some(*rows))
+            .collect::<Vec<_>>();
+        let outputs = call.output_statistics(&num_rows, &inputs);
+
+        Some(Self {
+            call,
+            outputs,
+            page_row_counts,
+        })
+    }
+}
+
+impl PruningStatistics for NestedPagesPruningStatistics<'_> {
+    fn min_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
+        self.call.bound_array(&self.outputs, false)
+    }
+
+    fn max_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
+        self.call.bound_array(&self.outputs, true)
+    }
+
+    fn num_containers(&self) -> usize {
+        self.page_row_counts.len()
+    }
+
+    fn null_counts(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
+        self.call.null_count_array(&self.outputs)
+    }
+
+    fn row_counts(&self) -> Option<ArrayRef> {
+        let counts = self
+            .page_row_counts
+            .iter()
+            .map(|rows| Some(*rows as u64))
+            .collect::<arrow::array::UInt64Array>();
+        Some(Arc::new(counts))
+    }
+
+    fn contained(
+        &self,
+        _column: &datafusion_common::Column,
+        _values: &HashSet<ScalarValue>,
+    ) -> Option<BooleanArray> {
+        None
+    }
+}
+
+impl PageStatistics for NestedPagesPruningStatistics<'_> {
+    fn page_row_counts(&self) -> Option<Vec<usize>> {
+        Some(self.page_row_counts.clone())
     }
 }
 impl PruningStatistics for PagesPruningStatistics<'_> {
