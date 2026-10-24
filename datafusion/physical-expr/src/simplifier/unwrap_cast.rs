@@ -37,8 +37,8 @@ use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::{
-    is_date_narrowing_cast, is_timestamp_precision_narrowing_cast,
-    try_cast_literal_to_type,
+    is_date_narrowing_cast, is_integer_narrowing_cast,
+    is_timestamp_precision_narrowing_cast, try_cast_literal_to_type,
 };
 
 use crate::PhysicalExpr;
@@ -63,7 +63,7 @@ fn try_unwrap_cast_binary(
     schema: &Schema,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Case 1: cast(left_expr) op literal
-    if let (Some((inner_expr, cast_type)), Some(literal)) = (
+    if let (Some((inner_expr, cast_type, is_try_cast)), Some(literal)) = (
         extract_cast_info(binary.left()),
         binary.right().downcast_ref::<Literal>(),
     ) && binary.op().supports_propagation()
@@ -71,6 +71,7 @@ fn try_unwrap_cast_binary(
             Arc::clone(inner_expr),
             literal.value(),
             cast_type,
+            is_try_cast,
             *binary.op(),
             schema,
         )?
@@ -79,7 +80,7 @@ fn try_unwrap_cast_binary(
     }
 
     // Case 2: literal op cast(right_expr)
-    if let (Some(literal), Some((inner_expr, cast_type))) = (
+    if let (Some(literal), Some((inner_expr, cast_type, is_try_cast))) = (
         binary.left().downcast_ref::<Literal>(),
         extract_cast_info(binary.right()),
     ) {
@@ -90,6 +91,7 @@ fn try_unwrap_cast_binary(
                 Arc::clone(inner_expr),
                 literal.value(),
                 cast_type,
+                is_try_cast,
                 swapped_op,
                 schema,
             )?
@@ -106,14 +108,15 @@ fn try_unwrap_cast_binary(
 /// Extract cast information from a physical expression
 ///
 /// If the expression is a CAST(expr, datatype) or TRY_CAST(expr, datatype),
-/// returns Some((inner_expr, target_datatype)). Otherwise returns None.
+/// returns the inner expression, target datatype, and whether the cast is a
+/// TRY_CAST. Otherwise returns None.
 fn extract_cast_info(
     expr: &Arc<dyn PhysicalExpr>,
-) -> Option<(&Arc<dyn PhysicalExpr>, &DataType)> {
+) -> Option<(&Arc<dyn PhysicalExpr>, &DataType, bool)> {
     if let Some(cast) = expr.downcast_ref::<CastExpr>() {
-        Some((cast.expr(), cast.cast_type()))
+        Some((cast.expr(), cast.cast_type(), false))
     } else if let Some(try_cast) = expr.downcast_ref::<TryCastExpr>() {
-        Some((try_cast.expr(), try_cast.cast_type()))
+        Some((try_cast.expr(), try_cast.cast_type(), true))
     } else {
         None
     }
@@ -124,6 +127,7 @@ fn try_unwrap_cast_comparison(
     inner_expr: Arc<dyn PhysicalExpr>,
     literal_value: &ScalarValue,
     cast_type: &DataType,
+    is_try_cast: bool,
     op: Operator,
     schema: &Schema,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
@@ -132,6 +136,7 @@ fn try_unwrap_cast_comparison(
 
     if is_timestamp_precision_narrowing_cast(&inner_type, cast_type)
         || is_date_narrowing_cast(&inner_type, cast_type)
+        || (is_try_cast && is_integer_narrowing_cast(&inner_type, cast_type))
     {
         return Ok(None);
     }
@@ -464,6 +469,84 @@ mod tests {
 
         // Should NOT be transformed (string to int cast not supported)
         assert!(!result.transformed);
+    }
+
+    #[test]
+    fn test_no_unwrap_narrowing_integer_try_cast() -> Result<()> {
+        use arrow::array::{BooleanArray, Int64Array};
+        use arrow::record_batch::RecordBatch;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "int_col",
+            DataType::Int64,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(i64::from(i32::MIN) - 1),
+                Some(i64::from(i32::MAX) + 1),
+                None,
+            ]))],
+        )?;
+
+        for (literal, expected) in [
+            (
+                ScalarValue::Int32(Some(1)),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    None,
+                    None,
+                    None,
+                ]),
+            ),
+            (
+                ScalarValue::UInt64(Some(1)),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    None,
+                ]),
+            ),
+        ] {
+            // Width narrowing and signed/unsigned transitions must both preserve
+            // NULL results for values outside the target integer domain.
+            let cast_type = literal.data_type();
+            for literal_on_left in [false, true] {
+                let column_expr = col("int_col", &schema)?;
+                let try_cast_expr =
+                    Arc::new(TryCastExpr::new(column_expr, cast_type.clone()));
+                let literal_expr = lit(literal.clone());
+                let binary_expr = if literal_on_left {
+                    BinaryExpr::new(literal_expr, Operator::Lt, try_cast_expr)
+                } else {
+                    BinaryExpr::new(try_cast_expr, Operator::Gt, literal_expr)
+                };
+
+                let result = unwrap_cast_in_comparison(Arc::new(binary_expr), &schema)?;
+                assert!(
+                    !result.transformed,
+                    "{cast_type:?}, literal_on_left={literal_on_left}"
+                );
+                let actual =
+                    result.data.evaluate(&batch)?.into_array(batch.num_rows())?;
+                assert_eq!(
+                    actual.as_any().downcast_ref::<BooleanArray>().unwrap(),
+                    &expected,
+                    "{cast_type:?}, literal_on_left={literal_on_left}"
+                );
+            }
+        }
+
+        Ok(())
     }
 
     #[test]
