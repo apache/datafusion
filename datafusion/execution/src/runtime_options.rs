@@ -17,10 +17,14 @@
 
 //! Typed schema for the `datafusion.runtime.*` configuration namespace.
 //!
-//! [`RuntimeOptions`] owns the runtime keys, their descriptions, their defaults
+//! `RuntimeOptions` owns the runtime keys, their descriptions, their defaults
 //! and their parsing, using the same [`ConfigField`] machinery that backs
 //! `ConfigOptions`. It does not live inside `ConfigOptions` because
 //! `datafusion-execution` depends on `datafusion-common`, never the reverse.
+//!
+//! It is crate-private: set or reset a key through
+//! [`RuntimeEnvBuilder::with_config_entry`] and
+//! [`RuntimeEnvBuilder::with_default_config_entry`].
 
 use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
@@ -138,7 +142,7 @@ config_namespace! {
     /// Options that configure the [`RuntimeEnv`] shared by a session.
     ///
     /// Field order below is the order entries are reported in.
-    pub struct RuntimeOptions {
+    pub(crate) struct RuntimeOptions {
         /// Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.
         memory_limit: Option<CapacityLimit>, default = None
 
@@ -167,17 +171,17 @@ config_namespace! {
 
 impl RuntimeOptions {
     /// Set `key` (without the `datafusion.runtime.` prefix) from its string form.
-    pub fn set_entry(&mut self, key: &str, value: &str) -> Result<()> {
+    pub(crate) fn set_entry(&mut self, key: &str, value: &str) -> Result<()> {
         ConfigField::set(self, key, value).map_err(|e| qualify(e, key))
     }
 
     /// Restore `key` (without the `datafusion.runtime.` prefix) to its default.
-    pub fn reset_entry(&mut self, key: &str) -> Result<()> {
+    pub(crate) fn reset_entry(&mut self, key: &str) -> Result<()> {
         ConfigField::reset(self, key).map_err(|e| qualify(e, key))
     }
 
     /// Every key in this namespace with its current value and description.
-    pub fn entries(&self) -> Vec<ConfigEntry> {
+    pub(crate) fn entries(&self) -> Vec<ConfigEntry> {
         struct Visitor(Vec<ConfigEntry>);
 
         impl Visit for Visitor {
@@ -210,7 +214,7 @@ impl RuntimeOptions {
 
     /// The entries to report for `env`, with values read back from its live
     /// resource objects rather than from whatever was last requested.
-    pub fn env_entries(env: &RuntimeEnv) -> Vec<ConfigEntry> {
+    pub(crate) fn env_entries(env: &RuntimeEnv) -> Vec<ConfigEntry> {
         let mut entries = Self::from_runtime_env(env).entries();
 
         // An unbounded pool is not unset, but has no byte value to report, so
@@ -273,7 +277,7 @@ impl RuntimeOptions {
     ///
     /// Only the named key is applied: rebuilding every resource on each `SET`
     /// would discard the live memory pool and its outstanding reservations.
-    pub fn apply_key(
+    pub(crate) fn apply_key(
         &self,
         key: &str,
         mut builder: RuntimeEnvBuilder,
@@ -341,16 +345,31 @@ fn name_config(e: DataFusionError, config_name: &str) -> DataFusionError {
     }
 }
 
+/// `key` without the `datafusion.runtime.` prefix, or an error if it is not in
+/// this namespace.
+pub(crate) fn strip_prefix(key: &str) -> Result<&str> {
+    key.strip_prefix(RUNTIME_CONFIG_PREFIX)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .ok_or_else(|| {
+            plan_datafusion_err!(
+                "Unknown runtime configuration: {key}. \
+                 Keys must start with {RUNTIME_CONFIG_PREFIX}."
+            )
+        })
+}
+
 fn unknown_key(key: &str) -> DataFusionError {
     plan_datafusion_err!("Unknown runtime configuration: {RUNTIME_CONFIG_PREFIX}.{key}")
 }
 
-/// [`parse_capacity`], with `config_name` named in any error.
+/// Parse a byte capacity (`0`, or a number with a `K`, `M` or `G` suffix),
+/// with `config_name` named in any error.
 pub fn parse_capacity_limit(config_name: &str, limit: &str) -> Result<usize> {
     parse_capacity(limit).map_err(|e| name_config(e, config_name))
 }
 
-/// [`parse_ttl`], with `config_name` named in any error.
+/// Parse a cache TTL (minutes and/or seconds, such as `1m30s`), with
+/// `config_name` named in any error.
 pub fn parse_duration(config_name: &str, duration: &str) -> Result<Duration> {
     parse_ttl(duration).map_err(|e| name_config(e, config_name))
 }
@@ -527,6 +546,56 @@ mod tests {
         // `1.5G` is not a whole number of gigabytes, so it is shown in megabytes.
         let limit = CapacityLimit::from_bytes(parse_bytes("1.5G").unwrap());
         assert_eq!(limit.to_string(), "1536M");
+    }
+
+    #[test]
+    fn builder_sets_and_resets_a_full_key() {
+        let value = |env: &RuntimeEnv, key: &str| {
+            env.config_entries()
+                .into_iter()
+                .find(|e| e.key == key)
+                .unwrap_or_else(|| panic!("missing {key}"))
+                .value
+        };
+        let key = "datafusion.runtime.metadata_cache_limit";
+
+        let env = RuntimeEnvBuilder::new()
+            .with_config_entry(key, "1M")
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(value(&env, key), Some("1M".to_string()));
+
+        let env = RuntimeEnvBuilder::from_runtime_env(&env)
+            .with_default_config_entry(key)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(value(&env, key), Some("50M".to_string()));
+    }
+
+    #[test]
+    fn builder_rejects_keys_outside_the_namespace() {
+        for key in [
+            "memory_limit",
+            "datafusion.execution.batch_size",
+            "datafusion.runtimex.a",
+        ] {
+            let err = RuntimeEnvBuilder::new()
+                .with_config_entry(key, "1M")
+                .err()
+                .unwrap_or_else(|| panic!("{key} was accepted"))
+                .to_string();
+            assert!(
+                err.contains("Keys must start with datafusion.runtime."),
+                "{err}"
+            );
+        }
+        assert!(
+            RuntimeEnvBuilder::new()
+                .with_default_config_entry("datafusion.runtime.nope")
+                .is_err()
+        );
     }
 
     #[test]

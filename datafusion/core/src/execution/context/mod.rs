@@ -64,7 +64,7 @@ use datafusion_common::{
 pub use datafusion_execution::TaskContext;
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
-use datafusion_execution::runtime_options::{self, RuntimeOptions};
+use datafusion_execution::runtime_options;
 use datafusion_expr::HigherOrderUDF;
 pub use datafusion_expr::execution_props::ExecutionProps;
 #[cfg(feature = "sql")]
@@ -1230,35 +1230,25 @@ impl SessionContext {
     }
 
     fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
-        let key = variable.strip_prefix("datafusion.runtime.").unwrap();
-
-        let mut options = RuntimeOptions::default();
-        options.set_entry(key, value)?;
-        self.apply_runtime_option(&options, key)
+        self.update_runtime_env(|builder| builder.with_config_entry(variable, value))
     }
 
     fn reset_runtime_variable(&self, variable: &str) -> Result<()> {
-        let key = variable.strip_prefix("datafusion.runtime.").unwrap();
-
-        // Every field of a fresh `RuntimeOptions` already holds its default, so
-        // this only has to reject an unknown key.
-        let mut options = RuntimeOptions::default();
-        options.reset_entry(key)?;
-        self.apply_runtime_option(&options, key)
+        self.update_runtime_env(|builder| builder.with_default_config_entry(variable))
     }
 
-    /// Rebuild the session's `RuntimeEnv` with `key` taken from `options`.
+    /// Rebuild the session's `RuntimeEnv` after `update` changes one entry.
     ///
-    /// Only the named key is applied. Rebuilding every resource on each
-    /// statement would replace the live memory pool and discard the
-    /// reservations held against it.
-    fn apply_runtime_option(&self, options: &RuntimeOptions, key: &str) -> Result<()> {
+    /// Only that entry changes. Rebuilding every resource on each statement
+    /// would replace the live memory pool and discard the reservations held
+    /// against it.
+    fn update_runtime_env(
+        &self,
+        update: impl FnOnce(RuntimeEnvBuilder) -> Result<RuntimeEnvBuilder>,
+    ) -> Result<()> {
         let mut state = self.state.write();
 
-        let builder = options.apply_key(
-            key,
-            RuntimeEnvBuilder::from_runtime_env(state.runtime_env()),
-        )?;
+        let builder = update(RuntimeEnvBuilder::from_runtime_env(state.runtime_env()))?;
 
         *state = SessionStateBuilder::from(state.clone())
             .with_runtime_env(Arc::new(builder.build()?))
