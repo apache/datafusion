@@ -1538,7 +1538,16 @@ mod tests {
         let optimized = EliminateCrossJoin::new()
             .rewrite(plan, &OptimizerContext::new())?
             .data;
-        assert!(optimized.to_string().contains("IS NOT DISTINCT FROM"));
+        assert!(matches!(
+            &optimized,
+            LogicalPlan::Filter(Filter {
+                predicate: Expr::BinaryExpr(BinaryExpr {
+                    op: Operator::IsNotDistinctFrom,
+                    ..
+                }),
+                ..
+            })
+        ));
         Ok(())
     }
 
