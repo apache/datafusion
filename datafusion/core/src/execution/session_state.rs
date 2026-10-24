@@ -36,7 +36,6 @@ use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::DataType;
 use arrow_schema::FieldRef;
 use datafusion_catalog::MemoryCatalogProviderList;
-#[cfg(feature = "sql")]
 use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, INFORMATION_SCHEMA_TABLES, InformationSchemaProvider,
 };
@@ -445,7 +444,7 @@ impl SessionState {
                         //   => information schema provider for named catalog
                         let catalog = self.resolve_catalog(catalog_name)?;
                         return Ok(Arc::new(
-                            InformationSchemaProvider::for_catalog(
+                            InformationSchemaProvider::new_from_catalog(
                                 catalog_name.to_string(),
                                 catalog,
                             )

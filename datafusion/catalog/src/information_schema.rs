@@ -82,8 +82,11 @@ pub struct InformationSchemaProvider {
 }
 
 impl InformationSchemaProvider {
-    /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
-    pub fn for_catalog(catalog_name: String, catalog: Arc<dyn CatalogProvider>) -> Self {
+    /// Creates a new [`InformationSchemaProvider`] for the provided `catalog`
+    pub fn new_from_catalog(
+        catalog_name: String,
+        catalog: Arc<dyn CatalogProvider>,
+    ) -> Self {
         #[derive(Debug)]
         struct SingleCatalogList {
             catalog_name: String,
@@ -167,9 +170,10 @@ impl InformationSchemaConfig {
         builder: &mut InformationSchemaTablesBuilder,
     ) -> Result<(), DataFusionError> {
         // create a mem table with the names of tables
+        let catalog_names = self.catalog_list.catalog_names();
 
-        for catalog_name in self.catalog_list.catalog_names() {
-            let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
+        for catalog_name in &catalog_names {
+            let catalog = self.catalog_list.catalog(catalog_name).unwrap();
 
             for schema_name in catalog.schema_names() {
                 if schema_name != INFORMATION_SCHEMA {
@@ -180,7 +184,7 @@ impl InformationSchemaConfig {
                                 schema.table_type(&table_name).await?
                             {
                                 builder.add_table(
-                                    &catalog_name,
+                                    catalog_name,
                                     &schema_name,
                                     &table_name,
                                     table_type,
@@ -194,7 +198,7 @@ impl InformationSchemaConfig {
             // Add a final list for the information schema tables themselves
             for table_name in INFORMATION_SCHEMA_TABLES {
                 builder.add_table(
-                    &catalog_name,
+                    catalog_name,
                     INFORMATION_SCHEMA,
                     table_name,
                     TableType::View,
