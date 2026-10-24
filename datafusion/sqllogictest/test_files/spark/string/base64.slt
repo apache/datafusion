@@ -105,11 +105,46 @@ Spark SQ
 Spark S
 NULL
 
-query error Failed to decode value using base64
+# Like Spark's MIME decoder: padding is optional and characters outside the
+# Base64 alphabet are skipped
+query ?
 SELECT unbase64('123'::string);
+----
+d76d
 
-query error Failed to decode value using base64
+query ?
 SELECT unbase64('123'::bytea);
+----
+d76d
+
+query T
+SELECT arrow_cast(unbase64(column1), 'Utf8')
+FROM VALUES
+('YQ'::string),
+('YW Jj'::string),
+('YWJj!!'::string),
+('!!!!'::string),
+('YWJ='::string);
+----
+a
+abc
+abc
+(empty)
+ab
+
+query ?
+SELECT unbase64(arrow_cast('YWJj', 'LargeBinary'));
+----
+616263
+
+query error Failed to decode value using base64: last unit does not have enough valid bits
+SELECT unbase64('Y'::string);
+
+query error Failed to decode value using base64: invalid padding
+SELECT unbase64('YQ='::string);
+
+query error Failed to decode value using base64: invalid padding
+SELECT unbase64('YQ==YQ=='::string);
 
 query error Error during planning: Function 'unbase64' requires Binary, but received Int32 \(DataType: Int32\)
 SELECT unbase64(12::integer);

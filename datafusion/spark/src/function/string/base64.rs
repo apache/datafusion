@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use arrow::array::{Array, ArrayRef, AsArray, BinaryArray, LargeBinaryArray};
 use arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
 use datafusion_common::types::{NativeType, logical_string};
@@ -27,7 +28,8 @@ use datafusion_expr::{Coercion, Expr, ReturnFieldArgs, TypeSignatureClass, lit};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_functions::expr_fn::{decode, encode};
+use datafusion_functions::expr_fn::encode;
+use datafusion_functions::utils::make_scalar_function;
 
 /// Apache Spark base64 uses padded base64 encoding.
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#base64>
@@ -156,19 +158,127 @@ impl ScalarUDFImpl for SparkUnBase64 {
         )))
     }
 
-    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        exec_err!("{} should have been simplified", self.name())
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(spark_unbase64, vec![])(&args.args)
+    }
+}
+
+fn spark_unbase64(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [bin] = take_function_args("unbase64", args)?;
+    fn decode_all<'a, T>(
+        values: impl Iterator<Item = Option<&'a [u8]>>,
+    ) -> Result<ArrayRef>
+    where
+        T: Array + FromIterator<Option<Vec<u8>>> + 'static,
+    {
+        let decoded = values
+            .map(|value| value.map(mime_decode).transpose())
+            .collect::<Result<T>>()?;
+        Ok(Arc::new(decoded))
+    }
+    match bin.data_type() {
+        DataType::Binary => decode_all::<BinaryArray>(bin.as_binary::<i32>().iter()),
+        DataType::LargeBinary => {
+            decode_all::<LargeBinaryArray>(bin.as_binary::<i64>().iter())
+        }
+        DataType::BinaryView => decode_all::<BinaryArray>(bin.as_binary_view().iter()),
+        other => exec_err!("unbase64 expects a binary argument, got {other}"),
+    }
+}
+
+/// Decodes `input` the way Spark's `unbase64` does, with Java's MIME Base64
+/// decoder: characters outside the Base64 alphabet are skipped and padding is
+/// optional, but a final unit of one character, padding that does not
+/// complete a unit, and alphabet characters after the padding are errors.
+fn mime_decode(input: &[u8]) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(input.len() / 4 * 3 + 2);
+    let mut unit = 0u32;
+    let mut unit_len = 0;
+    let mut rest = input.iter();
+    while let Some(&byte) = rest.next() {
+        if byte == b'=' {
+            let completes_unit = match unit_len {
+                2 => rest.next() == Some(&b'='),
+                3 => true,
+                _ => false,
+            };
+            if !completes_unit || rest.any(|&byte| base64_value(byte).is_some()) {
+                return exec_err!("Failed to decode value using base64: invalid padding");
+            }
+            break;
+        }
+        let Some(value) = base64_value(byte) else {
+            continue;
+        };
+        unit = (unit << 6) | u32::from(value);
+        unit_len += 1;
+        if unit_len == 4 {
+            out.extend_from_slice(&unit.to_be_bytes()[1..]);
+            unit = 0;
+            unit_len = 0;
+        }
+    }
+    match unit_len {
+        1 => {
+            return exec_err!(
+                "Failed to decode value using base64: last unit does not have enough valid bits"
+            );
+        }
+        2 => out.push((unit >> 4) as u8),
+        3 => out.extend_from_slice(&((unit >> 2) as u16).to_be_bytes()),
+        _ => {}
+    }
+    Ok(out)
+}
+
+fn base64_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decode(input: &str) -> Result<Vec<u8>> {
+        mime_decode(input.as_bytes())
     }
 
-    fn simplify(
-        &self,
-        args: Vec<Expr>,
-        _info: &SimplifyContext,
-    ) -> Result<ExprSimplifyResult> {
-        let [bin] = take_function_args(self.name(), args)?;
-        Ok(ExprSimplifyResult::Simplified(decode(
-            bin,
-            lit("base64pad"),
-        )))
+    #[test]
+    fn test_mime_decode_matches_java_mime_decoder() -> Result<()> {
+        // Expected values from java.util.Base64.getMimeDecoder()
+        assert_eq!(decode("U3BhcmsgU1FM")?, b"Spark SQL");
+        assert_eq!(decode("U3BhcmsgUw==")?, b"Spark S");
+        assert_eq!(decode("123")?, [0xd7, 0x6d]);
+        assert_eq!(decode("12")?, [0xd7]);
+        assert_eq!(decode("YQ")?, b"a");
+        assert_eq!(decode("YW Jj")?, b"abc");
+        assert_eq!(decode("YW\nJj")?, b"abc");
+        assert_eq!(decode("YWJj!!")?, b"abc");
+        assert_eq!(decode("YQ!==")?, b"a");
+        assert_eq!(decode("YQ===")?, b"a");
+        assert_eq!(decode("YQ== ")?, b"a");
+        assert_eq!(decode("YWJ=")?, b"ab");
+        assert_eq!(decode("YWJ= =")?, b"ab");
+        assert_eq!(decode("+/8=")?, [0xfb, 0xff]);
+        assert_eq!(decode("!!!!")?, b"");
+        assert_eq!(decode("")?, b"");
+        Ok(())
+    }
+
+    #[test]
+    fn test_mime_decode_errors_match_java_mime_decoder() {
+        for input in [
+            "Y", "YWJjZ", "Y===", "Y=Q", "YQ=", "YQ=x", "YQ= =", "YQ==x", "YWJj=", "=YQ",
+            "YQ==YQ==", "-_8",
+        ] {
+            assert!(decode(input).is_err(), "{input:?} should not decode");
+        }
     }
 }
