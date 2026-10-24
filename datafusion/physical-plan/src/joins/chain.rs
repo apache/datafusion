@@ -75,3 +75,43 @@ where
         match_row_idx = next - one;
     }
 }
+
+/// Emits the build rows `rows[pos..end]` of probe row `prob_idx`, at most
+/// `remaining` of them, for maps that store the build rows of each key next to
+/// each other instead of in a chain. Returns `Some(offset)` if the limit was
+/// reached and there are more results to process, as [`traverse_chain`] does.
+/// A [`MidChain`] offset then holds the position in `rows` to resume from,
+/// which is never `0` because at least one row was emitted.
+#[expect(clippy::too_many_arguments)]
+#[inline(always)]
+pub(crate) fn emit_grouped_rows<T>(
+    rows: &[T],
+    pos: usize,
+    end: usize,
+    prob_idx: usize,
+    remaining: &mut usize,
+    input_indices: &mut Vec<u32>,
+    match_indices: &mut Vec<u64>,
+    is_last_input: bool,
+) -> Option<ProbeOffset>
+where
+    T: Copy + Into<u64>,
+{
+    let take = (end - pos).min(*remaining);
+    match_indices.extend(rows[pos..pos + take].iter().map(|&row| row.into()));
+    input_indices.extend(std::iter::repeat_n(prob_idx as u32, take));
+    *remaining -= take;
+    if *remaining > 0 {
+        return None;
+    }
+    if pos + take < end {
+        Some(MidChain {
+            row: prob_idx,
+            next: (pos + take) as u64,
+        })
+    } else if is_last_input {
+        None
+    } else {
+        Some(AtRow { row: prob_idx + 1 })
+    }
+}
