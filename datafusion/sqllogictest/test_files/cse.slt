@@ -368,3 +368,23 @@ FROM cse_agg_filter
 
 statement ok
 DROP TABLE cse_agg_filter
+
+# `CAST(a AS VARCHAR)` as a group key yields an unqualified field named `t.a`
+# next to the qualified `t.a`. The intermediate projection must keep both.
+statement ok
+CREATE TABLE cse_cast_group_key (a INT) AS VALUES (1)
+
+query III
+SELECT a, a + 1, (a + 1) * 2 FROM cse_cast_group_key GROUP BY CAST(a AS VARCHAR), a
+----
+1 2 4
+
+query IIT
+SELECT a, a + 1, COALESCE(min('x'), CAST(a AS VARCHAR))
+FROM cse_cast_group_key
+GROUP BY CAST(a AS VARCHAR), a
+----
+1 2 x
+
+statement ok
+DROP TABLE cse_cast_group_key

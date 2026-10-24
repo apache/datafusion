@@ -851,13 +851,13 @@ fn build_common_expr_project_plan(
     let mut project_exprs = common_exprs
         .into_iter()
         .map(|(expr, expr_alias)| {
-            fields_set.insert(expr_alias.clone());
+            fields_set.insert(Column::from_name(expr_alias.clone()));
             Ok(expr.alias(expr_alias))
         })
         .collect::<Result<Vec<_>>>()?;
 
     for (qualifier, field) in input.schema().iter() {
-        if fields_set.insert(qualified_name(qualifier, field.name())) {
+        if fields_set.insert(Column::new(qualifier.cloned(), field.name())) {
             project_exprs.push(Expr::from((qualifier, field)));
         }
     }
