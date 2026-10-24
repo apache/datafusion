@@ -20,9 +20,8 @@
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::error::ArrowError;
 use datafusion_common::{
-    Result, ScalarValue, arrow_datafusion_err, datatype::DataTypeExt,
-    exec_datafusion_err, exec_err, internal_err, types::logical_string,
-    utils::take_function_args,
+    Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, exec_err,
+    internal_err, types::logical_string, utils::take_function_args,
 };
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
@@ -174,20 +173,20 @@ impl ScalarUDFImpl for ArrowCastFunc {
                 .contains_key("ARROW:extension:name");
             if has_extension_metadata {
                 // Need to create a cast to strip extension metadata
-                Expr::Cast(datafusion_expr::Cast {
-                    expr: Box::new(source_arg),
-                    field: target_type.into_nullable_field_ref(),
-                })
+                Expr::Cast(datafusion_expr::Cast::new(
+                    Box::new(source_arg),
+                    target_type,
+                ))
             } else {
                 // the argument's data type is already the correct type
                 source_arg
             }
         } else {
             // Use an actual cast to get the correct type
-            Expr::Cast(datafusion_expr::Cast {
-                expr: Box::new(source_arg),
-                field: target_type.into_nullable_field_ref(),
-            })
+            Expr::Cast(datafusion_expr::Cast::new(
+                Box::new(source_arg),
+                target_type,
+            ))
         };
         // return the newly written argument to DataFusion
         Ok(ExprSimplifyResult::Simplified(new_expr))

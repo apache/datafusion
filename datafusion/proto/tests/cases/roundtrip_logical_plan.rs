@@ -2768,51 +2768,435 @@ fn roundtrip_null_literal() {
 
 #[test]
 fn roundtrip_cast() {
-    let test_expr = Expr::Cast(Cast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
-
     let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
 
+    // 1. Explicit cast with DataType
+    let explicit_expr = Expr::Cast(Cast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+    roundtrip_expr_test(explicit_expr.clone(), ctx.clone());
+    let proto = serialize_expr(&explicit_expr, &DefaultLogicalExtensionCodec {}).unwrap();
+    let deserialized = from_proto::parse_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &DefaultLogicalExtensionCodec {},
+    )
+    .unwrap();
+    if let Expr::Cast(c) = &deserialized {
+        assert!(
+            !c.is_implicit,
+            "explicit cast must preserve is_implicit = false"
+        );
+    } else {
+        panic!("expected Expr::Cast");
+    }
+
+    // 2. Explicit cast with FieldRef
     let field =
         Field::new("", DataType::Boolean, false).with_metadata(HashMap::from([(
             String::from("key"),
             String::from("value"),
         )]));
-    let test_expr = Expr::Cast(Cast::new_from_field(
+    let explicit_field_expr = Expr::Cast(Cast::new_from_field(
+        Box::new(lit(1.0_f32)),
+        Arc::new(field.clone()),
+    ));
+    roundtrip_expr_test(explicit_field_expr.clone(), ctx.clone());
+    let proto =
+        serialize_expr(&explicit_field_expr, &DefaultLogicalExtensionCodec {}).unwrap();
+    let deserialized = from_proto::parse_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &DefaultLogicalExtensionCodec {},
+    )
+    .unwrap();
+    if let Expr::Cast(c) = &deserialized {
+        assert!(
+            !c.is_implicit,
+            "explicit cast with field must preserve is_implicit = false"
+        );
+    } else {
+        panic!("expected Expr::Cast");
+    }
+
+    // 3. Implicit cast with DataType
+    let implicit_expr = Expr::Cast(Cast::new_implicit(
+        Box::new(lit(1.0_f32)),
+        DataType::Boolean,
+    ));
+    roundtrip_expr_test(implicit_expr.clone(), ctx.clone());
+    let proto = serialize_expr(&implicit_expr, &DefaultLogicalExtensionCodec {}).unwrap();
+    let deserialized = from_proto::parse_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &DefaultLogicalExtensionCodec {},
+    )
+    .unwrap();
+    if let Expr::Cast(c) = &deserialized {
+        assert!(
+            c.is_implicit,
+            "implicit cast must preserve is_implicit = true"
+        );
+    } else {
+        panic!("expected Expr::Cast");
+    }
+
+    // 4. Implicit cast with FieldRef
+    let implicit_field_expr = Expr::Cast(Cast::new_implicit_from_field(
         Box::new(lit(1.0_f32)),
         Arc::new(field),
     ));
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
+    roundtrip_expr_test(implicit_field_expr.clone(), ctx.clone());
+    let proto =
+        serialize_expr(&implicit_field_expr, &DefaultLogicalExtensionCodec {}).unwrap();
+    let deserialized = from_proto::parse_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &DefaultLogicalExtensionCodec {},
+    )
+    .unwrap();
+    if let Expr::Cast(c) = &deserialized {
+        assert!(
+            c.is_implicit,
+            "implicit cast with field must preserve is_implicit = true"
+        );
+    } else {
+        panic!("expected Expr::Cast");
+    }
 }
 
 #[test]
 fn roundtrip_try_cast() {
-    let test_expr =
-        Expr::TryCast(TryCast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
-
     let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
 
+    // 1. Explicit try_cast with DataType
+    let explicit_expr =
+        Expr::TryCast(TryCast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+    roundtrip_expr_test(explicit_expr.clone(), ctx.clone());
+    let proto = serialize_expr(&explicit_expr, &DefaultLogicalExtensionCodec {}).unwrap();
+    let deserialized = from_proto::parse_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &DefaultLogicalExtensionCodec {},
+    )
+    .unwrap();
+    if let Expr::TryCast(tc) = &deserialized {
+        assert!(
+            !tc.is_implicit,
+            "explicit try_cast must preserve is_implicit = false"
+        );
+    } else {
+        panic!("expected Expr::TryCast");
+    }
+
+    // 2. Explicit try_cast with FieldRef
     let field =
         Field::new("", DataType::Boolean, false).with_metadata(HashMap::from([(
             String::from("key"),
             String::from("value"),
         )]));
-    let test_expr = Expr::TryCast(TryCast::new_from_field(
+    let explicit_field_expr = Expr::TryCast(TryCast::new_from_field(
+        Box::new(lit(1.0_f32)),
+        Arc::new(field.clone()),
+    ));
+    roundtrip_expr_test(explicit_field_expr.clone(), ctx.clone());
+    let proto =
+        serialize_expr(&explicit_field_expr, &DefaultLogicalExtensionCodec {}).unwrap();
+    let deserialized = from_proto::parse_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &DefaultLogicalExtensionCodec {},
+    )
+    .unwrap();
+    if let Expr::TryCast(tc) = &deserialized {
+        assert!(
+            !tc.is_implicit,
+            "explicit try_cast with field must preserve is_implicit = false"
+        );
+    } else {
+        panic!("expected Expr::TryCast");
+    }
+
+    // 3. String literal try_cast
+    let test_expr =
+        Expr::TryCast(TryCast::new(Box::new(lit("not a bool")), DataType::Boolean));
+    roundtrip_expr_test(test_expr, ctx.clone());
+
+    // 4. Implicit try_cast with DataType
+    let implicit_expr = Expr::TryCast(TryCast::new_implicit(
+        Box::new(lit(1.0_f32)),
+        DataType::Boolean,
+    ));
+    roundtrip_expr_test(implicit_expr.clone(), ctx.clone());
+    let proto = serialize_expr(&implicit_expr, &DefaultLogicalExtensionCodec {}).unwrap();
+    let deserialized = from_proto::parse_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &DefaultLogicalExtensionCodec {},
+    )
+    .unwrap();
+    if let Expr::TryCast(tc) = &deserialized {
+        assert!(
+            tc.is_implicit,
+            "implicit try_cast must preserve is_implicit = true"
+        );
+    } else {
+        panic!("expected Expr::TryCast");
+    }
+
+    // 5. Implicit try_cast with FieldRef
+    let implicit_field_expr = Expr::TryCast(TryCast::new_implicit_from_field(
         Box::new(lit(1.0_f32)),
         Arc::new(field),
     ));
+    roundtrip_expr_test(implicit_field_expr.clone(), ctx.clone());
+    let proto =
+        serialize_expr(&implicit_field_expr, &DefaultLogicalExtensionCodec {}).unwrap();
+    let deserialized = from_proto::parse_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &DefaultLogicalExtensionCodec {},
+    )
+    .unwrap();
+    if let Expr::TryCast(tc) = &deserialized {
+        assert!(
+            tc.is_implicit,
+            "implicit try_cast with field must preserve is_implicit = true"
+        );
+    } else {
+        panic!("expected Expr::TryCast");
+    }
+}
 
+#[test]
+fn roundtrip_cast_try_cast_backward_compatibility() {
     let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
+    let codec = DefaultLogicalExtensionCodec {};
 
-    let test_expr =
-        Expr::TryCast(TryCast::new(Box::new(lit("not a bool")), DataType::Boolean));
+    // 1. CastNode with is_implicit = None (simulating legacy serialized payload before field 5 existed)
+    let legacy_cast_proto = protobuf::LogicalExprNode {
+        expr_type: Some(protobuf::logical_expr_node::ExprType::Cast(Box::new(
+            protobuf::CastNode {
+                expr: Some(Box::new(serialize_expr(&lit(42), &codec).unwrap())),
+                arrow_type: Some((&DataType::Float64).try_into().unwrap()),
+                metadata: Default::default(),
+                nullable: Some(true),
+                is_implicit: None,
+            },
+        ))),
+    };
+    let parsed_cast =
+        from_proto::parse_expr(&legacy_cast_proto, ctx.task_ctx().as_ref(), &codec)
+            .unwrap();
+    match parsed_cast {
+        Expr::Cast(c) => {
+            assert!(
+                !c.is_implicit,
+                "legacy CastNode payload lacking is_implicit must safely default to is_implicit = false"
+            );
+        }
+        _ => panic!("expected Expr::Cast"),
+    }
 
+    // 2. TryCastNode with is_implicit = None (simulating legacy serialized payload before field 5 existed)
+    let legacy_try_cast_proto = protobuf::LogicalExprNode {
+        expr_type: Some(protobuf::logical_expr_node::ExprType::TryCast(Box::new(
+            protobuf::TryCastNode {
+                expr: Some(Box::new(serialize_expr(&lit("hello"), &codec).unwrap())),
+                arrow_type: Some((&DataType::Int32).try_into().unwrap()),
+                metadata: Default::default(),
+                nullable: Some(true),
+                is_implicit: None,
+            },
+        ))),
+    };
+    let parsed_try_cast =
+        from_proto::parse_expr(&legacy_try_cast_proto, ctx.task_ctx().as_ref(), &codec)
+            .unwrap();
+    match parsed_try_cast {
+        Expr::TryCast(tc) => {
+            assert!(
+                !tc.is_implicit,
+                "legacy TryCastNode payload lacking is_implicit must safely default to is_implicit = false"
+            );
+        }
+        _ => panic!("expected Expr::TryCast"),
+    }
+}
+
+#[tokio::test]
+async fn roundtrip_aggregate_colliding_risk_cast_plan() -> Result<()> {
     let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
+
+    // 1. Test via LogicalPlanBuilder with explicit and implicit Cast
+    let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, true)]));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+    ctx.register_table("t", table)?;
+
+    let scan = ctx.table("t").await?.into_optimized_plan()?;
+
+    let implicit_cast =
+        Expr::Cast(Cast::new_implicit(Box::new(col("x")), DataType::Float64));
+    let explicit_cast = Expr::Cast(Cast::new(Box::new(col("x")), DataType::Float64));
+
+    let aggr_implicit = sum(implicit_cast);
+    let aggr_explicit = sum(explicit_cast);
+
+    let plan = LogicalPlanBuilder::from(scan)
+        .aggregate(Vec::<Expr>::new(), vec![aggr_implicit, aggr_explicit])?
+        .build()?;
+
+    // Check pre-serialization schema names and duplicate-field validation
+    assert_eq!(
+        plan.schema().field_names(),
+        vec![
+            "sum(t.x)".to_string(),
+            "sum(CAST(t.x AS Float64))".to_string()
+        ]
+    );
+    assert!(plan.schema().check_names().is_ok());
+
+    // Serialize to bytes and round-trip deserialize
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let roundtrip_plan = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    // Verify post-serialization schema names and duplicate-field validation
+    assert_eq!(
+        roundtrip_plan.schema().field_names(),
+        plan.schema().field_names(),
+        "roundtrip plan schema field names must match original plan exactly without colliding"
+    );
+    assert!(
+        roundtrip_plan.schema().check_names().is_ok(),
+        "duplicate field validation must succeed after round trip"
+    );
+
+    // Verify individual reconstructed expressions preserve is_implicit
+    if let LogicalPlan::Aggregate(aggr) = &roundtrip_plan {
+        assert_eq!(aggr.aggr_expr.len(), 2);
+        // First aggr: sum(implicit_cast)
+        match &aggr.aggr_expr[0] {
+            Expr::AggregateFunction(f) => {
+                assert_eq!(f.params.args.len(), 1);
+                match &f.params.args[0] {
+                    Expr::Cast(c) => assert!(
+                        c.is_implicit,
+                        "reconstructed implicit cast must have is_implicit = true"
+                    ),
+                    other => panic!("expected Cast, got {other:?}"),
+                }
+            }
+            other => panic!("expected AggregateFunction, got {other:?}"),
+        }
+        // Second aggr: sum(explicit_cast)
+        match &aggr.aggr_expr[1] {
+            Expr::AggregateFunction(f) => {
+                assert_eq!(f.params.args.len(), 1);
+                match &f.params.args[0] {
+                    Expr::Cast(c) => assert!(
+                        !c.is_implicit,
+                        "reconstructed explicit cast must have is_implicit = false"
+                    ),
+                    other => panic!("expected Cast, got {other:?}"),
+                }
+            }
+            other => panic!("expected AggregateFunction, got {other:?}"),
+        }
+    } else {
+        panic!("expected LogicalPlan::Aggregate");
+    }
+
+    // 2. Test via TryCast colliding-risk aggregate
+    let scan2 = ctx.table("t").await?.into_optimized_plan()?;
+    let implicit_try_cast =
+        Expr::TryCast(TryCast::new_implicit(Box::new(col("x")), DataType::Float64));
+    let explicit_try_cast =
+        Expr::TryCast(TryCast::new(Box::new(col("x")), DataType::Float64));
+
+    let aggr_implicit_try = sum(implicit_try_cast);
+    let aggr_explicit_try = sum(explicit_try_cast);
+
+    let plan_try = LogicalPlanBuilder::from(scan2)
+        .aggregate(
+            Vec::<Expr>::new(),
+            vec![aggr_implicit_try, aggr_explicit_try],
+        )?
+        .build()?;
+
+    assert_eq!(
+        plan_try.schema().field_names(),
+        vec![
+            "sum(t.x)".to_string(),
+            "sum(TRY_CAST(t.x AS Float64))".to_string()
+        ]
+    );
+    assert!(plan_try.schema().check_names().is_ok());
+
+    let bytes_try = logical_plan_to_bytes(&plan_try)?;
+    let roundtrip_plan_try = logical_plan_from_bytes(&bytes_try, &ctx.task_ctx())?;
+
+    assert_eq!(
+        roundtrip_plan_try.schema().field_names(),
+        plan_try.schema().field_names()
+    );
+    assert!(roundtrip_plan_try.schema().check_names().is_ok());
+
+    if let LogicalPlan::Aggregate(aggr) = &roundtrip_plan_try {
+        match &aggr.aggr_expr[0] {
+            Expr::AggregateFunction(f) => match &f.params.args[0] {
+                Expr::TryCast(tc) => assert!(
+                    tc.is_implicit,
+                    "reconstructed implicit TryCast must have is_implicit = true"
+                ),
+                other => panic!("expected TryCast, got {other:?}"),
+            },
+            other => panic!("expected AggregateFunction, got {other:?}"),
+        }
+        match &aggr.aggr_expr[1] {
+            Expr::AggregateFunction(f) => match &f.params.args[0] {
+                Expr::TryCast(tc) => assert!(
+                    !tc.is_implicit,
+                    "reconstructed explicit TryCast must have is_implicit = false"
+                ),
+                other => panic!("expected TryCast, got {other:?}"),
+            },
+            other => panic!("expected AggregateFunction, got {other:?}"),
+        }
+    } else {
+        panic!("expected LogicalPlan::Aggregate");
+    }
+
+    // 3. Test end-to-end SQL unaliased query round trip
+    let person_schema =
+        Arc::new(Schema::new(vec![Field::new("age", DataType::Int32, true)]));
+    let person_table = Arc::new(EmptyTable::new(Arc::clone(&person_schema)));
+    ctx.register_table("person", person_table)?;
+
+    let sql = "SELECT sum(age), sum(CAST(age AS FLOAT)) FROM person";
+    let df = ctx.sql(sql).await?;
+    let sql_plan = df.into_unoptimized_plan();
+
+    assert_eq!(
+        sql_plan.schema().field_names(),
+        vec![
+            "sum(person.age)".to_string(),
+            "sum(CAST(person.age AS Float32))".to_string()
+        ]
+    );
+    assert!(sql_plan.schema().check_names().is_ok());
+
+    let sql_bytes = logical_plan_to_bytes(&sql_plan)?;
+    let sql_roundtrip_plan = logical_plan_from_bytes(&sql_bytes, &ctx.task_ctx())?;
+
+    assert_eq!(
+        sql_roundtrip_plan.schema().field_names(),
+        sql_plan.schema().field_names(),
+        "SQL plan schema field names must be preserved across protobuf round trip"
+    );
+    assert!(
+        sql_roundtrip_plan.schema().check_names().is_ok(),
+        "SQL plan duplicate-field check must succeed after round trip"
+    );
+
+    Ok(())
 }
 
 #[test]

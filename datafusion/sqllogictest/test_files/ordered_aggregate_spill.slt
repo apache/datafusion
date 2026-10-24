@@ -176,9 +176,9 @@ FROM generate_series(20000) AS t1(v1)
 GROUP BY round(v1, -4), v1 % 5000
 ----
 Plan with Metrics
-01)AggregateExec: mode=FinalPartitioned,<slt:ignore>aggr=[sum(t1.v1 * Int64(2)), min(t1.v1 % Int64(2))], group_clustering_mode=Partial([0]), metrics=[<slt:ignore>spilled_rows=<slt:ignore> K,<slt:ignore>]
+01)AggregateExec: mode=FinalPartitioned,<slt:ignore>aggr=[sum(t1.v1 * Int64(2)), min(CAST(t1.v1 % Int64(2) AS Utf8View))], group_clustering_mode=Partial([0]), metrics=[<slt:ignore>spilled_rows=<slt:ignore> K,<slt:ignore>]
 02)--RepartitionExec:<slt:ignore>input_partitions=1, maintains_sort_order=true<slt:ignore>
-03)----AggregateExec: mode=Partial,<slt:ignore>aggr=[sum(t1.v1 * Int64(2)), min(t1.v1 % Int64(2))], group_clustering_mode=Partial([0]), metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
+03)----AggregateExec: mode=Partial,<slt:ignore>aggr=[sum(t1.v1 * Int64(2)), min(CAST(t1.v1 % Int64(2) AS Utf8View))], group_clustering_mode=Partial([0]), metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
 <slt:ignore>
 
 # ==================================================================================

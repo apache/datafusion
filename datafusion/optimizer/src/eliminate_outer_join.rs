@@ -349,8 +349,7 @@ fn extract_null_rejecting_sides(
                 NullRejectingSides::default()
             }
         }
-        Expr::Cast(Cast { expr, field: _ })
-        | Expr::TryCast(TryCast { expr, field: _ }) => {
+        Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
             extract_null_rejecting_sides(expr, left_schema, right_schema, false)
         }
         // IN list and BETWEEN reject NULLs from their input expression; list
