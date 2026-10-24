@@ -399,6 +399,7 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
 
         let name = udaf.name().into();
         let aliases = udaf.aliases().iter().map(|a| a.to_owned().into()).collect();
+        #[expect(deprecated)]
         let is_nullable = udaf.is_nullable();
         let volatility = udaf.signature().volatility.into();
 

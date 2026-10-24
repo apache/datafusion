@@ -293,8 +293,8 @@ impl AggregateUDFImpl for Count {
         Ok(DataType::Int64)
     }
 
-    fn is_nullable(&self) -> bool {
-        false
+    fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, false)))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {

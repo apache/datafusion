@@ -301,7 +301,7 @@ impl AggregateExprBuilder {
         if let Some(output_metadata) = output_metadata {
             return_field = output_metadata.add_to_field_ref(return_field);
         }
-        let is_nullable = fun.is_nullable();
+        let is_nullable = return_field.is_nullable();
         let Some(name) = alias else {
             return internal_err!(
                 "AggregateExprBuilder::alias must be provided prior to calling build"

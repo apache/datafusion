@@ -742,8 +742,8 @@ impl AggregateUDFImpl for ApproxDistinct {
         Ok(ScalarValue::UInt64(Some(0)))
     }
 
-    fn is_nullable(&self) -> bool {
-        false
+    fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::UInt64, false)))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
