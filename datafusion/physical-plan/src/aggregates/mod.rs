@@ -221,8 +221,6 @@ pub mod group_values;
 mod grouped_hash_stream;
 mod grouped_topk_stream;
 mod hash_stream;
-#[cfg(test)]
-mod memory_call_sequence_tests;
 pub mod order;
 mod partial_reduce_stream;
 mod single_stream;

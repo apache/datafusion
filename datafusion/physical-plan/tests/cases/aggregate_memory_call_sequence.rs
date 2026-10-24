@@ -59,14 +59,14 @@ use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use insta::{Settings, assert_snapshot};
 
-use super::{
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateInputMode, AggregateMode, GroupClusteringMode,
     PhysicalGroupBy,
 };
-use crate::ExecutionPlan;
-use crate::common::collect;
-use crate::metrics::MetricsSet;
-use crate::test::TestMemoryExec;
+use datafusion_physical_plan::common::collect;
+use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::test::TestMemoryExec;
 
 /// A [`GreedyMemoryPool`] that records every call in order, as
 /// `"<consumer name> <op> <bytes>"`, and the peak of its reserved bytes.
@@ -86,7 +86,7 @@ impl RecordingPool {
         }
     }
 
-    fn record(&self, consumer: &MemoryConsumer, call: String) {
+    fn record(&self, consumer: &MemoryConsumer, call: &str) {
         let line = format!("{} {call}", consumer.name());
         self.calls.lock().unwrap().push(line);
     }
@@ -107,25 +107,25 @@ impl MemoryPool for RecordingPool {
         self.inner.register(consumer);
         self.record(
             consumer,
-            format!("register can_spill={}", consumer.can_spill()),
+            &format!("register can_spill={}", consumer.can_spill()),
         );
     }
 
     fn unregister(&self, consumer: &MemoryConsumer) {
         self.inner.unregister(consumer);
-        self.record(consumer, "unregister".to_string());
+        self.record(consumer, "unregister");
     }
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         self.inner.grow(reservation, additional);
         self.peak
             .fetch_max(self.inner.reserved(), Ordering::Relaxed);
-        self.record(reservation.consumer(), format!("grow {additional}"));
+        self.record(reservation.consumer(), &format!("grow {additional}"));
     }
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         self.inner.shrink(reservation, shrink);
-        self.record(reservation.consumer(), format!("shrink {shrink}"));
+        self.record(reservation.consumer(), &format!("shrink {shrink}"));
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
@@ -135,7 +135,7 @@ impl MemoryPool for RecordingPool {
         let suffix = if result.is_ok() { "" } else { " -> refused" };
         self.record(
             reservation.consumer(),
-            format!("try_grow {additional}{suffix}"),
+            &format!("try_grow {additional}{suffix}"),
         );
         result
     }
@@ -243,12 +243,15 @@ impl Case {
         // by the `SUM` state, which for Int64 is the running sum itself.
         let reads_partial_state = self.mode.input_mode() == AggregateInputMode::Partial;
         let input_schema = if reads_partial_state {
-            Arc::new(super::create_schema(
-                &raw,
-                &group_by,
-                &aggregates,
+            AggregateExec::try_new(
                 AggregateMode::Partial,
-            )?)
+                group_by.clone(),
+                aggregates.clone(),
+                vec![None],
+                Arc::new(TestMemoryExec::try_new(&[vec![]], Arc::clone(&raw), None)?),
+                Arc::clone(&raw),
+            )?
+            .schema()
         } else {
             Arc::clone(&raw)
         };
