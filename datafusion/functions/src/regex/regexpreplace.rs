@@ -27,6 +27,7 @@ use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::array::{ArrayAccessor, StringViewArray};
 use arrow::array::{ArrayIter, AsArray, new_null_array};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::ScalarValue;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
@@ -186,7 +187,14 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
             && let DataType::Dictionary(_, value_type) = array.data_type().clone()
         {
             if preserve_dictionary {
-                let dict = array.as_any_dictionary();
+                let compacted;
+                let mut dict = array.as_any_dictionary();
+                if dict.values().len() > dict.keys().len() {
+                    // Filtered batches and shared Parquet dictionaries can have more
+                    // values than rows, so drop unreferenced values first.
+                    compacted = garbage_collect_any_dictionary(dict)?;
+                    dict = compacted.as_any_dictionary();
+                }
                 let mut inner: Vec<ColumnarValue> = Vec::with_capacity(args.len());
                 inner.push(ColumnarValue::Array(Arc::clone(dict.values())));
                 inner.extend_from_slice(&args[1..]);
