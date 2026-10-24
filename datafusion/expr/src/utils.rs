@@ -21,8 +21,10 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
+use crate::conditional_expressions::CaseBuilder;
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
+use crate::logical_plan::JoinType;
 use crate::{
     BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator, and,
 };
@@ -409,35 +411,52 @@ fn get_exprs_except_skipped(
 /// joins). An unqualified wildcard should include each USING column only once.
 /// This function returns the duplicate columns that should be excluded.
 fn exclude_using_columns(plan: &LogicalPlan) -> Result<HashSet<Column>> {
-    let output_columns: HashSet<_> = plan.schema().columns().iter().cloned().collect();
+    let output_columns = plan.schema().columns();
     let mut excluded = HashSet::new();
     for cols in plan.using_columns()? {
         // `using_columns()` returns join columns from both sides regardless of
-        // the join type. For semi/anti joins, only one side's columns appear in
-        // the output schema. Filter to output columns so that columns from the
-        // non-output side don't participate in the deduplication process below
-        // and displace real output columns.
-        let mut cols: Vec<_> = cols
-            .into_iter()
-            .filter(|c| output_columns.contains(c))
-            .collect();
-
-        // Sort so we keep the same qualified column, regardless of HashSet
-        // iteration order.
-        cols.sort();
-
-        // Keep only one column per name from the columns set, adding any
-        // duplicates to the excluded set.
+        // the join type. Visit only output columns, in schema order, so the
+        // surviving key keeps its position in an unqualified wildcard.
         let mut seen_names = HashSet::new();
-        for col in cols {
-            if seen_names.contains(col.name.as_str()) {
-                excluded.insert(col); // exclude columns with already seen name
-            } else {
-                seen_names.insert(col.name.clone()); // mark column name as seen
+        for col in output_columns.iter().filter(|col| cols.contains(*col)) {
+            if !seen_names.insert(&col.name) {
+                excluded.insert(col.clone());
             }
         }
     }
     Ok(excluded)
+}
+
+fn merged_using_key_for_wildcard(
+    col: Column,
+    merged_keys: &[(Column, Column, JoinType)],
+) -> Result<Expr> {
+    let Some((l, r, join_type)) =
+        merged_keys.iter().find(|(l, r, _)| l == &col || r == &col)
+    else {
+        return Ok(Expr::Column(col));
+    };
+
+    let (expr, visible_col) = match join_type {
+        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+            (Expr::Column(r.clone()), r.clone())
+        }
+        JoinType::Full => CaseBuilder::new(
+            None,
+            vec![Expr::Column(l.clone()).is_not_null()],
+            vec![Expr::Column(l.clone())],
+            Some(Box::new(Expr::Column(r.clone()))),
+        )
+        .end()
+        .map(|expr| (expr, col.clone()))?,
+        _ => (Expr::Column(l.clone()), l.clone()),
+    };
+
+    if expr == Expr::Column(visible_col.clone()) {
+        Ok(expr)
+    } else {
+        Ok(expr.alias_qualified(visible_col.relation, visible_col.name))
+    }
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
@@ -459,7 +478,21 @@ pub fn expand_wildcard(
     };
     // Add each excluded `Column` to columns_to_skip
     columns_to_skip.extend(excluded_columns);
-    Ok(get_exprs_except_skipped(schema, &columns_to_skip))
+    let exprs = get_exprs_except_skipped(schema, &columns_to_skip);
+
+    // Resolve the surviving USING / NATURAL key column to the merged key value,
+    // while preserving the wildcard-visible field qualifier.
+    let merged_keys = plan.using_key_pairs()?;
+    if merged_keys.is_empty() {
+        return Ok(exprs);
+    }
+    exprs
+        .into_iter()
+        .map(|expr| match expr {
+            Expr::Column(col) => merged_using_key_for_wildcard(col, &merged_keys),
+            other => Ok(other),
+        })
+        .collect()
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
