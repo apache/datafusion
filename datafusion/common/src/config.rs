@@ -3362,6 +3362,7 @@ impl ConfigField for TableParquetOptions {
 
 macro_rules! config_namespace_with_hashmap {
     (
+     @with_derives [$($derive:path),*]
      $(#[doc = $struct_d:tt])*
      $(#[deprecated($($struct_depr:tt)*)])?  // Optional struct-level deprecated attribute
      $vis:vis struct $struct_name:ident {
@@ -3375,7 +3376,7 @@ macro_rules! config_namespace_with_hashmap {
 
         $(#[doc = $struct_d])*
         $(#[deprecated($($struct_depr)*)])?  // Apply struct deprecation
-        #[derive(Debug, Clone, PartialEq)]
+        #[derive($($derive),*)]
         $vis struct $struct_name{
             $(
             $(#[doc = $d])*
@@ -3445,7 +3446,13 @@ macro_rules! config_namespace_with_hashmap {
                 }
             }
         }
-    }
+    };
+    ($($tokens:tt)*) => {
+        config_namespace_with_hashmap! {
+            @with_derives [Debug, Clone, PartialEq]
+            $($tokens)*
+        }
+    };
 }
 
 config_namespace_with_hashmap! {
@@ -3491,7 +3498,11 @@ config_namespace_with_hashmap! {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Parquet file encryption configuration.
+///
+/// Key contents are redacted from [`Debug`](std::fmt::Debug) output. Direct field
+/// access and [`ConfigField`] visits still expose the configured key values.
+#[derive(Clone, PartialEq)]
 pub struct ConfigFileEncryptionProperties {
     /// Should the parquet footer be encrypted
     /// default is true
@@ -3509,6 +3520,25 @@ pub struct ConfigFileEncryptionProperties {
     pub store_aad_prefix: bool,
 }
 
+impl fmt::Debug for ConfigFileEncryptionProperties {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConfigFileEncryptionProperties")
+            .field("encrypt_footer", &self.encrypt_footer)
+            .field("footer_key_as_hex", &"<REDACTED>")
+            .field(
+                "footer_key_metadata_as_hex",
+                &self.footer_key_metadata_as_hex,
+            )
+            .field(
+                "column_encryption_properties",
+                &self.column_encryption_properties,
+            )
+            .field("aad_prefix_as_hex", &self.aad_prefix_as_hex)
+            .field("store_aad_prefix", &self.store_aad_prefix)
+            .finish()
+    }
+}
+
 // Setup to match EncryptionPropertiesBuilder::new()
 impl Default for ConfigFileEncryptionProperties {
     fn default() -> Self {
@@ -3524,11 +3554,23 @@ impl Default for ConfigFileEncryptionProperties {
 }
 
 config_namespace_with_hashmap! {
+    @with_derives [Clone, PartialEq]
+    /// Per-column encryption configuration, with key contents redacted from
+    /// [`Debug`](std::fmt::Debug) output.
     pub struct ColumnEncryptionProperties {
         /// Per column encryption key
         pub column_key_as_hex: String, default = "".to_string()
         /// Per column encryption key metadata
         pub column_metadata_as_hex: Option<String>, default = None
+    }
+}
+
+impl fmt::Debug for ColumnEncryptionProperties {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ColumnEncryptionProperties")
+            .field("column_key_as_hex", &"<REDACTED>")
+            .field("column_metadata_as_hex", &self.column_metadata_as_hex)
+            .finish()
     }
 }
 
@@ -3689,7 +3731,11 @@ impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Parquet file decryption configuration.
+///
+/// Key contents are redacted from [`Debug`](std::fmt::Debug) output. Direct field
+/// access and [`ConfigField`] visits still expose the configured key values.
+#[derive(Clone, PartialEq)]
 pub struct ConfigFileDecryptionProperties {
     /// Binary string to use for the parquet footer encoded in hex format
     pub footer_key_as_hex: String,
@@ -3702,10 +3748,38 @@ pub struct ConfigFileDecryptionProperties {
     pub footer_signature_verification: bool,
 }
 
+impl fmt::Debug for ConfigFileDecryptionProperties {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConfigFileDecryptionProperties")
+            .field("footer_key_as_hex", &"<REDACTED>")
+            .field(
+                "column_decryption_properties",
+                &self.column_decryption_properties,
+            )
+            .field("aad_prefix_as_hex", &self.aad_prefix_as_hex)
+            .field(
+                "footer_signature_verification",
+                &self.footer_signature_verification,
+            )
+            .finish()
+    }
+}
+
 config_namespace_with_hashmap! {
+    @with_derives [Clone, PartialEq]
+    /// Per-column decryption configuration, with key contents redacted from
+    /// [`Debug`](std::fmt::Debug) output.
     pub struct ColumnDecryptionProperties {
         /// Per column encryption key
         pub column_key_as_hex: String, default = "".to_string()
+    }
+}
+
+impl fmt::Debug for ColumnDecryptionProperties {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ColumnDecryptionProperties")
+            .field("column_key_as_hex", &"<REDACTED>")
+            .finish()
     }
 }
 
