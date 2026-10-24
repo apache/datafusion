@@ -22,7 +22,7 @@
 //! - Test runners that spawn individual test processes
 //! - Test cases that contain the actual validation logic
 
-use crate::memory_limit::memory_limit_validation::utils;
+use crate::utils;
 
 // ===========================================================================
 // Test runners:
