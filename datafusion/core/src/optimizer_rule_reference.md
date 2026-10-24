@@ -56,13 +56,14 @@ Rule order matters. The default pipeline may change between releases.
 | 17    | `eliminate_outer_join`                    | Rewrites outer joins to inner joins when later filters reject the NULL-extended rows.                                       |
 | 18    | `push_down_limit`                         | Moves literal limits closer to scans and unions and merges adjacent limits.                                                 |
 | 19    | `push_down_filter`                        | Moves filters as early as possible through filter-commutative operators.                                                    |
-| 20    | `eliminate_aggregate_distinct`            | Drops the `DISTINCT` modifier from aggregates whose result cannot change, such as `min`, `max` and `bit_or`.                |
-| 21    | `single_distinct_aggregation_to_group_by` | Rewrites single-column `DISTINCT` aggregations into two-stage `GROUP BY` plans.                                             |
-| 22    | `eliminate_group_by_constant`             | Removes constant or functionally redundant expressions from `GROUP BY`.                                                     |
-| 23    | `common_sub_expression_eliminate`         | Computes repeated subexpressions once and reuses the result.                                                                |
-| 24    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
-| 25    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
-| 26    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
+| 20    | `push_down_semi_join`                     | Pushes semi / anti joins below inner joins and restricts decorrelated subquery aggregates to the outer keys.                |
+| 21    | `eliminate_aggregate_distinct`            | Drops the `DISTINCT` modifier from aggregates whose result cannot change, such as `min`, `max` and `bit_or`.                |
+| 22    | `single_distinct_aggregation_to_group_by` | Rewrites single-column `DISTINCT` aggregations into two-stage `GROUP BY` plans.                                             |
+| 23    | `eliminate_group_by_constant`             | Removes constant or functionally redundant expressions from `GROUP BY`.                                                     |
+| 24    | `common_sub_expression_eliminate`         | Computes repeated subexpressions once and reuses the result.                                                                |
+| 25    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
+| 26    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
+| 27    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
 
 ### Physical Optimizer Rules
 
