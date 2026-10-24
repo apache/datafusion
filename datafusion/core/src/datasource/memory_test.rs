@@ -129,6 +129,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn merge_into_distributes_rows_across_target_partitions() -> Result<()> {
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let batch = |ids: Vec<i32>, values: Vec<i32>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(ids)),
+                    Arc::new(Int32Array::from(values)),
+                ],
+            )
+        };
+
+        let target = Arc::new(MemTable::try_new(
+            Arc::clone(&schema),
+            vec![
+                vec![batch(
+                    (0..50).collect(),
+                    (0..50).map(|id| id * 10).collect(),
+                )?],
+                vec![batch(
+                    (50..100).collect(),
+                    (50..100).map(|id| id * 10).collect(),
+                )?],
+            ],
+        )?);
+        let source = Arc::new(MemTable::try_new(
+            Arc::clone(&schema),
+            vec![vec![batch(
+                (0..101).collect(),
+                (0..101).map(|id| id * 100).collect(),
+            )?]],
+        )?);
+        ctx.register_table("merge_target", target.clone())?;
+        ctx.register_table("merge_source", source)?;
+
+        let result = ctx
+            .sql(
+                "MERGE INTO merge_target USING merge_source \
+                 ON merge_target.id = merge_source.id \
+                 WHEN MATCHED THEN UPDATE SET value = merge_source.value \
+                 WHEN NOT MATCHED THEN INSERT (id, value) \
+                   VALUES (merge_source.id, merge_source.value)",
+            )
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(
+            result[0].column(0).as_primitive::<UInt64Type>().value(0),
+            101
+        );
+
+        let mut partition_rows: Vec<usize> = Vec::with_capacity(target.batches.len());
+        let mut rows = vec![];
+        for partition in &target.batches {
+            let partition = partition.read().await;
+            partition_rows.push(partition.iter().map(RecordBatch::num_rows).sum());
+            for batch in partition.iter() {
+                let ids = batch.column(0).as_primitive::<Int32Type>();
+                let values = batch.column(1).as_primitive::<Int32Type>();
+                rows.extend(
+                    (0..batch.num_rows())
+                        .map(|row_idx| (ids.value(row_idx), values.value(row_idx))),
+                );
+            }
+        }
+        rows.sort_unstable();
+        assert_eq!(partition_rows, vec![51, 50]);
+        assert_eq!(rows, (0..101).map(|id| (id, id * 100)).collect::<Vec<_>>());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn merge_into_only_compiles_defaults_for_omitted_columns() -> Result<()> {
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let target = MemTable::try_new(schema, vec![vec![]])?.with_column_defaults(
+            HashMap::from([
+                // The supplied id must not require its default to be valid.
+                ("id".to_string(), col("unresolvable_default")),
+                ("value".to_string(), lit(42)),
+            ]),
+        );
+        ctx.register_table("merge_target", Arc::new(target))?;
+
+        ctx.sql(
+            "MERGE INTO merge_target USING (SELECT 7 AS id) AS s ON false \
+             WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id)",
+        )
+        .await?
+        .collect()
+        .await?;
+        let rows = ctx
+            .sql("SELECT id, value FROM merge_target")
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].num_rows(), 1);
+        assert_eq!(rows[0].column(0).as_primitive::<Int32Type>().value(0), 7);
+        assert_eq!(rows[0].column(1).as_primitive::<Int32Type>().value(0), 42);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_load_preserves_constraints() -> Result<()> {
         let session_ctx = SessionContext::new();
         let constraints =
