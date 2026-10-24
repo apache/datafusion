@@ -2775,6 +2775,26 @@ impl ScalarValue {
         )
     }
 
+    /// Applies [`normalize_float`] to a `Float16`, `Float32` or `Float64`
+    /// value, so `-0.0` becomes `0.0`. Other values are returned as is.
+    ///
+    /// [`normalize_float`]: crate::float_semantics::normalize_float
+    pub fn normalize(self) -> Self {
+        use crate::float_semantics::normalize_float;
+        match self {
+            ScalarValue::Float16(Some(v)) => {
+                ScalarValue::Float16(Some(normalize_float(v)))
+            }
+            ScalarValue::Float32(Some(v)) => {
+                ScalarValue::Float32(Some(normalize_float(v)))
+            }
+            ScalarValue::Float64(Some(v)) => {
+                ScalarValue::Float64(Some(normalize_float(v)))
+            }
+            other => other,
+        }
+    }
+
     /// whether this value is null or not.
     pub fn is_null(&self) -> bool {
         match self {
@@ -12068,5 +12088,29 @@ mod tests {
         assert_eq!(arr.len(), 1);
         assert_eq!(arr.null_count(), 0);
         assert_eq!(arr.num_columns(), 0);
+    }
+
+    #[test]
+    fn normalize_folds_negative_zero() {
+        assert_eq!(
+            ScalarValue::Float64(Some(-0.0)).normalize(),
+            ScalarValue::Float64(Some(0.0))
+        );
+        assert_eq!(
+            ScalarValue::Float32(Some(-0.0)).normalize(),
+            ScalarValue::Float32(Some(0.0))
+        );
+        assert_eq!(
+            ScalarValue::Float16(Some(f16::NEG_ZERO)).normalize(),
+            ScalarValue::Float16(Some(f16::ZERO))
+        );
+        assert_eq!(
+            ScalarValue::Float64(None).normalize(),
+            ScalarValue::Float64(None)
+        );
+        assert_eq!(
+            ScalarValue::Int32(Some(0)).normalize(),
+            ScalarValue::Int32(Some(0))
+        );
     }
 }
