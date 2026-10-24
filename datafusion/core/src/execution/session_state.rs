@@ -36,8 +36,10 @@ use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::DataType;
 use arrow_schema::FieldRef;
 use datafusion_catalog::MemoryCatalogProviderList;
+#[cfg(feature = "sql")]
+use datafusion_catalog::information_schema::INFORMATION_SCHEMA_TABLES;
 use datafusion_catalog::information_schema::{
-    INFORMATION_SCHEMA, INFORMATION_SCHEMA_TABLES, InformationSchemaProvider,
+    INFORMATION_SCHEMA, InformationSchemaProvider,
 };
 use datafusion_catalog::{TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
