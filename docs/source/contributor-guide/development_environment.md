@@ -52,6 +52,31 @@ Notes:
 - `protoc` is required to compile DataFusion from source.
 - Some tests and examples rely on git submodule data being present locally.
 
+## API Documentation Examples
+
+The published `datafusion` crate includes runnable examples under
+`datafusion/core/examples`. Rustdoc automatically shows their API call sites
+in the documentation built by docs.rs.
+
+To build the same documentation locally, use a nightly Rust toolchain:
+
+```shell
+cargo +nightly doc -p datafusion --all-features --lib --no-deps \
+  -Z unstable-options -Z rustdoc-scrape-examples
+```
+
+Open `target/doc/datafusion/index.html` and follow an API such as
+`SessionContext::sql` to see its examples. You can also run the example directly:
+
+```shell
+cargo run -p datafusion --example query
+```
+
+For new examples, add a `[[example]]` target with `doc-scrape-examples = true`
+in `datafusion/core/Cargo.toml`. Keep the source inside the core crate and
+include it in the package's `include` list so it is available to docs.rs.
+Use `required-features` when an example depends on an optional feature.
+
 ## Nix and direnv
 
 The repository's `flake.nix` provides a Nix development shell. Enter it directly

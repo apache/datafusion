@@ -19,7 +19,7 @@
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
 keywords = ["arrow", "query", "sql"]
-include = ["benches/*.rs", "src/**/*.md", "src/**/*.rs", "Cargo.toml", "LICENSE.txt", "NOTICE.txt"]
+include = ["benches/*.rs", "examples/*.rs", "src/**/*.md", "src/**/*.rs", "Cargo.toml", "LICENSE.txt", "NOTICE.txt"]
 readme = "../../README.md"
 version = { workspace = true }
 edition = { workspace = true }
@@ -31,6 +31,12 @@ rust-version = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true
+cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
+
+[[example]]
+name = "query"
+doc-scrape-examples = true
+required-features = ["sql"]
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
