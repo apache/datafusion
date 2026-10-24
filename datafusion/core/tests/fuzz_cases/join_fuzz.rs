@@ -949,6 +949,7 @@ impl JoinFuzzTestCase {
                 self.join_type,
                 vec![SortOptions::default(); self.on_columns().len()],
                 NullEquality::NullEqualsNothing,
+                false,
             )
             .unwrap(),
         )
@@ -1363,6 +1364,7 @@ async fn test_filtered_join_spill_fuzz() {
                         *join_type,
                         vec![SortOptions::default(); on.len()],
                         NullEquality::NullEqualsNothing,
+                        false,
                     )
                     .unwrap(),
                 );

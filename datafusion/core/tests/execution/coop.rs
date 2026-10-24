@@ -367,6 +367,7 @@ async fn sort_merge_join_yields(
         JoinType::Inner,
         vec![inf1.properties().eq_properties.output_ordering().unwrap()[0].options],
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
