@@ -1533,6 +1533,22 @@ the API breaks.</p>
 <p><code class="docutils literal notranslate"><span class="pre">PhysicalExtensionCodec</span></code> is not deprecated: extension <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code>s and UDF payloads still need it, and it remains the fallback for unmigrated plans.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24625">issue #24625</a> for details.</p>
 </section>
+<section id="logicalplan-has-the-new-variant-materializedcte">
+<h3><code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> has the new variant <code class="docutils literal notranslate"><span class="pre">MaterializedCte</span></code><a class="headerlink" href="#logicalplan-has-the-new-variant-materializedcte" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">x</span> <span class="pre">AS</span> <span class="pre">MATERIALIZED</span> <span class="pre">(...)</span></code> is planned with the new variant <code class="docutils literal notranslate"><span class="pre">LogicalPlan::MaterializedCte(MaterializedCtePlan)</span></code>. <code class="docutils literal notranslate"><span class="pre">MaterializedCtePlan</span></code> has two cases:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">MaterializedCtePlan::Cte</span></code> has two inputs: the body of the CTE, which is computed once, and the continuation (the query that declared the CTE). Its output is the output of the continuation.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">MaterializedCtePlan::Scan</span></code> is a leaf. It reads the buffered output of the <code class="docutils literal notranslate"><span class="pre">MaterializedCtePlan::Cte</span></code> that has the same id.</p></li>
+</ul>
+<section id="id1">
+<h4>Who is affected<a class="headerlink" href="#id1" title="Link to this heading">#</a></h4>
+<ul class="simple">
+<li><p>Code that has an exhaustive <code class="docutils literal notranslate"><span class="pre">match</span></code> on <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> must add an arm for the new variant.</p></li>
+<li><p>A custom optimizer rule that moves a filter, limit or projection below a node must not move it into the body of a <code class="docutils literal notranslate"><span class="pre">MaterializedCte</span></code>, because all the scans of the CTE share the body. The continuation has no such limit.</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">MaterializedCteScan::find_in</span></code> returns the scans of one CTE in a plan, also in subquery expressions.</p>
+</section>
+</section>
 <section id="extension-physicalexprs-can-decode-by-name-instead-of-through-a-codec">
 <h3>Extension <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code>s can decode by name instead of through a codec<a class="headerlink" href="#extension-physicalexprs-can-decode-by-name-instead-of-through-a-codec" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">PhysicalExtensionExprNode</span></code> has a new optional <code class="docutils literal notranslate"><span class="pre">expr_name</span></code> field. An extension expression that sets it is decoded by a decoder registered on the session, not by a <code class="docutils literal notranslate"><span class="pre">PhysicalExtensionCodec</span></code>. This is the same mechanism extension <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>s use (see above), and it uses the same <code class="docutils literal notranslate"><span class="pre">ProtoDecoderRegistry</span></code>.</p>
@@ -1723,6 +1739,10 @@ also accounts for the output ordering.</p>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#extension-executionplans-can-decode-without-a-physicalextensioncodec">Extension <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>s can decode without a <code class="docutils literal notranslate"><span class="pre">PhysicalExtensionCodec</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logicalplan-has-the-new-variant-materializedcte"><code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> has the new variant <code class="docutils literal notranslate"><span class="pre">MaterializedCte</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">Who is affected</a></li>
+</ul>
+</li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#extension-physicalexprs-can-decode-by-name-instead-of-through-a-codec">Extension <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code>s can decode by name instead of through a codec</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#order-preservation-hooks-for-limit-pushdown-are-deprecated">Order-preservation hooks for limit pushdown are deprecated</a></li>
 </ul>
