@@ -85,6 +85,10 @@ impl ScalarUDFImpl for SparkSha1 {
         Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_sha1, vec![])(&args.args)
     }

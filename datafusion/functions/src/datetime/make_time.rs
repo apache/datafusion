@@ -108,6 +108,10 @@ impl ScalarUDFImpl for MakeTimeFunc {
         Ok(Time32(TimeUnit::Second))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [hours, minutes, seconds] = take_function_args(self.name(), args.args)?;
 

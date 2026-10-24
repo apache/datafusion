@@ -88,6 +88,10 @@ impl ScalarUDFImpl for SparkNegative {
         Ok(arg_types[0].clone())
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         spark_negative(&args.args, args.config_options.execution.enable_ansi_mode)
     }

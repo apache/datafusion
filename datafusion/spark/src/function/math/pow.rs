@@ -78,6 +78,10 @@ impl ScalarUDFImpl for SparkPow {
         self.inner.return_type(arg_types)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // Only Float64 × Float64 needs the Spark override.
         // Decimal / integer / mixed-type paths are delegated to the standard

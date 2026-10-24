@@ -102,6 +102,10 @@ impl ScalarUDFImpl for LevenshteinFunc {
         }
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match args.args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 => {

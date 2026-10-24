@@ -99,6 +99,10 @@ impl ScalarUDFImpl for RepeatFunc {
         utf8_to_str_type(&arg_types[0], "repeat")
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let return_type = args.return_field.data_type().clone();
         let [string_arg, count_arg] = take_function_args(self.name(), args.args)?;

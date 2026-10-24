@@ -85,6 +85,10 @@ impl ScalarUDFImpl for BitmapCount {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(bitmap_count_inner, vec![])(&args.args)
     }

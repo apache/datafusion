@@ -101,6 +101,10 @@ impl ScalarUDFImpl for ArrayAdd {
         coerce_array_math_arg_types(self.name(), arg_types)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_add_inner)(&args.args)
     }

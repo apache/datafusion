@@ -110,6 +110,10 @@ impl ScalarUDFImpl for ArrayAvg {
         Ok(vec![coerced])
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_avg_inner)(&args.args)
     }

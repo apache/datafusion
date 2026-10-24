@@ -72,6 +72,99 @@ make_udf_function!(arrow_field::ArrowFieldFunc, arrow_field);
 make_udf_function!(file_row_index::FileRowIndexFunc, file_row_index);
 make_udf_function!(input_file_name::InputFileNameFunc, input_file_name);
 
+#[cfg(test)]
+mod strict_tests {
+    use super::*;
+    use arrow::datatypes::Field;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{
+        ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    };
+    use std::sync::Arc;
+
+    #[test]
+    fn strict_core_functions_propagate_nulls() {
+        let cases = vec![
+            (
+                overlay(),
+                vec![
+                    ScalarValue::from("Txxxxas"),
+                    ScalarValue::from("hom"),
+                    ScalarValue::from(2_i64),
+                ],
+            ),
+            (
+                overlay(),
+                vec![
+                    ScalarValue::from("Txxxxas"),
+                    ScalarValue::from("hom"),
+                    ScalarValue::from(2_i64),
+                    ScalarValue::from(4_i64),
+                ],
+            ),
+        ];
+
+        for (func, valid_args) in cases {
+            assert!(func.is_strict(), "{} should be marked strict", func.name());
+
+            for null_mask in 0..(1 << valid_args.len()) {
+                let mut args = valid_args.clone();
+                for (arg_idx, arg) in args.iter_mut().enumerate() {
+                    if null_mask & (1 << arg_idx) != 0 {
+                        *arg = ScalarValue::try_new_null(&arg.data_type()).unwrap();
+                    }
+                }
+
+                let result =
+                    invoke_with_scalar_args(&func, args).unwrap_or_else(|error| {
+                        panic!(
+                            "{} failed for NULL mask {null_mask:b}: {error}",
+                            func.name()
+                        )
+                    });
+                let expected_null = null_mask != 0;
+                let result = result.into_array(1).unwrap();
+                assert_eq!(
+                    result.null_count() == result.len(),
+                    expected_null,
+                    "{} returned {result:?} for NULL mask {null_mask:0width$b}",
+                    func.name(),
+                    width = valid_args.len(),
+                );
+            }
+        }
+    }
+
+    fn invoke_with_scalar_args(
+        func: &ScalarUDF,
+        args: Vec<ScalarValue>,
+    ) -> Result<ColumnarValue> {
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Arc::new(Field::new(
+                    format!("arg_{idx}"),
+                    arg.data_type(),
+                    arg.is_null(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let scalar_arguments = args.iter().map(Some).collect::<Vec<_>>();
+        let return_field = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        func.invoke_with_args(ScalarFunctionArgs {
+            args: args.into_iter().map(ColumnarValue::Scalar).collect(),
+            arg_fields,
+            number_rows: 1,
+            return_field,
+            config_options: Arc::new(Default::default()),
+        })
+    }
+}
+
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
 

@@ -62,6 +62,10 @@ impl ScalarUDFImpl for SparkRint {
         Ok(Float64)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_rint, vec![])(&args.args)
     }

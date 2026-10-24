@@ -67,6 +67,10 @@ impl ScalarUDFImpl for SparkILike {
         Ok(Arc::new(Field::new("ilike", DataType::Boolean, nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_ilike, vec![])(&args.args)
     }

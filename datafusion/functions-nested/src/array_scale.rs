@@ -131,6 +131,10 @@ impl ScalarUDFImpl for ArrayScale {
         Ok(vec![coerced_array, DataType::Float64])
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_scale_inner)(&args.args)
     }

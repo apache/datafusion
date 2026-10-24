@@ -110,6 +110,10 @@ impl ScalarUDFImpl for Flatten {
         Ok(data_type)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(flatten_inner)(&args.args)
     }

@@ -88,6 +88,10 @@ impl ScalarUDFImpl for SparkBitCount {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 1 {
             return plan_err!("bit_count expects exactly 1 argument");

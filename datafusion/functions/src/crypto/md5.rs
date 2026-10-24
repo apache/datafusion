@@ -93,6 +93,10 @@ impl ScalarUDFImpl for Md5Func {
         Ok(DataType::Utf8View)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         md5(&args.args)
     }

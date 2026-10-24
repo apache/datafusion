@@ -202,6 +202,10 @@ impl ScalarUDFImpl for ArrayHas {
         Ok(ExprSimplifyResult::Original(args))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [first_arg, second_arg] = take_function_args(self.name(), &args.args)?;
         if first_arg.data_type().is_null() {

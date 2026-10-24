@@ -78,6 +78,10 @@ impl ScalarUDFImpl for SparkCrc32 {
         Ok(Arc::new(Field::new(self.name(), DataType::Int64, nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_crc32, vec![])(&args.args)
     }

@@ -115,6 +115,10 @@ impl ScalarUDFImpl for ArrayRemove {
         Ok(Arc::new(array_field.with_nullable(nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [list_arg, element_arg] = take_function_args(self.name(), &args.args)?;
         let num_rows = args.number_rows;
@@ -236,6 +240,10 @@ impl ScalarUDFImpl for ArrayRemoveN {
         Ok(Arc::new(array_field.with_nullable(nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [list_arg, element_arg, max_arg] =
             take_function_args(self.name(), &args.args)?;
@@ -352,6 +360,10 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         let array_field = args.arg_fields[0].as_ref().clone();
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         Ok(Arc::new(array_field.with_nullable(nullable)))
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

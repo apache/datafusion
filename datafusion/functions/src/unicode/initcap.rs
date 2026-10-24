@@ -87,6 +87,10 @@ impl ScalarUDFImpl for InitcapFunc {
         Ok(arg_types[0].clone())
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match &args.args[0] {
             ColumnarValue::Scalar(scalar) => {

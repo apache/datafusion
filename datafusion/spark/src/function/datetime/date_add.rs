@@ -85,6 +85,10 @@ impl ScalarUDFImpl for SparkDateAdd {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_date_add, vec![])(&args.args)
     }

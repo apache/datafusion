@@ -87,6 +87,10 @@ impl ScalarUDFImpl for LeftFunc {
     /// left('abcde', 2) = 'ab'
     /// left('abcde', -2) = 'abc'
     /// The implementation uses UTF-8 code points as characters
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
         match args[0].data_type() {

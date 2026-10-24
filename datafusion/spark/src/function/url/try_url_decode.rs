@@ -62,6 +62,10 @@ impl ScalarUDFImpl for TryUrlDecode {
         self.url_decoder.return_type(arg_types)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(spark_try_url_decode, vec![])(&args)

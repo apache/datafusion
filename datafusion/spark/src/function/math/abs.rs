@@ -88,6 +88,10 @@ impl ScalarUDFImpl for SparkAbs {
         Ok(Arc::new(Field::new(self.name(), out_dt, out_nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         spark_abs(&args.args, args.config_options.execution.enable_ansi_mode)
     }

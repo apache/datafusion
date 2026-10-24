@@ -80,6 +80,10 @@ impl ScalarUDFImpl for SparkLengthFunc {
         )
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(
         &self,
         args: ScalarFunctionArgs,

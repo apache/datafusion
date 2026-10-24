@@ -127,6 +127,10 @@ impl ScalarUDFImpl for RtrimFunc {
         Ok(arg_types[0].clone())
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(rtrim, vec![Hint::Pad, Hint::AcceptsSingular])(&args.args)
     }

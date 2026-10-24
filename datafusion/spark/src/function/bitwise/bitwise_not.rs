@@ -76,6 +76,10 @@ impl ScalarUDFImpl for SparkBitwiseNot {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 1 {
             return plan_err!("bitwise_not expects exactly 1 argument");

@@ -87,6 +87,10 @@ impl ScalarUDFImpl for UpperFunc {
         )
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         to_upper(&args.args, "upper")
     }

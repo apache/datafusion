@@ -79,6 +79,10 @@ impl ScalarUDFImpl for SparkWeekDay {
         Ok(Arc::new(Field::new(self.name(), DataType::Int32, nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [arg] = take_function_args(self.name(), args.args)?;
         match arg {

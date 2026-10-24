@@ -105,6 +105,10 @@ impl ScalarUDFImpl for Cardinality {
         Ok(UInt64)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(cardinality_inner)(&args.args)
     }

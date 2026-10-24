@@ -91,6 +91,10 @@ impl ScalarUDFImpl for SparkMakeValidUtf8 {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_make_valid_utf8_inner, vec![])(&args.args)
     }
