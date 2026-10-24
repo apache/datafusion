@@ -122,12 +122,8 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     let correlation_filter = conjunction(pull_up.join_filters);
 
     // Look up each aggregate's default value on empty input (e.g., COUNT → 0,
-    // SUM → NULL). This must happen before wrapping in SubqueryAlias, because
-    // the map is keyed by LogicalPlan and wrapping changes the plan.
-    let collected_count_expr_map = pull_up
-        .collected_count_expr_map
-        .get(&rewritten_subquery)
-        .cloned();
+    // SUM → NULL).
+    let collected_count_expr_map = pull_up.collected_count_expr_map.take();
 
     // Re-wrap in SubqueryAlias if the original had one, preserving the alias name.
     // The SubqueryAlias re-qualifies all columns with the alias, so we must also

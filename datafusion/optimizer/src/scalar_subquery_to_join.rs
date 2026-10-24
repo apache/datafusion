@@ -354,17 +354,14 @@ fn build_join(
         return Ok(None);
     }
 
-    let collected_count_expr_map = pull_up
-        .collected_count_expr_map
-        .get(&decorrelated_subquery)
-        .cloned();
+    let collected_count_expr_map = pull_up.collected_count_expr_map.take();
     let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
         .alias(subquery_alias.to_string())?
         .build()?;
 
     let join_filter_opt = build_join_filter(
         pull_up.join_filters,
-        pull_up.correlated_subquery_cols_map.values().flatten(),
+        &pull_up.correlated_subquery_cols,
         subquery_alias,
     )?;
 
