@@ -675,8 +675,8 @@ where
     i64: AsPrimitive<O::Native>,
 {
     let array = as_primitive_array::<T>(array)?;
-    // Values outside one day are NULL, as in arrow's `date_part`. arrow's
-    // `as_time` would wrap some of them around to a valid time instead.
+    // Values outside one day are NULL, as in arrow's `date_part`. `as_time`
+    // wraps some to a valid time: https://github.com/apache/arrow-rs/issues/11893
     let r: PrimitiveArray<O> = array.unary_opt(|v| {
         let v: i64 = v.as_();
         (0..SECONDS_IN_DAY * UNITS_PER_SECOND)
