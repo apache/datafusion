@@ -846,7 +846,7 @@ impl ExecutionPlan for InterleaveExec {
         let elapsed_compute = baseline_metrics.elapsed_compute().clone();
         let _timer = elapsed_compute.timer(); // record on drop
 
-        let mut input_stream_vec = vec![];
+        let mut input_stream_vec = Vec::with_capacity(self.inputs.len());
         for input in self.inputs.iter() {
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, Arc::clone(&context))?;

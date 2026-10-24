@@ -440,13 +440,13 @@ impl WindowFrameStateRange {
         delta: Option<&ScalarValue>,
         length: usize,
     ) -> Result<usize> {
-        let current_row_values = get_row_at_idx(range_columns, idx)?;
+        let mut end_range = get_row_at_idx(range_columns, idx)?;
         let search_start = if SIDE {
             last_range.start
         } else {
             last_range.end
         };
-        let end_range = if let Some(delta) = delta {
+        if let Some(delta) = delta {
             let is_descending: bool = self
                 .sort_options
                 .first()
@@ -463,10 +463,9 @@ impl WindowFrameStateRange {
             // wrapped-around target: PRECEDING searches reach `search_start`,
             // FOLLOWING searches reach `length`.
             let unbounded_edge = if SEARCH_SIDE { search_start } else { length };
-            let mut targets = Vec::with_capacity(current_row_values.len());
-            for value in &current_row_values {
+            // Turn the current row values into search targets in place
+            for value in &mut end_range {
                 if value.is_null() {
-                    targets.push(value.clone());
                     continue;
                 }
                 let target = if SEARCH_SIDE == is_descending {
@@ -474,23 +473,20 @@ impl WindowFrameStateRange {
                         Ok(v) => v,
                         Err(_) => return Ok(unbounded_edge),
                     }
-                } else if value.is_unsigned() && value < delta {
+                } else if value.is_unsigned() && *value < *delta {
                     // NOTE: This gets a polymorphic zero without having long coercion code for ScalarValue.
                     //       If we decide to implement a "default" construction mechanism for ScalarValue,
                     //       change the following statement to use that.
-                    value.sub(value)?
+                    value.sub(&*value)?
                 } else {
                     match value.sub_checked(delta) {
                         Ok(v) => v,
                         Err(_) => return Ok(unbounded_edge),
                     }
                 };
-                targets.push(target);
+                *value = target;
             }
-            targets
-        } else {
-            current_row_values
-        };
+        }
         let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
             let cmp = compare_rows(current, target, &self.sort_options)?;
             Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })

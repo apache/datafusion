@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::spill::get_record_batch_memory_size;
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
 use arrow::compute::interleave;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
@@ -151,13 +151,15 @@ impl BatchBuilder {
         &self,
         indices: &[(usize, usize)],
     ) -> Result<Vec<ArrayRef>> {
+        let mut arrays: Vec<&dyn Array> = Vec::with_capacity(self.batches.len());
         (0..self.schema.fields.len())
             .map(|column_idx| {
-                let arrays: Vec<_> = self
-                    .batches
-                    .iter()
-                    .map(|(_, batch)| batch.column(column_idx).as_ref())
-                    .collect();
+                arrays.clear();
+                arrays.extend(
+                    self.batches
+                        .iter()
+                        .map(|(_, batch)| batch.column(column_idx).as_ref()),
+                );
                 // Arrow 58.1.0+ returns OffsetOverflowError directly from
                 // interleave, allowing retry_interleave to shrink the batch.
                 interleave(&arrays, indices).map_err(Into::into)

@@ -39,6 +39,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
@@ -169,9 +170,10 @@ impl OrderingEquivalenceCache {
     pub fn new(
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) -> Self {
+        let normal_cls = OrderingEquivalenceClass::new(orderings);
         let mut cache = Self {
-            normal_cls: OrderingEquivalenceClass::new(orderings),
-            leading_map: HashMap::new(),
+            leading_map: HashMap::with_capacity(normal_cls.len()),
+            normal_cls,
         };
         cache.update_map();
         cache
@@ -1407,6 +1409,29 @@ impl EquivalenceProperties {
             .unwrap_or_else(|_| ExprProperties::new_unknown())
     }
 
+    /// Returns whether `transformed_expr` reports the same ordering direction
+    /// when `source_expr` is ordered and all other inputs are singleton.
+    pub(crate) fn is_same_direction_ordered_transform(
+        &self,
+        transformed_expr: &Arc<dyn PhysicalExpr>,
+        source_expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        if transformed_expr.eq(source_expr) {
+            return false;
+        }
+
+        let options = SortOptions::default();
+        let dependencies = Dependencies::new(std::iter::once(PhysicalSortExpr::new(
+            Arc::clone(source_expr),
+            options,
+        )));
+        matches!(
+            get_expr_properties(transformed_expr, &dependencies, &self.schema)
+                .map(|properties| properties.sort_properties),
+            Ok(SortProperties::Ordered(actual)) if actual == options
+        )
+    }
+
     /// Transforms this `EquivalenceProperties` by mapping columns in the
     /// original schema to columns in the new schema by index.
     pub fn with_new_schema(mut self, schema: SchemaRef) -> Result<Self> {
@@ -1431,7 +1456,7 @@ impl EquivalenceProperties {
         }
 
         // Rewrite equivalence classes according to the new schema:
-        let mut eq_classes = vec![];
+        let mut eq_classes = Vec::with_capacity(self.eq_group.len());
         for mut eq_class in self.eq_group {
             // Rewrite the expressions in the equivalence class:
             eq_class.exprs = eq_class

@@ -194,7 +194,9 @@ fn map_deduplicate_keys(
     // in `flat_values` to materialize for each output slot (updated in place
     // on overwrite).
     let mut keys_mask_builder = BooleanBuilder::new();
-    let mut value_indices: Vec<i32> = Vec::new();
+    let mut value_indices: Vec<i32> = Vec::with_capacity(
+        keys_offsets.last().map_or(0, |offset| *offset as usize) - first_keys_offset,
+    );
     let mut key_to_output_idx: HashMap<ScalarValue, usize> = HashMap::new();
     for (row_idx, (next_keys_offset, next_values_offset)) in keys_offsets
         .iter()

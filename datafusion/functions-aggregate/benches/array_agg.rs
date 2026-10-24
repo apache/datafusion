@@ -25,10 +25,11 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, FieldRef, Int64Type, Schema};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use datafusion_expr::function::AccumulatorArgs;
-use datafusion_expr::{Accumulator, AggregateUDFImpl};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate::array_agg::{
     ArrayAgg, ArrayAggAccumulator, DistinctArrayAggAccumulator,
 };
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::GroupsAccumulatorAdapter;
 use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -227,29 +228,40 @@ const DB_NAMES: &[&str] = &[
 
 /// Low-cardinality: every row is drawn uniformly from `DB_NAMES` (~25 distinct
 /// values across 8 192 rows). Exercises the hot duplicate path.
-fn create_string_array_low_cardinality(size: usize) -> StringArray {
+/// `null_density` is the fraction of rows that are null instead.
+fn create_string_array_low_cardinality(size: usize, null_density: f32) -> StringArray {
     let mut rng = StdRng::seed_from_u64(42);
-    StringArray::from_iter_values(
-        (0..size).map(|_| DB_NAMES[rng.random_range(0..DB_NAMES.len())]),
-    )
+    StringArray::from_iter((0..size).map(|_| {
+        if null_density > 0.0 && rng.random::<f32>() < null_density {
+            return None;
+        }
+        Some(DB_NAMES[rng.random_range(0..DB_NAMES.len())])
+    }))
 }
 
 /// High-cardinality: `db_name_pct` fraction of rows are drawn from `DB_NAMES`;
 /// the rest are near-unique random hex strings ("id_XXXXXXXX").
 /// With 8 192 rows and a 32-bit space the collision probability among the
 /// random strings is < 1 %, giving ~7 800 distinct values in total.
-fn create_string_array_high_cardinality(size: usize, db_name_pct: f32) -> StringArray {
+/// `null_density` is the fraction of rows that are null instead.
+fn create_string_array_high_cardinality(
+    size: usize,
+    db_name_pct: f32,
+    null_density: f32,
+) -> StringArray {
     let mut rng = StdRng::seed_from_u64(42);
-    let strings: Vec<String> = (0..size)
+    let strings: Vec<Option<String>> = (0..size)
         .map(|_| {
-            if rng.random::<f32>() < db_name_pct {
-                DB_NAMES[rng.random_range(0..DB_NAMES.len())].to_string()
+            if null_density > 0.0 && rng.random::<f32>() < null_density {
+                None
+            } else if rng.random::<f32>() < db_name_pct {
+                Some(DB_NAMES[rng.random_range(0..DB_NAMES.len())].to_string())
             } else {
-                format!("id_{:08x}", rng.random::<u32>())
+                Some(format!("id_{:08x}", rng.random::<u32>()))
             }
         })
         .collect();
-    StringArray::from_iter_values(strings.iter().map(String::as_str))
+    StringArray::from_iter(strings.iter().map(Option::as_deref))
 }
 
 fn distinct_update_batch_bench(
@@ -272,7 +284,7 @@ fn distinct_array_agg_benchmark(c: &mut Criterion) {
     // --- Low cardinality: ~25 distinct DB names in 8 192 rows ---------------
     // Realistic production scenario: most rows are duplicates, the HashSet
     // saturates quickly and the rest of the batch is pure dedup overhead.
-    let values = Arc::new(create_string_array_low_cardinality(8192)) as ArrayRef;
+    let values = Arc::new(create_string_array_low_cardinality(8192, 0.0)) as ArrayRef;
     distinct_update_batch_bench(
         c,
         "distinct_array_agg utf8 low cardinality (~25 distinct)",
@@ -283,13 +295,140 @@ fn distinct_array_agg_benchmark(c: &mut Criterion) {
     // --- High cardinality: ~5 % DB names, ~95 % near-unique random strings --
     // Worst-case scenario: almost every row is a new distinct value, so the
     // accumulator pays the full insertion cost for nearly every row.
-    let values = Arc::new(create_string_array_high_cardinality(8192, 0.05)) as ArrayRef;
+    let values =
+        Arc::new(create_string_array_high_cardinality(8192, 0.05, 0.0)) as ArrayRef;
     distinct_update_batch_bench(
         c,
         "distinct_array_agg utf8 high cardinality (~7800 distinct, 5% db names)",
         &values,
         false,
     );
+
+    // --- With nulls and IGNORE NULLS: the accumulator drops the null rows
+    // before deduplicating, so these cover that filtering step.
+    let values = Arc::new(create_string_array_low_cardinality(8192, 0.1)) as ArrayRef;
+    distinct_update_batch_bench(
+        c,
+        "distinct_array_agg utf8 low cardinality (~25 distinct), 10% nulls, ignore nulls",
+        &values,
+        true,
+    );
+
+    let values =
+        Arc::new(create_string_array_high_cardinality(8192, 0.05, 0.1)) as ArrayRef;
+    distinct_update_batch_bench(
+        c,
+        "distinct_array_agg utf8 high cardinality (~7800 distinct, 5% db names), 10% nulls, ignore nulls",
+        &values,
+        true,
+    );
+}
+
+/// `ARRAY_AGG(DISTINCT x) ... GROUP BY g` over one 8 192-row Utf8 batch, with
+/// the groups accumulator against the previous per-group path
+/// (`GroupsAccumulatorAdapter` over one `DistinctArrayAggAccumulator` per group),
+/// across group counts, distinct cardinalities and partial emission.
+fn distinct_array_agg_groups_benchmark(c: &mut Criterion) {
+    let schema = Schema::new(vec![Field::new("value", DataType::Utf8, true)]);
+    let value_expr = col("value", &schema).unwrap();
+    let value_field = value_expr.return_field(&schema).unwrap();
+    let return_field: FieldRef = Field::new(
+        "array_agg",
+        DataType::List(Field::new_list_field(DataType::Utf8, true).into()),
+        true,
+    )
+    .into();
+    let args = AccumulatorArgs {
+        return_field,
+        schema: &schema,
+        expr_fields: std::slice::from_ref(&value_field),
+        ignore_nulls: false,
+        order_bys: &[],
+        is_reversed: false,
+        name: "array_agg(DISTINCT value)",
+        is_distinct: true,
+        exprs: std::slice::from_ref(&value_expr),
+    };
+    let array_agg = ArrayAgg::default();
+
+    let inputs = [
+        (
+            "low cardinality (~25 distinct)",
+            Arc::new(create_string_array_low_cardinality(8192, 0.0)) as ArrayRef,
+        ),
+        (
+            "high cardinality (~7800 distinct)",
+            Arc::new(create_string_array_high_cardinality(8192, 0.05, 0.0)) as ArrayRef,
+        ),
+    ];
+    for num_groups in [100, 1000, 8192] {
+        let mut rng = StdRng::seed_from_u64(42);
+        let group_indices = (0..8192)
+            .map(|_| rng.random_range(0..num_groups))
+            .collect::<Vec<usize>>();
+        for (input_name, values) in &inputs {
+            // Emits every group at once, or in eight `EmitTo::First` chunks, which
+            // makes the accumulator rebuild its state after each partial emission.
+            for emit_chunks in [1, 8] {
+                let run = |acc: &mut dyn GroupsAccumulator| {
+                    acc.update_batch(
+                        std::slice::from_ref(values),
+                        &group_indices,
+                        None,
+                        num_groups,
+                    )
+                    .unwrap();
+                    if emit_chunks == 1 {
+                        return vec![acc.evaluate(EmitTo::All).unwrap()];
+                    }
+                    let chunk = num_groups.div_ceil(emit_chunks);
+                    let mut remaining = num_groups;
+                    let mut emitted = Vec::with_capacity(emit_chunks);
+                    while remaining > 0 {
+                        let n = chunk.min(remaining);
+                        emitted.push(acc.evaluate(EmitTo::First(n)).unwrap());
+                        remaining -= n;
+                    }
+                    emitted
+                };
+                let emit = if emit_chunks == 1 {
+                    "emit all".to_string()
+                } else {
+                    format!("emit in {emit_chunks} chunks")
+                };
+                c.bench_function(
+                    &format!(
+                        "distinct_array_agg groups {num_groups} groups, {input_name}, {emit}"
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            let mut acc =
+                                array_agg.create_groups_accumulator(args.clone()).unwrap();
+                            run(acc.as_mut())
+                        })
+                    },
+                );
+                c.bench_function(
+                    &format!(
+                        "distinct_array_agg adapter {num_groups} groups, {input_name}, {emit}"
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            let factory = || {
+                                Ok(Box::new(DistinctArrayAggAccumulator::try_new(
+                                    &DataType::Utf8,
+                                    None,
+                                    false,
+                                )?) as Box<dyn Accumulator>)
+                            };
+                            let mut acc = GroupsAccumulatorAdapter::new(factory);
+                            run(&mut acc)
+                        })
+                    },
+                );
+            }
+        }
+    }
 }
 
 /// Precomputes the schema, physical expressions, sort expression, and aggregate
@@ -514,6 +653,7 @@ criterion_group!(
     benches,
     array_agg_benchmark,
     distinct_array_agg_benchmark,
+    distinct_array_agg_groups_benchmark,
     ordered_array_agg_benchmark,
     ordered_array_agg_wide_utf8_benchmark
 );

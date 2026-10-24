@@ -33,7 +33,8 @@ use datafusion::logical_expr::ExplainFormat;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::{
-    ListFilesCacheFunc, MetadataCacheFunc, ParquetMetadataFunc, StatisticsCacheFunc,
+    ListFilesCacheFunc, MetadataCacheFunc, ParquetFileMetadataFunc, ParquetMetadataFunc,
+    ParquetPageIndexFunc, StatisticsCacheFunc,
 };
 use datafusion_cli::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
@@ -270,6 +271,15 @@ async fn main_inner() -> Result<()> {
     )));
     // register `parquet_metadata` table function to get metadata from parquet files
     ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+
+    // register `parquet_file_metadata` table function to get file level metadata from parquet files
+    ctx.register_udtf(
+        "parquet_file_metadata",
+        Arc::new(ParquetFileMetadataFunc {}),
+    );
+
+    // register `parquet_page_index` table function to get the page index of parquet files
+    ctx.register_udtf("parquet_page_index", Arc::new(ParquetPageIndexFunc {}));
 
     // register `metadata_cache` table function to get the contents of the file metadata cache
     ctx.register_udtf(
@@ -605,6 +615,72 @@ mod tests {
         | ../parquet-testing/data/data_index_bloom_encoding_stats.parquet | 0            | 14                 | 1                     | 163             | 0         | 4           | 14         | "String"       | BYTE_ARRAY | Hello     | today     | 0                |                      | Hello           | today           | GZIP(GzipLevel(6)) | [PLAIN, RLE, BIT_PACKED] |                   |                        | 4                | 152                   | 163                     |
         +-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
         "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_file_metadata_works() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_udtf(
+            "parquet_file_metadata",
+            Arc::new(ParquetFileMetadataFunc {}),
+        );
+
+        let sql = "SELECT * FROM parquet_file_metadata('../parquet-testing/data/int32_with_null_pages.parquet')";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+
+        assert_snapshot!(batches_to_string(&rbs), @r"
+        +-------------------------------------------------------+-------------------------------------------------------------------------------------+---------+----------+----------------+------------------------------+---------------+
+        | filename                                              | created_by                                                                          | version | num_rows | num_row_groups | key_value_metadata           | footer_length |
+        +-------------------------------------------------------+-------------------------------------------------------------------------------------+---------+----------+----------------+------------------------------+---------------+
+        | ../parquet-testing/data/int32_with_null_pages.parquet | parquet-mr version 1.13.0-SNAPSHOT (build 433de8df33fcf31927f7b51456be9f53e64d48b9) | 1       | 1000     | 1              | {writer.model.name: example} | 273           |
+        +-------------------------------------------------------+-------------------------------------------------------------------------------------+---------+----------+----------------+------------------------------+---------------+
+        ");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_page_index_works() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_udtf("parquet_page_index", Arc::new(ParquetPageIndexFunc {}));
+
+        // page 2 only holds nulls, so it has no min or max
+        let sql = "SELECT * FROM parquet_page_index('../parquet-testing/data/int32_with_null_pages.parquet')";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+
+        assert_snapshot!(batches_to_string(&rbs), @r"
+        +-------------------------------------------------------+--------------+-----------+--------------+-----------------+--------+----------------------+-------------+------------+------------+
+        | filename                                              | row_group_id | column_id | page_ordinal | first_row_index | offset | compressed_page_size | min_value   | max_value  | null_count |
+        +-------------------------------------------------------+--------------+-----------+--------------+-----------------+--------+----------------------+-------------+------------+------------+
+        | ../parquet-testing/data/int32_with_null_pages.parquet | 0            | 0         | 0            | 0               | 4      | 415                  | -2135807632 | 2144701119 | 8          |
+        | ../parquet-testing/data/int32_with_null_pages.parquet | 0            | 0         | 1            | 100             | 419    | 220                  | -2104090659 | 1745329571 | 55         |
+        | ../parquet-testing/data/int32_with_null_pages.parquet | 0            | 0         | 2            | 200             | 639    | 31                   |             |            | 100        |
+        | ../parquet-testing/data/int32_with_null_pages.parquet | 0            | 0         | 3            | 300             | 670    | 228                  | -2116849709 | 2077105757 | 52         |
+        | ../parquet-testing/data/int32_with_null_pages.parquet | 0            | 0         | 4            | 400             | 898    | 382                  | -2048691758 | 2143189382 | 16         |
+        | ../parquet-testing/data/int32_with_null_pages.parquet | 0            | 0         | 5            | 500             | 1280   | 402                  | -2017923401 | 2087827129 | 12         |
+        | ../parquet-testing/data/int32_with_null_pages.parquet | 0            | 0         | 6            | 600             | 1682   | 422                  | -2136906554 | 2125689411 | 5          |
+        | ../parquet-testing/data/int32_with_null_pages.parquet | 0            | 0         | 7            | 700             | 2104   | 411                  | -2113313110 | 2145722375 | 7          |
+        | ../parquet-testing/data/int32_with_null_pages.parquet | 0            | 0         | 8            | 800             | 2515   | 417                  | -2046900272 | 2087168549 | 8          |
+        | ../parquet-testing/data/int32_with_null_pages.parquet | 0            | 0         | 9            | 900             | 2932   | 400                  | -1941944785 | 2078586537 | 12         |
+        +-------------------------------------------------------+--------------+-----------+--------------+-----------------+--------+----------------------+-------------+------------+------------+
+        ");
+
+        // min and max of UTF8 columns are shown as strings
+        let sql = "SELECT * FROM parquet_page_index('../parquet-testing/data/data_index_bloom_encoding_stats.parquet')";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+
+        assert_snapshot!(batches_to_string(&rbs), @r"
+        +-----------------------------------------------------------------+--------------+-----------+--------------+-----------------+--------+----------------------+-----------+-----------+------------+
+        | filename                                                        | row_group_id | column_id | page_ordinal | first_row_index | offset | compressed_page_size | min_value | max_value | null_count |
+        +-----------------------------------------------------------------+--------------+-----------+--------------+-----------------+--------+----------------------+-----------+-----------+------------+
+        | ../parquet-testing/data/data_index_bloom_encoding_stats.parquet | 0            | 0         | 0            | 0               | 4      | 152                  | Hello     | today     | 0          |
+        +-----------------------------------------------------------------+--------------+-----------+--------------+-----------------+--------+----------------------+-----------+-----------+------------+
+        ");
 
         Ok(())
     }

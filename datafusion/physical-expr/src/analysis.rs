@@ -198,8 +198,9 @@ pub fn analyze(
             .map(|c| Arc::new(c) as _)
             .collect::<Vec<_>>();
 
-        let mut target_indices_and_boundaries = vec![];
         let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
+        let mut target_indices_and_boundaries =
+            Vec::with_capacity(target_expr_and_indices.len());
 
         for (expr, index) in &target_expr_and_indices {
             if let Some(column) = expr.downcast_ref::<Column>()

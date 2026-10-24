@@ -212,11 +212,9 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         Ok(true)
     }
 
-    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
-        // `from_unixtime` stores the input's exact `Int64` value as a
-        // `Timestamp(Second)`: the mapping is one-to-one, order-preserving,
-        // and maps nulls to nulls.
-        Ok(true)
+    fn strictly_order_preserving(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        // A lossless cast cannot restore strictness lost by its input.
+        Ok(inputs[0].strictly_order_preserving)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -353,7 +351,7 @@ mod test {
         timezone: Option<&str>,
     ) -> Result<ColumnarValue> {
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = timezone.map(str::to_string);
+        options.execution.time_zone = timezone.map(|tz| tz.parse().unwrap());
         let func = FromUnixtimeFunc::new_with_config(&options);
 
         let arg_field: FieldRef = Field::new("a", DataType::Int64, true).into();
@@ -560,7 +558,7 @@ mod test {
     #[test]
     fn test_session_timezone_is_used_without_explicit_timezone() {
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Denver".to_string());
+        options.execution.time_zone = Some("America/Denver".parse().unwrap());
 
         let func = FromUnixtimeFunc::new_with_config(&options);
 
@@ -599,7 +597,7 @@ mod test {
     #[test]
     fn test_explicit_timezone_overrides_session_timezone() {
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Denver".to_string());
+        options.execution.time_zone = Some("America/Denver".parse().unwrap());
 
         let func = FromUnixtimeFunc::new_with_config(&options);
 

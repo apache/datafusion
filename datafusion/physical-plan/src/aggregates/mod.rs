@@ -48,19 +48,19 @@
 //!
 //! See [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`] for details.
 //!
-//! ### Ordering optimization
+//! ### Group clustering optimization
 //!
-//! When the input is ordered by the group key, an ordered fast path is used. It
-//! uses a similar two-stage hash aggregation with an early-emission optimization.
+//! When the input is ordered by group keys, rows are clustered by those keys.
+//! The clustered paths use this guarantee to emit completed groups early.
 //!
 //! ```text
-//! AggregateExec (final, ordered)
+//! AggregateExec (final, clustered)
 //!   RepartitionExec (hash by group keys, order-preserving)
-//!     AggregateExec (partial, ordered)
+//!     AggregateExec (partial, clustered)
 //! ```
 //!
-//! See [`OrderedPartialAggregateStream`], [`OrderedFinalAggregateStream`], and
-//! [`OrderedSingleAggregateStream`] for details.
+//! See [`ClusteredPartialAggregateStream`], [`ClusteredFinalAggregateStream`], and
+//! [`ClusteredSingleAggregateStream`] for details.
 //!
 //! Related configuration:
 //!
@@ -81,7 +81,7 @@
 //!   input
 //! ```
 //!
-//! See [`SingleHashAggregateStream`] and [`OrderedSingleAggregateStream`] for
+//! See [`SingleHashAggregateStream`] and [`ClusteredSingleAggregateStream`] for
 //! details.
 //!
 //! Related configuration:
@@ -153,12 +153,12 @@ use std::sync::Arc;
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     aggregate_stream::AggregateStream,
+    clustered_final_stream::ClusteredFinalAggregateStream,
+    clustered_partial_stream::ClusteredPartialAggregateStream,
+    clustered_single_stream::ClusteredSingleAggregateStream,
     grouped_hash_stream::GroupedHashAggregateStream,
     grouped_topk_stream::GroupedTopKAggregateStream,
     hash_stream::{FinalHashAggregateStream, PartialHashAggregateStream},
-    ordered_final_stream::OrderedFinalAggregateStream,
-    ordered_partial_stream::OrderedPartialAggregateStream,
-    ordered_single_stream::OrderedSingleAggregateStream,
     partial_reduce_stream::PartialReduceHashAggregateStream,
     single_stream::SingleHashAggregateStream,
 };
@@ -174,13 +174,14 @@ use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputDistributionRequirements,
-    InputOrderMode, Partitioning, SendableRecordBatchStream, Statistics,
+    Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 
 use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
@@ -206,19 +207,21 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+pub use order::GroupClusteringMode;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
+mod aggregate_argument;
 mod aggregate_hash_table;
 mod aggregate_stream;
+mod clustered_final_stream;
+mod clustered_partial_stream;
+mod clustered_single_stream;
 pub mod group_values;
 mod grouped_hash_stream;
 mod grouped_topk_stream;
 mod hash_stream;
 pub mod order;
-mod ordered_final_stream;
-mod ordered_partial_stream;
-mod ordered_single_stream;
 mod partial_reduce_stream;
 mod single_stream;
 mod skip_partial;
@@ -690,12 +693,12 @@ enum StreamType {
     /// Single stage of the hash aggregation
     /// Input output scheme: initial input -> final result
     SingleHash(SingleHashAggregateStream),
-    /// Partial stage of aggregation for ordered input.
-    OrderedPartialAggregate(OrderedPartialAggregateStream),
-    /// Final stage of aggregation for ordered input.
-    OrderedFinalAggregate(OrderedFinalAggregateStream),
-    /// Single stage of aggregation for ordered input.
-    OrderedSingleAggregate(OrderedSingleAggregateStream),
+    /// Partial stage of aggregation for clustered input.
+    ClusteredPartialAggregate(ClusteredPartialAggregateStream),
+    /// Final stage of aggregation for clustered input.
+    ClusteredFinalAggregate(ClusteredFinalAggregateStream),
+    /// Single stage of aggregation for clustered input.
+    ClusteredSingleAggregate(ClusteredSingleAggregateStream),
     /// Legacy hash aggregation reused for multiple stages
     ///
     /// Every path it handles now has a dedicated stream, so this variant is only
@@ -715,12 +718,12 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::PartialHash(stream) => stream.into_stream(),
-            StreamType::PartialReduceHash(stream) => Box::pin(stream),
+            StreamType::PartialReduceHash(stream) => stream.into_stream(),
             StreamType::FinalHash(stream) => stream.into_stream(),
-            StreamType::SingleHash(stream) => Box::pin(stream),
-            StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
-            StreamType::OrderedFinalAggregate(stream) => stream.into_stream(),
-            StreamType::OrderedSingleAggregate(stream) => Box::pin(stream),
+            StreamType::SingleHash(stream) => stream.into_stream(),
+            StreamType::ClusteredPartialAggregate(stream) => stream.into_stream(),
+            StreamType::ClusteredFinalAggregate(stream) => stream.into_stream(),
+            StreamType::ClusteredSingleAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
@@ -846,21 +849,39 @@ impl LimitOptions {
     }
 }
 
-/// Aggregation state, separating a DISTINCT soft limit from accumulators and filters.
+/// Mutually exclusive aggregation implementations and their configuration.
+///
+/// # Public Only for Internal Use:
+/// `datafusion-physical-optimizer` inspects and combines aggregate kinds.
+/// This enum is not part of the supported public API.
+#[doc(hidden)]
 #[derive(Debug, Clone)]
-enum AggregateKind {
-    /// Ordinary aggregation, including the existing Top-K configuration.
+pub enum AggregateKind {
+    /// Ordinary aggregation, with no limit on the groups retained.
     General {
         group_by: Arc<PhysicalGroupBy>,
         aggr_expr: Arc<[Arc<AggregateFunctionExpr>]>,
         filter_expr: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
-        limit_options: Option<LimitOptions>,
     },
     /// `SELECT DISTINCT k FROM t LIMIT n`: eligible streams may stop after n groups.
     /// Other streams consume all input; the parent LIMIT enforces the row count.
     DistinctLimit {
         group_by: Arc<PhysicalGroupBy>,
         limit: usize,
+    },
+    /// See [`AggregateExec::try_optimize_topk`] for details.
+    TopKMinMax {
+        group_by: Arc<PhysicalGroupBy>,
+        aggr_expr: Arc<AggregateFunctionExpr>,
+        limit: usize,
+        descending: bool,
+        nulls_first: bool,
+    },
+    /// See [`AggregateExec::try_optimize_topk`] for details.
+    TopKDistinct {
+        group_by: Arc<PhysicalGroupBy>,
+        limit: usize,
+        descending: bool,
     },
 }
 
@@ -869,7 +890,14 @@ enum AggregateKind {
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
-    kind: AggregateKind,
+    /// Aggregation implementation and its configuration.
+    ///
+    /// # Public Only for Internal Use:
+    /// `datafusion-physical-optimizer` updates this when combining aggregates.
+    /// Changes must preserve the expressions, schema, and plan properties.
+    /// This field is not part of the supported public API.
+    #[doc(hidden)]
+    pub kind: AggregateKind,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied. Contains the group by columns followed by the
@@ -884,12 +912,12 @@ pub struct AggregateExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<OrderingRequirements>,
-    /// Describes how the input is ordered relative to the group by columns
+    /// Describes how input rows are clustered by grouping expressions.
     ///
-    /// This field is also overloaded to mean "the output MUST preserve this
-    /// input order". When that is not possible, the constructor overwrites it
-    /// with the unordered variant [`InputOrderMode::Linear`].
-    input_order_mode: InputOrderMode,
+    /// Input ordering describes a subset of the cases in which groups can be
+    /// safely emitted before the input ends. Full group clustering requires only
+    /// that rows for each complete grouping tuple are contiguous.
+    group_clustering_mode: GroupClusteringMode,
     cache: Arc<PlanProperties>,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
     /// it is set to `Some(..)` regardless of whether it can be pushed down to a child node.
@@ -901,6 +929,202 @@ pub struct AggregateExec {
 }
 
 impl AggregateExec {
+    /// Try to use TopK (min/max heap) optimization in AggregateExec.
+    ///
+    /// The optimizer must keep the limit operator above because the aggregate may
+    /// still produce more than K rows.
+    /// Returns `None` if not applicable.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    ///
+    /// # TopK Optimization Overview
+    ///
+    /// Retain candidate groups for a parent ORDER BY / LIMIT. There are two applicable
+    /// cases:
+    ///
+    /// ## TopK MIN/MAX
+    ///
+    /// ```txt
+    /// SELECT k, MAX(v) AS score FROM t GROUP BY k
+    /// ORDER BY score DESC NULLS LAST LIMIT 10;
+    ///
+    /// Before:
+    /// Sort: score DESC, fetch=10
+    ///   Aggregate: k, MAX(v)
+    ///     input
+    ///
+    /// After (Added info in `AggregateExec` to trigger heap optimization):
+    /// Sort: score DESC, fetch=10
+    ///   Aggregate: k, MAX(v), TopKMinMax(10)
+    ///     input
+    /// ```
+    ///
+    /// For an aggregate output named `score`, the example uses:
+    /// ```txt
+    /// try_optimize_topk(10, "score", SortOptions {
+    ///     descending: true,   // DESC
+    ///     nulls_first: false, // NULLS LAST
+    /// })
+    /// ```
+    ///
+    /// A min-heap keeps the 10 largest non-NULL scores.
+    /// MIN with ASC uses a max-heap.
+    ///
+    /// ## TopK DISTINCT
+    ///
+    /// ```txt
+    /// SELECT DISTINCT k FROM t ORDER BY k ASC NULLS LAST LIMIT 10;
+    ///
+    /// Before:
+    /// Sort: k ASC, fetch=10
+    ///   Aggregate: k, no aggregates
+    ///     input
+    ///
+    /// After (Added info in `AggregateExec` to trigger heap optimization):
+    /// Sort: k ASC, fetch=10
+    ///   Aggregate: k, TopKDistinct(10)
+    ///     input
+    /// ```
+    ///
+    /// Here the grouping key is the output used for ordering:
+    /// ```txt
+    /// try_optimize_topk(10, "k", SortOptions {
+    ///     descending: false,  // ASC
+    ///     nulls_first: false, // NULLS LAST
+    /// })
+    /// ```
+    ///
+    /// A max-heap keeps the 10 smallest non-NULL keys.
+    /// DESC uses a min-heap.
+    #[doc(hidden)]
+    pub fn try_optimize_topk(
+        mut self,
+        limit: usize,
+        order_by: &str,
+        options: SortOptions,
+    ) -> Option<Transformed<Self>> {
+        if limit == 0
+            || matches!(self.kind, AggregateKind::DistinctLimit { .. })
+            || self.group_by().has_grouping_set()
+            || self.filter_expr().iter().any(Option::is_some)
+        {
+            return None;
+        }
+        // The priority map needs one supported key and value type.
+        let (group_key, group_key_alias) =
+            self.group_expr().expr().iter().exactly_one().ok()?;
+        let input_schema = self.input.schema();
+        let key_type = group_key.data_type(&input_schema).ok()?;
+        let minmax = self.get_minmax_desc();
+        let value_type = minmax
+            .as_ref()
+            .map_or(&key_type, |(field, _)| field.data_type());
+        if !topk_types_supported(&key_type, value_type)
+            || self.schema.fields().len() != 1 + self.aggr_expr().len()
+        {
+            return None;
+        }
+
+        let kind = if let Some((field, descending)) = minmax {
+            let aggregate = self.aggr_expr().iter().exactly_one().ok()?;
+            if field.name() != order_by
+                || descending != options.descending
+                || !aggregate.order_bys().is_empty()
+            {
+                return None;
+            }
+            let argument = aggregate.expressions().into_iter().exactly_one().ok()?;
+            // NULLS FIRST can worsen a group's rank when its first value arrives.
+            if options.nulls_first && argument.nullable(&self.input_schema).ok()? {
+                return None;
+            }
+
+            // Raw input, partial state, and output must fit the same heap value.
+            let state_field = aggregate
+                .state_fields()
+                .ok()?
+                .into_iter()
+                .exactly_one()
+                .ok()?;
+            let input_argument = aggregate_expressions(self.aggr_expr(), &self.mode, 1)
+                .ok()?
+                .into_iter()
+                .flatten()
+                .exactly_one()
+                .ok()?;
+            let value_type = field.data_type();
+            if state_field.data_type() != value_type
+                || argument.data_type(&self.input_schema).ok()? != *value_type
+                || input_argument.data_type(&input_schema).ok()? != *value_type
+            {
+                return None;
+            }
+            AggregateKind::TopKMinMax {
+                group_by: Arc::clone(self.group_by()),
+                aggr_expr: Arc::clone(aggregate),
+                limit,
+                descending,
+                nulls_first: options.nulls_first,
+            }
+        } else if self.aggr_expr().is_empty() && group_key_alias == order_by {
+            AggregateKind::TopKDistinct {
+                group_by: Arc::clone(self.group_by()),
+                limit,
+                descending: options.descending,
+            }
+        } else {
+            return None;
+        };
+
+        // Preserve compatible tighter bounds; never switch an existing order.
+        match &self.kind {
+            AggregateKind::TopKMinMax { nulls_first, .. }
+                if *nulls_first != options.nulls_first =>
+            {
+                return None;
+            }
+            AggregateKind::TopKMinMax {
+                limit: existing,
+                descending,
+                ..
+            }
+            | AggregateKind::TopKDistinct {
+                limit: existing,
+                descending,
+                ..
+            } => {
+                if *descending != options.descending {
+                    return None;
+                }
+                if *existing <= limit {
+                    return Some(Transformed::no(self));
+                }
+            }
+            _ => {}
+        }
+
+        // Commit the kind and properties together: heap output is unordered and final.
+        self.kind = kind;
+        self.group_clustering_mode = GroupClusteringMode::None;
+        self.required_input_ordering = None;
+        // Keep unchanged properties so parent aggregates do not need rebuilding.
+        if !self.cache.eq_properties.oeq_class().is_empty()
+            || self.cache.emission_type != EmissionType::Final
+        {
+            let mut equivalence = self.cache.eq_properties.clone();
+            equivalence.clear_orderings();
+            let cache = Arc::make_mut(&mut self.cache);
+            cache.set_eq_properties(equivalence);
+            cache.emission_type = EmissionType::Final;
+        }
+        self.metrics = ExecutionPlanMetricsSet::new();
+        Some(Transformed::yes(self))
+    }
+
     /// Try to stop after enough distinct grouping keys have been accumulated.
     ///
     /// The caller must establish that discarding other groups is legal, for
@@ -920,6 +1144,13 @@ impl AggregateExec {
     /// leaves the aggregate in a consistent state. Ineligible aggregates return
     /// `None`. Eligible aggregates are returned unchanged when the limit is zero
     /// or no tighter than the existing limit.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn try_optimize_distinct_soft_limit(
         mut self,
         limit: usize,
@@ -941,9 +1172,17 @@ impl AggregateExec {
         Some(Transformed::yes(self))
     }
 
-    /// Function used in `OptimizeAggregateOrder` optimizer rule,
-    /// where we need parts of the new value, others cloned from the old one
-    /// Rewrites aggregate exec with new aggregate expressions.
+    /// Clone with replacement aggregate expressions.
+    ///
+    /// The caller must preserve the schema, filters, and ordering requirements.
+    /// Changing expressions in a TopK aggregate drops its specialization.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn with_new_aggr_exprs(
         &self,
         aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,
@@ -952,15 +1191,23 @@ impl AggregateExec {
         let mut new = self.clone();
         match &mut new.kind {
             AggregateKind::General { aggr_expr: old, .. } => *old = aggr_expr,
-            AggregateKind::DistinctLimit { .. } if aggr_expr.is_empty() => {}
-            AggregateKind::DistinctLimit { group_by, .. } => {
-                // An accumulator rewrite cannot inherit DISTINCT's early stop.
+            AggregateKind::DistinctLimit { .. } | AggregateKind::TopKDistinct { .. }
+                if aggr_expr.is_empty() => {}
+            // Ordering optimization can revisit an existing TopK with the
+            // same expressions. Preserve its specialization in that case.
+            AggregateKind::TopKMinMax {
+                aggr_expr: existing,
+                ..
+            } if matches!(aggr_expr.as_ref(), [new] if Arc::ptr_eq(existing, new)) => {}
+            AggregateKind::DistinctLimit { group_by, .. }
+            | AggregateKind::TopKMinMax { group_by, .. }
+            | AggregateKind::TopKDistinct { group_by, .. } => {
+                // A replacement expression cannot inherit a specialization
+                // validated for the previous aggregate.
                 new.kind = AggregateKind::General {
                     group_by: Arc::clone(group_by),
-                    // The previous `DistinctLimit` type doesn't include filter
                     filter_expr: vec![None; aggr_expr.len()].into(),
                     aggr_expr,
-                    limit_options: None,
                 };
             }
         }
@@ -968,9 +1215,18 @@ impl AggregateExec {
         new
     }
 
-    /// Clone this exec, overriding only the limit hint.
+    /// Clone with a validated legacy limit hint, falling back to ordinary
+    /// aggregation when the request is unsupported.
+    #[deprecated(
+        since = "56.0.0",
+        note = "The replacement APIs are [`try_optimize_topk`](Self::try_optimize_topk) and [`try_optimize_distinct_soft_limit`](Self::try_optimize_distinct_soft_limit). They still require specific plan-shape invariants to be used correctly, so they remain internal for now. If you have a use case that requires these APIs to be public, please open an issue in DataFusion."
+    )]
     pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
-        let mut new = self.clone().with_limit_options(limit_options);
+        let mut new = self.clone().without_optimization();
+        new = new
+            .clone()
+            .restore_limit_options(limit_options)
+            .unwrap_or(new);
         new.metrics = ExecutionPlanMetricsSet::new();
         new
     }
@@ -1080,11 +1336,11 @@ impl AggregateExec {
         // it is not null in every group
         let indices: Vec<usize> = indices
             .into_iter()
-            .filter(|idx| group_by.groups.iter().all(|group| !group[*idx]))
             .filter(|idx| {
-                input_eq_properties
-                    .is_expr_constant(&groupby_exprs[*idx])
-                    .is_none()
+                group_by.groups.iter().all(|group| !group[*idx])
+                    && input_eq_properties
+                        .is_expr_constant(&groupby_exprs[*idx])
+                        .is_none()
             })
             .collect();
 
@@ -1092,21 +1348,21 @@ impl AggregateExec {
             .iter()
             .filter(|expr| input_eq_properties.is_expr_constant(expr).is_none())
             .count();
-        let mut input_order_mode = if indices.len() == num_non_constant_groupby_exprs
+        let mut group_clustering_mode = if indices.len() == num_non_constant_groupby_exprs
             && !indices.is_empty()
             && group_by.groups.len() == 1
         {
-            InputOrderMode::Sorted
+            GroupClusteringMode::Full
         } else if !indices.is_empty() {
-            InputOrderMode::PartiallySorted(indices)
+            GroupClusteringMode::Partial(indices)
         } else {
-            InputOrderMode::Linear
+            GroupClusteringMode::None
         };
 
-        // Input order mode is also used to advertise plan output ordering, grouping
-        // sets handling, and partial reduce aggregation can't promise that.
+        // Grouping sets can change group keys. PartialReduce combines intermediate
+        // states without using group boundaries to recognize completed groups.
         if group_by.has_grouping_set() || mode == AggregateMode::PartialReduce {
-            input_order_mode = InputOrderMode::Linear;
+            group_clustering_mode = GroupClusteringMode::None;
         }
 
         // construct a map from the input expression to the output expression of the Aggregation group by
@@ -1122,7 +1378,7 @@ impl AggregateExec {
                 &group_expr_mapping,
                 group_by.is_true_no_grouping(),
                 &mode,
-                &input_order_mode,
+                &group_clustering_mode,
                 aggr_expr.as_ref(),
             )?
         };
@@ -1133,14 +1389,13 @@ impl AggregateExec {
                 group_by,
                 aggr_expr: aggr_expr.into(),
                 filter_expr,
-                limit_options: None,
             },
             input,
             schema,
             input_schema,
             metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
-            input_order_mode,
+            group_clustering_mode,
             cache: Arc::new(cache),
             dynamic_filter: None,
         };
@@ -1155,12 +1410,61 @@ impl AggregateExec {
         &self.mode
     }
 
-    /// Set the limit options for this AggExec
-    pub fn with_limit_options(mut self, limit_options: Option<LimitOptions>) -> Self {
-        // Restoring an existing hint must not depend on input ordering: a later
-        // optimizer may have sorted the child since the hint was introduced.
-        if let Some(options) = limit_options
-            && options.descending.is_none()
+    /// Returns whether this is a compatible partial/final aggregation pair.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is made public for the physical optimizer to use, this is not part of
+    /// the public API.
+    #[doc(hidden)]
+    pub fn matches_partial(&self, partial: &Self) -> bool {
+        matches!(
+            (self.mode, partial.mode),
+            (
+                AggregateMode::Final | AggregateMode::FinalPartitioned,
+                AggregateMode::Partial,
+            )
+        ) && self.group_expr() == &partial.group_expr().as_final()
+    }
+
+    /// Set a legacy limit hint. Unsupported requests leave ordinary aggregation.
+    #[deprecated(
+        since = "56.0.0",
+        note = "The replacement APIs are [`try_optimize_topk`](Self::try_optimize_topk) and [`try_optimize_distinct_soft_limit`](Self::try_optimize_distinct_soft_limit). They still require specific plan-shape invariants to be used correctly, so they remain internal for now. If you have a use case that requires these APIs to be public, please open an issue in DataFusion."
+    )]
+    pub fn with_limit_options(self, limit_options: Option<LimitOptions>) -> Self {
+        let ordinary = self.without_optimization();
+        ordinary
+            .clone()
+            .restore_limit_options(limit_options)
+            .unwrap_or(ordinary)
+    }
+
+    /// Clear a specialization. Keeping conservative unordered properties is
+    /// valid for the ordinary hash implementation too.
+    fn without_optimization(mut self) -> Self {
+        self.kind = AggregateKind::General {
+            group_by: Arc::clone(self.group_by()),
+            aggr_expr: self.clone_aggr_exprs(),
+            filter_expr: self.clone_filter_exprs(),
+        };
+        self
+    }
+
+    /// Decode the legacy limit representation at the compatibility boundary.
+    /// Unlike optimizer eligibility, restoring DISTINCT does not require an
+    /// unordered input: a later rule may have sorted the child.
+    fn restore_limit_options(
+        mut self,
+        limit_options: Option<LimitOptions>,
+    ) -> Option<Self> {
+        let Some(options) = limit_options else {
+            return Some(self);
+        };
+        if options.limit == 0 {
+            return None;
+        }
+        if options.descending.is_none()
             && !self.group_by().is_true_no_grouping()
             && self.aggr_expr().is_empty()
             && self.filter_expr().is_empty()
@@ -1169,29 +1473,42 @@ impl AggregateExec {
                 group_by: Arc::clone(self.group_by()),
                 limit: options.limit,
             };
+            Some(self)
         } else {
-            match &mut self.kind {
-                AggregateKind::General {
-                    limit_options: old, ..
-                } => *old = limit_options,
-                AggregateKind::DistinctLimit { group_by, .. } => {
-                    self.kind = AggregateKind::General {
-                        group_by: Arc::clone(group_by),
-                        aggr_expr: Arc::from([]),
-                        filter_expr: Arc::from([]),
-                        limit_options,
-                    };
-                }
-            }
+            // The legacy representation has no NULL placement. NULLS LAST
+            // accepts every valid serialized MIN/MAX configuration; grouping
+            // only TopK retains a NULL candidate for either placement.
+            let descending = options
+                .descending
+                .or_else(|| self.get_minmax_desc().map(|(_, desc)| desc))?;
+            let order_by = match self.aggr_expr() {
+                [] => self.group_by().expr.first()?.1.clone(),
+                [aggregate] => aggregate.name().to_owned(),
+                _ => return None,
+            };
+            self.try_optimize_topk(
+                options.limit,
+                &order_by,
+                SortOptions {
+                    descending,
+                    nulls_first: false,
+                },
+            )
+            .map(|result| result.data)
         }
-        self
     }
 
     /// Get the limit options (if set)
     pub fn limit_options(&self) -> Option<LimitOptions> {
         match &self.kind {
-            AggregateKind::General { limit_options, .. } => *limit_options,
+            AggregateKind::General { .. } => None,
             AggregateKind::DistinctLimit { limit, .. } => Some(LimitOptions::new(*limit)),
+            AggregateKind::TopKMinMax {
+                limit, descending, ..
+            }
+            | AggregateKind::TopKDistinct {
+                limit, descending, ..
+            } => Some(LimitOptions::new_with_order(*limit, *descending)),
         }
     }
 
@@ -1204,7 +1521,9 @@ impl AggregateExec {
     fn group_by(&self) -> &Arc<PhysicalGroupBy> {
         match &self.kind {
             AggregateKind::General { group_by, .. }
-            | AggregateKind::DistinctLimit { group_by, .. } => group_by,
+            | AggregateKind::DistinctLimit { group_by, .. }
+            | AggregateKind::TopKMinMax { group_by, .. }
+            | AggregateKind::TopKDistinct { group_by, .. } => group_by,
         }
     }
 
@@ -1212,7 +1531,9 @@ impl AggregateExec {
     fn group_by_mut(&mut self) -> &mut Arc<PhysicalGroupBy> {
         match &mut self.kind {
             AggregateKind::General { group_by, .. }
-            | AggregateKind::DistinctLimit { group_by, .. } => group_by,
+            | AggregateKind::DistinctLimit { group_by, .. }
+            | AggregateKind::TopKMinMax { group_by, .. }
+            | AggregateKind::TopKDistinct { group_by, .. } => group_by,
         }
     }
 
@@ -1225,7 +1546,12 @@ impl AggregateExec {
     pub fn aggr_expr(&self) -> &[Arc<AggregateFunctionExpr>] {
         match &self.kind {
             AggregateKind::General { aggr_expr, .. } => aggr_expr,
-            AggregateKind::DistinctLimit { .. } => &[],
+            AggregateKind::DistinctLimit { .. } | AggregateKind::TopKDistinct { .. } => {
+                &[]
+            }
+            AggregateKind::TopKMinMax { aggr_expr, .. } => {
+                std::slice::from_ref(aggr_expr)
+            }
         }
     }
 
@@ -1233,21 +1559,32 @@ impl AggregateExec {
     pub fn filter_expr(&self) -> &[Option<Arc<dyn PhysicalExpr>>] {
         match &self.kind {
             AggregateKind::General { filter_expr, .. } => filter_expr,
-            AggregateKind::DistinctLimit { .. } => &[],
+            AggregateKind::DistinctLimit { .. } | AggregateKind::TopKDistinct { .. } => {
+                &[]
+            }
+            AggregateKind::TopKMinMax { .. } => &[None],
         }
     }
 
     fn clone_aggr_exprs(&self) -> Arc<[Arc<AggregateFunctionExpr>]> {
         match &self.kind {
             AggregateKind::General { aggr_expr, .. } => Arc::clone(aggr_expr),
-            AggregateKind::DistinctLimit { .. } => Arc::from([]),
+            AggregateKind::DistinctLimit { .. } | AggregateKind::TopKDistinct { .. } => {
+                Arc::from([])
+            }
+            AggregateKind::TopKMinMax { aggr_expr, .. } => {
+                Arc::from(std::slice::from_ref(aggr_expr))
+            }
         }
     }
 
     fn clone_filter_exprs(&self) -> Arc<[Option<Arc<dyn PhysicalExpr>>]> {
         match &self.kind {
             AggregateKind::General { filter_expr, .. } => Arc::clone(filter_expr),
-            AggregateKind::DistinctLimit { .. } => Arc::from([]),
+            AggregateKind::DistinctLimit { .. } | AggregateKind::TopKDistinct { .. } => {
+                Arc::from([])
+            }
+            AggregateKind::TopKMinMax { .. } => Arc::from([None]),
         }
     }
 
@@ -1317,6 +1654,52 @@ impl AggregateExec {
         &self.input
     }
 
+    /// Whether a candidate input keeps each group in one partition.
+    ///
+    /// Unlike co-partitioning, aggregation only needs equality groups to be
+    /// local. A final stage can inherit that guarantee from a partial stage
+    /// even when projecting the grouping expressions loses range metadata.
+    /// This check does not require the two stages to be combined.
+    pub fn input_keeps_groups_local(
+        &self,
+        input: &dyn ExecutionPlan,
+        allow_subset: bool,
+    ) -> bool {
+        if !matches!(
+            self.mode,
+            AggregateMode::Partial
+                | AggregateMode::SinglePartitioned
+                | AggregateMode::FinalPartitioned
+        ) || self.group_by().is_empty()
+            || self.group_by().has_grouping_set()
+        {
+            return false;
+        }
+
+        if input.output_partitioning().keeps_keys_local(
+            &self.group_by().input_exprs(),
+            input.equivalence_properties(),
+            allow_subset,
+        ) {
+            return true;
+        }
+
+        self.mode == AggregateMode::FinalPartitioned
+            && input
+                .downcast_ref::<AggregateExec>()
+                .is_some_and(|partial| {
+                    partial.mode == AggregateMode::Partial
+                        && datafusion_physical_expr::physical_exprs_equal(
+                            &partial.output_group_expr(),
+                            &self.group_by().input_exprs(),
+                        )
+                        && partial.input_keeps_groups_local(
+                            partial.input.as_ref(),
+                            allow_subset,
+                        )
+                })
+    }
+
     /// Get the input schema before any aggregates are applied
     pub fn input_schema(&self) -> SchemaRef {
         Arc::clone(&self.input_schema)
@@ -1335,29 +1718,21 @@ impl AggregateExec {
             )?));
         }
 
-        // Grouping by an expression that has a sort/limit upstream.
-        //
-        // `GroupedTopKAggregateStream` keeps a priority queue, so it only works
-        // when an ordering direction is available: either this is a MIN/MAX
-        // aggregate, whose direction is implied by the accumulator, or the
-        // optimizer pushed a direction down next to the limit.
-        //
-        // A direction-less limit is a soft hint pushed by
-        // `LimitedDistinctAggregation`, which only pushes it while
-        // `is_unordered_unfiltered_group_by_distinct()` holds. That predicate is
-        // not stable: a later rule such as `EnsureRequirements` can insert the
-        // sort a window function requires below this aggregate, which gives the
-        // rebuilt aggregate an output ordering and makes the predicate false
-        // without ever supplying a direction. Falling back to the regular
-        // grouped streams is correct in that case, because they treat the limit
-        // as a soft limit and the `LIMIT` above this aggregate still truncates
-        // the result.
-        if let Some(config) = self.limit_options()
-            && !self.is_unordered_unfiltered_group_by_distinct()
-            && (config.descending.is_some() || self.get_minmax_desc().is_some())
+        if let AggregateKind::TopKMinMax {
+            limit, descending, ..
+        }
+        | AggregateKind::TopKDistinct {
+            limit, descending, ..
+        } = &self.kind
         {
             return Ok(StreamType::GroupedPriorityQueue(
-                GroupedTopKAggregateStream::new(self, context, partition, config.limit)?,
+                GroupedTopKAggregateStream::new(
+                    self,
+                    context,
+                    partition,
+                    *limit,
+                    *descending,
+                )?,
             ));
         }
 
@@ -1388,47 +1763,51 @@ impl AggregateExec {
             );
         }
 
-        // Choose the execution path based on (aggregation mode, ordering).
-        //
-        // Note that `self.input_order_mode` represents both input ordering and output
-        // order promise. See its comment for details.
+        // Choose the execution path based on aggregation mode and when groups
+        // are known to be complete.
         use AggregateMode::*;
-        use InputOrderMode::*;
-        let stream = match (self.mode, &self.input_order_mode) {
-            (Partial, Linear) => StreamType::PartialHash(
+        let stream = match (self.mode, &self.group_clustering_mode) {
+            (Partial, GroupClusteringMode::None) => StreamType::PartialHash(
                 PartialHashAggregateStream::new(self, context, partition)?,
             ),
-            (Partial, Sorted | PartiallySorted(_)) => {
-                StreamType::OrderedPartialAggregate(OrderedPartialAggregateStream::new(
-                    self, context, partition,
-                )?)
+            (Partial, GroupClusteringMode::Partial(_) | GroupClusteringMode::Full) => {
+                StreamType::ClusteredPartialAggregate(
+                    ClusteredPartialAggregateStream::new(self, context, partition)?,
+                )
             }
-            (PartialReduce, Linear) => StreamType::PartialReduceHash(
+            (PartialReduce, GroupClusteringMode::None) => StreamType::PartialReduceHash(
                 PartialReduceHashAggregateStream::new(self, context, partition)?,
             ),
-            (PartialReduce, Sorted | PartiallySorted(_)) => {
-                // See the comment above: the builder enforces `Linear` order for
-                // `PartialReduce` mode.
+            (
+                PartialReduce,
+                GroupClusteringMode::Partial(_) | GroupClusteringMode::Full,
+            ) => {
                 return internal_err!(
-                    "PartialReduce aggregation must use InputOrderMode::Linear"
+                    "PartialReduce aggregation must use GroupClusteringMode::None"
                 );
             }
-            (Final | FinalPartitioned, Linear) => StreamType::FinalHash(
-                FinalHashAggregateStream::new(self, context, partition)?,
-            ),
-            (Final | FinalPartitioned, Sorted | PartiallySorted(_)) => {
-                StreamType::OrderedFinalAggregate(OrderedFinalAggregateStream::new(
+            (Final | FinalPartitioned, GroupClusteringMode::None) => {
+                StreamType::FinalHash(FinalHashAggregateStream::new(
                     self, context, partition,
                 )?)
             }
-            (Single | SinglePartitioned, Linear) => StreamType::SingleHash(
-                SingleHashAggregateStream::new(self, context, partition)?,
-            ),
-            (Single | SinglePartitioned, Sorted | PartiallySorted(_)) => {
-                StreamType::OrderedSingleAggregate(OrderedSingleAggregateStream::new(
+            (
+                Final | FinalPartitioned,
+                GroupClusteringMode::Partial(_) | GroupClusteringMode::Full,
+            ) => StreamType::ClusteredFinalAggregate(ClusteredFinalAggregateStream::new(
+                self, context, partition,
+            )?),
+            (Single | SinglePartitioned, GroupClusteringMode::None) => {
+                StreamType::SingleHash(SingleHashAggregateStream::new(
                     self, context, partition,
                 )?)
             }
+            (
+                Single | SinglePartitioned,
+                GroupClusteringMode::Partial(_) | GroupClusteringMode::Full,
+            ) => StreamType::ClusteredSingleAggregate(
+                ClusteredSingleAggregateStream::new(self, context, partition)?,
+            ),
         };
         Ok(stream)
     }
@@ -1486,7 +1865,7 @@ impl AggregateExec {
         group_expr_mapping: &ProjectionMapping,
         is_true_no_grouping: bool,
         mode: &AggregateMode,
-        input_order_mode: &InputOrderMode,
+        group_clustering_mode: &GroupClusteringMode,
         aggr_exprs: &[Arc<AggregateFunctionExpr>],
     ) -> Result<PlanProperties> {
         // Construct equivalence properties:
@@ -1494,9 +1873,11 @@ impl AggregateExec {
             .equivalence_properties()
             .project(group_expr_mapping, schema);
 
-        // An aggregation that does not maintain its input order must not
-        // propegrate the input's ordering either, match `maintains_input_order` value
-        if *input_order_mode == InputOrderMode::Linear {
+        // Only the clustered paths preserve existing ordering on group keys.
+        // Project the input's actual sort expressions; clustering alone does
+        // not establish an output ordering. Keep this consistent with
+        // `maintains_input_order`.
+        if *group_clustering_mode == GroupClusteringMode::None {
             eq_properties.clear_orderings();
         }
 
@@ -1544,7 +1925,7 @@ impl AggregateExec {
         };
 
         // TODO: Emission type and boundedness information can be enhanced here
-        let emission_type = if *input_order_mode == InputOrderMode::Linear {
+        let emission_type = if *group_clustering_mode == GroupClusteringMode::None {
             EmissionType::Final
         } else {
             input.pipeline_behavior()
@@ -1574,8 +1955,12 @@ impl AggregateExec {
         )
     }
 
-    pub fn input_order_mode(&self) -> &InputOrderMode {
-        &self.input_order_mode
+    /// Describes how input rows are clustered by grouping expressions.
+    ///
+    /// This does not imply a sort order. See [`ExecutionPlanProperties::output_ordering`]
+    /// for the ordering of the aggregate's output.
+    pub fn group_clustering_mode(&self) -> &GroupClusteringMode {
+        &self.group_clustering_mode
     }
 
     /// Estimates output statistics for this aggregate node.
@@ -2059,8 +2444,12 @@ impl DisplayAs for AggregateExec {
                     write!(f, ", lim=[{}]", config.limit)?;
                 }
 
-                if self.input_order_mode != InputOrderMode::Linear {
-                    write!(f, ", ordering_mode={:?}", self.input_order_mode)?;
+                if self.group_clustering_mode != GroupClusteringMode::None {
+                    write!(
+                        f,
+                        ", group_clustering_mode={:?}",
+                        self.group_clustering_mode
+                    )?;
                 }
             }
             DisplayFormatType::TreeRender => {
@@ -2186,17 +2575,10 @@ impl ExecutionPlan for AggregateExec {
         vec![self.required_input_ordering.clone()]
     }
 
-    /// The output ordering of [`AggregateExec`] is determined by its `group_by`
-    /// columns. Although this method is not explicitly used by any optimizer
-    /// rules yet, overriding the default implementation ensures that it
-    /// accurately reflects the actual behavior.
-    ///
-    /// If the [`InputOrderMode`] is `Linear`, the `group_by` columns don't have
-    /// an ordering, which means the results do not either. However, in the
-    /// `Ordered` and `PartiallyOrdered` cases, the `group_by` columns do have
-    /// an ordering, which is preserved in the output.
+    /// Clustered aggregation preserves existing ordering on the group-by
+    /// columns. Aggregate result columns do not inherit input ordering.
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![self.input_order_mode != InputOrderMode::Linear]
+        vec![self.group_clustering_mode != GroupClusteringMode::None]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -2225,7 +2607,40 @@ impl ExecutionPlan for AggregateExec {
                     Arc::clone(&self.input_schema),
                     Arc::clone(&self.schema),
                 )?;
-                me = me.with_limit_options(self.limit_options());
+                // Reapply a limit only if the new input remains eligible.
+                let optimized = match &self.kind {
+                    AggregateKind::General { .. } => None,
+                    AggregateKind::DistinctLimit { limit, .. } => {
+                        me.clone().try_optimize_distinct_soft_limit(*limit)
+                    }
+                    AggregateKind::TopKMinMax {
+                        aggr_expr,
+                        limit,
+                        descending,
+                        nulls_first,
+                        ..
+                    } => me.clone().try_optimize_topk(
+                        *limit,
+                        aggr_expr.name(),
+                        SortOptions::new(*descending, *nulls_first),
+                    ),
+                    // TopK DISTINCT orders by its single grouping key and
+                    // ignores `nulls_first`.
+                    AggregateKind::TopKDistinct {
+                        group_by,
+                        limit,
+                        descending,
+                    } => group_by.expr().first().and_then(|(_, alias)| {
+                        me.clone().try_optimize_topk(
+                            *limit,
+                            alias,
+                            SortOptions::new(*descending, false),
+                        )
+                    }),
+                };
+                if let Some(optimized) = optimized {
+                    me = optimized.data;
+                }
                 me.dynamic_filter.clone_from(&self.dynamic_filter);
                 Ok(Arc::new(me))
             }
@@ -2299,7 +2714,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.metrics.clone_inner().with_output_rows_skew())
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
@@ -2452,7 +2867,7 @@ impl ExecutionPlan for AggregateExec {
             // Derived at construction from the input ordering and `group_by`.
             required_input_ordering: _,
             // Derived at construction from the input ordering and `group_by`.
-            input_order_mode: _,
+            group_clustering_mode: _,
             // Derived at construction by `Self::compute_properties`.
             cache: _,
             dynamic_filter,
@@ -2810,7 +3225,13 @@ impl AggregateExec {
                 Some(descending) => LimitOptions::new_with_order(fetch, descending),
                 None => LimitOptions::new(fetch),
             };
-            aggregate.with_limit_options(Some(options))
+            aggregate
+                .restore_limit_options(Some(options))
+                .ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "Invalid DISTINCT or TopK aggregate limit configuration"
+                    )
+                })?
         } else {
             aggregate
         };
@@ -3226,7 +3647,13 @@ pub(crate) fn group_id_array(
     let semantic_id = group
         .iter()
         .fold(0u64, |acc, &is_null| (acc << 1) | u64::from(is_null));
-    let full_id = semantic_id | ((ordinal as u64) << n);
+    // A zero ordinal needs no high bits. Avoid shifting it by 64 when all
+    // UInt64 bits belong to the semantic mask.
+    let full_id = if ordinal == 0 {
+        semantic_id
+    } else {
+        semantic_id | ((ordinal as u64) << n)
+    };
     if total_bits <= 8 {
         Ok(Arc::new(UInt8Array::from(vec![full_id as u8; num_rows])))
     } else if total_bits <= 16 {
@@ -3246,7 +3673,7 @@ pub(crate) fn group_id_array(
 /// three times the ordinals are 0, 1, 2 and this function returns 2.
 /// Returns 0 when no grouping set is duplicated.
 pub(crate) fn max_duplicate_ordinal(groups: &[Vec<bool>]) -> usize {
-    let mut counts: HashMap<&[bool], usize> = HashMap::new();
+    let mut counts: HashMap<&[bool], usize> = HashMap::with_capacity(groups.len());
     for group in groups {
         *counts.entry(group).or_insert(0) += 1;
     }
@@ -3294,7 +3721,8 @@ pub fn evaluate_group_by(
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
     let max_ordinal = max_duplicate_ordinal(&group_by.groups);
-    let mut ordinal_per_pattern: HashMap<&[bool], usize> = HashMap::new();
+    let mut ordinal_per_pattern: HashMap<&[bool], usize> =
+        HashMap::with_capacity(group_by.groups.len());
     let exprs = evaluate_expressions_to_arrays(
         group_by.expr.iter().map(|(expr, _)| expr),
         batch,
@@ -3336,6 +3764,7 @@ pub fn evaluate_group_by(
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::mem::size_of;
     use std::task::{Context, Poll};
 
     use super::*;
@@ -3392,6 +3821,13 @@ mod tests {
     use datafusion_physical_expr::projection::ProjectionExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
+
+    #[test]
+    fn wide_group_id_64_empty_rows() {
+        let array = group_id_array(&[true; 64], 0, 0, 0).unwrap();
+        assert_eq!(array.data_type(), &DataType::UInt64);
+        assert_eq!(array.len(), 0);
+    }
 
     #[cfg(feature = "proto")]
     #[test]
@@ -3617,7 +4053,8 @@ mod tests {
 
         const KEYS: usize = 64;
         const VALUES_PER_KEY: i64 = 64;
-        const MEMORY_LIMIT: usize = 8192;
+        // Leave only a small amount above 8 KiB for the empty aggregate state.
+        const MEMORY_LIMIT: usize = 8_384;
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int64, false),
             Field::new("value", DataType::Int64, false),
@@ -3856,11 +4293,11 @@ mod tests {
         match (mode, ordered, &stream) {
             (AggregateMode::Final, false, StreamType::FinalHash(_))
             | (AggregateMode::Single, false, StreamType::SingleHash(_)) => {}
-            (AggregateMode::Final, true, StreamType::OrderedFinalAggregate(_))
-            | (AggregateMode::Single, true, StreamType::OrderedSingleAggregate(_)) => {
+            (AggregateMode::Final, true, StreamType::ClusteredFinalAggregate(_))
+            | (AggregateMode::Single, true, StreamType::ClusteredSingleAggregate(_)) => {
                 assert_eq!(
-                    aggregate.input_order_mode(),
-                    &InputOrderMode::PartiallySorted(vec![0])
+                    aggregate.group_clustering_mode(),
+                    &GroupClusteringMode::Partial(vec![0])
                 );
             }
             _ => panic!("unexpected stream for {mode:?}, ordered={ordered}"),
@@ -4021,8 +4458,8 @@ mod tests {
         )];
 
         let task_ctx = if spill {
-            // adjust the max memory size to have the partial aggregate result for spill mode.
-            new_spill_ctx(4, 500)
+            // Includes the descriptor-aware empty grouping-set table state.
+            new_spill_ctx(4, 700)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -4040,6 +4477,14 @@ mod tests {
             collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         if spill {
+            let early_emit_count = partial_aggregate
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize();
+            assert!(early_emit_count > 0);
+
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
             // we trigger the early emit rule, which turns out the partial aggregate result.
             allow_duplicates! {
@@ -4802,12 +5247,12 @@ mod tests {
         let stream = aggregate.execute_typed(0, &fits)?;
         match (mode, ordered, &stream) {
             (AggregateMode::Partial, false, StreamType::PartialHash(_))
-            | (AggregateMode::Partial, true, StreamType::OrderedPartialAggregate(_))
+            | (AggregateMode::Partial, true, StreamType::ClusteredPartialAggregate(_))
             | (AggregateMode::PartialReduce, false, StreamType::PartialReduceHash(_))
             | (AggregateMode::Final, false, StreamType::FinalHash(_))
-            | (AggregateMode::Final, true, StreamType::OrderedFinalAggregate(_))
+            | (AggregateMode::Final, true, StreamType::ClusteredFinalAggregate(_))
             | (AggregateMode::Single, false, StreamType::SingleHash(_))
-            | (AggregateMode::Single, true, StreamType::OrderedSingleAggregate(_)) => {}
+            | (AggregateMode::Single, true, StreamType::ClusteredSingleAggregate(_)) => {}
             _ => panic!("unexpected stream for {mode:?}, ordered={ordered}"),
         }
         let reserved = fits.memory_pool().reserved();
@@ -5134,7 +5579,9 @@ mod tests {
                 partial_input,
                 Arc::clone(&schema),
             )?
-            .with_limit_options(Some(LimitOptions::new(2))),
+            .try_optimize_distinct_soft_limit(2)
+            .unwrap()
+            .data,
         );
 
         let partial_stream = partial_aggregate.execute_typed(0, &task_ctx)?;
@@ -5175,7 +5622,9 @@ mod tests {
                 final_input,
                 Arc::clone(&schema),
             )?
-            .with_limit_options(Some(LimitOptions::new(2))),
+            .try_optimize_distinct_soft_limit(2)
+            .unwrap()
+            .data,
         );
 
         let final_stream = final_aggregate.execute_typed(0, &task_ctx)?;
@@ -5255,7 +5704,17 @@ mod tests {
         assert!(matches!(stream, StreamType::SingleHash(_)));
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
+        assert_eq!(output.len(), 2);
         assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+
+        let metrics = single.metrics().expect("aggregate metrics should exist");
+        assert_eq!(metrics.output_rows(), Some(3));
+        assert_eq!(
+            metrics
+                .sum(|metric| matches!(metric.value(), MetricValue::OutputBatches(_)))
+                .map(|value| value.as_usize()),
+            Some(2)
+        );
         assert_snapshot!(batches_to_sort_string(&output), @r"
 +---+--------+
 | a | SUM(b) |
@@ -5281,7 +5740,116 @@ mod tests {
         Ok(())
     }
 
-    /// Ensures `OrderedSingleAggregateStream` is used for ordered raw input.
+    #[rstest::rstest]
+    #[case::full(true)]
+    #[case::partial(false)]
+    fn group_clustering_preserves_sort_options(
+        #[case] full: bool,
+        #[values(AggregateMode::Partial, AggregateMode::Single)] mode: AggregateMode,
+        #[values(false, true)] descending: bool,
+        #[values(false, true)] nulls_first: bool,
+    ) -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("value", DataType::Int64, true),
+        ]));
+        let options = SortOptions::new(descending, nulls_first);
+        let mut input_ordering = vec![PhysicalSortExpr::new(col("a", &schema)?, options)];
+        let mut output_ordering = vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("group_a", 1)),
+            options,
+        )];
+        if full {
+            input_ordering.push(PhysicalSortExpr::new(col("b", &schema)?, options));
+            output_ordering.push(PhysicalSortExpr::new(
+                Arc::new(Column::new("group_b", 0)),
+                options,
+            ));
+        }
+        let input_ordering = LexOrdering::new(input_ordering).unwrap();
+        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![input_ordering.clone()])?;
+        let aggregate = AggregateExec::try_new(
+            mode,
+            PhysicalGroupBy::new_single(vec![
+                (col("b", &schema)?, "group_b".to_string()),
+                (col("a", &schema)?, "group_a".to_string()),
+            ]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(value)")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
+            schema,
+        )?;
+
+        let expected_mode = if full {
+            GroupClusteringMode::Full
+        } else {
+            GroupClusteringMode::Partial(vec![1])
+        };
+        assert_eq!(aggregate.group_clustering_mode(), &expected_mode);
+        assert_eq!(aggregate.maintains_input_order(), vec![true]);
+        assert_eq!(
+            aggregate.properties().emission_type,
+            EmissionType::Incremental
+        );
+        assert_eq!(
+            aggregate.properties().output_ordering(),
+            LexOrdering::new(output_ordering).as_ref()
+        );
+        assert_eq!(
+            aggregate.required_input_ordering(),
+            vec![Some(OrderingRequirements::new_soft(input_ordering.into()))]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn group_clustering_is_recomputed_with_new_children() -> Result<()> {
+        let aggregate = Arc::new(single_test_aggregate()?);
+        let original_input = Arc::clone(aggregate.input());
+        let schema = original_input.schema();
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("a", &schema)?)])
+                .unwrap();
+        let sorted_input = TestMemoryExec::try_new(&[vec![]], schema, None)?
+            .try_with_sort_information(vec![ordering.clone()])?;
+        let sorted_input =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(sorted_input)));
+
+        let sorted = aggregate.replace_children(
+            vec![sorted_input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let sorted_aggregate = sorted.downcast_ref::<AggregateExec>().unwrap();
+        assert_eq!(
+            sorted_aggregate.group_clustering_mode(),
+            &GroupClusteringMode::Full
+        );
+        assert_eq!(sorted.output_ordering(), Some(&ordering));
+        assert_eq!(sorted.pipeline_behavior(), EmissionType::Incremental);
+
+        let unordered = sorted.replace_children(
+            vec![original_input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let unordered_aggregate = unordered.downcast_ref::<AggregateExec>().unwrap();
+        assert_eq!(
+            unordered_aggregate.group_clustering_mode(),
+            &GroupClusteringMode::None
+        );
+        assert_eq!(unordered.maintains_input_order(), vec![false]);
+        assert!(unordered.output_ordering().is_none());
+        assert_eq!(unordered.pipeline_behavior(), EmissionType::Final);
+        Ok(())
+    }
+
+    /// Ensures `ClusteredSingleAggregateStream` is used for ordered raw input.
     #[tokio::test]
     async fn ordered_single_aggregate_planning() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -5330,14 +5898,14 @@ mod tests {
             input,
             Arc::clone(&schema),
         )?;
-        assert!(matches!(
-            aggregate.input_order_mode(),
-            InputOrderMode::PartiallySorted(_)
-        ));
+        assert_eq!(
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::Partial(vec![0])
+        );
 
         let task_ctx = new_migrated_hash_ctx(2);
         let stream = aggregate.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedSingleAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredSingleAggregate(_)));
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
         assert_snapshot!(batches_to_sort_string(&output), @r"
@@ -5353,7 +5921,7 @@ mod tests {
 
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedSingleAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredSingleAggregate(_)));
 
         Ok(())
     }
@@ -5390,7 +5958,10 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        assert_eq!(partial_reduce.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(
+            partial_reduce.group_clustering_mode(),
+            &GroupClusteringMode::None
+        );
         assert_eq!(partial_reduce.maintains_input_order(), vec![false]);
         assert!(
             partial_reduce.properties().output_ordering().is_none(),
@@ -5445,7 +6016,10 @@ mod tests {
             None,
         )?;
         let aggregate = build_aggregate(unordered_input)?;
-        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::None
+        );
         assert_eq!(
             aggregate.schema().as_ref(),
             &Schema::new(vec![
@@ -5477,7 +6051,10 @@ mod tests {
         let ordered_input =
             Arc::new(TestMemoryExec::update_cache(&Arc::new(ordered_input)));
         let aggregate = build_aggregate(ordered_input)?;
-        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Sorted);
+        assert_eq!(
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::Full
+        );
 
         Ok(())
     }
@@ -5721,9 +6298,11 @@ mod tests {
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
 
-        // Same flush cadence as the column-backed test: one flush per input
-        // batch, each sliced into batches of 2 and 1 rows.
-        assert_eq!(output.len(), 2 * num_input_batches);
+        // One flush per input batch. The memory limit only fits the table, so
+        // holding the materialized flush while slicing it does not fit and each
+        // flush is emitted whole instead of in `batch_size` slices.
+        assert_eq!(output.len(), num_input_batches);
+        assert!(output.iter().all(|batch| batch.num_rows() == 3));
         assert_snapshot!(batches_to_string(&output), @r"
         +---+---+-------------+
         | a | n | SUM(b)[sum] |
@@ -5795,7 +6374,10 @@ mod tests {
             schema,
         )?;
 
-        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::None
+        );
         // This captures the behavior before #24438. When the source can declare
         // `(key, time_bin)` group-contiguous, the corresponding case can use
         // `EmissionType::Incremental`.
@@ -5820,7 +6402,7 @@ mod tests {
         Ok(())
     }
 
-    /// Ensures for ordered input, `OrderedPartialAggregateStream` is used.
+    /// Ensures for ordered input, `ClusteredPartialAggregateStream` is used.
     #[tokio::test]
     async fn ordered_partial_aggregate_planning() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -5874,13 +6456,13 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert!(matches!(
-            aggregate.input_order_mode(),
-            InputOrderMode::PartiallySorted(_)
+            aggregate.group_clustering_mode(),
+            GroupClusteringMode::Partial(_)
         ));
 
         let task_ctx = new_migrated_hash_ctx(2);
         let stream = aggregate.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedPartialAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredPartialAggregate(_)));
 
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
@@ -5896,15 +6478,15 @@ mod tests {
 +----------+-----------+-------------------------+
 ");
 
-        // Ordered partial aggregation supports finite memory.
+        // Clustered partial aggregation supports finite memory.
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedPartialAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredPartialAggregate(_)));
 
         Ok(())
     }
 
-    /// Ensures for ordered input, `OrderedFinalAggregateStream` is used.
+    /// Ensures for ordered input, `ClusteredFinalAggregateStream` is used.
     #[tokio::test]
     async fn ordered_final_aggregate_planning() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -5955,11 +6537,14 @@ mod tests {
             final_input,
             Arc::clone(&schema),
         )?;
-        assert_eq!(final_aggregate.input_order_mode(), &InputOrderMode::Sorted);
+        assert_eq!(
+            final_aggregate.group_clustering_mode(),
+            &GroupClusteringMode::Full
+        );
 
         let task_ctx = new_migrated_hash_ctx(2);
         let stream = final_aggregate.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedFinalAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredFinalAggregate(_)));
 
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
@@ -5974,10 +6559,10 @@ mod tests {
 +-----+--------------+
 ");
 
-        // Ordered final aggregation supports finite memory.
+        // Clustered final aggregation supports finite memory.
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = final_aggregate.execute_typed(0, &finite_memory_task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedFinalAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredFinalAggregate(_)));
 
         Ok(())
     }
@@ -6029,8 +6614,8 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert!(matches!(
-            aggregate.input_order_mode(),
-            InputOrderMode::PartiallySorted(_)
+            aggregate.group_clustering_mode(),
+            GroupClusteringMode::Partial(_)
         ));
 
         let runtime = RuntimeEnvBuilder::default()
@@ -6047,7 +6632,7 @@ mod tests {
         );
 
         let mut stream: SendableRecordBatchStream =
-            OrderedPartialAggregateStream::new(&aggregate, &task_ctx, 0)?.into_stream();
+            ClusteredPartialAggregateStream::new(&aggregate, &task_ctx, 0)?.into_stream();
 
         while let Some(result) = stream.next().await {
             if let Err(e) = result {
@@ -6328,7 +6913,7 @@ mod tests {
     //
     // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
     // "  CoalescePartitionsExec",
-    // "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], ordering_mode=None",
+    // "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], group_clustering_mode=None",
     // "      DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
     //
     // and checks whether the function `merge_batch` works correctly for
@@ -7430,9 +8015,11 @@ mod tests {
         )?);
 
         let batch_size = 2;
-        let memory_pool = Arc::new(FairSpillPool::new(
-            initial_reservation(&single_aggregate)? + 200,
-        ));
+        // Allow the already-retained initial table but no extra headroom.
+        // This fixture's groups can fit in that initial capacity, so successful
+        // execution need not spill.
+        let memory_pool =
+            Arc::new(FairSpillPool::new(initial_reservation(&single_aggregate)?));
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::new().with_batch_size(batch_size))
@@ -7446,8 +8033,6 @@ mod tests {
         let result = collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await;
         match result {
             Ok(result) => {
-                assert_spill_count_metric(true, single_aggregate);
-
                 allow_duplicates! {
                     assert_snapshot!(batches_to_string(&result), @r"
                 +---+---+--------+--------+
@@ -7725,17 +8310,25 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(stats, (**schema).clone()))
             as Arc<dyn ExecutionPlan>;
 
+        let (aggregates, filters) = if limit.is_some() {
+            (vec![], vec![])
+        } else {
+            (vec![count_a_aggregate(schema)?], vec![None])
+        };
         let mut agg = AggregateExec::try_new(
             mode,
             group_by,
-            vec![count_a_aggregate(schema)?],
-            vec![None],
+            aggregates,
+            filters,
             input,
             Arc::clone(schema),
         )?;
 
         if let Some(limit) = limit {
-            agg = agg.with_limit_options(Some(limit));
+            agg = agg
+                .try_optimize_topk(limit.limit, "a", SortOptions::new(false, false))
+                .unwrap()
+                .data;
         }
 
         Ok(agg)
