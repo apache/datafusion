@@ -23,12 +23,12 @@
 use crate::ExecutionPlan;
 use crate::displayable;
 use crate::operator_statistics::{
-    ExtendedStatistics, StatisticsRegistry, StatisticsResult,
+    ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
 };
 use datafusion_common::extensions::Extensions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err,
+    Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err, internal_err,
 };
 use log::debug;
 use parking_lot::Mutex;
@@ -471,7 +471,10 @@ impl StatisticsContext {
                     self.validate_child_requests(plan, &children, &requests)?;
                     let child_statistics =
                         self.resolve_children(plan, &children, &requests)?;
-                    (plan.statistics_from_inputs(&child_statistics, args)?, None)
+                    let statistics =
+                        plan.statistics_from_inputs(&child_statistics, args)?;
+                    validate_column_statistics(plan, &statistics, None)?;
+                    (statistics, None)
                 }
             };
         if let Some(owner) = retained_plan {
@@ -596,6 +599,7 @@ impl StatisticsContext {
                 provider.compute_statistics_with_args(plan, &child_extended, args)?
             {
                 let (statistics, extensions) = computed.into_parts();
+                validate_column_statistics(plan, &statistics, Some(provider.as_ref()))?;
                 let extensions = if extensions.is_empty() {
                     None
                 } else {
@@ -706,6 +710,34 @@ impl StatisticsContext {
             partition,
             extensions,
         );
+    }
+}
+
+/// Returns an error unless `statistics`, computed for `plan` by `provider` or,
+/// if `None`, by the operator itself, hold one [`ColumnStatistics`] per field
+/// of `plan`'s schema, as [`Statistics::column_statistics`] requires. Consumers
+/// index it by column, so a mismatch could make them go out of bounds or read
+/// the statistics of another column.
+///
+/// [`ColumnStatistics`]: datafusion_common::ColumnStatistics
+fn validate_column_statistics(
+    plan: &dyn ExecutionPlan,
+    statistics: &Statistics,
+    provider: Option<&dyn StatisticsProvider>,
+) -> Result<()> {
+    let column_statistics = statistics.column_statistics.len();
+    let fields = plan.schema().fields().len();
+    if column_statistics == fields {
+        return Ok(());
+    }
+    let name = plan.name();
+    match provider {
+        Some(provider) => internal_err!(
+            "Statistics provider {provider:?} returned {column_statistics} column statistics for {name}, expected {fields} (one per field of its schema)"
+        ),
+        None => internal_err!(
+            "{name} returned {column_statistics} column statistics, expected {fields} (one per field of its schema)"
+        ),
     }
 }
 

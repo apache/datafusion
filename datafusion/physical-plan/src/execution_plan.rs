@@ -740,11 +740,15 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// (the default), not an error.
     /// If `args.partition()` is `None`, it returns statistics for all partitions.
     ///
+    /// The result must hold one [`ColumnStatistics`] per field of
+    /// [`Self::schema`]; [`StatisticsContext::compute`] returns an error otherwise.
+    ///
     /// Implementations should not call [`StatisticsContext::compute`] from within
     /// this method; child statistics are provided via `input_stats`.
     ///
     /// Use [`StatisticsContext::compute`] to initiate a full plan-tree walk.
     ///
+    /// [`ColumnStatistics`]: datafusion_common::ColumnStatistics
     /// [`StatisticsContext::compute`]: crate::statistics::StatisticsContext::compute
     fn statistics_from_inputs(
         &self,

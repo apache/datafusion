@@ -413,6 +413,10 @@ impl NdvFallback {
 impl Default for Statistics {
     /// Returns a new [`Statistics`] instance with all fields set to unknown
     /// and no columns.
+    ///
+    /// Unless the schema has no fields, this is not valid as the statistics of
+    /// a plan, which must hold one [`ColumnStatistics`] per field; use
+    /// [`Statistics::new_unknown`] instead.
     fn default() -> Self {
         Self {
             num_rows: Precision::Absent,

@@ -414,7 +414,8 @@ impl AggregateUDFImpl for Count {
             // Only column references can be resolved from statistics;
             // expressions like casts or literals are not supported.
             let col_expr = expr.downcast_ref::<expressions::Column>()?;
-            if let Precision::Exact(dc) = col_stats[col_expr.index()].distinct_count {
+            if let Precision::Exact(dc) = col_stats.get(col_expr.index())?.distinct_count
+            {
                 let dc = i64::try_from(dc).ok()?;
                 return Some(ScalarValue::Int64(Some(dc)));
             }
@@ -427,7 +428,7 @@ impl AggregateUDFImpl for Count {
 
         // TODO optimize with exprs other than Column
         if let Some(col_expr) = expr.downcast_ref::<expressions::Column>() {
-            if let Precision::Exact(val) = col_stats[col_expr.index()].null_count {
+            if let Precision::Exact(val) = col_stats.get(col_expr.index())?.null_count {
                 let count = i64::try_from(num_rows - val).ok()?;
                 return Some(ScalarValue::Int64(Some(count)));
             }
@@ -1203,5 +1204,29 @@ mod tests {
         // Expect distinct {1,2,3} → count = 3
         assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(3)));
         Ok(())
+    }
+
+    /// `value_from_stats` is public and has no error channel, so a direct
+    /// caller passing fewer column statistics than the schema has fields gets
+    /// `None` instead of a panic, as with `sum`. The statistics walk rejects
+    /// such statistics during planning.
+    #[test]
+    fn count_value_from_stats_out_of_bounds_column_returns_none() {
+        let statistics = datafusion_common::Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![datafusion_common::ColumnStatistics::default()],
+        };
+        let return_type = DataType::Int64;
+        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("b", 1))];
+        for is_distinct in [false, true] {
+            let statistics_args = StatisticsArgs {
+                statistics: &statistics,
+                return_type: &return_type,
+                is_distinct,
+                exprs: &exprs,
+            };
+            assert_eq!(Count::new().value_from_stats(&statistics_args), None);
+        }
     }
 }
