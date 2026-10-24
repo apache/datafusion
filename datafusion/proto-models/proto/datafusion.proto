@@ -1058,6 +1058,15 @@ message PhysicalExtensionNode {
   optional string plan_name = 3;
 }
 
+// Payload of a DataSourceExec encoded as a PhysicalExtensionNode. The outer
+// plan name identifies DataSourceExec; source names use a separate registry kind.
+message PhysicalExtensionDataSourceNode {
+  bytes node = 1;
+  // Namespaced source type name. The decoding session must register a source
+  // decoder for this name; source payloads are never passed to a plan codec.
+  optional string source_name = 2;
+}
+
 // physical expressions
 message PhysicalExprNode {
   // Was date_time_interval_expr
