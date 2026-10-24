@@ -23,11 +23,11 @@
 //! unclustered Partial and PartialReduce streams is covered by their own tests.
 //!
 //! Each test runs one single-partition `AggregateExec` under a
-//! [`RecordingPool`] and snapshots every pool call of the aggregate consumers
-//! (the stream and the merge / replay siblings that share its consumer), then
-//! the query outcome. Limits were chosen by experiment so that each test
-//! really takes its path, which the test also asserts through metrics or the
-//! output batch sizes.
+//! [`RecordingPool`] and snapshots every pool call in order, then the query
+//! outcome. The merge and replay of a spill reuse the stream's consumer, so
+//! every call carries the stream's name. Limits were chosen by experiment so
+//! that each test really takes its path, which the test also asserts through
+//! metrics or the output batch sizes.
 //!
 //! The snapshots hide byte counts (see [`hide_byte_counts`]), so a change in
 //! accounting shows up as a missing or extra call, a flipped refusal or
@@ -59,19 +59,21 @@ use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use insta::{Settings, assert_snapshot};
 
-use super::{AggregateExec, AggregateMode, GroupClusteringMode, PhysicalGroupBy};
+use super::{
+    AggregateExec, AggregateInputMode, AggregateMode, GroupClusteringMode,
+    PhysicalGroupBy,
+};
 use crate::ExecutionPlan;
 use crate::common::collect;
 use crate::metrics::MetricsSet;
 use crate::test::TestMemoryExec;
 
-/// A [`GreedyMemoryPool`] that records every call made on behalf of an
-/// aggregate consumer, as `"<consumer name> <op> <bytes>"`, and the peak of
-/// its reserved bytes.
+/// A [`GreedyMemoryPool`] that records every call in order, as
+/// `"<consumer name> <op> <bytes>"`, and the peak of its reserved bytes.
 #[derive(Debug)]
 struct RecordingPool {
     inner: GreedyMemoryPool,
-    calls: Mutex<Vec<(String, String)>>,
+    calls: Mutex<Vec<String>>,
     peak: AtomicUsize,
 }
 
@@ -85,30 +87,8 @@ impl RecordingPool {
     }
 
     fn record(&self, consumer: &MemoryConsumer, call: String) {
-        let name = consumer.name();
-        if name.contains("Aggregate") {
-            let line = format!("{name} {call}");
-            self.calls.lock().unwrap().push((name.to_string(), line));
-        }
-    }
-
-    /// The recorded calls grouped by consumer, in first-seen consumer order.
-    fn calls(&self) -> String {
-        let calls = self.calls.lock().unwrap();
-        let mut names: Vec<&str> = vec![];
-        for (name, _) in calls.iter() {
-            if !names.contains(&name.as_str()) {
-                names.push(name);
-            }
-        }
-        let mut out = String::new();
-        for name in names {
-            for (_, line) in calls.iter().filter(|(n, _)| n == name) {
-                out.push_str(line);
-                out.push('\n');
-            }
-        }
-        out
+        let line = format!("{} {call}", consumer.name());
+        self.calls.lock().unwrap().push(line);
     }
 }
 
@@ -261,12 +241,7 @@ impl Case {
 
         // Stages after the first read partial states: the group columns followed
         // by the `SUM` state, which for Int64 is the running sum itself.
-        let reads_partial_state = matches!(
-            self.mode,
-            AggregateMode::Final
-                | AggregateMode::FinalPartitioned
-                | AggregateMode::PartialReduce
-        );
+        let reads_partial_state = self.mode.input_mode() == AggregateInputMode::Partial;
         let input_schema = if reads_partial_state {
             Arc::new(super::create_schema(
                 &raw,
@@ -366,7 +341,7 @@ impl Case {
         assert_eq!(pool.reserved(), 0, "every reservation is released");
 
         Ok(Run {
-            snapshot: format!("{}=> {outcome}", pool.calls()),
+            snapshot: format!("{}\n=> {outcome}", pool.calls.lock().unwrap().join("\n")),
             clustering: aggregate.group_clustering_mode().clone(),
             metrics: aggregate.metrics().unwrap(),
             output_batch_rows,
@@ -477,6 +452,22 @@ fn hide_byte_counts() -> Settings {
     settings
 }
 
+/// Runs `case` as Final and as Single and returns the Final run.
+///
+/// The Final and Single streams account in the same way, so this asserts that
+/// both make the same pool calls, with the same byte counts, once the stream
+/// name is replaced, and the test snapshots only the Final run.
+async fn run_final_and_single(case: impl Fn(AggregateMode) -> Case) -> Result<Run> {
+    let final_run = case(AggregateMode::Final).run().await?;
+    let single_run = case(AggregateMode::Single).run().await?;
+    assert_eq!(
+        single_run.snapshot.replace("Single", "Final"),
+        final_run.snapshot,
+        "Final and Single make different pool calls"
+    );
+    Ok(final_run)
+}
+
 /// Every key appears twice, in different spill runs.
 fn hash_input_repeated() -> Vec<Vec<(i64, i64)>> {
     vec![
@@ -510,17 +501,16 @@ fn clustered_partial_input_long_run() -> Vec<Vec<(i64, i64)>> {
 // Final, Single (GroupClusteringMode::None): spill or fail
 // ---------------------------------------------------------------------------
 
-/// Final: two spills, then the merge and the replay stream run as siblings of
-/// the stream's reservation (same consumer name).
+/// Final and Single: two spills, then the merge and the replay stream run as
+/// siblings of the stream's reservation (same consumer name).
 #[tokio::test]
-async fn final_spills_twice_then_replays() -> Result<()> {
+async fn spills_twice_then_replays() -> Result<()> {
     let _bound = hide_byte_counts().bind_to_scope();
-    let run = Case {
+    let run = run_final_and_single(|mode| Case {
         batch_size: 256,
         memory_limit: 39_000,
-        ..case(AggregateMode::Final, &["a"], false, hash_input_repeated())
-    }
-    .run()
+        ..case(mode, &["a"], false, hash_input_repeated())
+    })
     .await?;
     assert_eq!(run.clustering, GroupClusteringMode::None);
     assert_eq!(run.spill_count(), 2);
@@ -570,16 +560,16 @@ async fn final_spills_twice_then_replays() -> Result<()> {
     Ok(())
 }
 
-/// Final with temporary files disabled: the refusal is returned as an error.
+/// Final and Single with temporary files disabled: the refusal is returned as
+/// an error.
 #[tokio::test]
-async fn final_without_spilling_returns_refusal() -> Result<()> {
+async fn without_spilling_returns_refusal() -> Result<()> {
     let _bound = hide_byte_counts().bind_to_scope();
-    let run = Case {
+    let run = run_final_and_single(|mode| Case {
         memory_limit: 6_000,
         spill_enabled: false,
-        ..case(AggregateMode::Final, &["a"], false, hash_input_repeated())
-    }
-    .run()
+        ..case(mode, &["a"], false, hash_input_repeated())
+    })
     .await?;
     assert_eq!(run.spill_count(), 0);
     assert!(run.snapshot.contains("temporary files are not enabled"));
@@ -592,91 +582,6 @@ async fn final_without_spilling_returns_refusal() -> Result<()> {
     => Err(Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
     caused by
     Resources exhausted: Failed to allocate additional [bytes] for FinalHashAggregateStream[0] with [bytes] already allocated for this reservation - [bytes] remain available for the total memory pool: greedy(used: [bytes], pool_size: [bytes]))
-    ");
-    Ok(())
-}
-
-/// Single: two spills, then replay.
-#[tokio::test]
-async fn single_spills_twice_then_replays() -> Result<()> {
-    let _bound = hide_byte_counts().bind_to_scope();
-    let run = Case {
-        batch_size: 256,
-        memory_limit: 39_000,
-        ..case(AggregateMode::Single, &["a"], false, hash_input_repeated())
-    }
-    .run()
-    .await?;
-    assert_eq!(run.clustering, GroupClusteringMode::None);
-    assert_eq!(run.spill_count(), 2);
-    assert_snapshot!(run.snapshot, @r"
-    SingleHashAggregateStream[0] register can_spill=true
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes] -> refused
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes] -> refused
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes] -> refused
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] unregister
-    => Ok(768 rows in 7 batches)
-    ");
-    Ok(())
-}
-
-/// Single with temporary files disabled: the refusal is returned as an error.
-#[tokio::test]
-async fn single_without_spilling_returns_refusal() -> Result<()> {
-    let _bound = hide_byte_counts().bind_to_scope();
-    let run = Case {
-        memory_limit: 6_000,
-        spill_enabled: false,
-        ..case(AggregateMode::Single, &["a"], false, hash_input_repeated())
-    }
-    .run()
-    .await?;
-    assert_eq!(run.spill_count(), 0);
-    assert!(run.snapshot.contains("temporary files are not enabled"));
-    assert_snapshot!(run.snapshot, @r"
-    SingleHashAggregateStream[0] register can_spill=false
-    SingleHashAggregateStream[0] try_grow [bytes]
-    SingleHashAggregateStream[0] try_grow [bytes] -> refused
-    SingleHashAggregateStream[0] shrink [bytes]
-    SingleHashAggregateStream[0] unregister
-    => Err(Single hash aggregate cannot spill because temporary files are not enabled in the DiskManager
-    caused by
-    Resources exhausted: Failed to allocate additional [bytes] for SingleHashAggregateStream[0] with [bytes] already allocated for this reservation - [bytes] remain available for the total memory pool: greedy(used: [bytes], pool_size: [bytes]))
     ");
     Ok(())
 }
@@ -776,12 +681,12 @@ async fn clustered_partial_emits_completed_groups_whole() -> Result<()> {
     Ok(())
 }
 
-/// ClusteredFinal: completed groups held while sliced, then emitted whole
-/// under a lower limit.
+/// ClusteredFinal and ClusteredSingle: completed groups held while sliced, then
+/// emitted whole under a lower limit.
 #[tokio::test]
-async fn clustered_final_completed_groups() -> Result<()> {
+async fn clustered_completed_groups() -> Result<()> {
     let _bound = hide_byte_counts().bind_to_scope();
-    let run = clustered(AggregateMode::Final, 39_000).run().await?;
+    let run = run_final_and_single(|mode| clustered(mode, 39_000)).await?;
     assert_eq!(run.clustering, GroupClusteringMode::Partial(vec![0]));
     assert_eq!(run.spill_count(), 0);
     assert_eq!(run.max_output_rows(), 64);
@@ -804,7 +709,7 @@ async fn clustered_final_completed_groups() -> Result<()> {
     => Ok(1024 rows in 16 batches)
     ");
 
-    let run = clustered(AggregateMode::Final, 34_000).run().await?;
+    let run = run_final_and_single(|mode| clustered(mode, 34_000)).await?;
     assert_eq!(run.spill_count(), 0);
     assert_eq!(run.max_output_rows(), 256);
     assert_snapshot!(run.snapshot, @r"
@@ -828,22 +733,16 @@ async fn clustered_final_completed_groups() -> Result<()> {
     Ok(())
 }
 
-/// ClusteredFinal: one long run of `a = 0` overflows the table, which spills;
-/// the spills are then merged and replayed.
+/// ClusteredFinal and ClusteredSingle: one long run of `a = 0` overflows the
+/// table, which spills; the spills are then merged and replayed.
 #[tokio::test]
-async fn clustered_final_spills_then_replays() -> Result<()> {
+async fn clustered_spills_then_replays() -> Result<()> {
     let _bound = hide_byte_counts().bind_to_scope();
-    let run = Case {
+    let run = run_final_and_single(|mode| Case {
         batch_size: 256,
         memory_limit: 34_000,
-        ..case(
-            AggregateMode::Final,
-            &["a", "b"],
-            true,
-            clustered_partial_input_long_run(),
-        )
-    }
-    .run()
+        ..case(mode, &["a", "b"], true, clustered_partial_input_long_run())
+    })
     .await?;
     assert_eq!(run.clustering, GroupClusteringMode::Partial(vec![0]));
     assert_eq!(run.spill_count(), 2);
@@ -877,111 +776,6 @@ async fn clustered_final_spills_then_replays() -> Result<()> {
     ClusteredFinalAggregateStream[0] shrink [bytes]
     ClusteredFinalAggregateStream[0] shrink [bytes]
     ClusteredFinalAggregateStream[0] unregister
-    => Ok(832 rows in 5 batches)
-    ");
-    Ok(())
-}
-
-/// ClusteredSingle: completed groups held while sliced, then emitted whole
-/// under a lower limit.
-#[tokio::test]
-async fn clustered_single_completed_groups() -> Result<()> {
-    let _bound = hide_byte_counts().bind_to_scope();
-    let run = clustered(AggregateMode::Single, 39_000).run().await?;
-    assert_eq!(run.clustering, GroupClusteringMode::Partial(vec![0]));
-    assert_eq!(run.spill_count(), 0);
-    assert_eq!(run.max_output_rows(), 64);
-    assert_snapshot!(run.snapshot, @r"
-    ClusteredSingleAggregateStream[0] register can_spill=true
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] unregister
-    => Ok(1024 rows in 16 batches)
-    ");
-
-    let run = clustered(AggregateMode::Single, 34_000).run().await?;
-    assert_eq!(run.spill_count(), 0);
-    assert_eq!(run.max_output_rows(), 256);
-    assert_snapshot!(run.snapshot, @r"
-    ClusteredSingleAggregateStream[0] register can_spill=true
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes] -> refused
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes] -> refused
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes] -> refused
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] unregister
-    => Ok(1024 rows in 7 batches)
-    ");
-    Ok(())
-}
-
-/// ClusteredSingle: spills, then replays.
-#[tokio::test]
-async fn clustered_single_spills_then_replays() -> Result<()> {
-    let _bound = hide_byte_counts().bind_to_scope();
-    let run = Case {
-        batch_size: 256,
-        memory_limit: 34_000,
-        ..case(
-            AggregateMode::Single,
-            &["a", "b"],
-            true,
-            clustered_partial_input_long_run(),
-        )
-    }
-    .run()
-    .await?;
-    assert_eq!(run.clustering, GroupClusteringMode::Partial(vec![0]));
-    assert_eq!(run.spill_count(), 2);
-    assert_snapshot!(run.snapshot, @r"
-    ClusteredSingleAggregateStream[0] register can_spill=true
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes] -> refused
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes] -> refused
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] try_grow [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] shrink [bytes]
-    ClusteredSingleAggregateStream[0] unregister
     => Ok(832 rows in 5 batches)
     ");
     Ok(())
