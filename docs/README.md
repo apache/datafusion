@@ -20,8 +20,9 @@
 # DataFusion Documentation
 
 This folder contains the source content of the [User Guide](./source/user-guide)
-and [Contributor Guide](./source/contributor-guide). These are both published to
-https://datafusion.apache.org/ as part of the release process.
+and [Contributor Guide](./source/contributor-guide). The site root shows the
+development documentation built from `main`. Released versions of the complete
+site are available under `/versions/<version>/`.
 
 ## Dependencies
 
@@ -48,9 +49,7 @@ Run the provided script to build the HTML pages.
 ```
 
 The HTML will be generated into a `build` directory. Open `build/html/index.html`
-in your preferred browser, e.g.
-
-Preview the site on Linux by running this command.
+in your preferred browser, for example on Linux via
 
 ```bash
 # On macOS
@@ -58,6 +57,15 @@ open build/html/index.html
 # On Linux with Firefox
 firefox build/html/index.html
 ```
+
+Note that some features of the site, such as the "Version Picker" do not work
+when read from files. To preview such features, you can use the sphinx like this:
+
+```bash
+uv run --with sphinx-autobuild sphinx-autobuild source build/html --port 8000
+```
+
+And then open http://localhost:8000/ in your browser
 
 ## Making Changes
 
@@ -69,7 +77,7 @@ automatically updated.
 
 This documentation is hosted at https://datafusion.apache.org/
 
-When the PR is merged to the `main` branch of the DataFusion
+When a PR is merged to the `main` branch of the DataFusion
 repository, a [github workflow](https://github.com/apache/datafusion/blob/main/.github/workflows/docs.yaml) which:
 
 1. Builds the html content
