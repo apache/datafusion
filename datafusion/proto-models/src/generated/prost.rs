@@ -2796,6 +2796,9 @@ pub struct AsOfJoinExecNode {
     pub match_operator: i32,
     #[prost(uint32, repeated, tag = "7")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    /// Plans predating this field use broadcast execution.
+    #[prost(enumeration = "AsOfJoinMode", tag = "8")]
+    pub mode: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsyncFuncExecNode {
@@ -3254,6 +3257,32 @@ impl GenerateSeriesName {
         match value {
             "GS_GENERATE_SERIES" => Some(Self::GsGenerateSeries),
             "GS_RANGE" => Some(Self::GsRange),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AsOfJoinMode {
+    Broadcast = 0,
+    Partitioned = 1,
+}
+impl AsOfJoinMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Broadcast => "AS_OF_JOIN_MODE_BROADCAST",
+            Self::Partitioned => "AS_OF_JOIN_MODE_PARTITIONED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "AS_OF_JOIN_MODE_BROADCAST" => Some(Self::Broadcast),
+            "AS_OF_JOIN_MODE_PARTITIONED" => Some(Self::Partitioned),
             _ => None,
         }
     }

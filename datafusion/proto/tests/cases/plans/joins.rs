@@ -29,8 +29,8 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
-    AsOfJoinExec, AsOfMatchExpr, HashJoinExec, NestedLoopJoinExec, PartitionMode,
-    PiecewiseMergeJoinExec, SortMergeJoinExec, StreamJoinPartitionMode,
+    AsOfJoinExec, AsOfJoinMode, AsOfMatchExpr, HashJoinExec, NestedLoopJoinExec,
+    PartitionMode, PiecewiseMergeJoinExec, SortMergeJoinExec, StreamJoinPartitionMode,
     SymmetricHashJoinExec,
 };
 use datafusion::prelude::SessionContext;
@@ -90,8 +90,7 @@ fn roundtrip_hash_join() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn roundtrip_asof_join() -> Result<()> {
+fn asof_join_exec(op: Operator, projection: Option<Vec<usize>>) -> Result<AsOfJoinExec> {
     let left_schema = Arc::new(Schema::new(vec![
         Field::new("symbol", DataType::Utf8, true),
         Field::new("ts", DataType::Int64, true),
@@ -107,22 +106,111 @@ fn roundtrip_asof_join() -> Result<()> {
         Arc::new(Column::new("symbol", 0)) as _,
     )];
 
+    AsOfJoinExec::try_new(
+        Arc::new(EmptyExec::new(left_schema)),
+        Arc::new(EmptyExec::new(right_schema)),
+        on,
+        AsOfMatchExpr::new(
+            Arc::new(Column::new("ts", 1)),
+            op,
+            Arc::new(Column::new("ts", 1)),
+        ),
+        projection,
+    )
+}
+
+#[test]
+fn roundtrip_asof_join() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
     for projection in [None, Some(vec![]), Some(vec![0, 5])] {
         for op in [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq] {
-            roundtrip_test(Arc::new(AsOfJoinExec::try_new(
-                Arc::new(EmptyExec::new(Arc::clone(&left_schema))),
-                Arc::new(EmptyExec::new(Arc::clone(&right_schema))),
-                on.clone(),
-                AsOfMatchExpr::new(
-                    Arc::new(Column::new("ts", 1)),
-                    op,
-                    Arc::new(Column::new("ts", 1)),
-                ),
-                projection.clone(),
-            )?))?;
+            for mode in [AsOfJoinMode::Broadcast, AsOfJoinMode::Partitioned] {
+                let plan: Arc<dyn ExecutionPlan> =
+                    Arc::new(asof_join_exec(op, projection.clone())?.with_mode(mode)?);
+                let decoded = roundtrip_test_and_return(
+                    Arc::clone(&plan),
+                    &ctx,
+                    &codec,
+                    &proto_converter,
+                )?;
+                assert_eq!(decoded.downcast_ref::<AsOfJoinExec>().unwrap().mode(), mode);
+
+                #[cfg(feature = "json")]
+                {
+                    let decoded = super::roundtrip_test_json_and_return(plan, &ctx)?;
+                    assert_eq!(
+                        decoded.downcast_ref::<AsOfJoinExec>().unwrap().mode(),
+                        mode
+                    );
+                }
+            }
         }
     }
     Ok(())
+}
+
+fn decode_asof_join_with_wire_mode(
+    mode: i32,
+    remove_equality_keys: bool,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::new(asof_join_exec(Operator::GtEq, None)?),
+        &codec,
+        &proto_converter,
+    )?;
+    let mut node = protobuf::PhysicalPlanNode::decode(bytes.as_ref())
+        .expect("a serialized plan should decode as a protobuf node");
+    let Some(PhysicalPlanType::AsOfJoin(join)) = node.physical_plan_type.as_mut() else {
+        panic!("expected an ASOF join node");
+    };
+    join.mode = mode;
+    if remove_equality_keys {
+        join.on.clear();
+    }
+    physical_plan_from_bytes_with_proto_converter(
+        &node.encode_to_vec(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &proto_converter,
+    )
+}
+
+#[test]
+fn asof_join_missing_mode_defaults_to_broadcast() -> Result<()> {
+    // Proto3 omits a zero-valued enum field, reproducing the previous wire format.
+    let decoded = decode_asof_join_with_wire_mode(0, false)?;
+    assert_eq!(
+        decoded.downcast_ref::<AsOfJoinExec>().unwrap().mode(),
+        AsOfJoinMode::Broadcast
+    );
+    Ok(())
+}
+
+#[test]
+fn asof_join_rejects_unknown_mode() {
+    let error = decode_asof_join_with_wire_mode(i32::MAX, false)
+        .expect_err("unknown execution modes must be rejected");
+    assert!(
+        error.to_string().contains("unknown AsOfJoinMode"),
+        "{error}"
+    );
+}
+
+#[test]
+fn asof_join_partitioned_decode_requires_equality_keys() {
+    let error =
+        decode_asof_join_with_wire_mode(protobuf::AsOfJoinMode::Partitioned.into(), true)
+            .expect_err("partitioned execution must require equality keys");
+    assert!(
+        error.to_string().contains("require equality keys"),
+        "{error}"
+    );
 }
 
 #[test]

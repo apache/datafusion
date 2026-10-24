@@ -1849,6 +1849,11 @@ message PiecewiseMergeJoinExecNode {
   uint64 num_partitions = 7;
 }
 
+enum AsOfJoinMode {
+  AS_OF_JOIN_MODE_BROADCAST = 0;
+  AS_OF_JOIN_MODE_PARTITIONED = 1;
+}
+
 message AsOfJoinExecNode {
   PhysicalPlanNode left = 1;
   PhysicalPlanNode right = 2;
@@ -1857,6 +1862,8 @@ message AsOfJoinExecNode {
   PhysicalExprNode right_match_expr = 5;
   AsOfMatchOperator match_operator = 6;
   repeated uint32 projection = 7;
+  // Plans predating this field use broadcast execution.
+  AsOfJoinMode mode = 8;
 }
 
 message AsyncFuncExecNode {

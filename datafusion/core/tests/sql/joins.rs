@@ -19,7 +19,7 @@ use insta::assert_snapshot;
 
 use datafusion::catalog::MemTable;
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
-use datafusion::physical_plan::joins::AsOfJoinExec;
+use datafusion::physical_plan::joins::{AsOfJoinExec, AsOfJoinMode};
 use datafusion::physical_plan::{Distribution, ExecutionPlanProperties};
 use datafusion::test_util::register_unbounded_file_with_ordering;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
@@ -435,6 +435,127 @@ fn find_asof_exec(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan
         return Some(Arc::clone(plan));
     }
     plan.children().into_iter().find_map(find_asof_exec)
+}
+
+#[tokio::test]
+async fn asof_join_partitioned_planning_and_execution() -> Result<()> {
+    use datafusion_physical_expr::PartitioningSatisfaction;
+
+    for target_partitions in [1, 4] {
+        for enabled in [false, true] {
+            for with_equality_keys in [false, true] {
+                let config = SessionConfig::new()
+                    .with_batch_size(2)
+                    .with_target_partitions(target_partitions);
+                let ctx = SessionContext::new_with_config(config);
+                register_asof_test_tables(&ctx)?;
+                if enabled {
+                    ctx.sql("SET datafusion.optimizer.repartition_asof_joins = true")
+                        .await?
+                        .collect()
+                        .await?;
+                }
+
+                let (right, on) = if with_equality_keys {
+                    ("prices", "ON t.symbol = p.symbol")
+                } else {
+                    ("(SELECT ts, price FROM prices WHERE symbol = 'A')", "")
+                };
+                let plan = ctx
+                    .sql(&format!(
+                        "SELECT t.trade_id, p.price FROM trades t \
+                         ASOF JOIN {right} p MATCH_CONDITION (t.ts >= p.ts) {on}"
+                    ))
+                    .await?
+                    .create_physical_plan()
+                    .await?;
+                let asof = find_asof_exec(&plan).expect("expected an ASOF join");
+                let join = asof.downcast_ref::<AsOfJoinExec>().unwrap();
+                let partitioned = enabled && with_equality_keys;
+                assert_eq!(
+                    join.mode(),
+                    if partitioned {
+                        AsOfJoinMode::Partitioned
+                    } else {
+                        AsOfJoinMode::Broadcast
+                    }
+                );
+
+                let formatted = displayable(asof.as_ref());
+                for (text, mode_label) in [
+                    (formatted.one_line().to_string(), "mode=Partitioned"),
+                    (formatted.indent(true).to_string(), "mode=Partitioned"),
+                    (formatted.tree_render().to_string(), "mode: Partitioned"),
+                ] {
+                    assert_eq!(text.contains(mode_label), partitioned, "{text}");
+                }
+
+                let children = asof.children();
+                let left_count = children[0].output_partitioning().partition_count();
+                let right_count = children[1].output_partitioning().partition_count();
+                if partitioned {
+                    assert_eq!(left_count, right_count);
+                    if target_partitions > 1 {
+                        assert!(left_count > 1);
+                    }
+                } else {
+                    assert_eq!(right_count, 1);
+                }
+
+                let distributions =
+                    asof.input_distribution_requirements().into_per_child();
+                let orderings = asof.required_input_ordering();
+                for (index, child) in children.iter().enumerate() {
+                    assert_eq!(
+                        child.output_partitioning().satisfaction(
+                            &distributions[index],
+                            child.equivalence_properties(),
+                            false,
+                        ),
+                        PartitioningSatisfaction::Exact
+                    );
+                    let ordering = orderings[index].as_ref().unwrap();
+                    assert!(
+                        child
+                            .equivalence_properties()
+                            .ordering_satisfy_requirement(
+                                ordering.first().iter().cloned(),
+                            )?
+                    );
+                }
+
+                let batches = collect(plan, ctx.task_ctx()).await?;
+                let expected = if with_equality_keys {
+                    [
+                        "| 1        |       |",
+                        "| 2        | 40    |",
+                        "| 3        | 60    |",
+                        "| 4        | 101   |",
+                        "| 5        | 106   |",
+                        "| 6        |       |",
+                    ]
+                } else {
+                    [
+                        "| 1        |       |",
+                        "| 2        | 40    |",
+                        "| 3        | 60    |",
+                        "| 4        | 20    |",
+                        "| 5        | 60    |",
+                        "| 6        | 20    |",
+                    ]
+                };
+                let mut expected_table = vec![
+                    "+----------+-------+",
+                    "| trade_id | price |",
+                    "+----------+-------+",
+                ];
+                expected_table.extend(expected);
+                expected_table.push("+----------+-------+");
+                assert_batches_sorted_eq!(expected_table, &batches);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tokio::test]
