@@ -108,6 +108,56 @@ SELECT negative(NULL::int);
 ----
 NULL
 
+# Decimal column negation must preserve precision and scale for every width.
+# Use a table so constant folding cannot hide array-specific regressions.
+statement ok
+CREATE TABLE decimal_negative AS
+SELECT
+  arrow_cast(column1, 'Decimal32(7, 2)') AS d32,
+  arrow_cast(column1, 'Decimal64(10, 2)') AS d64,
+  arrow_cast(column1, 'Decimal128(10, 2)') AS d128,
+  arrow_cast(column1, 'Decimal256(42, 2)') AS d256
+FROM (VALUES (1.23), (-4.50), (0.00), (NULL));
+
+query RRRR rowsort
+SELECT negative(d32), negative(d64), negative(d128), negative(d256)
+FROM decimal_negative;
+----
+-1.23 -1.23 -1.23 -1.23
+0.00 0.00 0.00 0.00
+4.50 4.50 4.50 4.50
+NULL NULL NULL NULL
+
+# A cast must also see the original scale, rather than Arrow's default scale.
+query RRRR rowsort
+SELECT CAST(negative(d32) AS DOUBLE), CAST(negative(d64) AS DOUBLE),
+       CAST(negative(d128) AS DOUBLE), CAST(negative(d256) AS DOUBLE)
+FROM decimal_negative;
+----
+-1.23 -1.23 -1.23 -1.23
+0 0 0 0
+4.5 4.5 4.5 4.5
+NULL NULL NULL NULL
+
+# Zero and negative scales must be preserved too.
+statement ok
+CREATE TABLE decimal_negative_scales AS
+SELECT
+  arrow_cast(column1, 'Decimal32(7, -2)') AS d32,
+  arrow_cast(column1, 'Decimal64(10, 0)') AS d64,
+  arrow_cast(column1, 'Decimal128(10, -2)') AS d128,
+  arrow_cast(column1, 'Decimal256(42, 0)') AS d256
+FROM (VALUES (1200), (-4500), (0), (NULL));
+
+query RRRR rowsort
+SELECT negative(d32), negative(d64), negative(d128), negative(d256)
+FROM decimal_negative_scales;
+----
+-1200 -1200 -1200 -1200
+0 0 0 0
+4500 4500 4500 4500
+NULL NULL NULL NULL
+
 # Test negative with column values
 statement ok
 CREATE TABLE test_negative (id int, value int) AS VALUES (1, 10), (2, -20), (3, 0), (4, NULL);
@@ -281,6 +331,41 @@ DROP TABLE interval_test;
 ## ANSI mode tests: overflow detection
 statement ok
 set datafusion.execution.enable_ansi_mode = true;
+
+# Decimal columns must have the same values and types in ANSI mode.
+query RRRR rowsort
+SELECT negative(d32), negative(d64), negative(d128), negative(d256)
+FROM decimal_negative;
+----
+-1.23 -1.23 -1.23 -1.23
+0.00 0.00 0.00 0.00
+4.50 4.50 4.50 4.50
+NULL NULL NULL NULL
+
+query RRRR rowsort
+SELECT CAST(negative(d32) AS DOUBLE), CAST(negative(d64) AS DOUBLE),
+       CAST(negative(d128) AS DOUBLE), CAST(negative(d256) AS DOUBLE)
+FROM decimal_negative;
+----
+-1.23 -1.23 -1.23 -1.23
+0 0 0 0
+4.5 4.5 4.5 4.5
+NULL NULL NULL NULL
+
+query RRRR rowsort
+SELECT negative(d32), negative(d64), negative(d128), negative(d256)
+FROM decimal_negative_scales;
+----
+-1200 -1200 -1200 -1200
+0 0 0 0
+4500 4500 4500 4500
+NULL NULL NULL NULL
+
+statement ok
+DROP TABLE decimal_negative;
+
+statement ok
+DROP TABLE decimal_negative_scales;
 
 # Test ANSI mode: negative of minimum values should error (overflow)
 query error DataFusion error: Execution error: Int8 overflow on negative\(\-128\)
