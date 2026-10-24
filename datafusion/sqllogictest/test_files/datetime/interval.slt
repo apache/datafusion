@@ -591,3 +591,85 @@ true true true true true true
 
 statement ok
 drop table t
+
+# https://github.com/apache/datafusion/issues/26671
+# Duration vs Interval comparisons compare exact elapsed time by coercing both
+# sides to Duration(Nanosecond). Only intervals whose months and days are all
+# zero (e.g. hour/minute/second intervals) convert exactly; any other interval
+# errors instead of silently deciding the comparison on the wrong field.
+
+### duration (scalar) cmp interval (scalar), pure-nanosecond interval
+query BBBBBB
+select
+  (timestamp '2026-01-11' - timestamp '2026-01-01') = interval '240 hours',
+  (timestamp '2026-01-11' - timestamp '2026-01-01') != interval '239 hours',
+  (timestamp '2026-01-11' - timestamp '2026-01-01') < interval '241 hours',
+  (timestamp '2026-01-11' - timestamp '2026-01-01') <= interval '240 hours',
+  (timestamp '2026-01-11' - timestamp '2026-01-01') > interval '239 hours',
+  (timestamp '2026-01-11' - timestamp '2026-01-01') >= interval '1 hour';
+----
+true true true true true true
+
+### interval (scalar) cmp duration (scalar)
+query B
+select interval '240 hours' = (timestamp '2026-01-11' - timestamp '2026-01-01');
+----
+true
+
+### intervals with a days or months component are not exactly comparable to durations
+query error Cannot convert interval containing non-zero months or days to duration
+select (timestamp '2026-01-11' - timestamp '2026-01-01') <= interval '3 days';
+
+query error Cannot convert interval containing non-zero months or days to duration
+select (timestamp '2026-01-11' - timestamp '2026-01-01') <= interval '1 month';
+
+query error Cannot convert interval containing non-zero months or days to duration
+select interval '3 days' >= (timestamp '2026-01-11' - timestamp '2026-01-01');
+
+### runtime path: duration (timestamp - timestamp) cmp interval literal
+statement ok
+create table duration_interval_t(t1 timestamp, t2 timestamp) as values
+  (timestamp '2026-01-11', timestamp '2026-01-01'),
+  (timestamp '2026-01-01 00:30:00', timestamp '2026-01-01');
+
+query BB
+select (t1 - t2) >= interval '1 hour', (t1 - t2) < interval '240 hours' from duration_interval_t order by t1;
+----
+false true
+true false
+
+### runtime path: interval column with days errors at execution
+statement ok
+create table interval_col_t(i interval) as values (interval '2 hours'), (interval '3 days');
+
+query error Cannot convert interval containing non-zero months or days to duration
+select (timestamp '2026-01-11' - timestamp '2026-01-01') <= i from interval_col_t;
+
+### runtime path: pure-nanosecond interval column compares exactly
+statement ok
+create table interval_col_pure_t(i interval) as values (interval '2 hours'), (interval '250 hours');
+
+query BB
+select
+  (timestamp '2026-01-11' - timestamp '2026-01-01') >= i,
+  (timestamp '2026-01-11' - timestamp '2026-01-01') < i
+from interval_col_pure_t order by i;
+----
+true false
+false true
+
+### Interval(YearMonth) and Interval(DayTime) have no exact duration conversion
+query error Cannot infer common argument type for comparison operation
+select (timestamp '2026-01-11' - timestamp '2026-01-01') <= arrow_cast('13 months', 'Interval(YearMonth)');
+
+query error Cannot infer common argument type for comparison operation
+select arrow_cast('3 days', 'Interval(DayTime)') >= (timestamp '2026-01-11' - timestamp '2026-01-01');
+
+statement ok
+drop table duration_interval_t;
+
+statement ok
+drop table interval_col_t;
+
+statement ok
+drop table interval_col_pure_t;

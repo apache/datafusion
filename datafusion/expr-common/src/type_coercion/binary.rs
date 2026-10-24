@@ -1035,6 +1035,17 @@ where
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
+    // Mixed Duration/Interval comparisons need exact elapsed-time semantics,
+    // so they are handled here rather than falling through to
+    // `temporal_coercion`, which unifies any Interval with any Duration as
+    // `Interval(MonthDayNano)`.
+    if matches!(
+        (lhs_type, rhs_type),
+        (DataType::Duration(_), DataType::Interval(_))
+            | (DataType::Interval(_), DataType::Duration(_))
+    ) {
+        return duration_interval_comparison_coercion(lhs_type, rhs_type);
+    }
     binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true, coerce_fn))
         .or_else(|| ree_coercion(lhs_type, rhs_type, true, coerce_fn))
@@ -2221,6 +2232,45 @@ fn temporal_math_coercion(
             | Float32 | Float64,
             Interval(_),
         ) => Some((Interval(MonthDayNano), Interval(MonthDayNano))),
+        _ => None,
+    }
+}
+
+/// Coercion for comparisons between a `Duration` and an `Interval`.
+///
+/// Durations measure exact elapsed time, while intervals can carry calendar
+/// units (months, days) whose absolute length is not fixed. Comparing the two
+/// as `Interval(MonthDayNano)` would use its lexicographic
+/// months-then-days-then-nanoseconds ordering, so any interval with a
+/// non-zero months or days field would be decided against a duration's
+/// nanoseconds-only representation on the wrong field (e.g. a 10-day
+/// duration would compare as less than `INTERVAL '3 days'`).
+///
+/// Instead, compare exact elapsed time by coercing both sides to
+/// `Duration(Nanosecond)`. Arrow only supports casting
+/// `Interval(MonthDayNano)` to a duration, and only for values whose months
+/// and days are zero, failing loudly otherwise ("Cannot convert interval
+/// containing non-zero months or days to duration"), which keeps
+/// pure-nanosecond intervals comparable while months- or days-bearing
+/// intervals error rather than silently comparing on the wrong field.
+/// `Interval(YearMonth)` and `Interval(DayTime)` have no duration cast at
+/// all, so comparisons against them are unsupported.
+fn duration_interval_comparison_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    use arrow::datatypes::IntervalUnit::*;
+    use arrow::datatypes::TimeUnit::*;
+
+    match (lhs_type, rhs_type) {
+        (Duration(_), Interval(MonthDayNano)) | (Interval(MonthDayNano), Duration(_)) => {
+            Some(Duration(Nanosecond))
+        }
+        (Duration(_), Interval(YearMonth | DayTime))
+        | (Interval(YearMonth | DayTime), Duration(_)) => None,
+        // Not a mixed Duration/Interval pair; the caller only routes mixed
+        // pairs here, so reaching this arm would be a caller bug.
         _ => None,
     }
 }

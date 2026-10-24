@@ -1245,3 +1245,80 @@ fn test_comparison_coercion_with_session_timezone() {
         Some(DataType::Utf8)
     );
 }
+
+/// Duration vs Interval comparisons coerce to exact `Duration(Nanosecond)`
+/// comparison rather than `Interval(MonthDayNano)`, whose lexicographic
+/// (months, days, nanoseconds) ordering decides on the wrong field whenever
+/// the interval has a non-zero months or days component (#26671).
+#[test]
+fn test_duration_interval_comparison_coercion() -> Result<()> {
+    // All comparison operators, both operand orders, and every duration unit:
+    // `Interval(MonthDayNano)` is the only interval unit with a duration
+    // cast, so both sides coerce to exact nanosecond durations. Values with
+    // non-zero months or days fail that cast loudly instead of comparing on
+    // the wrong field.
+    for op in [
+        Operator::Eq,
+        Operator::NotEq,
+        Operator::Lt,
+        Operator::LtEq,
+        Operator::Gt,
+        Operator::GtEq,
+    ] {
+        for duration in [
+            DataType::Duration(Second),
+            DataType::Duration(Millisecond),
+            DataType::Duration(Microsecond),
+            DataType::Duration(Nanosecond),
+        ] {
+            test_coercion_binary_rule!(
+                duration,
+                DataType::Interval(MonthDayNano),
+                op,
+                DataType::Duration(Nanosecond)
+            );
+            test_coercion_binary_rule!(
+                DataType::Interval(MonthDayNano),
+                duration,
+                op,
+                DataType::Duration(Nanosecond)
+            );
+        }
+
+        // `Interval(YearMonth)` (months only) and `Interval(DayTime)` (days)
+        // have no exact duration conversion, so the comparison is rejected
+        // during planning.
+        for interval in [
+            DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth),
+            DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
+        ] {
+            assert!(
+                BinaryTypeCoercer::new(&DataType::Duration(Nanosecond), &op, &interval)
+                    .get_input_types()
+                    .is_err()
+            );
+            assert!(
+                BinaryTypeCoercer::new(&interval, &op, &DataType::Duration(Nanosecond))
+                    .get_input_types()
+                    .is_err()
+            );
+        }
+    }
+
+    // Duration vs Duration and Interval vs Interval comparisons keep coercing
+    // through `Interval(MonthDayNano)` as before.
+    test_coercion_binary_rule!(
+        DataType::Duration(Second),
+        DataType::Duration(Nanosecond),
+        Operator::Lt,
+        DataType::Interval(MonthDayNano)
+    );
+    test_coercion_binary_rule!(
+        DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth),
+        DataType::Interval(MonthDayNano),
+        Operator::Lt,
+        DataType::Interval(MonthDayNano)
+    );
+
+    Ok(())
+}
