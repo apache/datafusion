@@ -213,6 +213,26 @@ url = "2.5.7"
 uuid = "1.23"
 zstd = { version = "0.14", default-features = false }
 
+[patch.crates-io]
+arrow = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-arith = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-array = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-avro = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-buffer = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-cast = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-cmp = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-csv = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-data = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-flight = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-ipc = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-json = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-ord = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-row = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-schema = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-select = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+arrow-string = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+parquet = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a0fd08d85753428bf08bdf3da280d804063f74ee" }
+
 # Keep this list sorted alphabetically.
 # See https://github.com/apache/datafusion/issues/18467 for the ongoing effort of
 # picking useful non-default lints.
