@@ -2817,6 +2817,19 @@ impl ExecutionPlan for AggregateExec {
         )
     }
 
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        if let Some(dynamic_filter) = &self.dynamic_filter {
+            dynamic_filter.filter.reset()?;
+            for accumulator_filter in &dynamic_filter.accumulator_dyn_filter_info {
+                *accumulator_filter.shared_bound.lock() = ScalarValue::Null;
+            }
+        }
+
+        let mut aggregate = (*self).clone();
+        aggregate.metrics = ExecutionPlanMetricsSet::new();
+        Ok(Arc::new(aggregate))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -10162,6 +10175,60 @@ mod tests {
             lit(true),
         ));
         assert!(agg.set_dynamic_filter(df).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_exec_reset_state() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("min_a")
+                    .build()?,
+            )],
+            vec![None],
+            child,
+            Arc::clone(&schema),
+        )?;
+
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![col("a", &schema)?],
+            lit(false),
+        ));
+        let agg = Arc::new(agg.set_dynamic_filter(Arc::clone(&df))?);
+
+        // Simulate an iteration setting a shared bound and completing the filter
+        if let Some(dyn_filter) = &agg.dynamic_filter {
+            for info in &dyn_filter.accumulator_dyn_filter_info {
+                *info.shared_bound.lock() = ScalarValue::Int64(Some(42));
+            }
+            dyn_filter.filter.mark_complete();
+        }
+
+        // Call reset_state
+        let reset_plan = agg.reset_state()?;
+        let reset_agg = reset_plan
+            .downcast_ref::<AggregateExec>()
+            .expect("should downcast back to AggregateExec");
+
+        let dyn_filter = reset_agg
+            .dynamic_filter
+            .as_ref()
+            .expect("dynamic filter should be retained");
+
+        for info in &dyn_filter.accumulator_dyn_filter_info {
+            assert_eq!(*info.shared_bound.lock(), ScalarValue::Null);
+        }
+
+        let current_expr = dyn_filter.filter.current()?;
+        assert_eq!(format!("{current_expr}"), format!("{}", lit(true)));
+
         Ok(())
     }
 }
