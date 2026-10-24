@@ -176,6 +176,66 @@ impl<T: DecimalType> DecimalAverager<T> {
     }
 }
 
+/// Returns the precision of a decimal [`DataType`], or `None` if the type
+/// is not a decimal type.
+pub fn decimal_precision(data_type: &DataType) -> Option<u8> {
+    match data_type {
+        DataType::Decimal32(precision, _)
+        | DataType::Decimal64(precision, _)
+        | DataType::Decimal128(precision, _)
+        | DataType::Decimal256(precision, _) => Some(*precision),
+        _ => None,
+    }
+}
+
+/// Adds two unscaled decimal values, erroring on overflow.
+///
+/// Unlike the wrapping arithmetic used for integers (which matches
+/// DataFusion's documented lenient integer semantics), decimal addition is
+/// checked, consistent with scalar decimal arithmetic and `AVG`: if the
+/// result does not fit in a decimal with the given precision, an
+/// arithmetic overflow error is returned instead of a wrapped value.
+pub fn add_decimal_checked<T: ArrowNativeTypeOp>(
+    lhs: T,
+    rhs: T,
+    precision: u8,
+) -> Result<T> {
+    let Ok(result) = lhs.add_checked(rhs) else {
+        return exec_err!("Arithmetic Overflow in SumAccumulator");
+    };
+    check_decimal_precision(result, precision)
+}
+
+/// Subtracts two unscaled decimal values, erroring on overflow.
+///
+/// See [`add_decimal_checked`] for the rationale.
+pub fn sub_decimal_checked<T: ArrowNativeTypeOp>(
+    lhs: T,
+    rhs: T,
+    precision: u8,
+) -> Result<T> {
+    let Ok(result) = lhs.sub_checked(rhs) else {
+        return exec_err!("Arithmetic Overflow in SumAccumulator");
+    };
+    check_decimal_precision(result, precision)
+}
+
+/// Errors if the unscaled decimal `value` needs more than `precision`
+/// digits, which means it overflowed the decimal type.
+fn check_decimal_precision<T: ArrowNativeTypeOp>(value: T, precision: u8) -> Result<T> {
+    // The smallest magnitude that does not fit in `precision` digits is
+    // 10^precision. It is representable in the native type for every
+    // decimal type (e.g. 10^38 fits in an i128), but if it is not, the
+    // native checked arithmetic above has already reported the overflow.
+    if let Some(bound) = T::from_usize(10)
+        && let Ok(bound) = bound.pow_checked(precision as u32)
+        && (value.compare(bound).is_ge() || value.compare(bound.neg_wrapping()).is_le())
+    {
+        return exec_err!("Arithmetic Overflow in SumAccumulator");
+    }
+    Ok(value)
+}
+
 /// Generic way to collect distinct values for accumulators.
 ///
 /// The intermediate state is represented as a List of scalar values updated by

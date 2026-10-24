@@ -30,7 +30,7 @@ use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 
-use crate::utils::GenericDistinctBuffer;
+use crate::utils::{GenericDistinctBuffer, add_decimal_checked, decimal_precision};
 
 /// Accumulator for computing SUM(DISTINCT expr)
 #[derive(Debug)]
@@ -75,6 +75,14 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for DistinctSumAccumulator<T> {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.distinct_count() == 0 {
             ScalarValue::new_primitive::<T>(None, &self.data_type)
+        } else if let Some(precision) = decimal_precision(&self.data_type) {
+            // Decimal sums are checked: report overflow instead of
+            // returning a wrapped (wrong) result
+            let mut acc = T::Native::usize_as(0);
+            for distinct_value in self.values.values.iter() {
+                acc = add_decimal_checked(acc, distinct_value.0, precision)?;
+            }
+            ScalarValue::new_primitive::<T>(Some(acc), &self.data_type)
         } else {
             let mut acc = T::Native::usize_as(0);
             for distinct_value in self.values.values.iter() {
@@ -86,5 +94,35 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for DistinctSumAccumulator<T> {
 
     fn size(&self) -> usize {
         size_of_val(self) + self.values.size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Decimal128Array;
+    use arrow::datatypes::Decimal128Type;
+    use std::sync::Arc;
+
+    #[test]
+    fn decimal128_distinct_sum_overflow_errors() -> Result<()> {
+        let values: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![
+                Some(99999999999999999999999999999999999999_i128),
+                Some(99999999999999999999999999999999999998_i128),
+            ])
+            .with_precision_and_scale(38, 0)?,
+        );
+        let mut acc =
+            DistinctSumAccumulator::<Decimal128Type>::new(DataType::Decimal128(38, 0));
+
+        acc.update_batch(&[values])?;
+        let err = acc.evaluate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Arithmetic Overflow in SumAccumulator"),
+            "unexpected error: {err}"
+        );
+        Ok(())
     }
 }
