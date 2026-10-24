@@ -1,0 +1,194 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Planner decisions that depend on what each plan node knows about its
+# output: its orderings, the columns that are constant, and the columns that
+# are equal. Each case says which decision it pins.
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+# window_2.csv is sorted by (a, b) and, separately, by c.
+statement ok
+CREATE EXTERNAL TABLE t (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC)
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE TABLE small(x INT) AS VALUES (1), (2);
+
+###
+### Unions
+###
+
+# Each side of the union is sorted by a and also by a cast of a, but the cast
+# is in column x on the left side and in column y on the right side. The
+# union must still report that its output is sorted by a, so ORDER BY a needs
+# only a merge.
+query TT
+EXPLAIN SELECT a, CAST(a AS BIGINT) x, CAST(d AS BIGINT) y FROM t
+UNION ALL
+SELECT a, CAST(d AS BIGINT) x, CAST(a AS BIGINT) y FROM t
+ORDER BY a;
+----
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+02)--UnionExec
+03)----ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as x, CAST(d@1 AS Int64) as y]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
+06)----ProjectionExec: expr=[a@0 as a, CAST(d@1 AS Int64) as x, CAST(a@0 AS Int64) as y]
+07)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+08)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+###
+### GROUP BY keys in a different order than the input's orderings
+###
+
+# The GROUP BY lists its keys as d, c, b, a, which matches neither input
+# ordering. The aggregates still find that c, a and b are sorted (c from the
+# ordering on c, then a and b from the ordering on (a, b)), so they run in
+# partially sorted mode. The clustering mode lists those keys by their
+# position in the GROUP BY, in the order they were found: [1, 3, 2].
+query TT
+EXPLAIN SELECT d, c, b, a, count(*) FROM t GROUP BY d, c, b, a;
+----
+physical_plan
+01)ProjectionExec: expr=[d@0 as d, c@1 as c, b@2 as b, a@3 as a, count(Int64(1))@4 as count(*)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[d@0 as d, c@1 as c, b@2 as b, a@3 as a], aggr=[count(Int64(1))], group_clustering_mode=Partial([1, 3, 2])
+03)----RepartitionExec: partitioning=Hash([d@0, c@1, b@2, a@3], 4), input_partitions=4, preserve_order=true, sort_exprs=c@1 ASC NULLS LAST, a@3 ASC NULLS LAST, b@2 ASC NULLS LAST
+04)------AggregateExec: mode=Partial, gby=[d@3 as d, c@2 as c, b@1 as b, a@0 as a], aggr=[count(Int64(1))], group_clustering_mode=Partial([1, 3, 2])
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], file_type=csv, has_header=true
+
+###
+### Constants
+###
+
+# The filter makes b constant, and the inner ORDER BY c LIMIT 5 (planned as a
+# merge with a fetch) keeps that fact. So the outer ORDER BY b, c is already
+# satisfied by the order on c and the plan has no second sort.
+query TT
+EXPLAIN SELECT * FROM (SELECT b, c FROM t WHERE b = 1 ORDER BY c LIMIT 5) ORDER BY b, c;
+----
+physical_plan
+01)SortPreservingMergeExec: [c@1 ASC NULLS LAST], fetch=5
+02)--FilterExec: b@0 = 1, fetch=5
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c], output_ordering=[c@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+query II
+SELECT * FROM (SELECT b, c FROM t WHERE b = 1 ORDER BY c LIMIT 5) ORDER BY b, c;
+----
+1 25
+1 26
+1 27
+1 28
+1 29
+
+# A cross join keeps the constants of its left input: b = 1 still holds after
+# the join, so ORDER BY l.b, l.c sorts on c only.
+query TT
+EXPLAIN SELECT l.b, l.c, s.x FROM (SELECT b, c FROM t WHERE b = 1) l CROSS JOIN small s ORDER BY l.b, l.c;
+----
+physical_plan
+01)SortExec: expr=[c@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--CrossJoinExec
+03)----CoalescePartitionsExec
+04)------FilterExec: b@0 = 1
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c], output_ordering=[c@1 ASC NULLS LAST], file_type=csv, has_header=true
+07)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A cross join also keeps a right-side constant set by an equality filter:
+# x = 1 still holds after the join, so ORDER BY l.c, s.x sorts on c only.
+query TT
+EXPLAIN SELECT l.c, s.x FROM (SELECT c FROM t) l CROSS JOIN (SELECT x FROM small WHERE x = 1) s ORDER BY l.c, s.x;
+----
+physical_plan
+01)SortPreservingMergeExec: [c@0 ASC NULLS LAST, x@1 ASC NULLS LAST]
+02)--SortExec: expr=[c@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----CrossJoinExec
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
+05)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)--------FilterExec: x@0 = 1
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT l.c, s.x FROM (SELECT c FROM t) l CROSS JOIN (SELECT x FROM small WHERE x = 1) s ORDER BY l.c, s.x LIMIT 3;
+----
+0 1
+1 1
+2 1
+
+###
+### Order-preserving repartition of an unbounded input
+###
+
+# x = CAST(a AS BIGINT) is strictly increasing in a. The order-preserving
+# repartition on x merges on its input's order (a, b, c, then x), and its
+# output must still be known to be sorted by x, b as well. So the window's
+# PARTITION BY x ORDER BY b runs in sorted mode without a SortExec. A sort
+# here would make planning fail, because the input is unbounded.
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE t_inf (a0 INTEGER, a INTEGER, b INTEGER, c INTEGER, d INTEGER)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT a, x, SUM(c) OVER (PARTITION BY x ORDER BY b) s
+FROM (SELECT CAST(a AS BIGINT) x, a, b, c FROM t_inf);
+----
+physical_plan
+01)ProjectionExec: expr=[a@1 as a, x@0 as x, sum(t_inf.c) PARTITION BY [x] ORDER BY [t_inf.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as s]
+02)--BoundedWindowAggExec: wdw=[sum(t_inf.c) PARTITION BY [x] ORDER BY [t_inf.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(t_inf.c) PARTITION BY [x] ORDER BY [t_inf.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----RepartitionExec: partitioning=Hash([x@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, x@0 ASC NULLS LAST
+04)------ProjectionExec: expr=[CAST(a@0 AS Int64) as x, a@0 as a, b@1 as b, c@2 as c]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+06)----------StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE t_inf;
+
+statement ok
+DROP TABLE small;
+
+statement ok
+DROP TABLE t;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;

@@ -18,6 +18,7 @@
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
 use std::collections::VecDeque;
+use std::hash::BuildHasher;
 use std::mem::{size_of, size_of_val, take};
 use std::ops::Range;
 use std::sync::Arc;
@@ -27,7 +28,7 @@ use arrow::array::{
     UInt32Array, make_array, new_empty_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::compute::{SortOptions, cast, filter};
+use arrow::compute::{SortOptions, cast, filter, take as take_array};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::row::{OwnedRow, Row, RowConverter, Rows, SortField};
 use arrow_select::dictionary::garbage_collect_any_dictionary;
@@ -35,10 +36,12 @@ use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::scalar::copy_array_data;
+use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::utils::proxy::HashTableAllocExt;
 use datafusion_common::utils::{SingleRowListArrayBuilder, offset_span};
 use datafusion_common::{
-    Result, ScalarValue, assert_eq_or_internal_err, exec_err, internal_err,
+    HashMap, HashSet, Result, ScalarValue, assert_eq_or_internal_err, exec_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -177,40 +180,9 @@ impl AggregateUDFImpl for ArrayAgg {
         let ignore_nulls = acc_args.ignore_nulls && field.is_nullable();
 
         if acc_args.is_distinct {
-            // Limitation similar to Postgres. The aggregation function can only mix
-            // DISTINCT and ORDER BY if all the expressions in the ORDER BY appear
-            // also in the arguments of the function. This implies that if the
-            // aggregation function only accepts one argument, only one argument
-            // can be used in the ORDER BY, For example:
-            //
-            // ARRAY_AGG(DISTINCT col)
-            //
-            // can only be mixed with an ORDER BY if the order expression is "col".
-            //
-            // ARRAY_AGG(DISTINCT col ORDER BY col)                         <- Valid
-            // ARRAY_AGG(DISTINCT concat(col, '') ORDER BY concat(col, '')) <- Valid
-            // ARRAY_AGG(DISTINCT col ORDER BY other_col)                   <- Invalid
-            // ARRAY_AGG(DISTINCT col ORDER BY concat(col, ''))             <- Invalid
-            let sort_option = match acc_args.order_bys {
-                // This accumulator sorts the values itself, so a reversed
-                // aggregate must still sort them in the requested order.
-                [single] if single.expr.eq(&acc_args.exprs[0]) => {
-                    Some(if acc_args.is_reversed {
-                        !single.options
-                    } else {
-                        single.options
-                    })
-                }
-                [] => None,
-                _ => {
-                    return exec_err!(
-                        "In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list"
-                    );
-                }
-            };
             return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
                 data_type,
-                sort_option,
+                distinct_sort_options(&acc_args)?,
                 ignore_nulls,
             )?));
         }
@@ -243,7 +215,11 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        !args.is_distinct && args.order_bys.is_empty()
+        if args.is_distinct {
+            distinct_sort_options(&args).is_ok()
+        } else {
+            args.order_bys.is_empty()
+        }
     }
 
     fn create_groups_accumulator(
@@ -253,6 +229,13 @@ impl AggregateUDFImpl for ArrayAgg {
         let field = &args.expr_fields[0];
         let data_type = field.data_type().clone();
         let ignore_nulls = args.ignore_nulls && field.is_nullable();
+        if args.is_distinct {
+            return Ok(Box::new(DistinctArrayAggGroupsAccumulator::new(
+                data_type,
+                distinct_sort_options(&args)?,
+                ignore_nulls,
+            )));
+        }
         Ok(Box::new(ArrayAggGroupsAccumulator::new(
             data_type,
             ignore_nulls,
@@ -344,6 +327,42 @@ impl ArrayAggAccumulator {
         );
 
         Some(consecutive_valid_values)
+    }
+}
+
+/// Returns the sort options for `ARRAY_AGG(DISTINCT ...)`, or an error if the
+/// ORDER BY cannot be combined with DISTINCT.
+///
+/// Limitation similar to Postgres. The aggregation function can only mix
+/// DISTINCT and ORDER BY if all the expressions in the ORDER BY appear
+/// also in the arguments of the function. This implies that if the
+/// aggregation function only accepts one argument, only one argument
+/// can be used in the ORDER BY, For example:
+///
+/// ARRAY_AGG(DISTINCT col)
+///
+/// can only be mixed with an ORDER BY if the order expression is "col".
+///
+/// ARRAY_AGG(DISTINCT col ORDER BY col)                         <- Valid
+/// ARRAY_AGG(DISTINCT concat(col, '') ORDER BY concat(col, '')) <- Valid
+/// ARRAY_AGG(DISTINCT col ORDER BY other_col)                   <- Invalid
+/// ARRAY_AGG(DISTINCT col ORDER BY concat(col, ''))             <- Invalid
+///
+/// The DISTINCT accumulators sort the values themselves, so a reversed
+/// aggregate must still sort them in the requested order.
+fn distinct_sort_options(acc_args: &AccumulatorArgs) -> Result<Option<SortOptions>> {
+    match acc_args.order_bys {
+        [single] if single.expr.eq(&acc_args.exprs[0]) => {
+            Ok(Some(if acc_args.is_reversed {
+                !single.options
+            } else {
+                single.options
+            }))
+        }
+        [] => Ok(None),
+        _ => exec_err!(
+            "In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list"
+        ),
     }
 }
 
@@ -803,27 +822,12 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
     ) -> Result<Vec<ArrayRef>> {
         assert_eq!(values.len(), 1, "one argument to convert_to_state");
 
-        let input = &values[0];
-
-        // Each row becomes a 1-element list: offsets are [0, 1, 2, ..., n].
-        let offsets = OffsetBuffer::from_repeated_length(1, input.len());
-
-        // Filtered rows become null list entries, which merge_batch will skip.
-        let filter_nulls = opt_filter.map(filter_to_nulls);
-
-        // With ignore_nulls, null values also become null list entries. Without
-        // ignore_nulls, null values stay as [NULL] so merge_batch retains them.
-        let nulls = if self.ignore_nulls {
-            let logical = input.logical_nulls();
-            NullBuffer::union(filter_nulls.as_ref(), logical.as_ref())
-        } else {
-            filter_nulls
-        };
-
-        let field = Arc::new(Field::new_list_field(self.datatype.clone(), true));
-        let list_array = ListArray::new(field, offsets, Arc::clone(input), nulls);
-
-        Ok(vec![Arc::new(list_array)])
+        Ok(vec![single_value_lists(
+            &values[0],
+            opt_filter,
+            self.ignore_nulls,
+            &self.datatype,
+        )])
     }
     fn size(&self) -> usize {
         self.batches
@@ -837,6 +841,419 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
                 .map(|e| e.capacity() * size_of::<(u32, u32)>())
                 .sum::<usize>()
             + self.batch_entries.capacity() * size_of::<Vec<(u32, u32)>>()
+    }
+}
+
+/// Converts each input row into a one-element list, the state shape of
+/// `ARRAY_AGG`.
+///
+/// Filtered rows become null list entries, which `merge_batch` skips. With
+/// `ignore_nulls`, null values also become null list entries; without it they
+/// stay as `[NULL]` so `merge_batch` retains them.
+fn single_value_lists(
+    input: &ArrayRef,
+    opt_filter: Option<&BooleanArray>,
+    ignore_nulls: bool,
+    datatype: &DataType,
+) -> ArrayRef {
+    // Offsets are [0, 1, 2, ..., n].
+    let offsets = OffsetBuffer::from_repeated_length(1, input.len());
+    let filter_nulls = opt_filter.map(filter_to_nulls);
+    let nulls = if ignore_nulls {
+        let logical = input.logical_nulls();
+        NullBuffer::union(filter_nulls.as_ref(), logical.as_ref())
+    } else {
+        filter_nulls
+    };
+    let field = Arc::new(Field::new_list_field(datatype.clone(), true));
+    Arc::new(ListArray::new(field, offsets, Arc::clone(input), nulls))
+}
+
+/// [`GroupsAccumulator`] for `ARRAY_AGG(DISTINCT x)`, optionally with
+/// `ORDER BY x`.
+///
+/// Distinct values are encoded once with a [`RowConverter`] and stored in a
+/// single [`Rows`] buffer shared by all groups, so a value that appears in many
+/// groups is held once. Each group records the values it has seen as
+/// `(group_index, value_index)` pairs, deduplicated in one hash set rather than
+/// one set per group.
+#[derive(Debug)]
+struct DistinctArrayAggGroupsAccumulator {
+    datatype: DataType,
+    sort_options: Option<SortOptions>,
+    ignore_nulls: bool,
+    /// Encodes values to rows. Created on the first non-empty input, once the
+    /// runtime type is known.
+    converter: Option<RowConverter>,
+    /// Every distinct value seen so far, indexed by value index.
+    values: Option<Rows>,
+    /// `(hash, value_index)` for every row in `values`.
+    value_map: HashTable<(u64, u32)>,
+    /// Heap size of `value_map` in bytes.
+    value_map_size: usize,
+    /// Distinct `(group_index, value_index)` pairs, in first-seen order.
+    pairs: Vec<(u32, u32)>,
+    /// Deduplicates `pairs`.
+    pair_set: HashSet<(u32, u32), RandomState>,
+    /// Total number of groups tracked.
+    num_groups: usize,
+    random_state: RandomState,
+    /// Time spent deduplicating values, reported as the DISTINCT submetric.
+    distinct_metric: Option<Arc<dyn AggregateMetric>>,
+}
+
+impl DistinctArrayAggGroupsAccumulator {
+    fn new(
+        datatype: DataType,
+        sort_options: Option<SortOptions>,
+        ignore_nulls: bool,
+    ) -> Self {
+        Self {
+            datatype,
+            sort_options,
+            ignore_nulls,
+            converter: None,
+            values: None,
+            value_map: HashTable::new(),
+            value_map_size: 0,
+            pairs: Vec::new(),
+            pair_set: HashSet::default(),
+            num_groups: 0,
+            random_state: RandomState::default(),
+            distinct_metric: None,
+        }
+    }
+
+    fn converter(&mut self, data_type: &DataType) -> Result<&RowConverter> {
+        if self.converter.is_none() {
+            let sort_field = match self.sort_options {
+                Some(opts) => SortField::new_with_options(data_type.clone(), opts),
+                None => SortField::new(data_type.clone()),
+            };
+            let converter = RowConverter::new(vec![sort_field])?;
+            self.values = Some(converter.empty_rows(0, 0));
+            self.converter = Some(converter);
+        }
+        self.converter
+            .as_ref()
+            .ok_or_else(|| internal_datafusion_err!("row converter must be set"))
+    }
+
+    /// Like [`Self::insert`], but first gathers the selected rows when they
+    /// are only part of `input`, so rejected values are never encoded.
+    fn insert_selected(
+        &mut self,
+        input: &ArrayRef,
+        rows: Vec<(usize, usize)>,
+    ) -> Result<()> {
+        if rows.len() == input.len() {
+            return self.insert(input, rows);
+        }
+        let indices = UInt32Array::from_iter_values(
+            rows.iter().map(|&(_, row_index)| row_index as u32),
+        );
+        let selected = take_array(input.as_ref(), &indices, None)?;
+        self.insert(
+            &selected,
+            rows.into_iter()
+                .enumerate()
+                .map(|(position, (group_index, _))| (group_index, position)),
+        )
+    }
+
+    /// Records that `group_index` contains each value of `input` selected by
+    /// `rows`, given as `(group_index, row_in_input)` pairs.
+    fn insert(
+        &mut self,
+        input: &ArrayRef,
+        rows: impl IntoIterator<Item = (usize, usize)>,
+    ) -> Result<()> {
+        let encoded = self
+            .converter(input.data_type())?
+            .convert_columns(std::slice::from_ref(input))?;
+        let Self {
+            values,
+            value_map,
+            value_map_size,
+            pairs,
+            pair_set,
+            random_state,
+            ..
+        } = self;
+        let values = values
+            .as_mut()
+            .ok_or_else(|| internal_datafusion_err!("value rows must be set"))?;
+
+        for (group_index, row_index) in rows {
+            let row = encoded.row(row_index);
+            let hash = random_state.hash_one(row.as_ref());
+            let value_index = match value_map.find(hash, |&(h, index)| {
+                h == hash && values.row(index as usize) == row
+            }) {
+                Some(&(_, index)) => index,
+                None => {
+                    let index = values.num_rows() as u32;
+                    values.push(row);
+                    value_map.insert_accounted(
+                        (hash, index),
+                        |&(h, _)| h,
+                        value_map_size,
+                    );
+                    index
+                }
+            };
+            let pair = (group_index as u32, value_index);
+            if pair_set.insert(pair) {
+                pairs.push(pair);
+            }
+        }
+        Ok(())
+    }
+
+    /// Drops the state of the first `emit_groups` groups and renumbers the
+    /// rest so they start from 0. Values only referenced by emitted groups are
+    /// dropped too.
+    fn retain_after(&mut self, emit_groups: usize) {
+        let emit_groups = emit_groups as u32;
+        let old_pairs = take(&mut self.pairs);
+        let old_values = self.values.take();
+        self.value_map = HashTable::new();
+        self.value_map_size = 0;
+        self.pair_set = HashSet::default();
+        self.num_groups -= emit_groups as usize;
+
+        let (Some(converter), Some(old_values)) = (&self.converter, old_values) else {
+            return;
+        };
+        let mut values = converter.empty_rows(0, 0);
+        let mut remap: HashMap<u32, u32> = HashMap::new();
+        let mut pairs = Vec::new();
+        for (group_index, value_index) in old_pairs {
+            if group_index < emit_groups {
+                continue;
+            }
+            let new_index = *remap.entry(value_index).or_insert_with(|| {
+                let row = old_values.row(value_index as usize);
+                let index = values.num_rows() as u32;
+                values.push(row);
+                let hash = self.random_state.hash_one(row.as_ref());
+                self.value_map.insert_accounted(
+                    (hash, index),
+                    |&(h, _)| h,
+                    &mut self.value_map_size,
+                );
+                index
+            });
+            let pair = (group_index - emit_groups, new_index);
+            self.pair_set.insert(pair);
+            pairs.push(pair);
+        }
+        self.pairs = pairs;
+        self.values = Some(values);
+    }
+}
+
+impl GroupsAccumulator for DistinctArrayAggGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        // With `ORDER BY x` the ordering column is passed too. It is the
+        // argument itself, so only the first column is needed.
+        let Some(input) = values.first() else {
+            return internal_err!("array_agg(DISTINCT) expects an argument");
+        };
+        self.num_groups = self.num_groups.max(total_num_groups);
+
+        let nulls = if self.ignore_nulls {
+            input.logical_nulls()
+        } else {
+            None
+        };
+        let rows = group_indices
+            .iter()
+            .enumerate()
+            .filter(|&(row_index, _)| {
+                let filtered_out = opt_filter.is_some_and(|filter| {
+                    filter.is_null(row_index) || !filter.value(row_index)
+                });
+                let skipped_null =
+                    nulls.as_ref().is_some_and(|nulls| nulls.is_null(row_index));
+                !filtered_out && !skipped_null
+            })
+            .map(|(row_index, &group_index)| (group_index, row_index))
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut metric_recorder =
+            AggregateMetricRecorder::new(self.distinct_metric.clone());
+        let _timer = metric_recorder.timer();
+        self.insert_selected(input, rows)
+    }
+
+    /// Produces a `ListArray` ordered by group index. Groups without values
+    /// are null, matching [`DistinctArrayAggAccumulator`].
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let emit_groups = match emit_to {
+            EmitTo::All => self.num_groups,
+            EmitTo::First(n) => n,
+        };
+
+        // Counting sort of the pairs into group order.
+        let mut counts = vec![0u32; emit_groups];
+        for &(group_index, _) in &self.pairs {
+            if let Some(count) = counts.get_mut(group_index as usize) {
+                *count += 1;
+            }
+        }
+        let mut offsets = Vec::<i32>::with_capacity(emit_groups + 1);
+        offsets.push(0);
+        let mut nulls = NullBufferBuilder::new(emit_groups);
+        let mut write_positions = Vec::with_capacity(emit_groups);
+        let mut total = 0u32;
+        for &count in &counts {
+            if count == 0 {
+                nulls.append_null();
+            } else {
+                nulls.append_non_null();
+            }
+            write_positions.push(total);
+            total += count;
+            offsets.push(total as i32);
+        }
+        let mut ordered = vec![0u32; total as usize];
+        for &(group_index, value_index) in &self.pairs {
+            if let Some(position) = write_positions.get_mut(group_index as usize) {
+                ordered[*position as usize] = value_index;
+                *position += 1;
+            }
+        }
+
+        let flat_values = match (&self.converter, &self.values) {
+            (Some(converter), Some(values)) if total > 0 => {
+                if self.sort_options.is_some() {
+                    // The sort direction is encoded in the row bytes, so
+                    // comparing rows gives the requested order.
+                    for window in offsets.windows(2) {
+                        ordered[window[0] as usize..window[1] as usize].sort_unstable_by(
+                            |&a, &b| values.row(a as usize).cmp(&values.row(b as usize)),
+                        );
+                    }
+                }
+                let decoded = converter
+                    .convert_rows(ordered.iter().map(|&i| values.row(i as usize)))?
+                    .swap_remove(0);
+                // `convert_rows` always returns the physical (non-dictionary)
+                // type, so cast back when the declared type has a dictionary.
+                if decoded.data_type() != &self.datatype
+                    && datatype_contains_dictionary(&self.datatype)
+                {
+                    cast(decoded.as_ref(), &self.datatype)?
+                } else {
+                    decoded
+                }
+            }
+            _ => new_empty_array(&self.datatype),
+        };
+
+        match emit_to {
+            EmitTo::All => {
+                let converter = self.converter.take();
+                let distinct_metric = self.distinct_metric.take();
+                *self = Self::new(
+                    self.datatype.clone(),
+                    self.sort_options,
+                    self.ignore_nulls,
+                );
+                self.distinct_metric = distinct_metric;
+                // Keep the converter: the runtime type does not change.
+                if let Some(converter) = converter {
+                    self.values = Some(converter.empty_rows(0, 0));
+                    self.converter = Some(converter);
+                }
+            }
+            EmitTo::First(_) => self.retain_after(emit_groups),
+        }
+
+        let field = Arc::new(Field::new_list_field(self.datatype.clone(), true));
+        Ok(Arc::new(ListArray::new(
+            field,
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            flat_values,
+            nulls.finish(),
+        )))
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        Ok(vec![self.evaluate(emit_to)?])
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq_or_internal_err!(values.len(), 1, "one argument to merge_batch");
+        let lists = values[0].as_list::<i32>();
+        self.num_groups = self.num_groups.max(total_num_groups);
+
+        // A sliced list keeps its whole child array, so encode only the span
+        // its offsets cover.
+        let offsets = lists.offsets();
+        let (span_start, span_len) = offset_span(offsets);
+        let child = lists.values().slice(span_start, span_len);
+        let rows = group_indices
+            .iter()
+            .enumerate()
+            .filter(|&(list_index, _)| lists.is_valid(list_index))
+            .flat_map(|(list_index, &group_index)| {
+                let start = offsets[list_index] as usize - span_start;
+                let end = offsets[list_index + 1] as usize - span_start;
+                (start..end).map(move |position| (group_index, position))
+            })
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut metric_recorder =
+            AggregateMetricRecorder::new(self.distinct_metric.clone());
+        let _timer = metric_recorder.timer();
+        self.insert_selected(&child, rows)
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let Some(input) = values.first() else {
+            return internal_err!("array_agg(DISTINCT) expects an argument");
+        };
+        Ok(vec![single_value_lists(
+            input,
+            opt_filter,
+            self.ignore_nulls,
+            &self.datatype,
+        )])
+    }
+
+    fn set_metrics(&mut self, metrics: Arc<dyn AggregateMetrics>) {
+        self.distinct_metric = Some(metrics.metric("distinct"));
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+            + self.converter.as_ref().map_or(0, RowConverter::size)
+            + self.values.as_ref().map_or(0, Rows::size)
+            + self.value_map_size
+            + self.pairs.capacity() * size_of::<(u32, u32)>()
+            + estimate_memory_size::<(u32, u32)>(self.pair_set.capacity(), 0)
+                .unwrap_or_default()
     }
 }
 
@@ -1791,8 +2208,8 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Builder, ListBuilder, StringBuilder};
-    use arrow::datatypes::Schema;
+    use arrow::array::{DictionaryArray, Int32Builder, ListBuilder, StringBuilder};
+    use arrow::datatypes::{Int32Type, Schema};
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
     use datafusion_physical_expr::PhysicalExpr;
@@ -3417,11 +3834,289 @@ mod tests {
     }
 
     fn eval_i32_lists(
-        acc: &mut ArrayAggGroupsAccumulator,
+        acc: &mut dyn GroupsAccumulator,
         emit_to: EmitTo,
     ) -> Result<Vec<Option<Vec<Option<i32>>>>> {
         let result = acc.evaluate(emit_to)?;
         Ok(list_array_to_i32_vecs(result.as_list::<i32>()))
+    }
+
+    fn distinct_groups_accumulator(
+        ignore_nulls: bool,
+    ) -> DistinctArrayAggGroupsAccumulator {
+        DistinctArrayAggGroupsAccumulator::new(DataType::Int32, None, ignore_nulls)
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_dedups_per_group() -> Result<()> {
+        let mut acc = distinct_groups_accumulator(false);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 1, 2, 1, 2, 3]));
+        acc.update_batch(&[values], &[0, 0, 0, 1, 1, 1], None, 2)?;
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![2, 3, 3]));
+        acc.update_batch(&[values], &[0, 1, 1], None, 2)?;
+
+        // Values shared by both groups are stored once.
+        assert_eq!(acc.values.as_ref().map(Rows::num_rows), Some(3));
+
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals[0], Some(vec![Some(1), Some(2)]));
+        assert_eq!(vals[1], Some(vec![Some(1), Some(2), Some(3)]));
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_nulls() -> Result<()> {
+        let values: ArrayRef =
+            Arc::new(Int32Array::from(vec![None, Some(1), None, None]));
+        let groups = [0, 0, 0, 1];
+
+        // Without IGNORE NULLS a null is one more distinct value.
+        let mut acc = distinct_groups_accumulator(false);
+        acc.update_batch(&[Arc::clone(&values)], &groups, None, 3)?;
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals[0], Some(vec![None, Some(1)]));
+        assert_eq!(vals[1], Some(vec![None]));
+        // A group with no rows is null.
+        assert_eq!(vals[2], None);
+
+        // With IGNORE NULLS a group of only nulls is null.
+        let mut acc = distinct_groups_accumulator(true);
+        acc.update_batch(&[values], &groups, None, 2)?;
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals[0], Some(vec![Some(1)]));
+        assert_eq!(vals[1], None);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_opt_filter() -> Result<()> {
+        let mut acc = distinct_groups_accumulator(false);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 2, 3]));
+        let filter = BooleanArray::from(vec![Some(true), Some(false), Some(true), None]);
+        acc.update_batch(&[values], &[0, 0, 0, 1], Some(&filter), 2)?;
+
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals[0], Some(vec![Some(1), Some(2)]));
+        assert_eq!(vals[1], None);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_sparse_filter() -> Result<()> {
+        // Only the selected rows are gathered and encoded, so their positions
+        // move; check each value still lands in its own group.
+        let mut acc = distinct_groups_accumulator(true);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(5),
+            Some(6),
+            Some(7),
+            None,
+            Some(8),
+        ]));
+        let filter = BooleanArray::from(vec![false, true, false, true, true]);
+        acc.update_batch(&[values], &[0, 1, 0, 2, 2], Some(&filter), 3)?;
+
+        assert_eq!(acc.values.as_ref().map(Rows::num_rows), Some(2));
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals, vec![None, Some(vec![Some(6)]), Some(vec![Some(8)])]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_merges_sliced_state() -> Result<()> {
+        let mut partial = distinct_groups_accumulator(false);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 4]));
+        partial.update_batch(&[values], &[0, 1, 2, 3, 3], None, 4)?;
+        let state = partial.state(EmitTo::All)?;
+
+        // Partial aggregation emits slices of one state array.
+        let mut acc = distinct_groups_accumulator(false);
+        acc.merge_batch(&[state[0].slice(2, 2)], &[0, 1], 2)?;
+        acc.merge_batch(&[state[0].slice(0, 2)], &[1, 0], 2)?;
+
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals[0], Some(vec![Some(3), Some(2)]));
+        assert_eq!(vals[1], Some(vec![Some(4), Some(1)]));
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_records_metric() -> Result<()> {
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut acc = distinct_groups_accumulator(false);
+        acc.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
+
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        acc.update_batch(&[Arc::clone(&values)], &[0, 1], None, 2)?;
+        let state = acc.state(EmitTo::All)?;
+        acc.merge_batch(&state, &[0, 1], 2)?;
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 2);
+
+        // Emitting everything resets the state but keeps the metric.
+        acc.evaluate(EmitTo::All)?;
+        acc.update_batch(&[values], &[0, 1], None, 2)?;
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_order_by() -> Result<()> {
+        let descending = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let mut acc = DistinctArrayAggGroupsAccumulator::new(
+            DataType::Int32,
+            Some(descending),
+            false,
+        );
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(2),
+            None,
+            Some(5),
+            Some(2),
+            Some(1),
+        ]));
+        acc.update_batch(&[values], &[0, 0, 0, 0, 1], None, 2)?;
+
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals[0], Some(vec![Some(5), Some(2), None]));
+        assert_eq!(vals[1], Some(vec![Some(1)]));
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_emit_first() -> Result<()> {
+        let mut acc = distinct_groups_accumulator(false);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![10, 10, 20, 30, 20]));
+        acc.update_batch(&[values], &[0, 0, 1, 2, 2], None, 3)?;
+
+        let vals = eval_i32_lists(&mut acc, EmitTo::First(2))?;
+        assert_eq!(vals, vec![Some(vec![Some(10)]), Some(vec![Some(20)])]);
+
+        // 10 was only referenced by an emitted group, so it is dropped.
+        assert_eq!(acc.values.as_ref().map(Rows::num_rows), Some(2));
+
+        // The remaining group is renumbered to 0 and keeps deduplicating.
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![20, 40]));
+        acc.update_batch(&[values], &[0, 0], None, 1)?;
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals, vec![Some(vec![Some(30), Some(20), Some(40)])]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_state_merge_roundtrip() -> Result<()> {
+        let mut acc1 = distinct_groups_accumulator(false);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        acc1.update_batch(&[values], &[0, 1], None, 2)?;
+
+        let mut acc2 = distinct_groups_accumulator(false);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 3, 2]));
+        acc2.update_batch(&[values], &[0, 0, 1], None, 2)?;
+
+        let state = acc2.state(EmitTo::All)?;
+        acc1.merge_batch(&state, &[0, 1], 2)?;
+
+        let vals = eval_i32_lists(&mut acc1, EmitTo::All)?;
+        assert_eq!(vals[0], Some(vec![Some(1), Some(3)]));
+        assert_eq!(vals[1], Some(vec![Some(2)]));
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_convert_to_state_merge() -> Result<()> {
+        let partial = distinct_groups_accumulator(true);
+        let values: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(7), None, Some(7), Some(8)]));
+        let filter = BooleanArray::from(vec![true, true, true, false]);
+        let state = partial.convert_to_state(&[values], Some(&filter))?;
+
+        let mut acc = distinct_groups_accumulator(true);
+        acc.merge_batch(&state, &[0, 0, 0, 1], 2)?;
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals[0], Some(vec![Some(7)]));
+        assert_eq!(vals[1], None);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_keeps_dictionary_type() -> Result<()> {
+        let datatype =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let mut acc =
+            DistinctArrayAggGroupsAccumulator::new(datatype.clone(), None, false);
+        let values: ArrayRef = Arc::new(
+            vec!["a", "b", "a", "a"]
+                .into_iter()
+                .collect::<DictionaryArray<Int32Type>>(),
+        );
+        acc.update_batch(&[values], &[0, 0, 0, 1], None, 2)?;
+
+        let result = acc.evaluate(EmitTo::All)?;
+        let lists = result.as_list::<i32>();
+        assert_eq!(lists.values().data_type(), &datatype);
+        let flat = cast(lists.values().as_ref(), &DataType::Utf8)?;
+        let flat = flat.as_string::<i32>().iter().collect::<Vec<_>>();
+        assert_eq!(flat, vec![Some("a"), Some("b"), Some("a")]);
+        assert_eq!(lists.value_offsets(), &[0, 2, 3]);
+        Ok(())
+    }
+
+    /// Compares the groups accumulator with one [`DistinctArrayAggAccumulator`]
+    /// per group over batches with repeated values, nulls and a filter.
+    #[test]
+    fn distinct_groups_accumulator_matches_row_accumulator() -> Result<()> {
+        let num_groups = 7;
+        let mut acc = distinct_groups_accumulator(false);
+        let mut expected = (0..num_groups)
+            .map(|_| DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false))
+            .collect::<Result<Vec<_>>>()?;
+
+        for batch in 0..5 {
+            let len = 50;
+            let values = (0..len)
+                .map(|i| ((i * 7 + batch * 3) % 11 != 0).then_some((i * 13 + batch) % 9))
+                .collect::<Vec<Option<i32>>>();
+            let groups = (0..len)
+                .map(|i| ((i * 5 + batch) % num_groups as i32) as usize)
+                .collect::<Vec<_>>();
+            let filter = (0..len).map(|i| (i + batch) % 4 != 0).collect::<Vec<_>>();
+
+            let array: ArrayRef = Arc::new(Int32Array::from(values.clone()));
+            acc.update_batch(
+                &[array],
+                &groups,
+                Some(&BooleanArray::from(filter.clone())),
+                num_groups,
+            )?;
+            for ((value, group), keep) in values.into_iter().zip(groups).zip(filter) {
+                if keep {
+                    let value: ArrayRef = Arc::new(Int32Array::from(vec![value]));
+                    expected[group].update_batch(&[value])?;
+                }
+            }
+        }
+
+        let sorted = |list: Option<Vec<Option<i32>>>| {
+            list.map(|mut values| {
+                values.sort();
+                values
+            })
+        };
+        let actual = eval_i32_lists(&mut acc, EmitTo::All)?;
+        for (group, acc) in expected.iter_mut().enumerate() {
+            let ScalarValue::List(list) = acc.evaluate()? else {
+                return internal_err!("expected a list");
+            };
+            let expected_values = list_array_to_i32_vecs(&list).swap_remove(0);
+            assert_eq!(
+                sorted(actual[group].clone()),
+                sorted(expected_values),
+                "group {group}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
