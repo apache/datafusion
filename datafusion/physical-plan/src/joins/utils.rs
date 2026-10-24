@@ -55,10 +55,10 @@ use arrow::array::{
 };
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int8Array,
-    Int16Array, Int32Array, Int64Array, LargeBinaryArray, LargeStringArray, StringArray,
-    StringViewArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array,
+    Decimal128Array, FixedSizeBinaryArray, Int8Array, Int16Array, Int32Array, Int64Array,
+    LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt8Array, UInt16Array,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, take};
@@ -75,7 +75,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
-    internal_datafusion_err, not_impl_err, plan_err,
+    internal_datafusion_err, plan_err,
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
@@ -2794,88 +2794,9 @@ pub fn compare_join_arrays(
     sort_options: &[SortOptions],
     null_equality: NullEquality,
 ) -> Result<Ordering> {
-    let mut res = Ordering::Equal;
-    for ((left_array, right_array), sort_options) in
-        left_arrays.iter().zip(right_arrays).zip(sort_options)
-    {
-        macro_rules! compare_value {
-            ($T:ty) => {{
-                let left_array = left_array.as_any().downcast_ref::<$T>().unwrap();
-                let right_array = right_array.as_any().downcast_ref::<$T>().unwrap();
-                match (left_array.is_null(left), right_array.is_null(right)) {
-                    (false, false) => {
-                        let left_value = &left_array.value(left);
-                        let right_value = &right_array.value(right);
-                        res = left_value.partial_cmp(right_value).unwrap();
-                        if sort_options.descending {
-                            res = res.reverse();
-                        }
-                    }
-                    (true, false) => {
-                        res = if sort_options.nulls_first {
-                            Ordering::Less
-                        } else {
-                            Ordering::Greater
-                        };
-                    }
-                    (false, true) => {
-                        res = if sort_options.nulls_first {
-                            Ordering::Greater
-                        } else {
-                            Ordering::Less
-                        };
-                    }
-                    _ => {
-                        res = match null_equality {
-                            NullEquality::NullEqualsNothing => Ordering::Less,
-                            NullEquality::NullEqualsNull => Ordering::Equal,
-                        };
-                    }
-                }
-            }};
-        }
-
-        match left_array.data_type() {
-            DataType::Null => {}
-            DataType::Boolean => compare_value!(BooleanArray),
-            DataType::Int8 => compare_value!(Int8Array),
-            DataType::Int16 => compare_value!(Int16Array),
-            DataType::Int32 => compare_value!(Int32Array),
-            DataType::Int64 => compare_value!(Int64Array),
-            DataType::UInt8 => compare_value!(UInt8Array),
-            DataType::UInt16 => compare_value!(UInt16Array),
-            DataType::UInt32 => compare_value!(UInt32Array),
-            DataType::UInt64 => compare_value!(UInt64Array),
-            DataType::Float32 => compare_value!(Float32Array),
-            DataType::Float64 => compare_value!(Float64Array),
-            DataType::Binary => compare_value!(BinaryArray),
-            DataType::BinaryView => compare_value!(BinaryViewArray),
-            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
-            DataType::LargeBinary => compare_value!(LargeBinaryArray),
-            DataType::Utf8 => compare_value!(StringArray),
-            DataType::Utf8View => compare_value!(StringViewArray),
-            DataType::LargeUtf8 => compare_value!(LargeStringArray),
-            DataType::Decimal128(..) => compare_value!(Decimal128Array),
-            DataType::Timestamp(time_unit, None) => match time_unit {
-                TimeUnit::Second => compare_value!(TimestampSecondArray),
-                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
-                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
-                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
-            },
-            DataType::Date32 => compare_value!(Date32Array),
-            DataType::Date64 => compare_value!(Date64Array),
-            dt => {
-                return not_impl_err!(
-                    "Unsupported data type in sort merge join comparator: {}",
-                    dt
-                );
-            }
-        }
-        if !res.is_eq() {
-            break;
-        }
-    }
-    Ok(res)
+    let cmp =
+        JoinKeyComparator::new(left_arrays, right_arrays, sort_options, null_equality)?;
+    Ok(cmp.compare(left, right))
 }
 
 #[cfg(test)]
@@ -2887,6 +2808,7 @@ mod tests {
     use super::*;
     use crate::metrics::MetricValue;
 
+    use arrow::array::Float64Array;
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
@@ -5849,5 +5771,97 @@ mod tests {
             ),
             Inexact(10)
         );
+    }
+
+    #[test]
+    fn test_compare_join_arrays_extended_types() -> Result<()> {
+        use arrow::array::{
+            Decimal256Array, DictionaryArray, Int32Array, StringArray,
+            Time32MillisecondArray, Time64NanosecondArray,
+        };
+        use arrow::datatypes::i256;
+        let sort_opts = vec![SortOptions::default()];
+
+        // 1. Timezone-aware timestamp
+        let ts_left: ArrayRef = Arc::new(
+            TimestampMicrosecondArray::from(vec![1_000_000, 2_000_000])
+                .with_timezone("UTC"),
+        );
+        let ts_right: ArrayRef = Arc::new(
+            TimestampMicrosecondArray::from(vec![1_000_000, 3_000_000])
+                .with_timezone("UTC"),
+        );
+
+        // 2. Dictionary(Int32, Utf8) with independently ordered codes:
+        // Left:  keys [0, 1] -> ["apple", "banana"] (apple is code 0, banana is code 1)
+        // Right: keys [1, 0] -> ["cherry", "apple"] (apple is code 1, cherry is code 0)
+        // At index 0: "apple" (code 0) == "apple" (code 1) -> tests equality across distinct dictionary encodings
+        // At index 1: "banana" (code 1) < "cherry" (code 0) -> tests value ordering opposite to key code ordering
+        let dict_left: ArrayRef = Arc::new(DictionaryArray::try_new(
+            Int32Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec!["apple", "banana"])),
+        )?);
+        let dict_right: ArrayRef = Arc::new(DictionaryArray::try_new(
+            Int32Array::from(vec![1, 0]),
+            Arc::new(StringArray::from(vec!["cherry", "apple"])),
+        )?);
+
+        // 3. Decimal256
+        let dec_left: ArrayRef = Arc::new(
+            Decimal256Array::from(vec![Some(i256::from(100)), Some(i256::from(200))])
+                .with_precision_and_scale(40, 2)?,
+        );
+        let dec_right: ArrayRef = Arc::new(
+            Decimal256Array::from(vec![Some(i256::from(100)), Some(i256::from(300))])
+                .with_precision_and_scale(40, 2)?,
+        );
+
+        // 4. Time64
+        let t64_left: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1000, 2000]));
+        let t64_right: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1000, 3000]));
+
+        // 5. Time32
+        let t32_left: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![10, 20]));
+        let t32_right: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![10, 30]));
+
+        let test_cases: [(&str, ArrayRef, ArrayRef); 5] = [
+            ("timezone_aware_timestamp", ts_left, ts_right),
+            ("dictionary_independent_codes", dict_left, dict_right),
+            ("decimal256", dec_left, dec_right),
+            ("time64", t64_left, t64_right),
+            ("time32", t32_left, t32_right),
+        ];
+
+        for (name, left, right) in test_cases {
+            let eq = compare_join_arrays(
+                &[Arc::clone(&left)],
+                0,
+                &[Arc::clone(&right)],
+                0,
+                &sort_opts,
+                NullEquality::NullEqualsNothing,
+            )?;
+            assert_eq!(
+                eq,
+                Ordering::Equal,
+                "Case '{name}': expected Ordering::Equal at index 0"
+            );
+
+            let less = compare_join_arrays(
+                &[left],
+                1,
+                &[right],
+                1,
+                &sort_opts,
+                NullEquality::NullEqualsNothing,
+            )?;
+            assert_eq!(
+                less,
+                Ordering::Less,
+                "Case '{name}': expected Ordering::Less at index 1"
+            );
+        }
+
+        Ok(())
     }
 }
