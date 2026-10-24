@@ -591,14 +591,15 @@ async fn without_spilling_returns_refusal() -> Result<()> {
 
 /// The table fits, but growing the reservation to the materialized output
 /// (`try_resize(memory_size())` on the first of several output batches) is
-/// refused. The streams disagree, and no issue tracks the difference: Final
-/// returns the error, Single hands the output off unreserved
-/// (`reserved = false`, no further calls), and Partial ignores it (and retries
-/// on every batch). Final is the only one that fails the query, although the
-/// output is already materialized. This pins each behavior as it is.
+/// refused. The streams disagree: Final returns the error, Single hands the
+/// output off unreserved (`reserved = false`, no further calls), and Partial
+/// ignores it (and retries on every batch). Final is the only one that fails
+/// the query, although the output is already materialized, which #26701
+/// reports. This pins each behavior as it is.
 ///
-/// No built-in aggregate materializes an output larger than its accounted
-/// state, so this uses [`PaddedOutputUdaf`].
+/// Built-in aggregates materialize at most a little more than their accounted
+/// state (`string_agg` does, see #26701), so this uses [`PaddedOutputUdaf`],
+/// whose output is far larger.
 #[tokio::test]
 async fn output_materialization_refused() -> Result<()> {
     let _bound = hide_byte_counts().bind_to_scope();
