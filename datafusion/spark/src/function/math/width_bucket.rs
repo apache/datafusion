@@ -316,7 +316,6 @@ pub(crate) fn width_bucket_interval_mdn_exact(
             b.append_null();
             continue;
         }
-        let next_bucket = buckets + 1;
 
         let x = v.value(i);
         let l = lo.value(i);
@@ -336,40 +335,10 @@ pub(crate) fn width_bucket_interval_mdn_exact(
             let l_m = l.months as f64;
             let h_m = h.months as f64;
 
-            if asc {
-                if x_m < l_m {
-                    b.append_value(0);
-                    continue;
-                }
-                if x_m >= h_m {
-                    b.append_value(next_bucket);
-                    continue;
-                }
-            } else {
-                if x_m > l_m {
-                    b.append_value(0);
-                    continue;
-                }
-                if x_m <= h_m {
-                    b.append_value(next_bucket);
-                    continue;
-                }
+            match bucket_from_f64(x_m, l_m, h_m, buckets, asc) {
+                Some(bucket) => b.append_value(bucket),
+                None => b.append_null(),
             }
-
-            let width = (h_m - l_m) / (buckets as f64);
-            if width == 0.0 || !width.is_finite() {
-                b.append_null();
-                continue;
-            }
-
-            let mut bucket = ((x_m - l_m) / width).floor() as i64 + 1;
-            if bucket < 1 {
-                bucket = 1;
-            }
-            if bucket > next_bucket {
-                bucket = next_bucket;
-            }
-            b.append_value(bucket);
             continue;
         }
 
@@ -387,40 +356,10 @@ pub(crate) fn width_bucket_interval_mdn_exact(
             let l_f = 0.0;
             let h_f = hf as f64;
 
-            if asc {
-                if x_f < l_f {
-                    b.append_value(0);
-                    continue;
-                }
-                if x_f >= h_f {
-                    b.append_value(next_bucket);
-                    continue;
-                }
-            } else {
-                if x_f > l_f {
-                    b.append_value(0);
-                    continue;
-                }
-                if x_f <= h_f {
-                    b.append_value(next_bucket);
-                    continue;
-                }
+            match bucket_from_f64(x_f, l_f, h_f, buckets, asc) {
+                Some(bucket) => b.append_value(bucket),
+                None => b.append_null(),
             }
-
-            let width = (h_f - l_f) / (buckets as f64);
-            if width == 0.0 || !width.is_finite() {
-                b.append_null();
-                continue;
-            }
-
-            let mut bucket = ((x_f - l_f) / width).floor() as i64 + 1;
-            if bucket < 1 {
-                bucket = 1;
-            }
-            if bucket > next_bucket {
-                bucket = next_bucket;
-            }
-            b.append_value(bucket);
             continue;
         }
 
@@ -428,6 +367,52 @@ pub(crate) fn width_bucket_interval_mdn_exact(
     }
 
     b.finish()
+}
+
+/// Computes the bucket number for a value `x` projected onto `f64`,
+/// given the range endpoints `l` and `h` split into `num_buckets` buckets.
+///
+/// Returns `Some(0)` when `x` falls below the range and
+/// `Some(num_buckets + 1)` when it falls above it. Returns `None` when the
+/// bucket width is zero or non-finite, in which case the result is null.
+fn bucket_from_f64(
+    x: f64,
+    l: f64,
+    h: f64,
+    num_buckets: i64,
+    ascending: bool,
+) -> Option<i64> {
+    let next_bucket = num_buckets + 1;
+
+    if ascending {
+        if x < l {
+            return Some(0);
+        }
+        if x >= h {
+            return Some(next_bucket);
+        }
+    } else {
+        if x > l {
+            return Some(0);
+        }
+        if x <= h {
+            return Some(next_bucket);
+        }
+    }
+
+    let width = (h - l) / (num_buckets as f64);
+    if width == 0.0 || !width.is_finite() {
+        return None;
+    }
+
+    let mut bucket = ((x - l) / width).floor() as i64 + 1;
+    if bucket < 1 {
+        bucket = 1;
+    }
+    if bucket > next_bucket {
+        bucket = next_bucket;
+    }
+    Some(bucket)
 }
 
 #[cfg(test)]

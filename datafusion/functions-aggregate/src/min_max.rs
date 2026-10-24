@@ -23,6 +23,7 @@ mod min_max_struct;
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, downcast_primitive};
 use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
+use datafusion_common::float_semantics::{float_gt, float_lt};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, exec_err, internal_err};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
@@ -58,6 +59,9 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
         DataType::Dictionary(_, dict_value_type) => {
             // TODO add checker, if the value type is complex data type
             Ok(vec![dict_value_type.deref().clone()])
+        }
+        DataType::RunEndEncoded(_, values) => {
+            get_min_max_result_type(&[values.data_type().clone()])
         }
         // TODO add checker for datatype which min and max supported
         // For example, the `Struct` and `Map` type are not supported in the MIN and MAX function
@@ -121,7 +125,7 @@ macro_rules! primitive_max_accumulator {
     ($t:ty, $data_type:ident, total, $bits:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$t, _>::new($data_type, |cur, new| {
-                if new.total_cmp(cur) == Ordering::Greater {
+                if float_gt(new, *cur) {
                     *cur = new
                 }
             })
@@ -157,7 +161,7 @@ macro_rules! primitive_min_accumulator {
     ($t:ty, $data_type:ident, total, $bits:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$t, _>::new(&$data_type, |cur, new| {
-                if new.total_cmp(cur) == Ordering::Less {
+                if float_lt(new, *cur) {
                     *cur = new
                 }
             })
@@ -1503,6 +1507,26 @@ mod tests {
         let data_type =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let result = get_min_max_result_type(&[data_type])?;
+        assert_eq!(result, vec![DataType::Utf8]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_min_max_return_type_coerce_run_end_encoded() -> Result<()> {
+        let run_ends = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let ree = |values: DataType| {
+            DataType::RunEndEncoded(
+                Arc::clone(&run_ends),
+                Arc::new(Field::new("values", values, true)),
+            )
+        };
+
+        let result = get_min_max_result_type(&[ree(DataType::UInt32)])?;
+        assert_eq!(result, vec![DataType::UInt32]);
+
+        let dict =
+            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8));
+        let result = get_min_max_result_type(&[ree(dict)])?;
         assert_eq!(result, vec![DataType::Utf8]);
         Ok(())
     }

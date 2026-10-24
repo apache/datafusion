@@ -41,7 +41,7 @@ use crate::utils::{
     Columnizer, can_hash, check_all_columns_from_schema, compare_sort_expr,
     expand_qualified_wildcard, expand_wildcard, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
-    split_conjunction_owned,
+    passthrough_field_index, split_conjunction_owned,
 };
 use crate::{
     BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
@@ -61,7 +61,9 @@ use datafusion_common::{
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
     plan_err,
 };
-use datafusion_expr_common::type_coercion::binary::type_union_resolution;
+use datafusion_expr_common::type_coercion::binary::{
+    type_union_coercion, type_union_resolution,
+};
 
 use indexmap::IndexSet;
 
@@ -85,6 +87,95 @@ impl LogicalPlanBuilderOptions {
     pub fn with_add_implicit_group_by_exprs(mut self, add: bool) -> Self {
         self.add_implicit_group_by_exprs = add;
         self
+    }
+}
+
+fn recursive_type_can_be_coerced(from: &DataType, into: &DataType) -> bool {
+    if from == into || *from == DataType::Null {
+        return true;
+    }
+    // Preserve the integer coercion supported by recursive queries since #9794.
+    if from.is_integer() && into.is_integer() {
+        return true;
+    }
+    if matches!(
+        (from, into),
+        (DataType::Date32, DataType::Date64)
+            | (DataType::Utf8, DataType::LargeUtf8 | DataType::Utf8View)
+            | (DataType::LargeUtf8, DataType::Utf8View)
+            | (
+                DataType::Binary,
+                DataType::LargeBinary | DataType::BinaryView
+            )
+            | (DataType::LargeBinary, DataType::BinaryView)
+            | (
+                DataType::FixedSizeBinary(_),
+                DataType::Binary | DataType::BinaryView
+            )
+    ) {
+        return true;
+    }
+    // Compound types and changes of type category need an explicit seed type.
+    // UNION's common-type rules can hide lossy casts within nested fields.
+    if !from.is_numeric() || !into.is_numeric() {
+        return false;
+    }
+    // The decimal range/scale checks below are more precise than UNION coercion,
+    // which reserves 20 digits for Int64 even though its values fit in 19.
+    if !into.is_decimal() && type_union_coercion(into, from).as_ref() != Some(into) {
+        return false;
+    }
+
+    match (from, into) {
+        (
+            DataType::Int16
+            | DataType::UInt16
+            | DataType::Int32
+            | DataType::UInt32
+            | DataType::Int64
+            | DataType::UInt64,
+            DataType::Float16,
+        )
+        | (
+            DataType::Int32 | DataType::UInt32 | DataType::Int64 | DataType::UInt64,
+            DataType::Float32,
+        )
+        | (DataType::Int64 | DataType::UInt64, DataType::Float64) => false,
+        (from, into) if from.is_decimal() && into.is_floating() => false,
+        (from, into) if into.is_decimal() => {
+            if from.is_floating() {
+                return false;
+            }
+            let Some((into_precision, into_scale)) = decimal_precision_scale(into) else {
+                return false;
+            };
+            let from_precision_scale = match from {
+                DataType::Int8 | DataType::UInt8 => Some((3, 0)),
+                DataType::Int16 | DataType::UInt16 => Some((5, 0)),
+                DataType::Int32 | DataType::UInt32 => Some((10, 0)),
+                DataType::Int64 => Some((19, 0)),
+                DataType::UInt64 => Some((20, 0)),
+                _ => decimal_precision_scale(from),
+            };
+            let Some((from_precision, from_scale)) = from_precision_scale else {
+                return false;
+            };
+            into_scale >= from_scale
+                && into_precision - into_scale >= from_precision - from_scale
+        }
+        _ => true,
+    }
+}
+
+fn decimal_precision_scale(data_type: &DataType) -> Option<(i16, i16)> {
+    match data_type {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
+            Some((*precision as i16, *scale as i16))
+        }
+        _ => None,
     }
 }
 
@@ -190,6 +281,23 @@ impl LogicalPlanBuilder {
                 static_fields_len,
                 recursive_fields_len
             );
+        }
+        for (index, (static_field, recursive_field)) in self
+            .plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(recursive_term.schema().fields())
+            .enumerate()
+        {
+            let static_type = static_field.data_type();
+            let recursive_type = recursive_field.data_type();
+            if !recursive_type_can_be_coerced(recursive_type, static_type) {
+                return plan_err!(
+                    "Recursive CTE '{name}' column {} has type {static_type} in the non-recursive term but {recursive_type} in the recursive term; cast the non-recursive term to the intended type",
+                    index + 1
+                );
+            }
         }
         // Ensure that the recursive term has the same field types as the static term
         let coerced_recursive_term =
@@ -331,7 +439,7 @@ impl LogicalPlanBuilder {
                 if let Some(prev_type) = common_type {
                     // Widen the running type so that it can hold both the
                     // previously seen rows and this row's value.
-                    let data_types = vec![prev_type.clone(), data_type.clone()];
+                    let data_types = [prev_type.clone(), data_type.clone()];
                     let Some(new_type) = type_union_resolution(&data_types) else {
                         return plan_err!(
                             "Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}"
@@ -1304,7 +1412,7 @@ impl LogicalPlanBuilder {
             .collect::<Result<_>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys).collect();
-        let mut join_on: Vec<(Expr, Expr)> = vec![];
+        let mut join_on: Vec<(Expr, Expr)> = Vec::with_capacity(on.len());
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
             if self.plan.schema().has_column(l)
@@ -1726,9 +1834,9 @@ pub fn unique_field_aliases(fields: &Fields) -> Vec<Option<String>> {
     // That's why we need the `seen` set, so the fields are always unique.
 
     // Tracks a mapping between a field name and the number of appearances of that field.
-    let mut name_map = HashMap::<&str, usize>::new();
+    let mut name_map = HashMap::<&str, usize>::with_capacity(fields.len());
     // Tracks all the fields and aliases that were previously seen.
-    let mut seen = HashSet::<Cow<String>>::new();
+    let mut seen = HashSet::<Cow<String>>::with_capacity(fields.len());
 
     fields
         .iter()
@@ -1988,22 +2096,20 @@ pub fn add_group_by_exprs_from_dependencies(
         return Ok(group_expr);
     }
 
-    // Names of the fields produced by the GROUP BY exprs for example, `GROUP BY
-    // c1 + 1` produces an output field named `"c1 + 1"`
-    let mut group_by_field_names = group_expr
+    // The input field that each GROUP BY expression passes through, or `None`
+    // for a computed expression such as `c1 + 1`
+    let mut group_by_input_indices = group_expr
         .iter()
-        .map(|e| e.schema_name().to_string())
+        .map(|e| passthrough_field_index(e, schema))
         .collect::<Vec<_>>();
 
     if let Some(target_indices) =
-        get_target_functional_dependencies(schema, &group_by_field_names)
+        get_target_functional_dependencies(schema, &group_by_input_indices)
     {
         for idx in target_indices {
-            let expr = Expr::Column(Column::from(schema.qualified_field(idx)));
-            let expr_name = expr.schema_name().to_string();
-            if !group_by_field_names.contains(&expr_name) {
-                group_by_field_names.push(expr_name);
-                group_expr.push(expr);
+            if !group_by_input_indices.contains(&Some(idx)) {
+                group_by_input_indices.push(Some(idx));
+                group_expr.push(Expr::Column(Column::from(schema.qualified_field(idx))));
             }
         }
     }
@@ -2015,9 +2121,10 @@ pub fn validate_unique_names<'a>(
     node_name: &str,
     expressions: impl IntoIterator<Item = &'a Expr>,
 ) -> Result<()> {
-    let mut unique_names = HashMap::new();
+    let expressions = expressions.into_iter();
+    let mut unique_names = HashMap::with_capacity(expressions.size_hint().0);
 
-    expressions.into_iter().enumerate().try_for_each(|(position, expr)| {
+    expressions.enumerate().try_for_each(|(position, expr)| {
         let name = expr.schema_name().to_string();
         match unique_names.get(&name) {
             None => {
@@ -3134,6 +3241,63 @@ mod tests {
         assert_snapshot!(plan, @r"
         Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]
           TableScan: employee_csv projection=[id, state, salary]
+        ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_aggregate_nullable_unique_adds_no_implicit_group_by_exprs()
+    -> Result<()> {
+        // A nullable UNIQUE column permits multiple NULL rows that may differ
+        // in the other columns, so it does not determine them across the
+        // single NULL group and they must not be added to the GROUP BY.
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("state", DataType::Utf8, true),
+            Field::new("salary", DataType::Int32, true),
+        ]);
+        let constraints = Constraints::new_unverified(vec![Constraint::Unique(vec![0])]);
+        let table_source = table_source_with_constraints(&schema, constraints);
+
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
+        let plan = LogicalPlanBuilder::scan("employee_csv", table_source, None)?
+            .with_options(options)
+            .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+            .build()?;
+
+        assert_snapshot!(plan, @r"
+        Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]
+          TableScan: employee_csv
+        ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_aggregate_not_null_unique_implicit_group_by_exprs() -> Result<()> {
+        // A UNIQUE column declared NOT NULL has no NULL rows, so it determines
+        // the other columns like a PRIMARY KEY and they are added to the
+        // GROUP BY.
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("state", DataType::Utf8, true),
+            Field::new("salary", DataType::Int32, true),
+        ]);
+        let constraints = Constraints::new_unverified(vec![Constraint::Unique(vec![0])]);
+        let table_source = table_source_with_constraints(&schema, constraints);
+
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
+        let plan = LogicalPlanBuilder::scan("employee_csv", table_source, None)?
+            .with_options(options)
+            .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+            .build()?;
+
+        assert_snapshot!(plan, @r"
+        Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]
+          TableScan: employee_csv
         ");
 
         Ok(())

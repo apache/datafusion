@@ -428,10 +428,6 @@ impl OptimizerRule for OptimizerMakeExtensionNodeInvalid {
         Some(ApplyOrder::TopDown)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     // Example rewrite pass which impacts validity of the extension node.
     fn rewrite(
         &self,
@@ -498,10 +494,6 @@ impl OptimizerRule for TopKOptimizerRule {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
     }
 
     // Example rewrite pass to insert a user defined LogicalPlanNode
