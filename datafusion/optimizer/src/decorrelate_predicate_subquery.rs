@@ -3507,4 +3507,38 @@ mod tests {
         "
         )
     }
+
+    #[test]
+    fn exists_subquery_filter_above_correlated_derived_table() -> Result<()> {
+        let sq_scan = test_table_scan_with_name("sq")?;
+        let derived = LogicalPlanBuilder::from(sq_scan)
+            .filter(col("sq.c").eq(out_ref_col(DataType::UInt32, "test.a")))?
+            .project(vec![col("sq.c")])?
+            .alias("t")?
+            .build()?;
+        let subquery = LogicalPlanBuilder::from(derived)
+            .filter(out_ref_col(DataType::UInt32, "test.b").gt(lit(0u32)))?
+            .project(vec![lit(1)])?
+            .build()?;
+
+        let outer_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(exists(Arc::new(subquery)))?
+            .project(vec![col("test.a")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a [a:UInt32]
+          LeftSemi Join:  Filter: __correlated_sq_1.c = test.a AND test.b > UInt32(0) [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_1 [Int32(1):Int32, c:UInt32]
+              Projection: Int32(1), t.c [Int32(1):Int32, c:UInt32]
+                SubqueryAlias: t [c:UInt32]
+                  Projection: sq.c [c:UInt32]
+                    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
 }
