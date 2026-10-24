@@ -97,7 +97,7 @@ use arrow::array::{
 };
 use arrow::compute::{BatchCoalescer, take};
 use arrow_ord::ord::make_comparator;
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow_schema::{DataType, SchemaRef, SortOptions};
 use datafusion_common::{NullEquality, Result, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{JoinType, Operator};
@@ -462,9 +462,12 @@ impl ExistencePWMJStream {
 /// and the comparator normalizes `-0.0` on either side of it.
 ///
 /// Nested keys use Arrow's comparator, so inner NULLs have the same ordering as
-/// sorting and range comparisons. Other keys use the typed min/max kernels.
+/// sorting and range comparisons, as do run-end encoded keys, which the typed min/max
+/// kernels do not support. Other keys use the typed min/max kernels.
 pub(super) fn extreme_key(values: &ArrayRef, descending: bool) -> Result<ArrayRef> {
-    if values.data_type().is_nested() {
+    if values.data_type().is_nested()
+        || matches!(values.data_type(), DataType::RunEndEncoded(_, _))
+    {
         // Reverse both value and inner-NULL ordering for max, matching SQL's
         // ascending NULLS FIRST nested comparison order.
         let cmp = make_comparator(
