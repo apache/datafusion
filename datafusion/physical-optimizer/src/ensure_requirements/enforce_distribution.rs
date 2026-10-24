@@ -220,8 +220,8 @@ pub fn adjust_input_keys_ordering(
                 *join_type,
                 new_conditions.1,
                 *null_equality,
-            )?
-            .with_null_aware(origin_exec.null_aware())
+                origin_exec.null_aware(),
+            )
             .map(|e| Arc::new(e) as _)
         };
         return reorder_partitioned_join_keys(
@@ -520,8 +520,8 @@ pub fn reorder_join_keys_to_inputs(
                 *join_type,
                 new_sort_options,
                 *null_equality,
-            )?
-            .with_null_aware(origin_exec.null_aware())
+                origin_exec.null_aware(),
+            )
             .map(|smj| Arc::new(smj) as _);
         }
     }
@@ -701,6 +701,7 @@ fn reorder_join_keys_to_range_inputs(
             join.join_type,
             new_sort_options,
             join.null_equality,
+            join.null_aware(),
         )?
         .with_projection(join.projection.clone())?;
         return Ok(Arc::new(reordered) as _);

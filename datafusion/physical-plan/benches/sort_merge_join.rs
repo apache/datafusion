@@ -158,6 +158,7 @@ fn do_join_with_filter(
         join_type,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        false,
     )
     .unwrap();
 

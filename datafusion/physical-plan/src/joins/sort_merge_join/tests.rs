@@ -282,6 +282,7 @@ fn join(
         join_type,
         sort_options,
         NullEquality::NullEqualsNothing,
+        false,
     )
 }
 
@@ -301,6 +302,7 @@ fn join_with_options(
         join_type,
         sort_options,
         null_equality,
+        false,
     )
 }
 
@@ -321,6 +323,7 @@ fn join_with_filter(
         join_type,
         sort_options,
         null_equality,
+        false,
     )
 }
 
@@ -428,6 +431,7 @@ fn join_and_projection_for_pushdown(
         Inner,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        false,
     )?);
     let input: Arc<dyn ExecutionPlan> = Arc::clone(&join) as _;
     let projection = ProjectionExec::try_new(
@@ -1796,15 +1800,16 @@ mod null_aware_tests {
         )];
         // Direct execution does not insert sorts. Fixtures are globally sorted
         // ASC NULLS FIRST, including across batch boundaries.
-        let join = join_with_options(
+        let join = SortMergeJoinExec::try_new(
             left,
             right,
             on,
+            None,
             LeftAnti,
             vec![SortOptions::new(false, true)],
             NullEquality::NullEqualsNothing,
-        )?
-        .with_null_aware(true)?;
+            true,
+        )?;
         let context = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::new().with_batch_size(batch_size)),
@@ -4923,6 +4928,7 @@ async fn join_get_stream_and_get_expected(
         join_type,
         sort_options,
         null_equality,
+        false,
     )?;
 
     let stream = join.execute(0, task_ctx)?;
@@ -6751,6 +6757,7 @@ async fn bitwise_spill_with_filter() -> Result<()> {
                 join_type,
                 sort_options.clone(),
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
             let stream = join.execute(0, task_ctx)?;
             let spilled_result = common::collect(stream).await.unwrap();
@@ -6800,6 +6807,7 @@ async fn bitwise_spill_with_filter() -> Result<()> {
                 join_type,
                 sort_options.clone(),
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
             let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
             let no_spill_result = common::collect(stream).await.unwrap();
@@ -6861,6 +6869,7 @@ async fn bitwise_filtered_no_spill() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            false,
         )?;
         let stream = join.execute(0, task_ctx)?;
         let err = common::collect(stream).await.unwrap_err();
@@ -7146,6 +7155,7 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            false,
         )?;
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
@@ -7251,6 +7261,7 @@ async fn bitwise_spill_null_key_group() -> Result<()> {
         LeftSemi,
         sort_options,
         NullEquality::NullEqualsNull,
+        false,
     )?;
     let stream = join.execute(0, task_ctx)?;
     let batches = common::collect(stream).await?;
@@ -7922,6 +7933,7 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            false,
         )?;
         let stream = join.execute(0, task_ctx)?;
         let spilled_result = common::collect(stream).await.unwrap();
@@ -7941,6 +7953,7 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            false,
         )?;
         let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
         let no_spill_result = common::collect(stream).await.unwrap();
@@ -7981,6 +7994,7 @@ async fn swap_inputs_swaps_the_projection() -> Result<()> {
         Inner,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        false,
     )?
     .with_projection(Some(vec![4, 2]))?;
 
@@ -8052,6 +8066,7 @@ async fn swap_inputs_swaps_the_filter() -> Result<()> {
             join_type,
             vec![SortOptions::default()],
             NullEquality::NullEqualsNothing,
+            false,
         )?;
 
         let swapped = join.swap_inputs()?;
@@ -8101,6 +8116,7 @@ async fn an_empty_projection_keeps_the_rows() -> Result<()> {
         Inner,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        false,
     )?
     .with_projection(Some(vec![]))?;
 
@@ -8191,6 +8207,7 @@ async fn collect_streamed_keys(
         join_type,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        false,
     )?;
 
     // A small batch size keeps the gate firing often enough to interleave the

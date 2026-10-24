@@ -1762,18 +1762,16 @@ impl DefaultPhysicalPlanner {
                     // without a filter. Single-partition inputs and NULLS FIRST ordering
                     // let the stream determine whether the entire RHS is empty or
                     // contains NULL before emitting any rows.
-                    Arc::new(
-                        SortMergeJoinExec::try_new(
-                            physical_left,
-                            physical_right,
-                            join_on,
-                            join_filter,
-                            *join_type,
-                            vec![SortOptions::new(false, true)], // ASC NULLS FIRST
-                            *null_equality,
-                        )?
-                        .with_null_aware(true)?,
-                    )
+                    Arc::new(SortMergeJoinExec::try_new(
+                        physical_left,
+                        physical_right,
+                        join_on,
+                        join_filter,
+                        *join_type,
+                        vec![SortOptions::new(false, true)], // ASC NULLS FIRST
+                        *null_equality,
+                        true,
+                    )?)
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && !prefer_hash_join
@@ -1798,6 +1796,7 @@ impl DefaultPhysicalPlanner {
                         *join_type,
                         vec![SortOptions::default(); join_on_len],
                         *null_equality,
+                        false,
                     )?)
                 } else {
                     // Remaining null-aware joins need global probe-side state, so keep

@@ -1889,6 +1889,7 @@ fn test_sort_merge_join_interleaved_projection_embeds() -> Result<()> {
         JoinType::Inner,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        false,
     )?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![

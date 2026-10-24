@@ -428,6 +428,7 @@ fn roundtrip_sort_merge_join_with_projection() -> Result<()> {
                     JoinType::Inner,
                     vec![SortOptions::default()],
                     NullEquality::NullEqualsNothing,
+                    false,
                 )?
                 .with_projection(projection.clone())?,
             ),
@@ -439,6 +440,55 @@ fn roundtrip_sort_merge_join_with_projection() -> Result<()> {
         assert_eq!(result.projection, projection);
     }
 
+    Ok(())
+}
+
+#[test]
+fn roundtrip_sort_merge_join_null_aware() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, true)]));
+    let on = vec![(
+        Arc::new(Column::new("key", 0)) as _,
+        Arc::new(Column::new("key", 0)) as _,
+    )];
+
+    for null_aware in [false, true] {
+        // Preserve the flag together with absent, empty, and nonempty projections.
+        for projection in [None, Some(vec![]), Some(vec![0])] {
+            let plan: Arc<dyn ExecutionPlan> = Arc::new(
+                SortMergeJoinExec::try_new(
+                    Arc::new(EmptyExec::new(Arc::clone(&schema))),
+                    Arc::new(EmptyExec::new(Arc::clone(&schema))),
+                    on.clone(),
+                    None,
+                    JoinType::LeftAnti,
+                    vec![SortOptions::new(false, true)],
+                    NullEquality::NullEqualsNothing,
+                    null_aware,
+                )?
+                .with_projection(projection.clone())?,
+            );
+            let decoded = roundtrip_test_and_return(
+                Arc::clone(&plan),
+                &ctx,
+                &codec,
+                &proto_converter,
+            )?;
+            let decoded = decoded.downcast_ref::<SortMergeJoinExec>().unwrap();
+            assert_eq!(decoded.null_aware(), null_aware);
+            assert_eq!(decoded.projection, projection);
+
+            #[cfg(feature = "json")]
+            {
+                let decoded = super::roundtrip_test_json_and_return(plan, &ctx)?;
+                let decoded = decoded.downcast_ref::<SortMergeJoinExec>().unwrap();
+                assert_eq!(decoded.null_aware(), null_aware);
+                assert_eq!(decoded.projection, projection);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -507,6 +557,7 @@ fn roundtrip_sort_merge_join() -> Result<()> {
                         join_type,
                         sort_options.clone(),
                         null_equality,
+                        false,
                     )?),
                     &ctx,
                     &codec,
@@ -515,6 +566,7 @@ fn roundtrip_sort_merge_join() -> Result<()> {
                 let result = result.downcast_ref::<SortMergeJoinExec>().unwrap();
                 assert_eq!(result.join_type(), join_type);
                 assert_eq!(result.null_equality(), null_equality);
+                assert!(!result.null_aware());
                 assert_eq!(result.sort_options(), sort_options);
                 assert_eq!(
                     result.filter().as_ref().map(|f| f.column_indices()),
