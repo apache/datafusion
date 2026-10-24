@@ -98,7 +98,7 @@ SELECT count(*) FROM (
 )
 ----
 Plan with Metrics
-01)MaterializedCteExec: name=c, metrics=[spill_count=0, <slt:ignore>buffered_rows=4]
+01)MaterializedCteExec: name=c, metrics=[spill_count=0, <slt:ignore>buffered_rows=4, <slt:ignore>]
 02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[<slt:ignore>]
 03)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
 04)----AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
@@ -415,10 +415,13 @@ SELECT * FROM (
 ----
 1 10
 
-# Spill: the body does not fit in the memory limit, so it is written to disk
-# and replayed from there by every reference. Part of the in-memory prefix is
-# also moved to disk, so that the two references have memory to decode the
-# spill files (spill_count=2).
+# Streaming: the body does not fit in the memory limit. The two references of
+# the UNION ALL read at about the same rate, so the body streams to both of
+# them. The log of the CTE keeps at most 150 KB in memory, which is two
+# batches of 64 KB. The two references run on two threads. When one of them
+# is more than two batches ahead, which depends on the thread scheduling, the
+# batches that the other has not read go to disk. Thus the spill count is
+# not checked.
 statement ok
 SET datafusion.execution.target_partitions = 1
 
@@ -436,7 +439,7 @@ EXPLAIN ANALYZE WITH g AS MATERIALIZED (SELECT value AS x FROM generate_series(1
 SELECT count(*) FROM (SELECT x FROM g UNION ALL SELECT x FROM g)
 ----
 Plan with Metrics
-01)MaterializedCteExec: name=g, metrics=[spill_count=2, <slt:ignore>buffered_rows=200.0 K]
+01)MaterializedCteExec: name=g, metrics=[<slt:ignore>buffered_rows=200.0 K, <slt:ignore>]
 02)--ProjectionExec: expr=[value@0 as x], metrics=[output_rows=200.0 K, <slt:ignore>]
 03)----LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=200000, batch_size=8192], metrics=[output_rows=200.0 K, <slt:ignore>]
 04)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
@@ -449,11 +452,29 @@ Plan with Metrics
 11)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
 12)--------------MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
 
-# Spill: the first batch has long strings and stays in memory. The next
-# batches are smaller and go to disk. The two references then need memory to
-# decode the spill files, and the first batch must move to disk. It is
-# written in pieces, because each reference reserves memory for the largest
-# batch on disk.
+# The two scalar subqueries run at the same time, and the body is computed one
+# time for both of them.
+query TT
+EXPLAIN ANALYZE WITH g AS MATERIALIZED (SELECT value AS x FROM generate_series(1, 200000))
+SELECT (SELECT count(*) FROM g), (SELECT sum(x) FROM g)
+----
+Plan with Metrics
+01)ScalarSubqueryExec: subqueries=2, metrics=[]
+02)--MaterializedCteExec: name=g, metrics=[<slt:ignore>buffered_rows=200.0 K, <slt:ignore>]
+03)----ProjectionExec: expr=[value@0 as x], metrics=[<slt:ignore>]
+04)------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=200000, batch_size=8192], metrics=[<slt:ignore>]
+05)----ProjectionExec: expr=[scalar_subquery(200000) as count(*), scalar_subquery(20000100000) as sum(g.x)], metrics=[<slt:ignore>]
+06)------PlaceholderRowExec, metrics=[]
+07)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+08)----AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+09)------ProjectionExec: expr=[], metrics=[<slt:ignore>]
+10)--------MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
+11)--AggregateExec: mode=Single, gby=[], aggr=[sum(g.x)], metrics=[<slt:ignore>]
+12)----MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
+
+# Spill: the first batch has long strings and is larger than the memory that
+# is left. It is written to disk in pieces, because each reference reserves
+# memory for the largest piece that it reads from disk.
 statement ok
 SET datafusion.runtime.memory_limit = '18M'
 
