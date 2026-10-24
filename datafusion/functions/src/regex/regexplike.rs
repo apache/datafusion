@@ -327,12 +327,12 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
                 _ => {
                     let string_view_array = flags.as_string_view();
-                    let string_vec: Vec<Option<String>> = (0..string_view_array.len())
+                    let string_vec: Vec<Option<&str>> = (0..string_view_array.len())
                         .map(|i| {
                             if string_view_array.is_null(i) {
                                 None
                             } else {
-                                Some(string_view_array.value(i).to_string())
+                                Some(string_view_array.value(i))
                             }
                         })
                         .collect();

@@ -23,8 +23,10 @@ CREATE EXTERNAL TABLE hits
 STORED AS PARQUET
 LOCATION '../core/tests/data/clickbench_hits_10.parquet';
 
-# If you change any of these queries, please change the corresponding query in
-# benchmarks/queries/clickbench/extended.sql and update the README.
+# Keep query bodies synchronized with:
+# - benchmarks/queries/clickbench/extended/qN.sql
+# - benchmarks/sql_benchmarks/clickbench_extended/benchmarks/qNN.benchmark
+# The `clickbench_parity` test enforces this contract.
 
 query III
 SELECT COUNT(DISTINCT "SearchPhrase"), COUNT(DISTINCT "MobilePhone"), COUNT(DISTINCT "MobilePhoneModel") FROM hits;
@@ -130,6 +132,23 @@ query TII
 SELECT "SearchPhrase", COUNT(*) AS c, COUNT(DISTINCT "MobilePhoneModel") AS models FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY c DESC LIMIT 10;
 ----
 
+query R
+SELECT MAX(c) FROM (
+    SELECT covar_samp("ResolutionWidth", "ResolutionHeight") as c
+    FROM hits
+    GROUP BY "UserID"
+);
+----
+0
+
+query R
+SELECT MAX(c) FROM (
+    SELECT covar_samp("ResolutionWidth", "ResolutionHeight") as c
+    FROM hits
+    GROUP BY "RegionID"
+);
+----
+0
 
 statement ok
 drop table hits;

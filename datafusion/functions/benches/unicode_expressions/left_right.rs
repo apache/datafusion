@@ -16,55 +16,116 @@
 // under the License.
 
 use std::hint::black_box;
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int64Array};
-use arrow::datatypes::{DataType, Field};
+use arrow::array::{StringArray, StringViewArray};
+use arrow::datatypes::{Field, Int64Type};
 use arrow::util::bench_util::{
-    create_string_array_with_len, create_string_view_array_with_len,
+    create_primitive_array_range, create_string_array_with_len_range_and_prefix_and_seed,
 };
 use criterion::{Criterion, criterion_group};
+use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_functions::unicode::{left, right};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 const BATCH_SIZE: usize = 8192;
 
+/// How the `n` argument is passed.
+enum NArg {
+    /// The same `n` for every row, as in `left(s, 5)`.
+    Scalar(i64),
+    /// A different `n` for each row, drawn from the range.
+    PerRow(Range<i64>),
+}
+
+/// Cyrillic text, two bytes per letter, with spaces between words.
+fn create_cyrillic_string_array(str_len: &RangeInclusive<usize>) -> StringArray {
+    let letters = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
+        .chars()
+        .collect::<Vec<_>>();
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..BATCH_SIZE)
+        .map(|_| {
+            if rng.random::<f32>() < 0.1 {
+                return None;
+            }
+            let len = rng.random_range(str_len.clone());
+            let string = (0..len)
+                .map(|_| {
+                    if rng.random_ratio(1, 7) {
+                        ' '
+                    } else {
+                        letters[rng.random_range(0..letters.len())]
+                    }
+                })
+                .collect::<String>();
+            Some(string)
+        })
+        .collect()
+}
+
 fn create_args(
-    str_len: usize,
-    n_range: Range<i64>,
+    str_len: &RangeInclusive<usize>,
+    n: &NArg,
+    ascii: bool,
     is_string_view: bool,
 ) -> Vec<ColumnarValue> {
-    let string_arg = if is_string_view {
-        ColumnarValue::Array(Arc::new(create_string_view_array_with_len(
-            BATCH_SIZE, 0.1, str_len, true,
-        )))
+    let strings = if ascii {
+        create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+            BATCH_SIZE,
+            0.1,
+            *str_len.start(),
+            *str_len.end(),
+            "",
+            42,
+        )
     } else {
-        ColumnarValue::Array(Arc::new(create_string_array_with_len::<i32>(
-            BATCH_SIZE, 0.1, str_len,
-        )))
+        create_cyrillic_string_array(str_len)
+    };
+    let string_arg = if is_string_view {
+        ColumnarValue::Array(Arc::new(strings.iter().collect::<StringViewArray>()))
+    } else {
+        ColumnarValue::Array(Arc::new(strings))
     };
 
-    let n_span = (n_range.end - n_range.start) as usize;
-    let n_values: Vec<i64> = (0..BATCH_SIZE)
-        .map(|i| n_range.start + (i % n_span) as i64)
-        .collect();
-    let n_array = Arc::new(Int64Array::from(n_values));
+    let n_arg = match n {
+        NArg::Scalar(n) => ColumnarValue::Scalar(ScalarValue::Int64(Some(*n))),
+        NArg::PerRow(range) => ColumnarValue::Array(Arc::new(
+            create_primitive_array_range::<Int64Type>(BATCH_SIZE, 0.0, range.clone()),
+        )),
+    };
 
-    vec![
-        string_arg,
-        ColumnarValue::Array(Arc::clone(&n_array) as ArrayRef),
-    ]
+    vec![string_arg, n_arg]
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    // Short results (1-10 chars) produce inline StringView entries (≤12 bytes).
-    // Long results (20-29 chars) produce out-of-line entries.
+    // Input lengths vary within each case, as in real data: with fixed-length
+    // inputs, per-row work that depends on the input length is unrealistically
+    // predictable.
+    // Lengths are in characters for non-ASCII inputs.
     let cases = [
-        ("short_result", 32, 1..11_i64),
-        ("long_result", 32, 20..30_i64),
+        // Results of up to 5 chars, stored inline in StringView arrays (≤12 bytes).
+        ("short_result", 1..=32, NArg::Scalar(5), true),
+        // 25-char results, stored out of line.
+        ("long_result", 32..=64, NArg::Scalar(25), true),
+        // Short results from long inputs.
+        ("short_result_long_input", 96..=256, NArg::Scalar(5), true),
+        // `n` exceeds every input's length, so each result is the whole input.
+        ("n_exceeds_len", 1..=32, NArg::Scalar(40), true),
+        // Negative `n` removes characters from the other end.
+        ("negative_n", 1..=32, NArg::Scalar(-5), true),
+        // `n` computed per row, as in `left(s, strpos(s, '-') - 1)`.
+        ("per_row_n", 1..=32, NArg::PerRow(1..11), true),
+        // Non-ASCII inputs need a scan for character boundaries.
+        ("non_ascii short_result", 1..=32, NArg::Scalar(5), false),
+        ("non_ascii long_result", 64..=256, NArg::Scalar(100), false),
+        ("non_ascii negative_n", 64..=256, NArg::Scalar(-100), false),
     ];
+    let config_options = Arc::new(ConfigOptions::default());
 
     for function in [left(), right()] {
         let mut group = c.benchmark_group(function.name().to_string());
@@ -76,9 +137,9 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "string"
             };
 
-            for (case_name, str_len, n_range) in &cases {
+            for (case_name, str_len, n, ascii) in &cases {
                 let bench_name = format!("{array_type} {case_name}");
-                let args = create_args(*str_len, n_range.clone(), is_string_view);
+                let args = create_args(str_len, n, *ascii, is_string_view);
                 let arg_fields: Vec<_> = args
                     .iter()
                     .enumerate()
@@ -86,8 +147,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
                     })
                     .collect();
-                let config_options = Arc::new(ConfigOptions::default());
-                let return_field = Field::new("f", DataType::Utf8View, true).into();
+                let scalar_arguments = vec![None; arg_fields.len()];
+                let return_field = function
+                    .return_field_from_args(ReturnFieldArgs {
+                        arg_fields: &arg_fields,
+                        scalar_arguments: &scalar_arguments,
+                    })
+                    .expect("should resolve return field");
 
                 group.bench_function(&bench_name, |b| {
                     b.iter(|| {

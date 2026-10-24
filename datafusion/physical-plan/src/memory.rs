@@ -159,6 +159,23 @@ pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
 
     /// Returns a new instance with the state reset.
     fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>>;
+
+    /// Encode this generator using the built-in generate-series wire format.
+    ///
+    /// The returned node carries the generator's arguments and batch size;
+    /// [`LazyMemoryExec`] supplies its output schema. The current wire format
+    /// only represents a single generate-series generator. Returning `Some(node)`
+    /// opts into reconstruction as a built-in series generator: its rows, batch
+    /// boundaries, and schema must match this generator after `reset_state()`.
+    /// The payload must describe the initial state, not the current cursor.
+    /// Returning `Ok(None)` leaves serialization to the execution plan's extension
+    /// codec. Returning `Err` stops serialization without extension fallback.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+    ) -> Result<Option<datafusion_proto_models::protobuf::GenerateSeriesNode>> {
+        Ok(None)
+    }
 }
 
 /// Execution plan for lazy in-memory batches of data
@@ -381,6 +398,29 @@ impl ExecutionPlan for LazyMemoryExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Preserve the existing single-generator wire format. Multiple
+        // generators still require a plan extension codec.
+        let [generator] = self.batch_generators.as_slice() else {
+            return Ok(None);
+        };
+        let Some(mut node) = generator.read().try_to_proto()? else {
+            return Ok(None);
+        };
+        node.schema = Some(self.schema.as_ref().try_into()?);
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::GenerateSeries(node),
+            ),
+        }))
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {

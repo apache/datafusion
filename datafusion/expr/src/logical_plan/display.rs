@@ -22,9 +22,10 @@ use std::fmt;
 
 use crate::{
     Aggregate, AsOfJoin, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter,
-    Join, Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition,
-    Sort, Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest,
-    Values, Window, expr_vec_fmt,
+    Join, Limit, LogicalPlan, MaterializedCte, MaterializedCtePlan, MaterializedCteScan,
+    Partitioning, Projection, RecursiveQuery, Repartition, Sort, Subquery, SubqueryAlias,
+    TableProviderFilterPushDown, TableScan, Unnest, Values, Window, WriteOp,
+    expr_vec_fmt,
 };
 
 use crate::dml::CopyTo;
@@ -463,11 +464,27 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 )
             }
             LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
-                pg_fields!(
-                    "Node Type": "Projection",
+                let mut object = pg_fields!(
+                    "Node Type": "Dml",
                     "Operation": op.name(),
                     "Table Name": table_name.table()
-                )
+                );
+                if let WriteOp::MergeInto(merge_op) = op {
+                    object.push("On", serde_json::Value::String(merge_op.on.to_string()));
+                    object.push(
+                        "Clauses",
+                        serde_json::Value::Array(
+                            merge_op
+                                .clauses
+                                .iter()
+                                .map(|clause| {
+                                    serde_json::Value::String(clause.to_string())
+                                })
+                                .collect(),
+                        ),
+                    );
+                }
+                object
             }
             LogicalPlan::Copy(CopyTo {
                 input: _,
@@ -689,6 +706,23 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 pg_fields!(
                     "Node Type": e.node.name(),
                     "Detail": format!("{:?}", e.node)
+                )
+            }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+                name,
+                ..
+            })) => {
+                pg_fields!(
+                    "Node Type": "MaterializedCte",
+                    "Name": name,
+                )
+            }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+                MaterializedCteScan { name, .. },
+            )) => {
+                pg_fields!(
+                    "Node Type": "MaterializedCteScan",
+                    "Name": name,
                 )
             }
             LogicalPlan::DescribeTable(DescribeTable { .. }) => {

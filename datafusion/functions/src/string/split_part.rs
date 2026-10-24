@@ -17,11 +17,12 @@
 
 use crate::strings::{
     BulkNullStringArrayBuilder, GenericStringArrayBuilder, StringViewArrayBuilder,
+    substr_view,
 };
 use crate::utils::utf8_to_str_type;
 use arrow::array::{
-    Array, ArrayRef, AsArray, ByteView, Int64Array, StringArrayType, StringViewArray,
-    make_view, new_null_array,
+    Array, ArrayRef, AsArray, Int64Array, StringArrayType, StringViewArray, make_view,
+    new_null_array,
 };
 use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -503,22 +504,6 @@ fn split_part_scalar_view(
     }
 }
 
-/// Creates a `StringView` referencing a substring of an existing view's buffer.
-/// For substrings ≤ 12 bytes, creates an inline view instead.
-#[inline]
-fn substr_view(original_view: &u128, substr: &str, start_offset: u32) -> u128 {
-    if substr.len() > 12 {
-        let view = ByteView::from(*original_view);
-        make_view(
-            substr.as_bytes(),
-            view.buffer_index,
-            view.offset + start_offset,
-        )
-    } else {
-        make_view(substr.as_bytes(), 0, 0)
-    }
-}
-
 /// Applies `split_fn` to each non-null string and appends the resulting view to
 /// `views_buf`.
 #[inline(always)]
@@ -538,10 +523,7 @@ fn split_view_loop<F>(
         }
         let string = string_view_array.value(i);
         match split_fn(string) {
-            Some(substr) => {
-                let start_offset = substr.as_ptr() as usize - string.as_ptr() as usize;
-                views_buf.push(substr_view(raw_view, substr, start_offset as u32));
-            }
+            Some(substr) => views_buf.push(substr_view(*raw_view, string, substr)),
             None => views_buf.push(empty_view),
         }
     }
