@@ -254,3 +254,37 @@ SELECT l.id, r.id FROM nested_zeros l JOIN nested_zeros r ON l.a = r.a ORDER BY 
 
 statement ok
 DROP TABLE nested_zeros;
+
+#####
+## Sort-based joins with multi-element nested float keys
+#####
+
+statement ok
+CREATE TABLE fa AS SELECT * FROM (VALUES
+  (1, make_array(arrow_cast(-0.0, 'Float64'), 1.0)),
+  (2, make_array(0.0, 0.0)),
+  (3, make_array(0.0, 1.0))) t(id, k);
+
+statement ok
+CREATE TABLE fb AS SELECT * FROM (VALUES
+  (10, make_array(0.0, 1.0)),
+  (11, make_array(0.0, 0.0))) t(id, k);
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+query II
+SELECT fa.id, fb.id FROM fa JOIN fb ON fa.k = fb.k ORDER BY fa.id, fb.id;
+----
+1 10
+2 11
+3 10
+
+statement ok
+reset datafusion.optimizer.prefer_hash_join;
+
+statement ok
+DROP TABLE fa;
+
+statement ok
+DROP TABLE fb;
