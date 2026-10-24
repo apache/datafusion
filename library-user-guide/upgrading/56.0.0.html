@@ -1308,6 +1308,26 @@ Build it with <code class="docutils literal notranslate"><span class="pre">Funct
 </pre></div>
 </div>
 </section>
+<section id="nullable-unique-constraints-no-longer-add-or-remove-group-by-expressions">
+<h3>Nullable <code class="docutils literal notranslate"><span class="pre">UNIQUE</span></code> constraints no longer add or remove <code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code> expressions<a class="headerlink" href="#nullable-unique-constraints-no-longer-add-or-remove-group-by-expressions" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">get_target_functional_dependencies</span></code> and <code class="docutils literal notranslate"><span class="pre">get_required_group_by_exprs_indices</span></code>
+now ignore a functional dependency that does not hold across NULL determinant
+values (see <code class="docutils literal notranslate"><span class="pre">FunctionalDependence::is_valid_across_nulls</span></code>), such as one derived
+from a nullable <code class="docutils literal notranslate"><span class="pre">UNIQUE</span></code> constraint, because <code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code> places all NULL keys in
+a single group.</p>
+<p>As a result, a column that is only determined by a nullable <code class="docutils literal notranslate"><span class="pre">UNIQUE</span></code> key can no
+longer be selected without appearing in the <code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code>. This matches PostgreSQL,
+which accepts such a query only for a <code class="docutils literal notranslate"><span class="pre">PRIMARY</span> <span class="pre">KEY</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="nb">INT</span><span class="w"> </span><span class="k">UNIQUE</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="nb">INT</span><span class="p">);</span>
+
+<span class="c1">-- Now fails: Column in SELECT must be in GROUP BY or an aggregate function</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
+
+<span class="c1">-- Works: add `y` to the GROUP BY, aggregate it, or declare `x` NOT NULL</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="functional-dependency-helpers-take-field-indices-instead-of-names">
 <h3>Functional dependency helpers take field indices instead of names<a class="headerlink" href="#functional-dependency-helpers-take-field-indices-instead-of-names" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies</span></code>, <code class="docutils literal notranslate"><span class="pre">get_target_functional_dependencies</span></code>,
@@ -1693,6 +1713,7 @@ also accounts for the output ordering.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoopnode-protobuf-literals-require-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-aware-joins-record-their-not-in-value-key-count">Null-aware joins record their <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value key count</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functionaldependence-has-a-new-null-equality-field"><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#nullable-unique-constraints-no-longer-add-or-remove-group-by-expressions">Nullable <code class="docutils literal notranslate"><span class="pre">UNIQUE</span></code> constraints no longer add or remove <code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code> expressions</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functional-dependency-helpers-take-field-indices-instead-of-names">Functional dependency helpers take field indices instead of names</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesource-exact-filter-controls-scan-equivalence-properties"><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tableprovider-scan-with-args-supports-skip-pushdown"><code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args</span></code> supports skip pushdown</a><ul class="nav section-nav flex-column">
