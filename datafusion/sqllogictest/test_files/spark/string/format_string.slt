@@ -154,7 +154,7 @@ Scientific: 1.234500E+03
 query T
 SELECT format_string('Compact: %g', 1234.5);
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('Compact: %g', CAST(123456789.1 AS DOUBLE));
@@ -165,7 +165,7 @@ Compact: 1.23457e+08
 query T
 SELECT format_string('Compact: %G', 1234.5);
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('Compact: %G', CAST(123456789.1 AS DOUBLE));
@@ -1564,7 +1564,7 @@ Scientific: 1.234500e+03
 query T
 SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Float32'));
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('String: %s', arrow_cast(3.14159, 'Float32'));
@@ -1612,22 +1612,22 @@ Scientific: 1.234500E+03
 query T
 SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Decimal128(10, 2)'));
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('Compact: %G', arrow_cast(1234.5, 'Decimal128(10, 2)'));
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('String: %s', arrow_cast(123.456, 'Decimal128(10, 3)'));
 ----
-String: 123456
+String: 123.456
 
 query T
 SELECT format_string('String: %S', arrow_cast(123.456, 'Decimal128(10, 3)'));
 ----
-String: 123456
+String: 123.456
 
 ## Decimal256 with various formats
 query T
@@ -1643,12 +1643,12 @@ Scientific: 1.234500e+03
 query T
 SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Decimal256(20, 2)'));
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('String: %s', arrow_cast(123.456, 'Decimal256(20, 3)'));
 ----
-String: 123456
+String: 123.456
 
 ## Time32Second with time formats
 query T
@@ -2402,3 +2402,80 @@ query T
 SELECT format_string('Large octal: %o', 9223372036854775807::BIGINT);
 ----
 Large octal: 777777777777777777777
+
+# %g keeps trailing zeros and %s prints a DECIMAL with its scale, like Java's Formatter
+
+query T
+SELECT format_string('%g', 0.0001::double);
+----
+0.000100000
+
+query T
+SELECT format_string('%g', 0.00001::double);
+----
+1.00000e-05
+
+query T
+SELECT format_string('%g', 123456789.0::double);
+----
+1.23457e+08
+
+query T
+SELECT format_string('%.3g', 1234.5::double);
+----
+1.23e+03
+
+query T
+SELECT format_string('%g', 0.0::double);
+----
+0.00000
+
+query T
+SELECT format_string('%.0g', 1.0::double);
+----
+1
+
+query T
+SELECT format_string('%g', -2.5::double);
+----
+-2.50000
+
+query T
+SELECT format_string('%10.2g', 3.14159::double);
+----
+       3.1
+
+query T
+SELECT format_string('%g', 100000.0::double);
+----
+100000
+
+query T
+SELECT format_string('%g', 999999.5::double);
+----
+1.00000e+06
+
+query T
+SELECT format_string('%s', arrow_cast(0.5, 'Decimal128(10, 2)'));
+----
+0.50
+
+query T
+SELECT format_string('%S', arrow_cast(-1234.5, 'Decimal128(10, 2)'));
+----
+-1234.50
+
+query T
+SELECT format_string('%s', arrow_cast(123, 'Decimal128(10, 0)'));
+----
+123
+
+query T
+SELECT format_string('%10s', arrow_cast(1.5, 'Decimal128(10, 2)'));
+----
+      1.50
+
+query T
+SELECT format_string('%e', 0.0::double);
+----
+0.000000e+00
