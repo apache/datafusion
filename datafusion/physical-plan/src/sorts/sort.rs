@@ -1440,12 +1440,10 @@ impl ExecutionPlan for SortExec {
             .expect("rebuilt SortExec with new children")
             .clone();
         // Our dynamic filter and execution metrics are the state we need to reset.
-        let expr = new_sort.filter.as_ref().map(|filter| filter.read().expr());
-        if let Some(expr) = expr {
-            expr.reset()?;
-            new_sort.filter = Some(new_sort.create_filter_with_expr(expr));
+        if let Some(filter) = &new_sort.filter {
+            filter.read().expr().reset()?;
         }
-
+        new_sort.rebuild_filter_for_current_partitioning();
         new_sort.metrics_set = ExecutionPlanMetricsSet::new();
 
         Ok(Arc::new(new_sort))
