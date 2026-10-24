@@ -3544,6 +3544,56 @@ DROP TABLE correlated_inner;
 statement ok
 DROP TABLE multi_in_right_empty;
 
+# A subquery in a JOIN ON correlated on an aliased table
+statement ok
+CREATE TABLE on_alias_t (a INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE on_alias_s (b INT) AS VALUES (1);
+
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON x.a = ANY (SELECT b FROM on_alias_s);
+----
+1 1
+1 2
+
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON x.a > ALL (SELECT b FROM on_alias_s);
+----
+2 1
+2 2
+
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON EXISTS (SELECT 1 FROM on_alias_s WHERE on_alias_s.b = x.a);
+----
+1 1
+1 2
+
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON NOT EXISTS (SELECT 1 FROM on_alias_s WHERE on_alias_s.b = x.a);
+----
+2 1
+2 2
+
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON x.a IN (SELECT b FROM on_alias_s WHERE on_alias_s.b = x.a);
+----
+1 1
+1 2
+
+# The subquery is nested in an OR, so it is not a top-level conjunct
+query II rowsort
+SELECT * FROM on_alias_t AS x JOIN on_alias_t AS y ON (EXISTS (SELECT 1 FROM on_alias_s WHERE on_alias_s.b = x.a) OR x.a = 99);
+----
+1 1
+1 2
+
+statement ok
+DROP TABLE on_alias_t;
+
+statement ok
+DROP TABLE on_alias_s;
+
 # Regression test for #25507: a correlated filter below the side of an outer
 # join that the join fills with NULLs must not be pulled above the join. The
 # filter decides which rows of the other side are unmatched, so once it is

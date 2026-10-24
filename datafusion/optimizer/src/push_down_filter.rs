@@ -849,6 +849,26 @@ fn references_any_column(expr: &Expr, names: &HashSet<String>) -> bool {
     found
 }
 
+/// Whether a subquery inside `expr` correlates on any of the columns whose
+/// qualified names are the keys of `columns`.
+fn has_outer_ref_to_any<V>(expr: &Expr, columns: &HashMap<String, V>) -> bool {
+    expr.exists(|e| {
+        let outer_refs = match e {
+            Expr::Exists(exists) => &exists.subquery.outer_ref_columns,
+            Expr::InSubquery(in_subquery) => &in_subquery.subquery.outer_ref_columns,
+            Expr::ScalarSubquery(subquery) => &subquery.outer_ref_columns,
+            Expr::SetComparison(set_comparison) => {
+                &set_comparison.subquery.outer_ref_columns
+            }
+            _ => return Ok(false),
+        };
+        Ok(outer_refs.iter().any(|outer_ref| {
+            matches!(outer_ref, Expr::OuterReferenceColumn(_, c) if columns.contains_key(&c.flat_name()))
+        }))
+    })
+    .expect("traversal is infallible")
+}
+
 impl OptimizerRule for PushDownFilter {
     fn name(&self) -> &str {
         "push_down_filter"
@@ -998,10 +1018,28 @@ impl OptimizerRule for PushDownFilter {
                     );
                 }
 
-                filter.predicate = replace_cols_by_name(filter.predicate, &replace_map)?;
+                // `replace_cols_by_name` doesn't rewrite the outer references
+                // of a subquery, so a predicate whose subquery correlates on
+                // the alias would name a qualifier that doesn't exist below
+                // it. Keep those predicates above the alias.
+                let (keep_predicates, push_predicates): (Vec<_>, Vec<_>) =
+                    split_conjunction_owned(filter.predicate)
+                        .into_iter()
+                        .partition(|expr| has_outer_ref_to_any(expr, &replace_map));
+                let Some(predicate) = conjunction(push_predicates) else {
+                    filter.predicate = conjunction(keep_predicates)
+                        .expect("every conjunct is kept when none is pushed");
+                    filter.input = Arc::new(LogicalPlan::SubqueryAlias(subquery_alias));
+                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                };
+
+                filter.predicate = replace_cols_by_name(predicate, &replace_map)?;
                 filter.input = subquery_alias.input;
                 subquery_alias.input = Arc::new(LogicalPlan::Filter(filter));
-                Ok(Transformed::yes(LogicalPlan::SubqueryAlias(subquery_alias)))
+                Ok(Transformed::yes(with_filters(
+                    keep_predicates,
+                    LogicalPlan::SubqueryAlias(subquery_alias),
+                )))
             }
             LogicalPlan::Projection(projection) => {
                 let predicates = split_conjunction_owned(filter.predicate.clone());
@@ -2444,6 +2482,32 @@ mod tests {
               TableScan: sq, full_filters=[outer_ref(test.c) = sq.a]
           NoopPlan
             TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn subquery_alias_outer_referenced_column() -> Result<()> {
+        // A subquery correlated on `b.a` can't be pushed below `SubqueryAlias: b`,
+        // where `b.a` is `test.a`. The other predicate still is.
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+            .filter(out_ref_col(DataType::UInt32, "b.a").eq(col("sq.a")))?
+            .project(vec![col("sq.a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .alias("b")?
+            .filter(exists(Arc::new(subquery)).and(col("b.c").gt(lit(1u32))))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: EXISTS (<subquery>)
+          Subquery:
+            Projection: sq.a
+              TableScan: sq, full_filters=[outer_ref(b.a) = sq.a]
+          SubqueryAlias: b
+            TableScan: test, full_filters=[test.c > UInt32(1)]
         "
         )
     }
