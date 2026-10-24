@@ -982,8 +982,8 @@ WHERE a + b > 2;
 ----
 logical_plan
 01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s, rank() PARTITION BY [window_ab.a + window_ab.b] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r
-02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [__common_expr_1 AS window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-03)----WindowAggr: windowExpr=[[rank() PARTITION BY [__common_expr_1 AS window_ab.a + window_ab.b] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [__common_expr_1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----WindowAggr: windowExpr=[[rank() PARTITION BY [__common_expr_1] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank() PARTITION BY [window_ab.a + window_ab.b] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------Projection: window_ab.a + window_ab.b AS __common_expr_1, window_ab.a, window_ab.b, window_ab.c
 05)--------Filter: window_ab.a + window_ab.b > Int32(2)
 06)----------TableScan: window_ab projection=[a, b, c]
