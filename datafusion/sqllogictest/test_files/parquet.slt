@@ -784,8 +784,150 @@ ERROR: Cast error: Failed to convert -9357363680509551 to datetime for Timestamp
 statement ok
 drop table int96_from_spark;
 
+# Without coerce_int96 the timezone has no effect: same type and values as the
+# default read above.
+statement ok
+reset datafusion.execution.parquet.coerce_int96;
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+query TTT
+describe int96_from_spark;
+----
+a Timestamp(ns) YES
+
+query P
+select * from int96_from_spark
+----
+2024-01-01T20:34:56.123456
+2024-01-01T01:00:00
+1816-03-29T08:56:08.066277376
+2024-12-30T23:00:00
+NULL
+1815-11-08T16:01:01.191053312
+
+statement ok
+drop table int96_from_spark;
+
+# An explicit nanosecond unit applies the timezone.
 statement ok
 set datafusion.execution.parquet.coerce_int96 = ns;
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+query TTT
+describe int96_from_spark;
+----
+a Timestamp(ns, "UTC") YES
+
+query P
+select * from int96_from_spark
+----
+2024-01-01T20:34:56.123456Z
+2024-01-01T01:00:00Z
+1816-03-29T08:56:08.066277376Z
+2024-12-30T23:00:00Z
+NULL
+1815-11-08T16:01:01.191053312Z
+
+statement ok
+drop table int96_from_spark;
+
+# Microseconds with the timezone. The last value is out of range for display,
+# as in the `coerce_int96 = ms` blocks above.
+statement ok
+set datafusion.execution.parquet.coerce_int96 = us;
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+query TTT
+describe int96_from_spark;
+----
+a Timestamp(µs, "UTC") YES
+
+query P
+select * from int96_from_spark
+----
+2024-01-01T20:34:56.123456Z
+2024-01-01T01:00:00Z
+9999-12-31T03:00:00Z
+2024-12-30T23:00:00Z
+NULL
+ERROR: Cast error: Failed to convert 9089380393200000000 to datetime for Timestamp(µs, "UTC")
+
+statement ok
+drop table int96_from_spark;
+
+# An explicit schema with the same type reads the same values. `WITH TIME ZONE`
+# takes the session time zone, so set it to match.
+statement ok
+set datafusion.execution.time_zone = 'UTC';
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark (a TIMESTAMP(6) WITH TIME ZONE)
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+query TTT
+describe int96_from_spark;
+----
+a Timestamp(µs, "UTC") YES
+
+query P
+select * from int96_from_spark
+----
+2024-01-01T20:34:56.123456Z
+2024-01-01T01:00:00Z
+9999-12-31T03:00:00Z
+2024-12-30T23:00:00Z
+NULL
+ERROR: Cast error: Failed to convert 9089380393200000000 to datetime for Timestamp(µs, "UTC")
+
+statement ok
+drop table int96_from_spark;
+
+statement ok
+reset datafusion.execution.time_zone;
+
+# A non-UTC offset keeps the stored instant and renders it at that offset,
+# eight hours ahead of the UTC values above.
+statement ok
+set datafusion.execution.parquet.coerce_int96 = ns;
+
+statement ok
+set datafusion.execution.parquet.coerce_int96_tz = '+08:00';
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+query TTT
+describe int96_from_spark;
+----
+a Timestamp(ns, "+08:00") YES
+
+query P
+select * from int96_from_spark
+----
+2024-01-02T04:34:56.123456+08:00
+2024-01-01T09:00:00+08:00
+1816-03-29T16:56:08.066277376+08:00
+2024-12-31T07:00:00+08:00
+NULL
+1815-11-09T00:01:01.191053312+08:00
+
+statement ok
+drop table int96_from_spark;
 
 statement ok
 reset datafusion.execution.parquet.coerce_int96_tz;

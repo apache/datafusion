@@ -1,0 +1,18 @@
+description = "Sort pushdown on existing TPC-H lineitem Parquet data"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- sort_pushdown --subgroup baseline --iterations 5"
+description = "Run the original eight queries without declared ordering."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- sort_pushdown --subgroup sorted --query 2 --iterations 5"
+description = "Run the ascending LIMIT query with declared ascending ordering."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- sort_pushdown --subgroup inexact --iterations 5"
+description = "Run DESC TopK queries on the existing inexact dataset."

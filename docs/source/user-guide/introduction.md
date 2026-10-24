@@ -124,7 +124,7 @@ Here are some active projects using DataFusion:
 - [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
 - [OpenObserve] Distributed cloud native observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
-- [Parseable] Log storage and observability platform
+- [Parseable] Open columnar observability data lake platform for logs, metrics, and traces.
 - [Massive.com](https://massive.com/) Stock Market API
 - [qv] Quickly view your data
 - [R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/) Cloudflare's distributed engine for querying data in Iceberg Catalogs

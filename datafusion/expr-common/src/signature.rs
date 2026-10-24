@@ -1684,7 +1684,7 @@ impl Signature {
             }
         }
 
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = std::collections::HashSet::with_capacity(names.len());
         for name in names {
             if !seen.insert(name) {
                 return plan_err!("Duplicate parameter name: '{}'", name);

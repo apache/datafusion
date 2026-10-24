@@ -39,7 +39,7 @@ pub async fn from_exchange_rel(
     // ref: https://substrait.io/relations/physical_relations/#exchange-types
     let partitioning_scheme = match exchange_kind {
         ExchangeKind::ScatterByFields(scatter_fields) => {
-            let mut partition_columns = vec![];
+            let mut partition_columns = Vec::with_capacity(scatter_fields.fields.len());
             let input_schema = input.schema();
             for field_ref in &scatter_fields.fields {
                 let column =

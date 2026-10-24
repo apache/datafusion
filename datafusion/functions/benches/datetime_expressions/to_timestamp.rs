@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow::array::builder::StringBuilder;
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::compute::cast;
-use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow::datatypes::{DataType, Field};
 use criterion::{Criterion, criterion_group};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
@@ -108,8 +108,6 @@ fn data_with_formats() -> (StringArray, StringArray, StringArray, StringArray) {
     )
 }
 fn criterion_benchmark(c: &mut Criterion) {
-    let return_field =
-        Field::new("f", DataType::Timestamp(TimeUnit::Nanosecond, None), true).into();
     let arg_field = Field::new("a", DataType::Utf8, false).into();
     let arg_fields = vec![arg_field];
     let mut options = ConfigOptions::default();
@@ -117,6 +115,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let config_options = Arc::new(options);
 
     let to_timestamp_udf = to_timestamp(config_options.as_ref());
+    let return_field = Field::new(
+        "f",
+        to_timestamp_udf.return_type(&[DataType::Utf8]).unwrap(),
+        true,
+    )
+    .into();
 
     c.bench_function("to_timestamp_no_formats_utf8", |b| {
         let to_timestamp_udf = Arc::clone(&to_timestamp_udf);

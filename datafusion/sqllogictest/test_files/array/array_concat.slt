@@ -419,9 +419,8 @@ select array_concat(make_array(column3), column1, column2) from arrays_values_v2
 [NULL, 11, 12]
 [NULL]
 
-# array_concat derives a fresh return type from the unified element types rather
-# than cloning an input's, so its output field is always the default nullable
-# `item` regardless of the inputs' inner fields
+# For one-dimensional inputs, array_concat uses the unified element type and a
+# default nullable item field rather than cloning the input field.
 query ?T
 select
   array_concat(arrow_cast(column1, 'List(non-null Int64)'), make_array(3)),
@@ -437,6 +436,58 @@ select
 from values (make_array(1, 2));
 ----
 [1, 2, 3] List(Int64)
+
+# One-dimensional inputs that share a named or non-nullable field still get the
+# default nullable item field.
+query ?T
+select
+  array_concat(a, a),
+  arrow_typeof(array_concat(a, a))
+from (
+  select arrow_cast([1], 'List(non-null Int64, field: ''element'')') as a
+);
+----
+[1, 1] List(Int64)
+
+# array_concat preserves nested list fields in the planned and executed type
+query ?T
+select
+  array_concat(a, a),
+  arrow_typeof(array_concat(a, a))
+from (
+  select make_array(arrow_cast([1, 2], 'LargeList(Int64)')) as a
+);
+----
+[[1, 2], [1, 2]] List(LargeList(Int64))
+
+query ?T
+select
+  array_concat(b, b),
+  arrow_typeof(array_concat(b, b))
+from (
+  select arrow_cast([[1]], 'List(List(Int64, field: ''element''), field: ''element'')') as b
+);
+----
+[[1], [1]] List(List(Int64, field: 'element'), field: 'element')
+
+# array_concat aligns all-null arguments to the deepest list type
+query ?T
+select
+  array_concat(arrow_cast(NULL, 'List(Int64)'), arrow_cast(NULL, 'List(List(Int64))')),
+  arrow_typeof(array_concat(arrow_cast(NULL, 'List(Int64)'), arrow_cast(NULL, 'List(List(Int64))')));
+----
+NULL List(List(Int64))
+
+# array_concat widens nested element nullability before concatenating
+query ?T
+select
+  array_concat(c, make_array(2)),
+  arrow_typeof(array_concat(c, make_array(2)))
+from (
+  select arrow_cast(make_array(make_array(1)), 'List(List(non-null Int64))') as c
+);
+----
+[[1], [2]] List(List(Int64))
 
 
 include ./cleanup.slt.part

@@ -18,123 +18,102 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, BooleanBufferBuilder, Int32Array, ListArray, StringArray};
+use arrow::array::{ArrayRef, Int32Array, ListArray, StringArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field};
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{Bencher, BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions_nested::sort::ArraySort;
-use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng};
 
 const SEED: u64 = 42;
 const NUM_ROWS: usize = 8192;
+/// Each case sorts the next of its arrays in each iteration, cycling through
+/// arrays that hold at least this many elements in total.
+const CYCLE_ELEMENTS: usize = 1 << 20;
 
+/// The arrays a case cycles through, each built by `make` from its own seed:
+/// enough to hold `CYCLE_ELEMENTS` elements, and at least two.
+fn inputs(
+    elements_per_row: usize,
+    make: impl Fn(&mut StdRng) -> ArrayRef,
+) -> Vec<ArrayRef> {
+    let count = CYCLE_ELEMENTS.div_ceil(NUM_ROWS * elements_per_row).max(2);
+    (0..count as u64)
+        .map(|i| make(&mut StdRng::seed_from_u64(SEED + i)))
+        .collect()
+}
+
+/// Offsets for `NUM_ROWS` rows of 1 to `2 * elements_per_row - 1` elements,
+/// `elements_per_row` on average.
+fn random_offsets(rng: &mut StdRng, elements_per_row: usize) -> OffsetBuffer<i32> {
+    OffsetBuffer::from_lengths(
+        (0..NUM_ROWS).map(|_| rng.random_range(1..2 * elements_per_row)),
+    )
+}
+
+/// Validity for `len` slots, each NULL with probability `null_rate`, or `None`
+/// if `null_rate` is zero.
+fn random_nulls(rng: &mut StdRng, len: usize, null_rate: f64) -> Option<NullBuffer> {
+    (null_rate > 0.0)
+        .then(|| NullBuffer::from_iter((0..len).map(|_| !rng.random_bool(null_rate))))
+}
+
+/// A list of distinct `Int32` values in random order, where each row is NULL
+/// with probability `null_row_rate` and each element with probability
+/// `null_element_rate`.
 fn create_int32_list_array(
-    num_rows: usize,
+    rng: &mut StdRng,
     elements_per_row: usize,
-    with_nulls: bool,
+    null_row_rate: f64,
+    null_element_rate: f64,
 ) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let total_values = num_rows * elements_per_row;
-
-    let mut values: Vec<i32> = (0..total_values as i32).collect();
-    values.shuffle(&mut rng);
-
-    let values = Arc::new(Int32Array::from(values));
-    let offsets: Vec<i32> = (0..=num_rows)
-        .map(|i| (i * elements_per_row) as i32)
-        .collect();
-
-    let nulls = if with_nulls {
-        // Every 10th row is null
-        Some(NullBuffer::from(
-            (0..num_rows).map(|i| i % 10 != 0).collect::<Vec<bool>>(),
-        ))
-    } else {
-        None
-    };
+    let offsets = random_offsets(rng, elements_per_row);
+    let mut values: Vec<i32> = (0..offsets.last()).collect();
+    values.shuffle(rng);
+    let element_nulls = random_nulls(rng, values.len(), null_element_rate);
+    let list_nulls = random_nulls(rng, NUM_ROWS, null_row_rate);
 
     Arc::new(ListArray::new(
         Arc::new(Field::new("item", DataType::Int32, true)),
-        OffsetBuffer::new(offsets.into()),
-        values,
-        nulls,
+        offsets,
+        Arc::new(Int32Array::new(values.into(), element_nulls)),
+        list_nulls,
     ))
 }
 
-/// Creates a ListArray where ~10% of elements within each row are null.
-fn create_int32_list_array_with_null_elements(
-    num_rows: usize,
-    elements_per_row: usize,
-) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let total_values = num_rows * elements_per_row;
-
-    let mut values: Vec<i32> = (0..total_values as i32).collect();
-    values.shuffle(&mut rng);
-
-    // ~10% of elements are null
-    let mut validity = BooleanBufferBuilder::new(total_values);
-    for i in 0..total_values {
-        validity.append(i % 10 != 0);
-    }
-    let null_buffer = NullBuffer::from(validity.finish());
-
-    let values = Arc::new(Int32Array::new(values.into(), Some(null_buffer)));
-    let offsets: Vec<i32> = (0..=num_rows)
-        .map(|i| (i * elements_per_row) as i32)
-        .collect();
-
-    Arc::new(ListArray::new(
-        Arc::new(Field::new("item", DataType::Int32, true)),
-        OffsetBuffer::new(offsets.into()),
-        values,
-        None,
-    ))
-}
-
-fn create_string_list_array(num_rows: usize, elements_per_row: usize) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let total_values = num_rows * elements_per_row;
-
-    let mut indices: Vec<usize> = (0..total_values).collect();
-    indices.shuffle(&mut rng);
-    let string_values: Vec<String> =
-        indices.iter().map(|i| format!("value_{i:06}")).collect();
-    let values = Arc::new(StringArray::from(string_values));
-
-    let offsets: Vec<i32> = (0..=num_rows)
-        .map(|i| (i * elements_per_row) as i32)
-        .collect();
+fn create_string_list_array(rng: &mut StdRng, elements_per_row: usize) -> ArrayRef {
+    let offsets = random_offsets(rng, elements_per_row);
+    let mut indices: Vec<i32> = (0..offsets.last()).collect();
+    indices.shuffle(rng);
+    let values =
+        StringArray::from_iter_values(indices.iter().map(|i| format!("value_{i:06}")));
 
     Arc::new(ListArray::new(
         Arc::new(Field::new("item", DataType::Utf8, true)),
-        OffsetBuffer::new(offsets.into()),
-        values,
+        offsets,
+        Arc::new(values),
         None,
     ))
 }
 
-fn invoke_array_sort(udf: &ArraySort, array: &ArrayRef) -> ColumnarValue {
-    invoke_array_sort_with_order(udf, array, None)
-}
-
-/// `order` is the optional second argument (`"ASC"` / `"DESC"`); `None` leaves
-/// `array_sort` with its default (ascending) ordering.
-fn invoke_array_sort_with_order(
+/// Calls `array_sort` on `array`, followed by `options`: the sort order
+/// (`"ASC"` / `"DESC"`), then where NULLs go (`"NULLS FIRST"` / `"NULLS LAST"`).
+/// Options left out take their defaults, ascending with NULLs first.
+fn invoke_array_sort(
     udf: &ArraySort,
     array: &ArrayRef,
-    order: Option<&str>,
+    options: &[&str],
 ) -> ColumnarValue {
     let mut args = vec![ColumnarValue::Array(Arc::clone(array))];
     let mut arg_fields = vec![Field::new("arr", array.data_type().clone(), true).into()];
-    if let Some(order) = order {
-        args.push(ColumnarValue::Scalar(ScalarValue::from(order)));
-        arg_fields.push(Field::new("order", DataType::Utf8, true).into());
+    for (name, &option) in ["order", "nulls"].into_iter().zip(options) {
+        args.push(ColumnarValue::Scalar(ScalarValue::from(option)));
+        arg_fields.push(Field::new(name, DataType::Utf8, true).into());
     }
     udf.invoke_with_args(ScalarFunctionArgs {
         args,
@@ -146,91 +125,72 @@ fn invoke_array_sort_with_order(
     .unwrap()
 }
 
-/// Vary elements_per_row over [5, 20, 100, 1000]: for small arrays, per-row
-/// overhead dominates, whereas for larger arrays the sort kernel dominates.
+/// Sorts the next of `arrays` with `options` in each iteration.
+fn sort_each<'a>(
+    udf: &'a ArraySort,
+    arrays: &'a [ArrayRef],
+    options: &'a [&'a str],
+) -> impl FnMut(&mut Bencher) + 'a {
+    let mut arrays = arrays.iter().cycle();
+    move |b| b.iter(|| black_box(invoke_array_sort(udf, arrays.next().unwrap(), options)))
+}
+
+/// Vary the average elements per row over [5, 20, 100, 1000]: for small
+/// arrays, per-row overhead dominates, whereas for larger arrays the sort
+/// kernel dominates.
 fn bench_array_sort(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_sort");
     let udf = ArraySort::new();
 
-    // Int32 arrays
+    // Int32 arrays, ascending and descending: `sort_row` sorts ascending and
+    // reverses, so the descending case measures the cost of that extra pass.
     for &elements_per_row in &[5, 20, 100, 1000] {
-        let array = create_int32_list_array(NUM_ROWS, elements_per_row, false);
-        group.bench_with_input(
+        let arrays = inputs(elements_per_row, |rng| {
+            create_int32_list_array(rng, elements_per_row, 0.0, 0.0)
+        });
+        group.bench_function(
             BenchmarkId::new("int32", elements_per_row),
-            &elements_per_row,
-            |b, _| {
-                b.iter(|| {
-                    black_box(invoke_array_sort(&udf, &array));
-                });
-            },
+            sort_each(&udf, &arrays, &[]),
         );
-    }
-
-    // Same shapes, descending: `sort_row` sorts ascending and reverses, so this
-    // measures the cost of that extra pass.
-    for &elements_per_row in &[5, 20, 100, 1000] {
-        let array = create_int32_list_array(NUM_ROWS, elements_per_row, false);
-        group.bench_with_input(
+        group.bench_function(
             BenchmarkId::new("int32_desc", elements_per_row),
-            &elements_per_row,
-            |b, _| {
-                b.iter(|| {
-                    black_box(invoke_array_sort_with_order(&udf, &array, Some("DESC")));
-                });
-            },
+            sort_each(&udf, &arrays, &["DESC"]),
         );
     }
 
     // Int32 with nulls in the outer list (10% null rows), single size
     {
-        let array = create_int32_list_array(NUM_ROWS, 50, true);
-        group.bench_function("int32_with_nulls", |b| {
-            b.iter(|| {
-                black_box(invoke_array_sort(&udf, &array));
-            });
+        let arrays = inputs(50, |rng| create_int32_list_array(rng, 50, 0.1, 0.0));
+        group.bench_function("int32_with_nulls", sort_each(&udf, &arrays, &[]));
+    }
+
+    // Int32 with null elements (10% of elements), placed first in ascending
+    // and descending order, and last in ascending order
+    for &elements_per_row in &[5, 20, 100, 1000] {
+        let arrays = inputs(elements_per_row, |rng| {
+            create_int32_list_array(rng, elements_per_row, 0.0, 0.1)
         });
-    }
-
-    // Int32 with null elements (~10% of elements within rows are null)
-    for &elements_per_row in &[5, 20, 100, 1000] {
-        let array =
-            create_int32_list_array_with_null_elements(NUM_ROWS, elements_per_row);
-        group.bench_with_input(
-            BenchmarkId::new("int32_null_elements", elements_per_row),
-            &elements_per_row,
-            |b, _| {
-                b.iter(|| {
-                    black_box(invoke_array_sort(&udf, &array));
-                });
-            },
-        );
-    }
-
-    for &elements_per_row in &[5, 20, 100, 1000] {
-        let array =
-            create_int32_list_array_with_null_elements(NUM_ROWS, elements_per_row);
-        group.bench_with_input(
-            BenchmarkId::new("int32_null_elements_desc", elements_per_row),
-            &elements_per_row,
-            |b, _| {
-                b.iter(|| {
-                    black_box(invoke_array_sort_with_order(&udf, &array, Some("DESC")));
-                });
-            },
-        );
+        let cases: [(&str, &[&str]); 3] = [
+            ("int32_null_elements", &[]),
+            ("int32_null_elements_desc", &["DESC"]),
+            ("int32_null_elements_nulls_last", &["ASC", "NULLS LAST"]),
+        ];
+        for (name, options) in cases {
+            group.bench_function(
+                BenchmarkId::new(name, elements_per_row),
+                sort_each(&udf, &arrays, options),
+            );
+        }
     }
 
     // String arrays
     for &elements_per_row in &[5, 20, 100, 1000] {
-        let array = create_string_list_array(NUM_ROWS, elements_per_row);
-        group.bench_with_input(
+        let arrays = inputs(elements_per_row, |rng| {
+            create_string_list_array(rng, elements_per_row)
+        });
+        group.bench_function(
             BenchmarkId::new("string", elements_per_row),
-            &elements_per_row,
-            |b, _| {
-                b.iter(|| {
-                    black_box(invoke_array_sort(&udf, &array));
-                });
-            },
+            sort_each(&udf, &arrays, &[]),
         );
     }
 

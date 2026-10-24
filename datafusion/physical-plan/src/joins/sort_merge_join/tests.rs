@@ -1616,6 +1616,43 @@ async fn join_left_mark_different_columns_count_with_filter() -> Result<()> {
 }
 
 #[tokio::test]
+async fn join_semi_anti_mark_column_free_filter() -> Result<()> {
+    for join_type in [
+        LeftSemi, LeftAnti, LeftMark, RightSemi, RightAnti, RightMark,
+    ] {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 5, 6]),
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+        // A filter that reads no columns and rejects every pair.
+        let filter = JoinFilter::new(
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))),
+            vec![],
+            Arc::new(Schema::empty()),
+        );
+        let (_, batches) =
+            join_collect_with_filter(left, right, on, filter, join_type).await?;
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let expected = match join_type {
+            LeftSemi | RightSemi => 0,
+            _ => 3,
+        };
+        assert_eq!(rows, expected, "{join_type:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn join_right_mark_different_columns_count_with_filter() -> Result<()> {
     // select *
     // from t1
@@ -5081,6 +5118,70 @@ async fn join_with_group_spanning_batches_rescanned_per_streamed_row() -> Result
     +-----+-------+-----+-------+
     ");
 
+    Ok(())
+}
+
+/// A streamed row is paired with its buffered key group in runs, each ending where its
+/// buffered batch ends or where the output batch fills. The test above uses one-row buffered
+/// batches, so its runs have one row. Here the group of key 1 spans buffered batches of 3, 2
+/// and 1 rows and the batch size is 4, so runs of several rows are cut both ways. Every pair
+/// must come out once, in the order of the buffered rows.
+#[tokio::test]
+async fn join_inner_group_spans_buffered_and_output_batches() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![1, 1, 2]),
+        ("b1", &vec![0, 0, 0]),
+        ("c1", &vec![10, 11, 20]),
+    );
+    let right = build_table_from_batches(vec![
+        build_table_i32(
+            ("a2", &vec![1, 1, 1]),
+            ("b2", &vec![0, 0, 0]),
+            ("c2", &vec![100, 101, 102]),
+        ),
+        build_table_i32(
+            ("a2", &vec![1, 1]),
+            ("b2", &vec![0, 0]),
+            ("c2", &vec![103, 104]),
+        ),
+        build_table_i32(
+            ("a2", &vec![1, 2]),
+            ("b2", &vec![0, 0]),
+            ("c2", &vec![105, 200]),
+        ),
+    ]);
+    let on = vec![(
+        Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+    )];
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(4)),
+    );
+    let stream = join(left, right, on, Inner)?.execute(0, task_ctx)?;
+    let batches = common::collect(stream).await?;
+
+    assert!(batches.iter().all(|batch| batch.num_rows() <= 4));
+    // The output order is important as SMJ preserves sortedness
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+----+----+-----+
+    | a1 | b1 | c1 | a2 | b2 | c2  |
+    +----+----+----+----+----+-----+
+    | 1  | 0  | 10 | 1  | 0  | 100 |
+    | 1  | 0  | 10 | 1  | 0  | 101 |
+    | 1  | 0  | 10 | 1  | 0  | 102 |
+    | 1  | 0  | 10 | 1  | 0  | 103 |
+    | 1  | 0  | 10 | 1  | 0  | 104 |
+    | 1  | 0  | 10 | 1  | 0  | 105 |
+    | 1  | 0  | 11 | 1  | 0  | 100 |
+    | 1  | 0  | 11 | 1  | 0  | 101 |
+    | 1  | 0  | 11 | 1  | 0  | 102 |
+    | 1  | 0  | 11 | 1  | 0  | 103 |
+    | 1  | 0  | 11 | 1  | 0  | 104 |
+    | 1  | 0  | 11 | 1  | 0  | 105 |
+    | 2  | 0  | 20 | 2  | 0  | 200 |
+    +----+----+----+----+----+-----+
+    ");
     Ok(())
 }
 
