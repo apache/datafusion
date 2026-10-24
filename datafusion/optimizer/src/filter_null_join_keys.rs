@@ -33,10 +33,6 @@ use std::sync::Arc;
 pub struct FilterNullJoinKeys {}
 
 impl OptimizerRule for FilterNullJoinKeys {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::BottomUp)
     }

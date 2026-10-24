@@ -321,15 +321,9 @@ fn hash_array_primitive<T>(
 
     if array.null_count() == 0 {
         if rehash {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                let mut hasher = random_state.seeded_state(*hash).build_hasher();
-                value.hash_write(&mut hasher);
-                *hash = hasher.finish();
-            }
+            hash_prim_rehash_dense(array.values(), hashes_buffer, random_state);
         } else {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = value.hash_one(random_state);
-            }
+            hash_prim_fresh_dense(array.values(), hashes_buffer, random_state);
         }
     } else if rehash {
         for i in array.nulls().unwrap().valid_indices() {
@@ -343,6 +337,53 @@ fn hash_array_primitive<T>(
             let value = unsafe { array.value_unchecked(i) };
             hashes_buffer[i] = value.hash_one(random_state);
         }
+    }
+}
+
+/// Overwrite each slot with `value.hash_one(state)`, 16 rows per iteration.
+/// Gathering + hashing a whole lane batch before storing keeps the independent
+/// hashes in flight so the pipeline isn't serialized on store-to-load deps.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_prim_fresh_dense<N, S>(values: &[N], hashes: &mut [u64], state: &S)
+where
+    N: HashValue + Copy,
+    S: HashState,
+{
+    const LANES: usize = 16;
+    let (value_chunks, value_tail) = values.as_chunks::<LANES>();
+    let (hash_chunks, hash_tail) = hashes.as_chunks_mut::<LANES>();
+    for (h, v) in hash_chunks.iter_mut().zip(value_chunks) {
+        *h = v.map(|value| value.hash_one(state));
+    }
+    for (h, v) in hash_tail.iter_mut().zip(value_tail) {
+        *h = v.hash_one(state);
+    }
+}
+
+/// Fold `prev_hash` + `value` into a new hash, 8 rows per iteration. 8 is
+/// narrower than `hash_prim_fresh_dense` because each lane holds both `prev` and
+/// `value` live; widening past 8 spilled registers in the multi-column case.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_prim_rehash_dense<N, S>(values: &[N], hashes: &mut [u64], state: &S)
+where
+    N: HashValue + Copy,
+    S: HashState,
+{
+    const LANES: usize = 8;
+    let rehash_one = |prev_hash: u64, value: N| {
+        let mut hasher = state.seeded_state(prev_hash).build_hasher();
+        value.hash_write(&mut hasher);
+        hasher.finish()
+    };
+    let (value_chunks, value_tail) = values.as_chunks::<LANES>();
+    let (hash_chunks, hash_tail) = hashes.as_chunks_mut::<LANES>();
+    for (h, v) in hash_chunks.iter_mut().zip(value_chunks) {
+        *h = std::array::from_fn(|lane| rehash_one(h[lane], v[lane]));
+    }
+    for (h, &v) in hash_tail.iter_mut().zip(value_tail) {
+        *h = rehash_one(*h, v);
     }
 }
 
@@ -543,11 +584,13 @@ fn hash_dictionary_scatter<
             if let Some(key) = key {
                 let idx = key.as_usize();
                 if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                    if MULTI_COL {
-                        *hash = combine_hashes(dict_hashes[idx], *hash);
+                    // SAFETY: `idx` is a valid Arrow dict key, in-bounds for `dict_hashes`.
+                    let dict_hash = unsafe { *dict_hashes.get_unchecked(idx) };
+                    *hash = if MULTI_COL {
+                        combine_hashes(dict_hash, *hash)
                     } else {
-                        *hash = dict_hashes[idx];
-                    }
+                        dict_hash
+                    };
                 }
             }
         }
@@ -555,11 +598,13 @@ fn hash_dictionary_scatter<
         for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().values()) {
             let idx = key.as_usize();
             if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                if MULTI_COL {
-                    *hash = combine_hashes(dict_hashes[idx], *hash);
+                // SAFETY: `idx` is a valid Arrow dict key, in-bounds for `dict_hashes`.
+                let dict_hash = unsafe { *dict_hashes.get_unchecked(idx) };
+                *hash = if MULTI_COL {
+                    combine_hashes(dict_hash, *hash)
                 } else {
-                    *hash = dict_hashes[idx];
-                }
+                    dict_hash
+                };
             }
         }
     }
@@ -899,6 +944,7 @@ fn hash_sparse_union_array(
         child_hashing.create_hashes([array.child(type_id)], &mut child_hashes)?;
     } else {
         let (starts, rows) = group_rows_by_type_id(type_ids);
+        let mut taken_hashes: Vec<u64> = Vec::new();
         for (type_id, _) in union_fields.iter() {
             let (start, end) = (starts[type_id as usize], starts[type_id as usize + 1]);
             if start == end {
@@ -927,10 +973,11 @@ fn hash_sparse_union_array(
                 child_hashing.create_hashes([masked], &mut child_hashes)?;
             } else {
                 let indices = UInt32Array::new(rows.slice(start, end - start), None);
-                let mut taken_hashes = vec![0; indices.len()];
+                taken_hashes.clear();
+                taken_hashes.resize(indices.len(), 0);
                 child_hashing
                     .create_hashes([take(child, &indices, None)?], &mut taken_hashes)?;
-                for (&row, hash) in indices.values().iter().zip(taken_hashes) {
+                for (&row, &hash) in indices.values().iter().zip(&taken_hashes) {
                     child_hashes[row as usize] = hash;
                 }
             }
@@ -1303,6 +1350,9 @@ mod tests {
     #[cfg(not(feature = "force_hash_collisions"))]
     use std::hash::{BuildHasherDefault, Hasher};
     use std::sync::Arc;
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::buffer::{NullBuffer, ScalarBuffer};
 
     use super::*;
 
@@ -1856,8 +1906,6 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_list_view_arrays() {
-        use arrow::buffer::{NullBuffer, ScalarBuffer};
-
         // Create values array: [0, 1, 2, 3, null, 5]
         let values = Arc::new(Int32Array::from(vec![
             Some(0),
@@ -1906,8 +1954,6 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_large_list_view_arrays() {
-        use arrow::buffer::{NullBuffer, ScalarBuffer};
-
         // Create values array: [0, 1, 2, 3, null, 5]
         let values = Arc::new(Int32Array::from(vec![
             Some(0),

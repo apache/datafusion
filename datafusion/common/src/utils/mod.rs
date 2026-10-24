@@ -43,7 +43,7 @@ use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
 use arrow::compute::{SortColumn, SortOptions, nullif, partition};
 use arrow::datatypes::{
-    ArrowNativeType, DataType, Field, Int32Type, Int64Type, SchemaRef,
+    ArrowNativeType, DataType, Field, Int32Type, Int64Type, Metadata, SchemaRef,
 };
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
@@ -184,9 +184,10 @@ pub fn find_bisect_point<F>(
 where
     F: Fn(&[ScalarValue], &[ScalarValue]) -> Result<bool>,
 {
+    let mut val = Vec::with_capacity(item_columns.len());
     while low < high {
         let mid = ((high - low) / 2) + low;
-        let val = get_row_at_idx(item_columns, mid)?;
+        extract_row_at_idx_to_buf(item_columns, mid, &mut val)?;
         if compare_fn(&val, target)? {
             low = mid + 1;
         } else {
@@ -231,8 +232,9 @@ pub fn search_in_slice<F>(
 where
     F: Fn(&[ScalarValue], &[ScalarValue]) -> Result<bool>,
 {
+    let mut val = Vec::new();
     while low < high {
-        let val = get_row_at_idx(item_columns, low)?;
+        extract_row_at_idx_to_buf(item_columns, low, &mut val)?;
         if !compare_fn(&val, target)? {
             break;
         }
@@ -356,7 +358,7 @@ pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<St
                 false
             };
             if is_double_quoted {
-                id[1..id.len() - 1].to_string().replace("\"\"", "\"")
+                id[1..id.len() - 1].replace("\"\"", "\"")
             } else if ignore_case {
                 id
             } else {
@@ -559,6 +561,7 @@ pub struct SingleRowListArrayBuilder {
     /// Specify the field name for the resulting array. Defaults to value used in
     /// [`Field::new_list_field`]
     field_name: Option<String>,
+    field_metadata: Metadata,
 }
 
 impl SingleRowListArrayBuilder {
@@ -568,6 +571,7 @@ impl SingleRowListArrayBuilder {
             arr,
             nullable: true,
             field_name: None,
+            field_metadata: Metadata::default(),
         }
     }
 
@@ -583,10 +587,12 @@ impl SingleRowListArrayBuilder {
         self
     }
 
-    /// Copies field name and nullable from the specified field
-    pub fn with_field(self, field: &Field) -> Self {
-        self.with_field_name(Some(field.name().to_owned()))
-            .with_nullable(field.is_nullable())
+    /// Copies field name, nullability, and metadata from the specified field
+    pub fn with_field(mut self, field: &Field) -> Self {
+        self.field_name = Some(field.name().to_owned());
+        self.nullable = field.is_nullable();
+        self.field_metadata = field.metadata().clone();
+        self
     }
 
     /// Build a single element [`ListArray`]
@@ -659,13 +665,14 @@ impl SingleRowListArrayBuilder {
             arr,
             nullable,
             field_name,
+            field_metadata,
         } = self;
         let data_type = arr.data_type().to_owned();
         let field = match field_name {
             Some(name) => Field::new(name, data_type, nullable),
             None => Field::new_list_field(data_type, nullable),
         };
-        (Arc::new(field), arr)
+        (Arc::new(field.with_metadata(field_metadata)), arr)
     }
 }
 
@@ -1070,7 +1077,9 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
     match original.as_slice() {
         [] => vec![],
         [first, ..] => {
-            let mut result = (0..first.len()).map(|_| vec![]).collect::<Vec<_>>();
+            let mut result = (0..first.len())
+                .map(|_| Vec::with_capacity(original.len()))
+                .collect::<Vec<_>>();
             for row in original {
                 for (item, transposed_row) in row.into_iter().zip(&mut result) {
                     transposed_row.push(item);
@@ -1347,14 +1356,8 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
             let offsets = OffsetBuffer::from_lengths(lengths);
             let values = make_array(mutable_array_data.freeze());
 
-            let field = match list.data_type() {
-                DataType::List(field) => field,
-                DataType::LargeList(field) => field,
-                _ => unreachable!(),
-            };
-
             return Ok(GenericListArray::try_new(
-                Arc::clone(field),
+                Arc::clone(list.value_field()),
                 offsets,
                 values,
                 list.nulls().cloned(),
@@ -1606,6 +1609,7 @@ pub fn apply_parent_nulls(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
@@ -1616,6 +1620,20 @@ mod tests {
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
+
+    #[test]
+    fn test_list_scalar_cast_preserves_target_element_metadata() -> Result<()> {
+        let input =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(1)])]);
+        let item = Field::new("item", DataType::Int32, true)
+            .with_metadata(HashMap::from([("PARQUET:field_id".into(), "2".into())]));
+        let target = DataType::List(Arc::new(item));
+
+        let casted = ScalarValue::List(Arc::new(input)).cast_to(&target)?;
+        assert_eq!(casted.data_type(), target);
+        assert_eq!(casted.to_array_of_size(2)?.data_type(), &target);
+        Ok(())
+    }
 
     #[test]
     fn test_apply_parent_nulls_sliced() -> Result<()> {

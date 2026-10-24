@@ -111,7 +111,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
                     map_contents.slice(n, map_contents.len() - n);
 
                 self.num_groups = 0;
-                let mut group_indexes = vec![];
+                let mut group_indexes = Vec::with_capacity(remaining_group_values.len());
                 self.intern(&[remaining_group_values], &mut group_indexes)?;
 
                 // Verify that the group indexes were assigned in the correct order

@@ -17,12 +17,14 @@
 
 //! [`ScalarSubqueryToJoin`] rewriting scalar subquery filters to `JOIN`s
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
+use crate::decorrelate::{
+    PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, build_join_filter,
+};
 use crate::optimizer::ApplyOrder;
-use crate::utils::{evaluates_to_null, replace_qualified_name};
+use crate::utils::evaluates_to_null;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
@@ -33,7 +35,6 @@ use datafusion_common::tree_node::{
 use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, plan_err};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::utils::conjunction;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
 
 /// Optimizer rule that rewrites scalar subquery filters to joins and places an
@@ -84,10 +85,6 @@ impl ScalarSubqueryToJoin {
 }
 
 impl OptimizerRule for ScalarSubqueryToJoin {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -219,7 +216,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     }
                 }
 
-                let mut proj_exprs = vec![];
+                let mut proj_exprs = Vec::with_capacity(projection.expr.len());
                 for (expr, new_expr) in projection.expr.iter().zip(rewrite_exprs) {
                     let old_expr_name = expr.schema_name().to_string();
                     let new_expr_name = new_expr.schema_name().to_string();
@@ -365,19 +362,11 @@ fn build_join(
         .alias(subquery_alias.to_string())?
         .build()?;
 
-    let all_correlated_cols: BTreeSet<Column> = pull_up
-        .correlated_subquery_cols_map
-        .values()
-        .flatten()
-        .cloned()
-        .collect();
-
-    // Correlated columns now live in the decorrelated subquery's output,
-    // so re-qualify them with the subquery alias.
-    let join_filter_opt =
-        conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Some)
-        })?;
+    let join_filter_opt = build_join_filter(
+        pull_up.join_filters,
+        pull_up.correlated_subquery_cols_map.values().flatten(),
+        subquery_alias,
+    )?;
 
     // When pull-up did not extract any usable join keys (a correlated subquery
     // whose predicate references only outer columns), fall back to `ON true`:
@@ -1286,5 +1275,47 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn correlated_scalar_subquery_filter_above_correlated_derived_table() -> Result<()> {
+        let derived = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                col("orders.o_custkey")
+                    .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+            )?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![max(col("orders.o_custkey")).alias("n")],
+            )?
+            .project(vec![col("n")])?
+            .alias("t")?
+            .build()?;
+
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(derived)
+                .filter(out_ref_col(DataType::Int64, "customer.c_custkey").gt(lit(0i64)))?
+                .project(vec![col("t.n")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .project(vec![col("customer.c_custkey"), scalar_subquery(sq)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey, __scalar_sq_1.n AS n [c_custkey:Int64, n:Int64;N]
+          Left Join:  Filter: __scalar_sq_1.o_custkey = customer.c_custkey AND customer.c_custkey > Int64(0) [c_custkey:Int64, c_name:Utf8, n:Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+            SubqueryAlias: __scalar_sq_1 [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+              Projection: t.n, t.o_custkey, t.__always_true [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+                SubqueryAlias: t [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+                  Projection: n, orders.o_custkey, __always_true [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+                    Aggregate: groupBy=[[orders.o_custkey, Boolean(true) AS __always_true]], aggr=[[max(orders.o_custkey) AS n]] [o_custkey:Int64, __always_true:Boolean, n:Int64;N]
+                      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "
+        )
     }
 }

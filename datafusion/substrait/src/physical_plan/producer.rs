@@ -70,8 +70,8 @@ pub fn to_substrait_rel(
             }
         }
 
-        let mut names = vec![];
-        let mut types = vec![];
+        let mut names = Vec::with_capacity(file_config.file_schema().fields.len());
+        let mut types = Vec::with_capacity(file_config.file_schema().fields.len());
 
         for field in file_config.file_schema().fields.iter() {
             let t = to_substrait_type(field.data_type(), field.is_nullable())?;

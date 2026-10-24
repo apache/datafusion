@@ -31,6 +31,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarType, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
@@ -581,6 +582,23 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         }
     }
 
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(if is_integer_input(input) {
+            input[0].sort_properties
+        } else {
+            SortProperties::Unordered
+        })
+    }
+
+    fn preserves_lex_ordering(&self, input: &[ExprProperties]) -> Result<bool> {
+        Ok(is_integer_input(input))
+    }
+
+    fn strictly_order_preserving(&self, input: &[ExprProperties]) -> Result<bool> {
+        // A lossless cast cannot restore strictness lost by its input.
+        Ok(is_integer_input(input) && input[0].strictly_order_preserving)
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -648,6 +666,23 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
                 )
             }
         }
+    }
+
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(if is_integer_input(input) {
+            input[0].sort_properties
+        } else {
+            SortProperties::Unordered
+        })
+    }
+
+    fn preserves_lex_ordering(&self, input: &[ExprProperties]) -> Result<bool> {
+        Ok(is_integer_input(input))
+    }
+
+    fn strictly_order_preserving(&self, input: &[ExprProperties]) -> Result<bool> {
+        // A lossless cast cannot restore strictness lost by its input.
+        Ok(is_integer_input(input) && input[0].strictly_order_preserving)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -719,6 +754,23 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         }
     }
 
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(if is_integer_input(input) {
+            input[0].sort_properties
+        } else {
+            SortProperties::Unordered
+        })
+    }
+
+    fn preserves_lex_ordering(&self, input: &[ExprProperties]) -> Result<bool> {
+        Ok(is_integer_input(input))
+    }
+
+    fn strictly_order_preserving(&self, input: &[ExprProperties]) -> Result<bool> {
+        // A lossless cast cannot restore strictness lost by its input.
+        Ok(is_integer_input(input) && input[0].strictly_order_preserving)
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -788,9 +840,33 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         }
     }
 
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(if is_integer_input(input) {
+            input[0].sort_properties
+        } else {
+            SortProperties::Unordered
+        })
+    }
+
+    fn preserves_lex_ordering(&self, input: &[ExprProperties]) -> Result<bool> {
+        Ok(is_integer_input(input))
+    }
+
+    fn strictly_order_preserving(&self, input: &[ExprProperties]) -> Result<bool> {
+        // A lossless cast cannot restore strictness lost by its input.
+        Ok(is_integer_input(input) && input[0].strictly_order_preserving)
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+/// The single-argument integer form casts the value to `Timestamp(unit, tz)`
+/// unchanged: one-to-one, order-preserving, and nulls map to nulls.
+/// Strict ordering of the full expression still depends on the input expression.
+fn is_integer_input(input: &[ExprProperties]) -> bool {
+    matches!(input, [value] if value.range.data_type().is_integer())
 }
 
 fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(

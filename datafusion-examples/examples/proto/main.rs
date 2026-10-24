@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example proto -- [all|composed_extension_codec|expression_deduplication]
+//! cargo run --example proto -- [all|composed_extension_codec|expression_deduplication|extension_plan_registry]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -32,9 +32,13 @@
 //!
 //! - `expression_deduplication`
 //!   (file: expression_deduplication.rs, desc: Example of expression caching/deduplication using the codec decorator pattern)
+//!
+//! - `extension_plan_registry`
+//!   (file: extension_plan_registry.rs, desc: Decode two crates' extension plans by name, with no composed codec)
 
 mod composed_extension_codec;
 mod expression_deduplication;
+mod extension_plan_registry;
 
 use datafusion::error::{DataFusionError, Result};
 use strum::{IntoEnumIterator, VariantNames};
@@ -46,6 +50,7 @@ enum ExampleKind {
     All,
     ComposedExtensionCodec,
     ExpressionDeduplication,
+    ExtensionPlanRegistry,
 }
 
 impl ExampleKind {
@@ -68,6 +73,9 @@ impl ExampleKind {
             }
             ExampleKind::ExpressionDeduplication => {
                 expression_deduplication::expression_deduplication()?
+            }
+            ExampleKind::ExtensionPlanRegistry => {
+                extension_plan_registry::extension_plan_registry()?
             }
         }
         Ok(())
