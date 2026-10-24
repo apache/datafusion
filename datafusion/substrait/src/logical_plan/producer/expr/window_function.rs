@@ -44,6 +44,7 @@ pub fn from_window_function(
                 partition_by,
                 order_by,
                 window_frame,
+                window_frame_explicit,
                 null_treatment,
                 distinct,
                 filter,
@@ -79,7 +80,16 @@ pub fn from_window_function(
         .map(|e| substrait_sort_field(producer, e, schema))
         .collect::<datafusion::common::Result<Vec<_>>>()?;
     // window frame
-    let bounds = to_substrait_bounds(window_frame)?;
+    // Substrait defaults missing bounds to the whole partition. Omit them only
+    // when that is also the resolved DataFusion frame; a running frame must
+    // retain its upper bound to preserve the query result.
+    let omit_bounds = !window_frame_explicit && window_frame == &WindowFrame::new(None);
+    let bounds = if omit_bounds {
+        (None, None)
+    } else {
+        let (lower, upper) = to_substrait_bounds(window_frame)?;
+        (Some(lower), Some(upper))
+    };
     let bound_type = to_substrait_bound_type(window_frame)?;
     // Substrait documents `output_type` as "Must be set to the return type of
     // the function, exactly as derived using the declaration in the extension",
@@ -105,8 +115,8 @@ pub fn from_window_function(
             } else {
                 AggregationInvocation::All as i32
             },
-            lower_bound: Some(bounds.0),
-            upper_bound: Some(bounds.1),
+            lower_bound: bounds.0,
+            upper_bound: bounds.1,
             args: vec![],
             bounds_type: bound_type as i32,
         })),

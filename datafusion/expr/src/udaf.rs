@@ -1257,6 +1257,7 @@ impl<'a> UdafWindowFunctionSchemaNameBuilder<'a> {
             filter,
             null_treatment,
             distinct,
+            ..
         } = params;
 
         let mut schema_name = String::new();
@@ -1448,6 +1449,7 @@ impl<'a> UdafWindowFunctionDisplayNameBuilder<'a> {
             filter,
             null_treatment,
             distinct,
+            ..
         } = params;
 
         let mut display_name = String::new();

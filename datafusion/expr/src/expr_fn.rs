@@ -822,7 +822,7 @@ pub struct ExprFuncBuilder {
 impl ExprFuncBuilder {
     /// Create a new `ExprFuncBuilder`, see [`ExprFunctionExt`]
     fn new(fun: Option<ExprFuncKind>) -> Self {
-        Self {
+        let mut builder = Self {
             fun,
             order_by: None,
             filter: None,
@@ -830,7 +830,28 @@ impl ExprFuncBuilder {
             null_treatment: None,
             partition_by: None,
             window_frame: None,
+        };
+        match &builder.fun {
+            Some(ExprFuncKind::Aggregate(udaf)) => {
+                builder.order_by = Some(udaf.params.order_by.clone());
+                builder.filter = udaf.params.filter.as_deref().cloned();
+                builder.distinct = udaf.params.distinct;
+                builder.null_treatment = udaf.params.null_treatment;
+            }
+            Some(ExprFuncKind::Window(udwf)) => {
+                builder.order_by = Some(udwf.params.order_by.clone());
+                builder.filter = udwf.params.filter.as_deref().cloned();
+                builder.distinct = udwf.params.distinct;
+                builder.null_treatment = udwf.params.null_treatment;
+                builder.partition_by = Some(udwf.params.partition_by.clone());
+                builder.window_frame = udwf
+                    .params
+                    .window_frame_explicit
+                    .then(|| udwf.params.window_frame.clone());
+            }
+            None => {}
         }
+        builder
     }
 
     /// Updates and returns the in progress [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
@@ -865,11 +886,19 @@ impl ExprFuncBuilder {
                 Expr::AggregateFunction(udaf)
             }
             ExprFuncKind::Window(mut udwf) => {
-                let has_order_by = order_by.as_ref().map(|o| !o.is_empty());
+                let order_by = order_by.unwrap_or_default();
+                let window_frame_explicit = window_frame.is_some();
+                let window_frame = window_frame.unwrap_or_else(|| {
+                    if udwf.params.order_by == order_by {
+                        udwf.params.window_frame.clone()
+                    } else {
+                        WindowFrame::new((!order_by.is_empty()).then_some(false))
+                    }
+                });
                 udwf.params.partition_by = partition_by.unwrap_or_default();
-                udwf.params.order_by = order_by.unwrap_or_default();
-                udwf.params.window_frame =
-                    window_frame.unwrap_or_else(|| WindowFrame::new(has_order_by));
+                udwf.params.order_by = order_by;
+                udwf.params.window_frame = window_frame;
+                udwf.params.window_frame_explicit = window_frame_explicit;
                 udwf.params.filter = filter.map(Box::new);
                 udwf.params.null_treatment = null_treatment;
                 udwf.params.distinct = distinct;

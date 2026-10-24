@@ -3313,6 +3313,15 @@ fn roundtrip_substr() {
 fn roundtrip_window() {
     let ctx = SessionContext::new();
 
+    let derived_frame = Expr::from(expr::WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        vec![],
+    ))
+    .order_by(vec![col("col2").sort(true, false)])
+    .build()
+    .unwrap();
+    roundtrip_expr_test(derived_frame, ctx.clone());
+
     // 1. without window_frame
     let test_expr1 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
