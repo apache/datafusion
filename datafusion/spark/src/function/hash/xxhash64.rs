@@ -532,4 +532,34 @@ mod tests {
         }
         assert_ne!(hashes[0], hashes[1]);
     }
+
+    /// Spark hashes floats through `floatToIntBits` / `doubleToLongBits`, which
+    /// map every NaN to the canonical one, so a NaN with the sign bit set or
+    /// another payload hashes like `NAN`. Expected values are Spark's, from
+    /// apache/datafusion#25913.
+    #[test]
+    fn test_xxhash64_nan_f32() {
+        use arrow::array::Float32Array;
+        let array: ArrayRef = Arc::new(Float32Array::from(vec![
+            f32::NAN,
+            f32::from_bits(0xffc0_0000),
+            f32::from_bits(0x7f80_0001),
+        ]));
+        let mut hashes = vec![DEFAULT_SEED; 3];
+        create_xxhash64_hashes(&[array], &mut hashes).unwrap();
+        assert_eq!(hashes, vec![2692338816207849720u64; 3]);
+    }
+
+    #[test]
+    fn test_xxhash64_nan_f64() {
+        use arrow::array::Float64Array;
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![
+            f64::NAN,
+            f64::from_bits(0xfff8_0000_0000_0000),
+            f64::from_bits(0x7ff0_0000_0000_0001),
+        ]));
+        let mut hashes = vec![DEFAULT_SEED; 3];
+        create_xxhash64_hashes(&[array], &mut hashes).unwrap();
+        assert_eq!(hashes, vec![-3127944061524951246i64 as u64; 3]);
+    }
 }
