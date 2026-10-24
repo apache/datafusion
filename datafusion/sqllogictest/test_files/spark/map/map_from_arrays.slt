@@ -185,3 +185,17 @@ NULL
 
 statement ok
 set datafusion.spark.map_key_dedup_policy = 'EXCEPTION';
+
+# Sliced input: OFFSET makes the function see list arrays whose first offset is
+# non-zero, so the child arrays still contain the skipped row's elements.
+query ?
+SELECT map_from_arrays(a, b)
+FROM (
+    SELECT * FROM values
+        (array[99, 98], array['x', 'y'], 1),
+        (array[1, 2], array['a', 'b'], 2)
+    AS tab(a, b, id)
+    ORDER BY id LIMIT 1 OFFSET 1
+);
+----
+{1: a, 2: b}

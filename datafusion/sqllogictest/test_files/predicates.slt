@@ -1008,12 +1008,14 @@ explain select x from t where x NOT IN (1,2,3,4,5) AND x IN (1,2,3);
 logical_plan EmptyRelation: rows=0
 physical_plan EmptyExec
 
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery\(InSubquery \{ expr: Literal\(Int64\(NULL\), None\), subquery: <subquery>, negated: false \}\)
+query BB
 WITH empty AS (SELECT 10 WHERE false)
 SELECT
     NULL IN (SELECT * FROM empty), -- should be false, as the right side is empty relation
     NULL NOT IN (SELECT * FROM empty) -- should be true, as the right side is empty relation
 FROM (SELECT 1) t;
+----
+false true
 
 query I
 WITH empty AS (SELECT 10 WHERE false)
@@ -1028,6 +1030,27 @@ SELECT * FROM (SELECT 1) t
 WHERE NULL NOT IN (SELECT * FROM empty); -- all rows should be returned
 ----
 1
+
+# Different non-null list expressions can evaluate to the same value.
+statement ok
+CREATE TABLE in_list_values(x INT NOT NULL, a INT NOT NULL, b INT NOT NULL)
+AS VALUES (1, 1, 1), (2, 1, 2), (3, 3, 4);
+
+query I rowsort
+SELECT x FROM in_list_values
+WHERE x IN (a, 2, 10, 11) AND x IN (b, 5, 12, 13);
+----
+1
+2
+
+query I
+SELECT x FROM in_list_values
+WHERE x IN (a, 2, 10, 11) AND x NOT IN (b, 5, 12, 13);
+----
+3
+
+statement ok
+DROP TABLE in_list_values;
 
 # Config reset
 statement ok

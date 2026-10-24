@@ -15,10 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::getfield::GetFieldFunc;
 use arrow::array::StructArray;
-use arrow::datatypes::{DataType, Field};
-use datafusion_common::{Result, exec_err, internal_err};
-use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    StructFieldMapping,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -114,6 +118,18 @@ impl ScalarUDFImpl for StructFunc {
         Ok(DataType::Struct(fields))
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        // The constructed struct row is never NULL: `invoke_with_args` builds
+        // the `StructArray` without a null buffer, so the output field is
+        // non-nullable and `struct(...) IS NOT NULL` folds to `true`.
+        Ok(Field::new(self.name(), self.return_type(&arg_types)?, false).into())
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let DataType::Struct(fields) = args.return_type() else {
             return internal_err!("incorrect struct return type");
@@ -135,5 +151,17 @@ impl ScalarUDFImpl for StructFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn struct_field_mapping(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        Some(StructFieldMapping {
+            field_accessor: Arc::new(ScalarUDF::from(GetFieldFunc::new())),
+            fields: (0..literal_args.len())
+                .map(|i| (vec![ScalarValue::Utf8(Some(format!("c{i}")))], i))
+                .collect(),
+        })
     }
 }

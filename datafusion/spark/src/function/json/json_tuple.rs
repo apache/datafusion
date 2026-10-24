@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, NullBufferBuilder, StringBuilder, StructArray};
@@ -151,7 +152,9 @@ fn json_tuple_inner(args: &[ArrayRef], return_type: &DataType) -> Result<ArrayRe
                             builder.append_value(s);
                         }
                         Some(other) => {
-                            builder.append_value(other.to_string());
+                            // Serialize straight into the builder, then finish the row.
+                            write!(builder, "{other}")?;
+                            builder.append_value("");
                         }
                         None => {
                             builder.append_null();

@@ -1,0 +1,45 @@
+# Shared template for every projection_subquery benchmark. Each qNN.benchmark
+# includes this template with parameters:
+#   QPAD  zero-padded query id / query file stem  (e.g. 01)
+#   NAME  criterion display name                  (e.g. q01_in_bare)
+# Optional, read by the load script as ${...:-default}:
+#   PSQ_ROWS  rows in each of the two tables (default 30000)
+#
+# The tables are always named `outer_t` and `inner_t`, so the load, the asserts
+# and the cleanup are the same for every query.
+#
+# Every query is an aggregate over the projected subquery result, so the output
+# is two numbers and the measurement is the plan and not the result transfer.
+# The counts are checked in under results/, so --result-mode validate also
+# proves that a change to the decorrelation still returns the same rows. The
+# checked-in counts hold for the default PSQ_ROWS only.
+
+load sql_benchmarks/projection_subquery/load/tables.sql
+
+name ${NAME}
+group projection_subquery
+
+# Both tables have exactly PSQ_ROWS rows.
+assert I
+SELECT count(*) = ${PSQ_ROWS:-30000} FROM outer_t;
+----
+true
+
+assert I
+SELECT count(*) = ${PSQ_ROWS:-30000} FROM inner_t;
+----
+true
+
+# The inner key must keep its NULLs, because three-valued logic is what forces
+# the extra mark joins. A load that loses them makes the suite measure the
+# wrong plan.
+assert I
+SELECT count(*) > 0 FROM inner_t WHERE id IS NULL;
+----
+true
+
+run sql_benchmarks/projection_subquery/queries/q${QPAD}.sql
+
+result sql_benchmarks/projection_subquery/results/${NAME}.csv
+
+cleanup sql_benchmarks/projection_subquery/init/cleanup.sql

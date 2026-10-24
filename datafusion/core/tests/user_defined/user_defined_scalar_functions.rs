@@ -25,7 +25,7 @@ use arrow::array::{
 };
 use arrow::array::{Int8Array, UInt64Array, as_string_array, create_array, record_batch};
 use arrow::compute::kernels::numeric::add;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Metadata, Schema};
 use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
 use arrow_schema::{ArrowError, FieldRef, SchemaRef};
 use datafusion::common::test_util::batches_to_string;
@@ -1647,10 +1647,8 @@ async fn test_metadata_based_udf() -> Result<()> {
     let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
     let schema = Arc::new(Schema::new(vec![
         Field::new("no_metadata", DataType::UInt64, true),
-        Field::new("with_metadata", DataType::UInt64, true).with_metadata(
-            std::iter::once(("modify_values".to_string(), "double_output".to_string()))
-                .collect(),
-        ),
+        Field::new("with_metadata", DataType::UInt64, true)
+            .with_metadata(Metadata::new().with("modify_values", "double_output")),
     ]));
     let batch = RecordBatch::try_new(
         schema,
@@ -1967,7 +1965,12 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
         }
 
         fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            let tz = args.config_options.execution.time_zone.clone();
+            let tz = args
+                .config_options
+                .execution
+                .time_zone
+                .as_ref()
+                .map(ToString::to_string);
             Ok(ColumnarValue::Scalar(ScalarValue::from(tz)))
         }
     }
@@ -1977,7 +1980,7 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     });
 
     let mut config = SessionConfig::new();
-    config.options_mut().execution.time_zone = Some("AEST".into());
+    config.options_mut().execution.time_zone = Some("Australia/Sydney".parse().unwrap());
 
     let ctx = SessionContext::new_with_config(config);
 
@@ -1990,7 +1993,7 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     let expected_schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
     let expected = RecordBatch::try_new(
         SchemaRef::from(expected_schema),
-        vec![create_array!(Utf8, ["AEST"])],
+        vec![create_array!(Utf8, ["Australia/Sydney"])],
     )?;
 
     assert_eq!(expected, actual[0]);

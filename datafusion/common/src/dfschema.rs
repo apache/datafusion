@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -32,7 +32,7 @@ use crate::{
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Schema, SchemaBuilder, SchemaRef,
+    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaBuilder, SchemaRef,
 };
 
 /// A reference-counted reference to a [DFSchema].
@@ -154,7 +154,7 @@ impl DFSchema {
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
     pub fn new_with_metadata(
         qualified_fields: Vec<(Option<TableReference>, Arc<Field>)>,
-        metadata: HashMap<String, String>,
+        metadata: impl Into<Metadata>,
     ) -> Result<Self> {
         let (qualifiers, fields): (Vec<Option<TableReference>>, Vec<Arc<Field>>) =
             qualified_fields.into_iter().unzip();
@@ -173,7 +173,7 @@ impl DFSchema {
     /// Create a new `DFSchema` from a list of Arrow [Field]s
     pub fn from_unqualified_fields(
         fields: Fields,
-        metadata: HashMap<String, String>,
+        metadata: impl Into<Metadata>,
     ) -> Result<Self> {
         let field_count = fields.len();
         let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
@@ -286,7 +286,9 @@ impl DFSchema {
     /// Create a new schema that contains the fields from this schema followed by the fields
     /// from the supplied schema. An error will be returned if there are duplicate field names.
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
-        let mut schema_builder = SchemaBuilder::new();
+        let mut schema_builder = SchemaBuilder::with_capacity(
+            self.inner.fields().len() + schema.fields().len(),
+        );
         schema_builder.extend(self.inner.fields().iter().cloned());
         schema_builder.extend(schema.fields().iter().cloned());
         let new_schema = schema_builder.finish();
@@ -338,7 +340,7 @@ impl DFSchema {
             .collect();
 
         let mut schema_builder = SchemaBuilder::from(self.inner.fields.clone());
-        let mut qualifiers = Vec::new();
+        let mut qualifiers = Vec::with_capacity(other_schema.inner.fields.len());
         for (qualifier, field) in other_schema.iter() {
             // skip duplicate columns
             let duplicated_field = match qualifier {
@@ -865,7 +867,7 @@ impl DFSchema {
     }
 
     /// Get metadata of this schema
-    pub fn metadata(&self) -> &HashMap<String, String> {
+    pub fn metadata(&self) -> &Metadata {
         &self.inner.metadata
     }
 
@@ -1138,11 +1140,7 @@ impl TryFrom<SchemaRef> for DFSchema {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
-        // Without checking names, because schema here may have duplicate field names.
-        // For example, Partial AggregateMode will generate duplicate field names from
-        // state_fields.
-        // See <https://github.com/apache/datafusion/issues/17715>
-        // dfschema.check_names()?;
+        dfschema.check_names()?;
         Ok(dfschema)
     }
 }
@@ -1192,7 +1190,7 @@ impl ToDFSchema for Vec<Field> {
         let field_count = self.len();
         let schema = Schema {
             fields: self.into(),
-            metadata: HashMap::new(),
+            metadata: Metadata::new(),
         };
         let dfschema = DFSchema {
             inner: schema.into(),
@@ -1234,7 +1232,7 @@ pub trait ExprSchema: std::fmt::Debug {
     }
 
     /// Returns the column's optional metadata.
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+    fn metadata(&self, col: &Column) -> Result<&Metadata> {
         Ok(self.field_from_column(col)?.metadata())
     }
 
@@ -1258,7 +1256,7 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
         self.as_ref().data_type(col)
     }
 
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+    fn metadata(&self, col: &Column) -> Result<&Metadata> {
         ExprSchema::metadata(self.as_ref(), col)
     }
 
@@ -1391,6 +1389,7 @@ pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String 
 #[cfg(test)]
 mod tests {
     use crate::assert_contains;
+    use std::collections::HashMap;
 
     use super::*;
 

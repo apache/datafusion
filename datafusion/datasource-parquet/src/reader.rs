@@ -20,6 +20,7 @@
 
 use crate::ParquetFileMetrics;
 use crate::metadata::DFParquetMetadata;
+use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
 use datafusion_common::HashMap;
 use datafusion_datasource::PartitionedFile;
@@ -34,10 +35,31 @@ use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::schema::types::SchemaDescriptor;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
+
+/// Derives a file's Arrow schema from its physical Parquet schema during opening.
+///
+/// Install with [`ParquetSource::with_schema_provider`](crate::source::ParquetSource::with_schema_provider).
+/// This runs after the footer is loaded, before Arrow schema inference or filter
+/// preparation, so files may have different nested layouts without loading their
+/// footers during planning. The original Parquet metadata is retained.
+pub trait ParquetFileSchemaProvider: Debug + Send + Sync + 'static {
+    /// Return the complete Arrow schema for the physical file, excluding partition
+    /// and virtual columns. It must be compatible with the Parquet schema under
+    /// [`ArrowReaderOptions::with_schema`], which also ignores advisory `ARROW:schema`
+    /// metadata. Errors fail the file open.
+    ///
+    /// An explicit [`PartitionedFile::arrow_schema`] takes precedence and skips
+    /// this call. Existing table-schema and INT96 coercions are applied afterwards.
+    fn schema(
+        &self,
+        parquet_schema: &SchemaDescriptor,
+    ) -> datafusion_common::Result<SchemaRef>;
+}
 
 /// Interface for reading Apache Parquet files.
 ///
@@ -337,8 +359,10 @@ impl FileMetadata for CachedParquetMetaData {
     }
 
     fn extra_info(&self) -> HashMap<String, String> {
-        let page_index =
-            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        let page_index = self
+            .0
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete());
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }

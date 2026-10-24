@@ -26,7 +26,39 @@ cd "${ROOT_DIR}"
 # Load centralized tool versions
 source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
 
-TARGET_FILE="docs/source/user-guide/configs.md"
+# `--output-dir DIR` writes the generated page into DIR instead of
+# docs/source/user-guide. A relative DIR is taken from the repository root.
+OUTPUT_DIR="docs/source/user-guide"
+
+usage() {
+  cat >&2 <<USAGE
+Usage: $0 [--output-dir DIR]
+
+Regenerates docs/source/user-guide/configs.md.
+--output-dir DIR  Write the generated page into DIR instead of docs/source/user-guide (relative to the repository root).
+USAGE
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-dir)
+      [[ $# -ge 2 ]] || usage
+      OUTPUT_DIR="$2"
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      usage
+      ;;
+  esac
+  shift
+done
+
+mkdir -p "${OUTPUT_DIR}"
+TARGET_FILE="${OUTPUT_DIR}/configs.md"
 PRINT_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_config_docs"
 PRINT_RUNTIME_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_runtime_config_docs"
 

@@ -28,10 +28,10 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
-    ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
-    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
-    LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    ValueOrLambda, Volatility, col,
+    ColumnarValue, CreateIndex, DdlStatement, Expr, ExprSchemable,
+    HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility, col,
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
     lambda,
     logical_plan::LogicalPlan,
@@ -46,6 +46,7 @@ use datafusion_sql::{
 
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
+use datafusion_functions::datetime::{self, planner::DatetimeFunctionPlanner};
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf,
     average::avg_udaf,
@@ -719,6 +720,64 @@ fn plan_insert_no_target_columns() {
     );
 }
 
+#[test]
+fn plan_insert_preserves_target_extension_metadata() {
+    let sql = "INSERT INTO person_with_uuid_extension \
+               SELECT id, first_name, last_name FROM person_with_binary_id";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Insert Into] table=[person_with_uuid_extension]
+      Projection: CAST(person_with_binary_id.id AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, person_with_binary_id.first_name AS first_name, person_with_binary_id.last_name AS last_name
+        Projection: person_with_binary_id.id, person_with_binary_id.first_name, person_with_binary_id.last_name
+          TableScan: person_with_binary_id
+    "#
+    );
+}
+
+#[test]
+fn plan_insert_skips_cast_for_matching_extension_metadata() {
+    let sql = "INSERT INTO person_with_uuid_extension \
+               SELECT id, first_name, last_name FROM person_with_uuid_extension";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Insert Into] table=[person_with_uuid_extension]
+      Projection: person_with_uuid_extension.id AS id, person_with_uuid_extension.first_name AS first_name, person_with_uuid_extension.last_name AS last_name
+        Projection: person_with_uuid_extension.id, person_with_uuid_extension.first_name, person_with_uuid_extension.last_name
+          TableScan: person_with_uuid_extension
+    "#
+    );
+}
+
+#[test]
+fn plan_insert_preserves_target_extension_metadata_on_type_cast() {
+    let sql = "INSERT INTO string_with_extension SELECT id FROM test_decimal";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Insert Into] table=[string_with_extension]
+      Projection: CAST(test_decimal.id AS Utf8<{"ARROW:extension:name": "example.string"}>) AS value
+        Projection: test_decimal.id
+          TableScan: test_decimal
+    "#
+    );
+}
+
+#[test]
+fn plan_insert_does_not_promise_ordinary_target_field_metadata() {
+    let sql = "INSERT INTO array_with_field_metadata SELECT left FROM array";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Dml(dml) = &plan else {
+        panic!("expected DML plan");
+    };
+
+    assert!(dml.input.schema().field(0).metadata().is_empty());
+}
+
 #[rstest]
 #[case::duplicate_columns(
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
@@ -792,6 +851,17 @@ fn plan_delete() {
     );
 }
 
+#[rstest]
+#[case("delete from person limit 1")]
+#[case("delete from person where id = 1 limit 1")]
+fn plan_delete_rejects_limit(#[case] sql: &str) {
+    let err = logical_plan(sql).expect_err("DELETE LIMIT should be rejected");
+    assert_eq!(
+        err.strip_backtrace(),
+        "Error during planning: Delete-limit clause is not supported"
+    );
+}
+
 #[test]
 fn plan_delete_quoted_identifier_case_sensitive() {
     let sql =
@@ -841,10 +911,15 @@ fn select_scalar_func_with_literal_no_relation() {
 struct SingleArgumentCoalescePlanner;
 
 impl ExprPlanner for SingleArgumentCoalescePlanner {
-    fn plan_scalar(&self, expr: RawScalarExpr) -> Result<PlannerResult<RawScalarExpr>> {
+    fn plan_scalar(
+        &self,
+        expr: RawScalarExpr,
+        schema: &DFSchema,
+    ) -> Result<PlannerResult<RawScalarExpr>> {
         if expr.func.name() == "coalesce"
             && let [arg] = expr.args.as_slice()
         {
+            assert_eq!(arg.get_type(schema)?, DataType::Int64);
             Ok(PlannerResult::Planned(arg.clone()))
         } else {
             Ok(PlannerResult::Original(expr))
@@ -858,7 +933,7 @@ fn select_scalar_func_with_expr_planner() -> Result<()> {
         .with_scalar_function(core_functions::coalesce())
         .with_expr_planner(Arc::new(SingleArgumentCoalescePlanner));
     let plan = logical_plan_from_state(
-        "SELECT coalesce(42)",
+        "SELECT coalesce(t.a) FROM (SELECT 42 AS a) AS t",
         &GenericDialect {},
         ParserOptions::default(),
         state,
@@ -866,8 +941,10 @@ fn select_scalar_func_with_expr_planner() -> Result<()> {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Int64(42)
-      EmptyRelation: rows=1
+    Projection: t.a
+      SubqueryAlias: t
+        Projection: Int64(42) AS a
+          EmptyRelation: rows=1
     "
     );
     Ok(())
@@ -3886,7 +3963,7 @@ fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
 }
 
 #[test]
-fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
+fn plan_merge_into_preserves_target_qualifier_and_quoted_columns() {
     let plan = logical_plan(
         "MERGE INTO person_quoted_cols AS t USING j2 AS s ON t.id = s.j2_id \
          WHEN MATCHED THEN UPDATE SET \"First Name\" = s.j2_string \
@@ -3900,7 +3977,11 @@ fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
         panic!("expected MergeInto, got {:?}", dml.op);
     };
 
-    assert_eq!(merge_op.on.to_string(), "person_quoted_cols.id = s.j2_id");
+    assert_eq!(
+        merge_op.target_qualifier(),
+        &datafusion_common::TableReference::bare("t")
+    );
+    assert_eq!(merge_op.on.to_string(), "t.id = s.j2_id");
 
     let datafusion_expr::dml::MergeIntoAction::Update(assignments) =
         &merge_op.clauses[0].action
@@ -3917,6 +3998,40 @@ fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
     };
     assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
     assert_eq!(values[0].to_string(), "s.j2_id");
+
+    let display = plan.display_indent().to_string();
+    assert_contains!(
+        &display,
+        r#"Dml: op=[MergeInto] table=[person_quoted_cols] on=[t.id = s.j2_id] clauses=[WHEN MATCHED THEN UPDATE SET "First Name" = s.j2_string, WHEN NOT MATCHED THEN INSERT (id, "Age") VALUES (s.j2_id, Int64(42))]"#
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.display_pg_json().to_string()).unwrap();
+    let root = &json[0]["Plan"];
+    assert_eq!(root["Node Type"], "Dml");
+    assert_eq!(root["Operation"], "MergeInto");
+    assert_eq!(root["Table Name"], "person_quoted_cols");
+    assert_eq!(root["On"], "t.id = s.j2_id");
+    assert_eq!(
+        root["Clauses"],
+        serde_json::json!([
+            r#"WHEN MATCHED THEN UPDATE SET "First Name" = s.j2_string"#,
+            r#"WHEN NOT MATCHED THEN INSERT (id, "Age") VALUES (s.j2_id, Int64(42))"#,
+        ])
+    );
+}
+
+#[test]
+fn plan_update_json_has_dml_node_without_merge_fields() {
+    let plan = logical_plan("UPDATE person SET age = 42").unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.display_pg_json().to_string()).unwrap();
+    let root = json[0]["Plan"].as_object().unwrap();
+    assert_eq!(root["Node Type"], "Dml");
+    assert_eq!(root["Operation"], "Update");
+    assert_eq!(root["Table Name"], "person");
+    assert!(!root.contains_key("On"));
+    assert!(!root.contains_key("Clauses"));
 }
 
 #[rstest]
@@ -3979,6 +4094,44 @@ fn plan_merge_into_rejects_invalid_actions_and_structure(
     let err = logical_plan(sql).unwrap_err();
     assert!(
         err.strip_backtrace().contains(expected),
+        "unexpected error: {err}"
+    );
+}
+
+/// With the `DatetimeFunctionPlanner`, `AT TIME ZONE` plans as the `timezone`
+/// function for every input type. The function picks the result type after
+/// type coercion, so the SQL planner does not need the input type.
+#[test]
+fn plan_at_time_zone_with_datetime_planner() {
+    let state = MockSessionState::default()
+        .with_expr_planner(Arc::new(DatetimeFunctionPlanner))
+        .with_scalar_function(datetime::timezone());
+    let plan = logical_plan_from_state(
+        "SELECT birth_date AT TIME ZONE 'America/Denver' FROM person",
+        &GenericDialect {},
+        ParserOptions::default(),
+        state,
+    )
+    .unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: timezone(Utf8("America/Denver"), person.birth_date)
+      TableScan: person
+    "#
+    );
+}
+
+/// Without an `ExprPlanner` for `AT TIME ZONE`, planning fails for every input,
+/// as for `EXTRACT`. The SQL planner does not know the input type after type
+/// coercion, so it cannot choose a lowering on its own.
+#[test]
+fn plan_at_time_zone_without_planner() {
+    let err = logical_plan("SELECT birth_date AT TIME ZONE 'America/Denver' FROM person")
+        .unwrap_err();
+    assert!(
+        err.strip_backtrace()
+            .contains("AT TIME ZONE needs an ExprPlanner"),
         "unexpected error: {err}"
     );
 }

@@ -253,7 +253,15 @@ statement ok
 INSERT INTO test_update_error VALUES (1, 'test');
 
 statement error No field named nonexistent
-UPDATE test_update_error SET nonexistent = 'value';
+EXPLAIN UPDATE test_update_error SET nonexistent = 'value';
+
+statement error No field named nonexistent
+EXPLAIN UPDATE test_update_error SET name = 'value' WHERE nonexistent = 1;
+
+query IT
+SELECT * FROM test_update_error;
+----
+1 test
 
 statement ok
 DROP TABLE test_update_error;
@@ -282,5 +290,201 @@ SELECT * FROM test_update_div;
 2 2 50
 3 5 20
 
+# Planning must not evaluate assignments, but execution must report their errors.
+statement ok
+EXPLAIN UPDATE test_update_div SET result = 100 / divisor;
+
+statement error Divide by zero
+UPDATE test_update_div SET result = 100 / divisor;
+
+query III rowsort
+SELECT * FROM test_update_div;
+----
+1 0 0
+2 2 50
+3 5 20
+
 statement ok
 DROP TABLE test_update_div;
+
+# Test that EXPLAIN UPDATE prints the plan and updates nothing.
+# Regression test for https://github.com/apache/datafusion/issues/24656:
+# the update used to run while the physical plan was built.
+statement ok
+CREATE TABLE test_update_explain AS VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+EXPLAIN UPDATE test_update_explain SET column1 = column1 + 10 WHERE column1 > 1;
+
+query IT rowsort
+SELECT * FROM test_update_explain;
+----
+1 a
+2 b
+3 c
+
+# EXPLAIN ANALYZE runs the plan, so it does update. Each matching value goes
+# up by ten once, so a second run of the plan would show 22 and 23.
+statement ok
+EXPLAIN ANALYZE UPDATE test_update_explain SET column1 = column1 + 10 WHERE column1 > 1;
+
+query IT rowsort
+SELECT * FROM test_update_explain;
+----
+1 a
+12 b
+13 c
+
+statement ok
+DROP TABLE test_update_explain;
+
+# A nullable source can be assigned to a NOT NULL column when selected values
+# are non-null. Selecting its NULL must fail at execution.
+statement ok
+CREATE TABLE test_update_not_null (id INT NOT NULL, value INT);
+
+statement ok
+INSERT INTO test_update_not_null VALUES (1, 10), (2, NULL);
+
+query I
+UPDATE test_update_not_null SET id = value WHERE value IS NOT NULL;
+----
+1
+
+statement ok
+EXPLAIN UPDATE test_update_not_null SET id = value;
+
+statement error non-nullable but contains null
+UPDATE test_update_not_null SET id = value;
+
+query II rowsort
+SELECT * FROM test_update_not_null;
+----
+10 10
+2 NULL
+
+statement ok
+DROP TABLE test_update_not_null;
+
+# Test UPDATE with an IN or an EXISTS subquery in the WHERE clause
+# The optimizer rewrites the subquery into a semi join, so the condition cannot
+# reach the table provider as a filter. DataFusion rejects the statement instead
+# of updating every row.
+statement ok
+CREATE TABLE test_update_subquery(id INT, name VARCHAR);
+
+statement ok
+INSERT INTO test_update_subquery VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+CREATE TABLE test_update_subquery_src(id INT);
+
+statement ok
+INSERT INTO test_update_subquery_src VALUES (2);
+
+statement error DataFusion error: This feature is not implemented: UPDATE on table 'test_update_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+UPDATE test_update_subquery SET name = 'z' WHERE id IN (SELECT id FROM test_update_subquery_src);
+
+statement error DataFusion error: This feature is not implemented: UPDATE on table 'test_update_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+UPDATE test_update_subquery SET name = 'z' WHERE EXISTS (SELECT 1 FROM test_update_subquery_src WHERE test_update_subquery_src.id = test_update_subquery.id);
+
+# The ordinary predicate matches rows 2 and 3, but the full condition only matches 2.
+# Passing only the ordinary predicate to the provider would update too many rows.
+statement error DataFusion error: This feature is not implemented: UPDATE on table 'test_update_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+UPDATE test_update_subquery SET name = 'z' WHERE id > 1 AND id IN (SELECT id FROM test_update_subquery_src);
+
+# Every row keeps its value after each rejected statement
+query IT rowsort
+SELECT * FROM test_update_subquery;
+----
+1 a
+2 b
+3 c
+
+statement ok
+DROP TABLE test_update_subquery_src;
+
+statement ok
+DROP TABLE test_update_subquery;
+
+# Test UPDATE with an always-false WHERE clause
+# The optimizer folds the predicate into an empty relation, so no filter reaches
+# the table provider. The statement affects no rows.
+statement ok
+CREATE TABLE test_update_false(id INT, name VARCHAR);
+
+statement ok
+INSERT INTO test_update_false VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+UPDATE test_update_false SET name = 'z' WHERE false;
+----
+0
+
+query I
+UPDATE test_update_false SET name = 'z' WHERE 1 = 2;
+----
+0
+
+query IT rowsort
+SELECT * FROM test_update_false;
+----
+1 a
+2 b
+3 c
+
+statement ok
+DROP TABLE test_update_false;
+
+# Test the same statements with the optimizer switched off
+# With `max_passes = 0` no rule rewrites the subquery into a semi join and no
+# rule folds an always-false predicate, so the whole WHERE clause reaches the
+# table provider. A subquery predicate is rejected there, when the provider
+# compiles it to a physical expression, so no path updates every row.
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+statement ok
+CREATE TABLE test_update_unopt(id INT, name VARCHAR);
+
+statement ok
+INSERT INTO test_update_unopt VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+CREATE TABLE test_update_unopt_src(id INT);
+
+statement ok
+INSERT INTO test_update_unopt_src VALUES (2);
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+UPDATE test_update_unopt SET name = 'z' WHERE id IN (SELECT id FROM test_update_unopt_src);
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+UPDATE test_update_unopt SET name = 'z' WHERE EXISTS (SELECT 1 FROM test_update_unopt_src WHERE test_update_unopt_src.id = test_update_unopt.id);
+
+# The always-false predicate reaches the provider, which matches no row with it
+query I
+UPDATE test_update_unopt SET name = 'z' WHERE false;
+----
+0
+
+query I
+UPDATE test_update_unopt SET name = 'z' WHERE 1 = 2;
+----
+0
+
+query IT rowsort
+SELECT * FROM test_update_unopt;
+----
+1 a
+2 b
+3 c
+
+statement ok
+DROP TABLE test_update_unopt_src;
+
+statement ok
+DROP TABLE test_update_unopt;
+
+statement ok
+RESET datafusion.optimizer.max_passes;

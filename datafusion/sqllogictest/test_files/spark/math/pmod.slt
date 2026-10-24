@@ -142,10 +142,10 @@ SELECT arrow_typeof(pmod(2.5::decimal(3,1), NULL));
 ----
 Decimal128(3, 1)
 
-# An untyped NULL beside a typed non-decimal argument takes the Numeric path,
-# which cannot coerce the pair. `mod` rejects it the same way.
-statement error DataFusion error: Error during planning: Internal error: Function 'pmod' failed to match any signature
+query I
 SELECT pmod(NULL, 3::int);
+----
+NULL
 
 # PMOD tests with large integers
 query I

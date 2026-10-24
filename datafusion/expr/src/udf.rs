@@ -364,6 +364,15 @@ impl ScalarUDF {
         self.inner.output_ordering(inputs)
     }
 
+    /// See [`ScalarUDFImpl::supports_range_key_locality_analysis`] for more details.
+    pub fn supports_range_key_locality_analysis(
+        &self,
+        argument_types: &[DataType],
+    ) -> bool {
+        self.inner
+            .supports_range_key_locality_analysis(argument_types)
+    }
+
     pub fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         self.inner.preserves_lex_ordering(inputs)
     }
@@ -543,11 +552,16 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// See [`Expr::schema_name`] for details
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
-        Ok(format!(
-            "{}({})",
-            self.name(),
-            schema_name_from_exprs_comma_separated_without_space(args)?
-        ))
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn inner(name: &str, args: &[Expr]) -> Result<String> {
+            Ok(format!(
+                "{}({})",
+                name,
+                schema_name_from_exprs_comma_separated_without_space(args)?
+            ))
+        }
+        inner(self.name(), args)
     }
 
     /// Returns a [`Signature`] describing the argument types for which this
@@ -660,12 +674,12 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_types = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type())
-            .cloned()
-            .collect::<Vec<_>>();
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn arg_fields_to_data_types(arg_fields: &[FieldRef]) -> Vec<DataType> {
+            arg_fields.iter().map(|f| f.data_type().clone()).collect()
+        }
+        let data_types = arg_fields_to_data_types(args.arg_fields);
         let return_type = self.return_type(&data_types)?;
         Ok(Arc::new(Field::new(self.name(), return_type, true)))
     }
@@ -899,6 +913,22 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
     /// then the output interval would be `[0, 3]`.
+    ///
+    /// # Output type
+    ///
+    /// The default implementation returns an unbounded [`DataType::Null`]
+    /// interval because the output type cannot be inferred from input intervals
+    /// alone. During physical property analysis, `ScalarFunctionExpr` uses its
+    /// resolved return type to replace any unbounded [`DataType::Null`]
+    /// interval returned here with a typed unbounded interval when supported,
+    /// including intervals returned by overrides. If the resolved type is not
+    /// supported by [`Interval::make_unbounded`], the original interval is kept.
+    /// UDFs need not override this method solely to preserve their output type
+    /// for that analysis.
+    ///
+    /// Override this method to provide more precise bounds. All intervals other
+    /// than an unbounded [`DataType::Null`] interval are preserved. The fallback
+    /// does not apply to direct calls to `PhysicalExpr::evaluate_bounds`.
     fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
         // We cannot assume the input datatype is the same of output type.
         Interval::make_unbounded(&DataType::Null)
@@ -942,19 +972,47 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
             return Ok(SortProperties::Unordered);
         }
 
-        let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
-            return Ok(SortProperties::Singleton);
-        };
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn inner(inputs: &[ExprProperties]) -> SortProperties {
+            let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
+                return SortProperties::Singleton;
+            };
 
-        if inputs
-            .iter()
-            .skip(1)
-            .all(|input| &input.sort_properties == first_order)
-        {
-            Ok(*first_order)
-        } else {
-            Ok(SortProperties::Unordered)
+            if inputs
+                .iter()
+                .skip(1)
+                .all(|input| &input.sort_properties == first_order)
+            {
+                *first_order
+            } else {
+                SortProperties::Unordered
+            }
         }
+        Ok(inner(inputs))
+    }
+
+    /// Returns whether this function and argument-type combination has been
+    /// audited for range-partitioning locality analysis.
+    ///
+    /// Range-boundary analysis has subtle correctness requirements, so the
+    /// policy is default-deny. Functions may opt in only after individual audit.
+    /// At minimum, an opted-in combination must:
+    ///
+    /// - have same-direction [`SortProperties::Ordered`] metadata over the
+    ///   admitted non-null domain when all other inputs are singleton;
+    /// - preserve nullness exactly, so successful evaluation returns null if and
+    ///   only if the range input is null.
+    ///
+    /// Callers may then prove key locality by evaluating values on both sides of
+    /// each concrete range split. Ordered metadata alone is insufficient because
+    /// a non-strict transform can collapse a split boundary.
+    ///
+    /// This does not claim a concrete partition layout or cross-input
+    /// co-partitioning compatibility. Boundary evaluation errors cause the
+    /// analysis to return `false`. This capability is not transported across FFI.
+    fn supports_range_key_locality_analysis(&self, _argument_types: &[DataType]) -> bool {
+        false
     }
 
     /// Returns true if the function preserves lexicographical ordering based on
@@ -995,7 +1053,12 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
     /// arguments to these specific types.
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        not_impl_err!("Function {} does not implement coerce_types", self.name())
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn inner(name: &str) -> Result<Vec<DataType>> {
+            not_impl_err!("Function {name} does not implement coerce_types")
+        }
+        inner(self.name())
     }
 
     /// For struct-producing functions, return how output fields map to input
@@ -1174,6 +1237,11 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.output_ordering(inputs)
     }
 
+    fn supports_range_key_locality_analysis(&self, argument_types: &[DataType]) -> bool {
+        self.inner
+            .supports_range_key_locality_analysis(argument_types)
+    }
+
     fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         self.inner.preserves_lex_ordering(inputs)
     }
@@ -1254,6 +1322,12 @@ mod tests {
         assert_ne!(b, o);
         assert_ne!(hash(&b), hash(&o)); // hash can collide for different values but does not collide in this test
         assert_eq!(b.partial_cmp(&o), Some(Ordering::Less));
+    }
+
+    #[test]
+    fn range_key_locality_analysis_is_disabled_by_default() {
+        let function = test_func("range_function", "a");
+        assert!(!function.supports_range_key_locality_analysis(&[DataType::Int64]));
     }
 
     fn test_func(name: &'static str, parameter: &'static str) -> ScalarUDF {

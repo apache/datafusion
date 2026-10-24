@@ -43,10 +43,10 @@ use crate::logical_plan::plan::RangePartitioning;
 use crate::{
     Aggregate, Analyze, AsOfJoin, AsOfMatch, CreateMemoryTable, CreateView, DdlStatement,
     Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
-    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
-    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
-    UserDefinedLogicalNode, Values, Window, WriteOp, builder::unnest_with_options,
-    dml::CopyTo,
+    Limit, LogicalPlan, MaterializedCte, MaterializedCtePlan, Partitioning, Prepare,
+    Projection, RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias,
+    TableScan, Union, Unnest, UserDefinedLogicalNode, Values, Window, WriteOp,
+    builder::unnest_with_options, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -138,6 +138,7 @@ impl TreeNode for LogicalPlan {
                 schema,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
             }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -149,6 +150,7 @@ impl TreeNode for LogicalPlan {
                     schema,
                     null_equality,
                     null_aware,
+                    null_aware_value_keys,
                 })
             }),
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -325,10 +327,12 @@ impl TreeNode for LogicalPlan {
                     DdlStatement::CreateExternalTable(_)
                     | DdlStatement::CreateCatalogSchema(_)
                     | DdlStatement::CreateCatalog(_)
+                    | DdlStatement::CreateExternalCatalog(_)
                     | DdlStatement::CreateIndex(_)
                     | DdlStatement::DropTable(_)
                     | DdlStatement::DropView(_)
                     | DdlStatement::DropCatalogSchema(_)
+                    | DdlStatement::DropCatalog(_)
                     | DdlStatement::CreateFunction(_)
                     | DdlStatement::DropFunction(_) => Transformed::no(ddl),
                 }
@@ -373,6 +377,25 @@ impl TreeNode for LogicalPlan {
                     })
                 },
             ),
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+                id,
+                name,
+                cte,
+                continuation,
+            })) => {
+                (cte, continuation)
+                    .map_elements(f)?
+                    .update_data(|(cte, continuation)| {
+                        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                            MaterializedCte {
+                                id,
+                                name,
+                                cte,
+                                continuation,
+                            },
+                        ))
+                    })
+            }
             LogicalPlan::Statement(stmt) => match stmt {
                 Statement::Prepare(p) => p
                     .input
@@ -385,6 +408,7 @@ impl TreeNode for LogicalPlan {
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
+            | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
         })
     }
@@ -512,6 +536,7 @@ impl LogicalPlan {
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::MaterializedCte(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Analyze(_)
@@ -626,6 +651,7 @@ impl LogicalPlan {
                 schema,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
             }) => (on, filter).map_elements(f)?.update_data(|(on, filter)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -637,6 +663,7 @@ impl LogicalPlan {
                     schema,
                     null_equality,
                     null_aware,
+                    null_aware_value_keys,
                 })
             }),
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -697,6 +724,7 @@ impl LogicalPlan {
                 projected_schema,
                 filters,
                 fetch,
+                skip: offset,
                 statistics_requests,
             }) => filters.map_elements(f)?.update_data(|filters| {
                 LogicalPlan::TableScan(TableScan {
@@ -706,6 +734,7 @@ impl LogicalPlan {
                     projected_schema,
                     filters,
                     fetch,
+                    skip: offset,
                     statistics_requests,
                 })
             }),
@@ -795,6 +824,7 @@ impl LogicalPlan {
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::MaterializedCte(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Analyze(_)

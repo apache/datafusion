@@ -242,6 +242,10 @@ struct ObjectStoreSpillWriter {
 }
 
 impl ObjectStoreSpillWriter {
+    #[expect(
+        clippy::result_large_err,
+        reason = "error type is dictated by the object_store API"
+    )]
     async fn flush_part(&mut self) -> object_store::Result<()> {
         if self.buffer.is_empty() {
             return Ok(());

@@ -37,6 +37,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -135,6 +136,12 @@ impl ScalarUDFImpl for ArrayRepeat {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_repeat_inner)(&args.args)
+    }
+
+    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // this is not strictly order preserving
+        // since array_repeat(NULL, 2) = [NULL, NULL] and not NULL
+        Ok(false)
     }
 
     fn aliases(&self) -> &[String] {
@@ -291,7 +298,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         None,
     )?;
     let inner_list = GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(list_array.value_type().clone(), true)),
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::new(inner_offsets.into()),
         inner_values,
         Some(NullBuffer::new(inner_nulls.finish())),

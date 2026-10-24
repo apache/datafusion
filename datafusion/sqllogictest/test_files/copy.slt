@@ -42,6 +42,28 @@ select * from validate_partitioned_parquet order by col1, col2;
 1 Foo
 2 Bar
 
+# Reject NULL partition values instead of writing them into the zero partition.
+statement ok
+CREATE TABLE nullable_partition_source (id INT, p INT) AS VALUES (1, NULL), (2, 0);
+
+statement error DataFusion error: Execution error: NULL values are not supported for partition column 'p'
+COPY nullable_partition_source TO 'test_files/scratch/copy/null_partition/' STORED AS PARQUET PARTITIONED BY (p);
+
+# Nullable partition columns still work when the copied rows contain no NULLs.
+query I
+COPY (SELECT * FROM nullable_partition_source WHERE p IS NOT NULL) TO 'test_files/scratch/copy/non_null_partition/' STORED AS PARQUET PARTITIONED BY (p);
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE validate_non_null_partition (id INT, p INT)
+STORED AS PARQUET LOCATION 'test_files/scratch/copy/non_null_partition/' PARTITIONED BY (p);
+
+query II
+SELECT id, p FROM validate_non_null_partition;
+----
+2 0
+
 # validate partition paths were actually generated
 statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet_bar STORED AS PARQUET
@@ -227,6 +249,33 @@ query TT
 select column1, column2 from validate_partitioned_parquet4 order by column1,column2;
 ----
 1 a
+
+# The files written above physically contain the partition column (because
+# keep_partition_by_columns was enabled), so a hive-partitioned table over the
+# whole directory must not end up with that column twice.
+# See https://github.com/apache/datafusion/issues/17420
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet4_hive STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_table4/' PARTITIONED BY (column1);
+
+query TT
+select column1, column2 from validate_partitioned_parquet4_hive order by column1, column2;
+----
+1 a
+2 b
+3 c
+
+# Same directory, but letting the factory infer the hive partitions from the path
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet4_inferred STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_table4/';
+
+query TT
+select column1, column2 from validate_partitioned_parquet4_inferred order by column1, column2;
+----
+1 a
+2 b
+3 c
 
 # Copy more files to directory via query
 query I
@@ -611,6 +660,86 @@ select * from validate_arrow;
 ----
 1 Foo
 2 Bar
+
+# Copy to arrow file with zstd compression
+query I
+COPY source_table to 'test_files/scratch/copy/table_zstd.arrow' STORED AS ARROW OPTIONS ('format.compression' 'zstd');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_zstd
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table_zstd.arrow';
+
+query IT
+select * from validate_arrow_zstd;
+----
+1 Foo
+2 Bar
+
+# Copy to arrow file with no compression
+query I
+COPY source_table to 'test_files/scratch/copy/table_uncompressed.arrow' STORED AS ARROW OPTIONS ('format.compression' 'uncompressed');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_uncompressed
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table_uncompressed.arrow';
+
+query IT
+select * from validate_arrow_uncompressed;
+----
+1 Foo
+2 Bar
+
+# Copy to arrow file with an invalid compression codec
+query error DataFusion error: Invalid or Unsupported Configuration: Invalid Arrow IPC compression type: snappy\. Expected one of: uncompressed, lz4_frame, zstd
+COPY source_table to 'test_files/scratch/copy/table_invalid_compression.arrow' STORED AS ARROW OPTIONS ('format.compression' 'snappy');
+
+# Copy to arrow file with zstd compression and an explicit compression level
+query I
+COPY source_table to 'test_files/scratch/copy/table_zstd_level.arrow' STORED AS ARROW OPTIONS ('format.compression' 'zstd', 'format.compression_level' '15');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_zstd_level
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table_zstd_level.arrow';
+
+query IT
+select * from validate_arrow_zstd_level;
+----
+1 Foo
+2 Bar
+
+# compression_level is not supported outside of zstd
+query error DataFusion error: Arrow error: Invalid argument error: LZ4 Frame compression does not support configurable compression levels
+COPY source_table to 'test_files/scratch/copy/table_lz4_level.arrow' STORED AS ARROW OPTIONS ('format.compression' 'lz4_frame', 'format.compression_level' '5');
+
+# Copy to arrow file with a non-default byte alignment
+query I
+COPY source_table to 'test_files/scratch/copy/table_alignment.arrow' STORED AS ARROW OPTIONS ('format.alignment' '32');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_alignment
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table_alignment.arrow';
+
+query IT
+select * from validate_arrow_alignment;
+----
+1 Foo
+2 Bar
+
+# alignment must be one of 8, 16, 32, or 64
+query error DataFusion error: Arrow error: Invalid argument error: Alignment should be 8, 16, 32, or 64\.
+COPY source_table to 'test_files/scratch/copy/table_bad_alignment.arrow' STORED AS ARROW OPTIONS ('format.alignment' '10');
 
 # Format Options Support without the 'format.' prefix
 
