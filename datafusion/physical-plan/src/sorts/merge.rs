@@ -86,6 +86,10 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Target batch size
     batch_size: usize,
 
+    /// Optional upper bound on the estimated in-memory size of an output batch. A batch
+    /// is emitted when it reaches `batch_size` rows or this many bytes, whichever first.
+    max_batch_bytes: Option<usize>,
+
     /// Cursors for each input partition. `None` means the input is exhausted
     cursors: Vec<Option<Cursor<C>>>,
 
@@ -146,9 +150,27 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             poll_reset_epochs: vec![0; stream_count],
             loser_tree: vec![],
             batch_size,
+            max_batch_bytes: None,
             fetch,
             produced: 0,
         }
+    }
+
+    /// Emit an output batch once its estimated in-memory size reaches
+    /// `max_batch_bytes`, even if it has fewer than `batch_size` rows. See
+    /// [`BatchBuilder::in_progress_bytes`] for how the size is estimated.
+    pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+        self.max_batch_bytes = max_batch_bytes;
+        self
+    }
+
+    /// Returns `true` if the in-progress batch has reached `batch_size` rows or
+    /// `max_batch_bytes` bytes.
+    fn in_progress_is_full(&self) -> bool {
+        self.in_progress.len() >= self.batch_size
+            || self
+                .max_batch_bytes
+                .is_some_and(|max| self.in_progress.in_progress_bytes() >= max)
     }
 
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream
@@ -257,7 +279,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 }
 
                 // 3.3. if there is enough to emit for a full record batch
-                if self.in_progress.len() >= self.batch_size {
+                if self.in_progress_is_full() {
                     // 3.3.1 build pending record batch and reset builder
                     let Some(batch) = self.emit_in_progress_batch()? else {
                         return internal_err!("must have batch in progress to emit");
