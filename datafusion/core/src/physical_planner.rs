@@ -1750,8 +1750,8 @@ impl DefaultPhysicalPlanner {
                             None,
                         )?)
                     }
-                } else if session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
+                } else if (session_state.config().target_partitions() == 1
+                    || session_state.config().repartition_joins())
                     && !prefer_hash_join
                     && !*null_aware
                 // Null-aware joins (e.g. `NOT IN` with a nullable subquery) must
@@ -1760,14 +1760,18 @@ impl DefaultPhysicalPlanner {
                 // results when the right side contains a null join key.
                 {
                     // Use SortMergeJoin if hash join is not preferred
-                    let join_on_len = join_on.len();
+                    // The join keys are an unordered set of equalities, so they may be
+                    // reshuffled (together with their sort options) to match the input
+                    // orderings and avoid sorting.
+                    let (join_on, sort_options) =
+                        sort_merge_join_keys(&physical_left, &physical_right, &join_on)?;
                     Arc::new(SortMergeJoinExec::try_new(
                         physical_left,
                         physical_right,
                         join_on,
                         join_filter,
                         *join_type,
-                        vec![SortOptions::default(); join_on_len],
+                        sort_options,
                         *null_equality,
                     )?)
                 } else {
@@ -3624,6 +3628,117 @@ enum PlannedExprResult {
 enum PlanAsyncExpr {
     Sync(PlannedExprResult),
     Async(AsyncMapper, PlannedExprResult),
+}
+
+/// Chooses the join key order and per-key [`SortOptions`] of a [`SortMergeJoinExec`], so that as
+/// few inputs as possible need a `SortExec`.
+///
+/// The join keys are an unordered set of equalities, so they can be permuted freely. Candidates
+/// are derived from each known output ordering of each input: its entries that (after normalizing
+/// through the equivalence group) are join keys become the leading keys, in that order and with
+/// those options, and the remaining keys follow with the default options. Each candidate is
+/// scored by how many inputs `ordering_satisfy` confirms are already sorted on it, so constants,
+/// equal columns and any key order are handled. The default (original key order, default options)
+/// wins ties, so plans that already match are unchanged.
+///
+/// Cost: nothing is done if neither input has an ordering; otherwise one candidate per known
+/// ordering, each verified with two `ordering_satisfy` calls.
+fn sort_merge_join_keys(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    on: &join_utils::JoinOn,
+) -> Result<(join_utils::JoinOn, Vec<SortOptions>)> {
+    let left_eq = left.equivalence_properties();
+    let right_eq = right.equivalence_properties();
+
+    // The baseline candidate is the join keys in the order they were provided, all with the
+    // default sort options. Other candidates replace it only if they strictly reduce the number
+    // of inputs that still need sorting.
+    let mut best = (on.clone(), vec![SortOptions::default(); on.len()]);
+    if left_eq.oeq_class().is_empty() && right_eq.oeq_class().is_empty() {
+        return Ok(best);
+    }
+
+    // Scores a candidate (join keys and their sort options) by the number of inputs that are
+    // already sorted on it and therefore need no `SortExec`: 0 (both inputs need a sort),
+    // 1 (one input is already sorted) or 2 (neither input needs a sort).
+    let score = |candidate: &(join_utils::JoinOn, Vec<SortOptions>)| -> Result<usize> {
+        let satisfied = |eq: &datafusion_physical_expr::EquivalenceProperties,
+                         left_side: bool| {
+            eq.ordering_satisfy(candidate.0.iter().zip(&candidate.1).map(
+                |((l, r), options)| {
+                    PhysicalSortExpr::new(
+                        Arc::clone(if left_side { l } else { r }),
+                        *options,
+                    )
+                },
+            ))
+        };
+        Ok(usize::from(satisfied(left_eq, true)?)
+            + usize::from(satisfied(right_eq, false)?))
+    };
+    let mut best_score = score(&best)?;
+
+    // Derive candidates from the orderings of both inputs, left first and then right. The left
+    // orderings may not lead to any improvement (e.g. the left input is unsorted or sorted on
+    // other columns), but the right input's orderings can still give a better score, so a
+    // candidate that only the right input is already sorted on is still found. Stop early once
+    // a candidate scores 2, as no input needs sorting anymore.
+    for (eq, driven_by_left) in [(left_eq, true), (right_eq, false)] {
+        if best_score == 2 {
+            break;
+        }
+        // The join key of the driving side, normalized through its equivalence group, so that
+        // equal columns match the entries of the ordering below.
+        let keys: Vec<_> = on
+            .iter()
+            .map(|(l, r)| {
+                eq.eq_group().normalize_expr(Arc::clone(if driven_by_left {
+                    l
+                } else {
+                    r
+                }))
+            })
+            .collect();
+        for ordering in eq.oeq_class().iter() {
+            // `used[j]` is true once join key `j` was found in this lex ordering and moved to the
+            // front of the candidate. Each key is used at most once, so an expression that
+            // appears twice in the ordering only matches one key.
+            let mut used = vec![false; on.len()];
+            let mut candidate =
+                (Vec::with_capacity(on.len()), Vec::with_capacity(on.len()));
+            // Walk the ordering in order: every sort expression that is a (not yet used) join
+            // key adds that key to the candidate, with the sort options of the ordering.
+            // Sort expressions that are not join keys are skipped; `ordering_satisfy` in
+            // `score` decides whether the skipped ones (e.g. constants) are harmless.
+            for sort_expr in ordering.iter() {
+                let expr = eq.eq_group().normalize_expr(Arc::clone(&sort_expr.expr));
+                if let Some(j) = (0..on.len()).find(|&j| !used[j] && keys[j].eq(&expr)) {
+                    used[j] = true;
+                    candidate.0.push(on[j].clone());
+                    candidate.1.push(sort_expr.options);
+                }
+            }
+            if candidate.0.is_empty() {
+                continue;
+            }
+            // The join keys that were not found in the ordering follow, in their provided order
+            // and with the default sort options.
+            for (key, _) in on.iter().zip(&used).filter(|(_, used)| !**used) {
+                candidate.0.push(key.clone());
+                candidate.1.push(SortOptions::default());
+            }
+            let candidate_score = score(&candidate)?;
+            if candidate_score > best_score {
+                best = candidate;
+                best_score = candidate_score;
+                if best_score == 2 {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(best)
 }
 
 fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
