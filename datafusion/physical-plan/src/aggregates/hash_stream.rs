@@ -20,7 +20,6 @@
 //! See comments in [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`]
 //! for details.
 
-use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -28,7 +27,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{
     DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
 };
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
@@ -40,6 +39,7 @@ use super::aggregate_hash_table::{
 use super::order::GroupClusteringMode;
 use super::skip_partial::SkipAggregationProbe;
 use super::spill::AggregateSpill;
+use super::stream_memory::StreamMemory;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
@@ -148,8 +148,8 @@ pub(crate) struct PartialHashAggregateStream {
     /// Target output batch size from configuration.
     batch_size: usize,
 
-    /// Memory reservation for group keys and accumulators.
-    reservation: MemoryReservation,
+    /// Memory for group keys and accumulators.
+    memory: StreamMemory,
 
     /// Execution metrics shared with the aggregate plan node.
     baseline_metrics: BaselineMetrics,
@@ -187,8 +187,8 @@ pub(crate) struct FinalHashAggregateStream {
     /// Execution metrics shared with the aggregate plan node.
     baseline_metrics: BaselineMetrics,
 
-    /// Memory reservation for group keys, accumulators, and spill sorting.
-    reservation: MemoryReservation,
+    /// Memory for group keys, accumulators, and spill sorting.
+    memory: StreamMemory,
 
     /// See comments for the same variable in [`PartialHashAggregateStream`].
     group_values_soft_limit: Option<usize>,
@@ -268,16 +268,14 @@ impl PartialHashAggregateStream {
                 // to ensure fair application of back pressure amongst the memory consumers.
                 .with_can_spill(true)
                 .register(context.memory_pool());
-
-        // Reserve memory for the initial hash table. that we hold for the lifetime of the stream.
-        reservation.try_grow(hash_table.memory_size())?;
+        let memory = StreamMemory::try_new(reservation, hash_table.memory_size())?;
 
         Ok(Self {
             schema,
             input,
             batch_size,
             baseline_metrics,
-            reservation,
+            memory,
             reduction_factor,
             early_emit_count,
             skip_aggregation_probe,
@@ -329,6 +327,7 @@ impl PartialHashAggregateStream {
                             materialized_group_states,
                             &mut emitter,
                             hash_table.memory_size(),
+                            hash_table.building_group_count(),
                         )
                         .await?;
                     }
@@ -421,7 +420,9 @@ impl PartialHashAggregateStream {
         // -------------------------------------------------
         // Step 4: Larger-than-memory execution (early emit)
         // -------------------------------------------------
-        let resize_result = self.reservation.try_resize(hash_table.memory_size());
+        let resize_result = self
+            .memory
+            .try_fit_table(hash_table.memory_size(), hash_table.building_group_count());
         match resize_result {
             Ok(()) => Ok(HandleInputResult::ProcessNext),
             Err(DataFusionError::ResourcesExhausted(_)) => Ok(HandleInputResult::OOM),
@@ -432,45 +433,20 @@ impl PartialHashAggregateStream {
     /// Emit a materialized partial-state batch in `batch_size` slices.
     async fn emit_on_memory_pressure(
         &mut self,
-        mut remaining_groups: RecordBatch,
+        remaining_groups: RecordBatch,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
-        hash_table_mem_size: usize,
+        table_size: usize,
+        groups: usize,
     ) -> Result<()> {
-        let remaining_groups_memory = remaining_groups.get_array_memory_size();
-
-        match self
-            .reservation
-            .try_resize(hash_table_mem_size + remaining_groups_memory)
-        {
-            Ok(()) => {}
-            Err(DataFusionError::ResourcesExhausted(_)) => {
-                self.reservation.try_resize(hash_table_mem_size)?;
-                self.reduction_factor.add_part(remaining_groups.num_rows());
-                emitter
-                    .emit(remaining_groups.record_output(&self.baseline_metrics))
-                    .await;
-                return Ok(());
-            }
-            Err(error) => return Err(error),
-        }
-
-        while remaining_groups.num_rows() > self.batch_size {
-            let output = remaining_groups.slice(0, self.batch_size);
-            remaining_groups = remaining_groups.slice(
-                self.batch_size,
-                remaining_groups.num_rows() - self.batch_size,
-            );
-            self.reduction_factor.add_part(output.num_rows());
+        let mut output =
+            self.memory
+                .hold(table_size, groups, remaining_groups, self.batch_size)?;
+        while let Some(slice) = output.next_slice(&self.memory)? {
+            self.reduction_factor.add_part(slice.num_rows());
             emitter
-                .emit(output.record_output(&self.baseline_metrics))
+                .emit(slice.record_output(&self.baseline_metrics))
                 .await;
         }
-
-        self.reduction_factor.add_part(remaining_groups.num_rows());
-        self.reservation.try_shrink(remaining_groups_memory)?;
-        emitter
-            .emit(remaining_groups.record_output(&self.baseline_metrics))
-            .await;
         Ok(())
     }
 
@@ -490,7 +466,7 @@ impl PartialHashAggregateStream {
                 // Only reachable when the table held no groups at all: a
                 // non-empty table always reports its last batch together with
                 // the `Done` state, which the `try_resize` below already zeroes.
-                self.reservation.try_resize(0)?;
+                self.memory.release();
                 return Ok(());
             };
 
@@ -499,7 +475,7 @@ impl PartialHashAggregateStream {
             // The table hands over its groups as they are materialized and
             // reports a size of 0 once it reaches `Done`, so this releases the
             // reservation before the final batch goes downstream.
-            let _ = self.reservation.try_resize(hash_table.memory_size());
+            let _ = self.memory.try_resize(hash_table.memory_size());
             self.reduction_factor.add_part(batch.num_rows());
 
             timer.done();
@@ -595,15 +571,14 @@ impl FinalHashAggregateStream {
             MemoryConsumer::new(format!("FinalHashAggregateStream[{partition}]"))
                 .with_can_spill(can_spill)
                 .register(context.memory_pool());
-
-        // Reserve memory for the initial hash table. that we hold for the lifetime of the stream.
-        reservation.try_grow(hash_table.memory_size())?;
+        let memory = StreamMemory::try_new(reservation, hash_table.memory_size())?
+            .with_sort_index_headroom(spill_context.is_some());
 
         Ok(Self {
             schema,
             input,
             baseline_metrics,
-            reservation,
+            memory,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             hash_table: Some(hash_table),
             spill_context,
@@ -657,26 +632,6 @@ impl FinalHashAggregateStream {
             .is_some_and(|limit| limit <= hash_table.building_group_count())
     }
 
-    /// Reserve memory for the current aggregate table.
-    fn reservation_size_for_table(
-        hash_table: &AggregateHashTable<FinalMarker>,
-        spill_context: Option<&AggregateSpill>,
-    ) -> usize {
-        let table_size = hash_table.memory_size();
-        if spill_context.is_some() {
-            // Count extra space needed for in-memory sorting and spilling. Only
-            // count memory for indices, the payload will be materialize incrementally
-            // in smaller chunks.
-            table_size.saturating_add(
-                hash_table
-                    .building_group_count()
-                    .saturating_mul(size_of::<u32>()),
-            )
-        } else {
-            table_size
-        }
-    }
-
     /// Read input stream, if no memory, then spill and continue reading - aggregate partial state batches into the hash table.
     ///
     /// Spilling: The table cannot reserve enough memory.
@@ -703,12 +658,10 @@ impl FinalHashAggregateStream {
             }
 
             // Check memory reservation, and potentially spill.
-            let resize_result =
-                self.reservation
-                    .try_resize(Self::reservation_size_for_table(
-                        hash_table,
-                        spill_context.as_deref(),
-                    ));
+            let resize_result = self.memory.try_fit_table(
+                hash_table.memory_size(),
+                hash_table.building_group_count(),
+            );
 
             match resize_result {
                 Ok(()) => {}
@@ -738,13 +691,7 @@ impl FinalHashAggregateStream {
 
                     // Spilling shrinks the aggregate table and releases its accumulated
                     // memory. Update the reservation accordingly.
-                    self.reservation
-                        .try_resize(hash_table.memory_size())
-                        .map_err(|e| {
-                            e.context(
-                                "Decreasing allocation after spilling should succeed",
-                            )
-                        })?;
+                    self.memory.shrink_after_spill(hash_table.memory_size())?;
 
                     result?;
 
@@ -806,11 +753,11 @@ impl FinalHashAggregateStream {
     ) -> Result<SendableRecordBatchStream> {
         let metrics = ClusteredAggregateTableMetrics::from_hash_table(&hash_table);
         drop(hash_table);
-        self.reservation.try_resize(0)?;
+        let replay_reservation = self.memory.release_for_replay();
         spill_context.into_replay_stream(
             &self.baseline_metrics,
             metrics,
-            self.reservation.new_empty(),
+            replay_reservation,
         )
     }
 
@@ -831,14 +778,14 @@ impl FinalHashAggregateStream {
                 // Only reachable when the table held no groups at all: a
                 // non-empty table always reports its last batch together with
                 // the `Done` state, which the `try_resize` below already zeroes.
-                self.reservation.try_resize(0)?;
+                self.memory.release();
                 return Ok(());
             };
 
             // The table hands over its groups as they are materialized and
             // reports a size of 0 once it reaches `Done`, so this releases the
             // reservation before the final batch goes downstream.
-            self.reservation.try_resize(hash_table.memory_size())?;
+            self.memory.try_resize(hash_table.memory_size())?;
 
             timer.done();
             emitter

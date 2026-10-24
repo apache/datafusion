@@ -19,13 +19,12 @@
 //!
 //! See comments in [`SingleHashAggregateStream`] for details.
 
-use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, assert_ne_or_internal_err};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::StreamExt;
 
@@ -34,6 +33,7 @@ use super::aggregate_hash_table::{
 };
 use super::order::GroupClusteringMode;
 use super::spill::AggregateSpill;
+use super::stream_memory::StreamMemory;
 use super::{AggregateExec, create_schema};
 use crate::SendableRecordBatchStream;
 use crate::aggregates::AggregateMode;
@@ -115,7 +115,7 @@ use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 pub(crate) struct SingleHashAggregateStream {
     /// Covers group keys, accumulators, and spill sorting; replay reuses it
     /// through a sibling reservation.
-    reservation: MemoryReservation,
+    memory: StreamMemory,
     context: SingleHashAggregateContext,
     stage: ExecutionStage,
 }
@@ -206,12 +206,11 @@ impl SingleHashAggregateStream {
             MemoryConsumer::new(format!("SingleHashAggregateStream[{partition}]"))
                 .with_can_spill(can_spill)
                 .register(context.memory_pool());
-
-        // Reserve memory for the initial hash table. that we hold for the lifetime of the stream.
-        reservation.try_grow(hash_table.memory_size())?;
+        let memory = StreamMemory::try_new(reservation, hash_table.memory_size())?
+            .with_sort_index_headroom(spill_context.is_some());
 
         Ok(Self {
-            reservation,
+            memory,
             context: SingleHashAggregateContext {
                 schema,
                 baseline_metrics,
@@ -275,7 +274,7 @@ impl SingleHashAggregateStream {
     /// 9. End.
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
         let Self {
-            reservation,
+            memory,
             context,
             stage,
         } = self;
@@ -286,11 +285,11 @@ impl SingleHashAggregateStream {
             while let Some(current_stage) = stage {
                 stage = match current_stage {
                     ExecutionStage::Aggregating(aggregating) => {
-                        aggregating.handle_stage(&context, &reservation).await?
+                        aggregating.handle_stage(&context, &memory).await?
                     }
                     ExecutionStage::Outputting(outputting) => {
                         outputting
-                            .handle_stage(&context, &reservation, &mut emitter)
+                            .handle_stage(&context, &memory, &mut emitter)
                             .await?
                     }
                     ExecutionStage::MergingSpills(mut stream) => {
@@ -309,23 +308,6 @@ impl SingleHashAggregateStream {
 }
 
 impl Aggregating {
-    /// Reserve memory for the current aggregate table.
-    fn reservation_size(&self) -> usize {
-        let table_size = self.hash_table.memory_size();
-        if self.spill_context.is_some() {
-            // Count extra space needed for in-memory sorting and spilling. Only
-            // count memory for indices, the payload will be materialize incrementally
-            // in smaller chunks.
-            table_size.saturating_add(
-                self.hash_table
-                    .building_group_count()
-                    .saturating_mul(size_of::<u32>()),
-            )
-        } else {
-            table_size
-        }
-    }
-
     fn has_spills(&self) -> bool {
         self.spill_context.as_ref().is_some_and(|s| s.has_spills())
     }
@@ -343,7 +325,7 @@ impl Aggregating {
     async fn handle_stage(
         mut self,
         context: &SingleHashAggregateContext,
-        reservation: &MemoryReservation,
+        memory: &StreamMemory,
     ) -> Result<Option<ExecutionStage>> {
         debug_assert!(self.hash_table.is_building());
         let elapsed_compute = context.baseline_metrics.elapsed_compute();
@@ -352,7 +334,10 @@ impl Aggregating {
             let _timer = elapsed_compute.timer();
             self.hash_table.aggregate_batch(&batch)?;
 
-            match reservation.try_resize(self.reservation_size()) {
+            match memory.try_fit_table(
+                self.hash_table.memory_size(),
+                self.hash_table.building_group_count(),
+            ) {
                 Ok(()) => {}
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
                     let Some(spill_context) = self.spill_context.as_mut() else {
@@ -366,13 +351,7 @@ impl Aggregating {
                         "Single hash aggregate ran out of memory with no aggregated groups"
                     );
                     spill_context.sort_and_spill(self.hash_table.take_state_batch()?)?;
-                    reservation
-                        .try_resize(self.hash_table.memory_size())
-                        .map_err(|e| {
-                            e.context(
-                                "Decreasing allocation after spilling should succeed",
-                            )
-                        })?;
+                    memory.shrink_after_spill(self.hash_table.memory_size())?;
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -401,12 +380,12 @@ impl Aggregating {
             // over the sort-preserving merge of all spill runs.
             let metrics = ClusteredAggregateTableMetrics::from_hash_table(&hash_table);
             drop(hash_table);
-            reservation.try_resize(0)?;
+            let replay_reservation = memory.release_for_replay();
             // The outer ObservedStream counts output; replay only shares compute time.
             let stream = spill_context.into_replay_stream(
                 &context.baseline_metrics.intermediate(),
                 metrics,
-                reservation.new_empty(),
+                replay_reservation,
             )?;
             return Ok(Some(ExecutionStage::MergingSpills(stream)));
         }
@@ -424,7 +403,7 @@ impl Outputting {
     async fn handle_stage(
         self,
         context: &SingleHashAggregateContext,
-        reservation: &MemoryReservation,
+        memory: &StreamMemory,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<Option<ExecutionStage>> {
         let Self { mut hash_table } = self;
@@ -438,7 +417,7 @@ impl Outputting {
                 // Only reachable when the table held no groups at all: a
                 // non-empty table always reports its last batch together with
                 // the `Done` state, which the `try_resize` below already zeroes.
-                reservation.try_resize(0)?;
+                memory.release();
                 return Ok(None);
             };
 
@@ -448,11 +427,11 @@ impl Outputting {
             // reports a size of 0 once it reaches `Done`, so this releases the
             // reservation before the final batch goes downstream.
             if reserved {
-                match reservation.try_resize(hash_table.memory_size()) {
+                match memory.try_resize(hash_table.memory_size()) {
                     Ok(()) => {}
                     Err(DataFusionError::ResourcesExhausted(_)) => {
                         // Already materialized and nothing left to spill: hand it off unreserved.
-                        reservation.try_resize(0)?;
+                        memory.try_resize(0)?;
                         reserved = false;
                     }
                     Err(e) => return Err(e),
