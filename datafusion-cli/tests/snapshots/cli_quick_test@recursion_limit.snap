@@ -1,0 +1,20 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "--file"
+    - tests/sql/recursion_limit.sql
+    - "-q"
+---
+success: true
+exit_code: 0
+----- stdout -----
++------+
+| deep |
++------+
+| 1    |
++------+
+
+----- stderr -----
+SQL error: RecursionLimitExceeded (current limit: 5)

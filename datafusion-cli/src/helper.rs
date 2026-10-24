@@ -23,9 +23,9 @@ use std::cell::Cell;
 
 use crate::highlighter::{Color, NoSyntaxHighlighter, SyntaxHighlighter};
 
-use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::parser::{DFParser, DFParserBuilder, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
-use datafusion_common::config::Dialect;
+use datafusion_common::config::{Dialect, SqlParserOptions};
 
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
 use rustyline::error::ReadlineError;
@@ -40,6 +40,7 @@ const DEFAULT_HINT_SUGGESTION: &str = " \\? for help, \\q to quit";
 pub struct CliHelper {
     completer: FilenameCompleter,
     dialect: Dialect,
+    recursion_limit: usize,
     highlighter: Box<dyn Highlighter>,
     /// Tracks whether to show the default hint. Set to `false` once the user
     /// types anything, so the hint doesn't reappear after deleting back to
@@ -57,6 +58,7 @@ impl CliHelper {
         Self {
             completer: FilenameCompleter::new(),
             dialect: *dialect,
+            recursion_limit: SqlParserOptions::default().recursion_limit.get(),
             highlighter,
             show_hint: Cell::new(true),
         }
@@ -66,6 +68,12 @@ impl CliHelper {
         if *dialect != self.dialect {
             self.dialect = *dialect;
         }
+    }
+
+    /// Sets the recursion limit used when validating input, see
+    /// `datafusion.sql_parser.recursion_limit`.
+    pub fn set_recursion_limit(&mut self, recursion_limit: usize) {
+        self.recursion_limit = recursion_limit;
     }
 
     /// Re-enable the default hint for the next prompt.
@@ -83,7 +91,12 @@ impl CliHelper {
             };
             let lines = split_from_semicolon(sql);
             for line in lines {
-                match DFParser::parse_sql_with_dialect(&line, dialect.as_ref()) {
+                let statements = DFParserBuilder::new(line.as_str())
+                    .with_dialect(dialect.as_ref())
+                    .with_recursion_limit(self.recursion_limit)
+                    .build()
+                    .and_then(|mut parser| parser.parse_statements());
+                match statements {
                     Ok(statements) if statements.is_empty() => {
                         return Ok(ValidationResult::Invalid(Some(
                             "  🤔 You entered an empty statement".to_string(),
@@ -314,6 +327,32 @@ mod tests {
         validator.set_dialect(&Dialect::PostgreSQL);
         let result = readline_direct(Cursor::new(br"select 1 # 2;"), &validator)?;
         assert!(matches!(result, ValidationResult::Valid(None)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sql_recursion_limit() -> Result<()> {
+        let mut validator = CliHelper::default();
+        let nested = |depth: usize| {
+            format!("select {}1{};", "abs(".repeat(depth), ")".repeat(depth))
+        };
+
+        // exceeds the default recursion limit
+        let result = readline_direct(Cursor::new(nested(60)), &validator)?;
+        assert!(
+            matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("RecursionLimitExceeded"))
+        );
+
+        validator.set_recursion_limit(100);
+        let result = readline_direct(Cursor::new(nested(60)), &validator)?;
+        assert!(matches!(result, ValidationResult::Valid(None)));
+
+        validator.set_recursion_limit(5);
+        let result = readline_direct(Cursor::new(nested(10)), &validator)?;
+        assert!(
+            matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("RecursionLimitExceeded"))
+        );
 
         Ok(())
     }
