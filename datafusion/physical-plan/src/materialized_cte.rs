@@ -351,7 +351,7 @@ async fn buffer_body(
                 .register(context.memory_pool());
         let spill_manager = spill_manager.clone();
         let buffered_rows = buffered_rows.clone();
-        join_set.spawn(async move {
+        join_set.spawn_reclaimable(async move {
             let result =
                 buffer_partition(stream, reservation, &spill_manager, &buffered_rows)
                     .await;
@@ -823,11 +823,13 @@ mod tests {
     use crate::common::collect;
     use crate::empty::EmptyExec;
     use crate::filter_pushdown::PushedDown;
-    use crate::test::TestMemoryExec;
+    use crate::test::exec::BlockingExec;
+    use crate::test::{TestMemoryExec, assert_is_pending};
     use arrow::array::{Array, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::expressions::{col, lit};
+    use futures::FutureExt;
 
     #[test]
     fn parent_filters_go_to_the_continuation_only() -> Result<()> {
@@ -854,6 +856,25 @@ mod tests {
         assert_eq!(parent_filters.len(), 2);
         assert!(matches!(parent_filters[0][0].discriminant, PushedDown::No));
         assert!(matches!(parent_filters[1][0].discriminant, PushedDown::Yes));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drop_cancel() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let body = Arc::new(BlockingExec::new(Arc::clone(&schema), 2));
+        let refs = body.refs();
+        let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
+        let scan = MaterializedCteScanExec::new(0, "c", Arc::clone(&schema), 1)
+            .bind(Arc::clone(&buffer));
+        let exec = MaterializedCteExec::new(body, Arc::new(scan), buffer);
+
+        let stream = exec.execute(0, Arc::new(TaskContext::default()))?;
+        drop(exec);
+        let mut fut = collect(stream).boxed();
+        assert_is_pending(&mut fut);
+        drop(fut);
+        assert_eq!(refs.strong_count(), 0);
         Ok(())
     }
 
