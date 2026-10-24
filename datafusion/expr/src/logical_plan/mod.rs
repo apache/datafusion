@@ -61,4 +61,6 @@ pub use datafusion_common::format::ExplainFormat;
 pub use display::display_schema;
 
 pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
-pub use materialized_cte::{MaterializedCte, MaterializedCteId, MaterializedCteScan};
+pub use materialized_cte::{
+    MaterializedCte, MaterializedCteId, MaterializedCtePlan, MaterializedCteScan,
+};
