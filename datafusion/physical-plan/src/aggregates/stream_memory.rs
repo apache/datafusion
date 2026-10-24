@@ -204,6 +204,11 @@ impl SlicedOutput {
         memory.reservation.try_shrink(held)?;
         Ok(Some(last))
     }
+
+    /// Whether the last slice has been handed out.
+    pub(super) fn is_done(&self) -> bool {
+        self.batch.is_none()
+    }
 }
 
 #[cfg(test)]

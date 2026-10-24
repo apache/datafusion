@@ -33,6 +33,7 @@ use super::aggregate_hash_table::{
 };
 use super::order::GroupClusteringMode;
 use super::spill::AggregateSpill;
+use super::stream_memory::StreamMemory;
 use crate::SendableRecordBatchStream;
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
@@ -58,7 +59,7 @@ use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 /// - After input ends, merge the sorted runs and replay them through a fully
 ///   ordered final aggregate stream.
 pub(crate) struct ClusteredFinalAggregateStream {
-    reservation: MemoryReservation,
+    memory: StreamMemory,
     context: ClusteredFinalAggregateContext,
     stage: ExecutionStage,
 }
@@ -197,11 +198,11 @@ impl ClusteredFinalAggregateStream {
             metrics,
         )?;
 
-        // Reserve memory for the initial hash table. that we hold for the lifetime of the stream.
-        reservation.try_grow(table.memory_size())?;
+        let memory = StreamMemory::try_new(reservation, table.memory_size())?
+            .with_sort_index_headroom(spill_context.is_some());
 
         Ok(Self {
-            reservation,
+            memory,
             context: ClusteredFinalAggregateContext {
                 schema,
                 batch_size,
@@ -278,7 +279,7 @@ impl ClusteredFinalAggregateStream {
     /// 11. End.
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
         let Self {
-            reservation,
+            memory,
             context,
             stage,
         } = self;
@@ -289,11 +290,11 @@ impl ClusteredFinalAggregateStream {
             while let Some(current_stage) = stage {
                 stage = match current_stage {
                     ExecutionStage::Aggregating(aggregating) => {
-                        aggregating.handle_stage(&context, &reservation).await?
+                        aggregating.handle_stage(&context, &memory).await?
                     }
                     ExecutionStage::Outputting(outputting) => {
                         outputting
-                            .handle_stage(&context, &reservation, &mut emitter)
+                            .handle_stage(&context, &memory, &mut emitter)
                             .await?
                     }
                     ExecutionStage::MergingSpills(mut stream) => {
@@ -312,23 +313,11 @@ impl ClusteredFinalAggregateStream {
 }
 
 impl Aggregating {
-    /// Reserve the table footprint and, when spillable, one sort index per group.
-    fn reservation_size(&self) -> usize {
-        let table_size = self.table.memory_size();
-        if self.spill_context.is_some() {
-            // See `ClusteredFinalAggregateStream` for the spill memory estimate.
-            table_size
-                .saturating_add(self.table.num_groups().saturating_mul(size_of::<u32>()))
-        } else {
-            table_size
-        }
-    }
-
     /// Merges partial states until final results are ready or spill replay begins.
     async fn handle_stage(
         mut self,
         context: &ClusteredFinalAggregateContext,
-        reservation: &MemoryReservation,
+        memory: &StreamMemory,
     ) -> Result<Option<ExecutionStage>> {
         let elapsed_compute = context.baseline_metrics.elapsed_compute();
 
@@ -336,7 +325,8 @@ impl Aggregating {
             let timer = elapsed_compute.timer();
             self.table.aggregate_batch(&batch)?;
 
-            match reservation.try_resize(self.reservation_size()) {
+            match memory.try_fit_table(self.table.memory_size(), self.table.num_groups())
+            {
                 Ok(()) => {}
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
                     let Some(spill_context) = self.spill_context.as_mut() else {
@@ -346,13 +336,7 @@ impl Aggregating {
                         return Err(oom);
                     }
                     spill_context.sort_and_spill(self.table.take_state_batch()?)?;
-                    reservation
-                        .try_resize(self.table.memory_size())
-                        .map_err(|e| {
-                            e.context(
-                                "Decreasing allocation after spilling should succeed",
-                            )
-                        })?;
+                    memory.shrink_after_spill(self.table.memory_size())?;
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -380,12 +364,12 @@ impl Aggregating {
             spill_context.sort_and_spill(self.table.take_state_batch()?)?;
             let metrics = self.table.metrics();
             drop(self.table);
-            reservation.try_resize(0)?;
+            let replay_reservation = memory.release_for_replay();
             // The outer ObservedStream counts output; replay only shares compute time.
             let stream = (*spill_context).into_replay_stream(
                 &context.baseline_metrics.intermediate(),
                 metrics,
-                reservation.new_empty(),
+                replay_reservation,
             )?;
             timer.done();
             return Ok(Some(ExecutionStage::MergingSpills(stream)));
@@ -396,7 +380,7 @@ impl Aggregating {
         drop(self.table);
         timer.done();
         let Some(batch) = output else {
-            reservation.try_resize(0)?;
+            memory.release();
             return Ok(None);
         };
         Ok(Some(ExecutionStage::Outputting(Outputting {
@@ -411,45 +395,24 @@ impl Outputting {
     async fn handle_stage(
         self,
         context: &ClusteredFinalAggregateContext,
-        reservation: &MemoryReservation,
+        memory: &StreamMemory,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<Option<ExecutionStage>> {
-        let Self { mut batch, resume } = self;
+        let Self { batch, resume } = self;
         let elapsed_compute = context.baseline_metrics.elapsed_compute();
         let mut timer = elapsed_compute.timer();
-        let (table_memory, next_stage) = match resume {
-            Some(aggregating) => (
-                aggregating.reservation_size(),
-                Some(ExecutionStage::Aggregating(aggregating)),
-            ),
-            None => (0, None),
-        };
-        let batch_memory = batch.get_array_memory_size();
-        match reservation.try_resize(table_memory + batch_memory) {
-            Ok(()) => {}
-            Err(DataFusionError::ResourcesExhausted(_)) => {
-                // If we cannot hold the batch while slicing, hand it off whole.
-                reservation.try_resize(table_memory)?;
-                timer.done();
-                emitter.emit(batch).await;
-                return Ok(next_stage);
-            }
-            Err(e) => return Err(e),
-        }
-
-        while batch.num_rows() > context.batch_size {
-            let output = batch.slice(0, context.batch_size);
-            batch =
-                batch.slice(context.batch_size, batch.num_rows() - context.batch_size);
+        let table_size = resume.as_ref().map_or(0, |a| a.table.memory_size());
+        let groups = resume.as_ref().map_or(0, |a| a.table.num_groups());
+        let next_stage = resume.map(ExecutionStage::Aggregating);
+        let mut output = memory.hold(table_size, groups, batch, context.batch_size)?;
+        while let Some(slice) = output.next_slice(memory)? {
             timer.done();
-            emitter.emit(output).await;
+            emitter.emit(slice).await;
+            if output.is_done() {
+                break;
+            }
             timer = elapsed_compute.timer();
         }
-
-        // The final slice transfers ownership of the buffers to the consumer.
-        reservation.try_shrink(batch_memory)?;
-        timer.done();
-        emitter.emit(batch).await;
         Ok(next_stage)
     }
 }

@@ -22,12 +22,13 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::StreamExt;
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{ClusteredAggregateTable, PartialMarker};
+use super::stream_memory::StreamMemory;
 use crate::aggregates::AggregateMode;
 use crate::aggregates::order::{GroupClustering, GroupClusteringMode};
 use crate::metrics::{BaselineMetrics, MetricBuilder, SpillMetrics};
@@ -109,7 +110,7 @@ use crate::{SendableRecordBatchStream, metrics};
 ///   remaining states, performs a sort-preserving merge of all runs, and feeds the
 ///   merged input into a fully clustered final aggregate stream.
 pub(crate) struct ClusteredPartialAggregateStream {
-    reservation: MemoryReservation,
+    memory: StreamMemory,
     context: ClusteredPartialAggregateContext,
     stage: ExecutionStage,
 }
@@ -173,12 +174,10 @@ impl ClusteredPartialAggregateStream {
                     GroupClustering::Partial(_)
                 ))
                 .register(context.memory_pool());
-
-        // Reserve memory for the initial hash table. that we hold for the lifetime of the stream.
-        reservation.try_grow(table.memory_size())?;
+        let memory = StreamMemory::try_new(reservation, table.memory_size())?;
 
         Ok(Self {
-            reservation,
+            memory,
             context: ClusteredPartialAggregateContext {
                 schema,
                 batch_size,
@@ -273,7 +272,7 @@ impl ClusteredPartialAggregateStream {
     /// 8. End.
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
         let Self {
-            reservation,
+            memory,
             context,
             stage,
         } = self;
@@ -284,11 +283,11 @@ impl ClusteredPartialAggregateStream {
             while let Some(current_stage) = stage {
                 stage = match current_stage {
                     ExecutionStage::Aggregating(aggregating) => {
-                        aggregating.handle_stage(&context, &reservation).await?
+                        aggregating.handle_stage(&context, &memory).await?
                     }
                     ExecutionStage::Outputting(outputting) => {
                         outputting
-                            .handle_stage(&context, &reservation, &mut emitter)
+                            .handle_stage(&context, &memory, &mut emitter)
                             .await?
                     }
                 };
@@ -307,7 +306,7 @@ impl Aggregating {
     async fn handle_stage(
         mut self,
         context: &ClusteredPartialAggregateContext,
-        reservation: &MemoryReservation,
+        memory: &StreamMemory,
     ) -> Result<Option<ExecutionStage>> {
         let elapsed_compute = context.baseline_metrics.elapsed_compute();
 
@@ -316,7 +315,9 @@ impl Aggregating {
             let timer = elapsed_compute.timer();
             self.table.aggregate_batch(&batch)?;
 
-            let output = match reservation.try_resize(self.table.memory_size()) {
+            let output = match memory
+                .try_fit_table(self.table.memory_size(), self.table.num_groups())
+            {
                 Ok(()) => self.table.take_completed_state_batch()?,
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
                     // Partial group clustering may have an unbounded active key range.
@@ -352,7 +353,7 @@ impl Aggregating {
         timer.done();
 
         let Some(batch) = output else {
-            reservation.try_resize(0)?;
+            memory.release();
             return Ok(None);
         };
         Ok(Some(ExecutionStage::Outputting(Outputting {
@@ -370,51 +371,25 @@ impl Outputting {
     async fn handle_stage(
         self,
         context: &ClusteredPartialAggregateContext,
-        reservation: &MemoryReservation,
+        memory: &StreamMemory,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<Option<ExecutionStage>> {
-        let Self { mut batch, resume } = self;
+        let Self { batch, resume } = self;
         let elapsed_compute = context.baseline_metrics.elapsed_compute();
         let mut timer = elapsed_compute.timer();
-        let (table_memory, next_stage) = match resume {
-            Some(aggregating) => (
-                aggregating.table.memory_size(),
-                Some(ExecutionStage::Aggregating(aggregating)),
-            ),
-            None => (0, None),
-        };
-        let batch_memory = batch.get_array_memory_size();
-        match reservation.try_resize(table_memory + batch_memory) {
-            Ok(()) => {}
-            Err(DataFusionError::ResourcesExhausted(_)) => {
-                // If we cannot hold the batch while slicing, hand it off whole.
-                // Only the retained table needs to remain reserved.
-                reservation.try_resize(table_memory)?;
-                context.reduction_factor.add_part(batch.num_rows());
-                timer.done();
-                emitter.emit(batch).await;
-                return Ok(next_stage);
-            }
-            Err(e) => return Err(e),
-        }
-
-        while batch.num_rows() > context.batch_size {
-            // 1. Emit first `batch_size` rows from `batch`
-            // 2. Update `batch`` with the remaining tail
-            let output = batch.slice(0, context.batch_size);
-            batch =
-                batch.slice(context.batch_size, batch.num_rows() - context.batch_size);
-            context.reduction_factor.add_part(output.num_rows());
+        let table_size = resume.as_ref().map_or(0, |a| a.table.memory_size());
+        let groups = resume.as_ref().map_or(0, |a| a.table.num_groups());
+        let next_stage = resume.map(ExecutionStage::Aggregating);
+        let mut output = memory.hold(table_size, groups, batch, context.batch_size)?;
+        while let Some(slice) = output.next_slice(memory)? {
+            context.reduction_factor.add_part(slice.num_rows());
             timer.done();
-            emitter.emit(output).await;
+            emitter.emit(slice).await;
+            if output.is_done() {
+                break;
+            }
             timer = elapsed_compute.timer();
         }
-
-        // The final slice transfers ownership of the buffers to the consumer.
-        reservation.try_shrink(batch_memory)?;
-        context.reduction_factor.add_part(batch.num_rows());
-        timer.done();
-        emitter.emit(batch).await;
         Ok(next_stage)
     }
 }
