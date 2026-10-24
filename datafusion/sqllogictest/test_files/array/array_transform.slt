@@ -133,6 +133,33 @@ SELECT array_transform([[10, 20]], v -> v[1]);
 ----
 [10]
 
+# dotted field access on a struct-valued lambda parameter
+query ?
+SELECT array_transform(
+  make_array(named_struct('rule_number', 1, 'rule_action', 'allow')),
+  e -> e.rule_action
+);
+----
+[allow]
+
+# dotted field access followed by a list subscript
+query ?
+SELECT array_transform(
+  make_array(named_struct('items', make_array(10, 20))),
+  e -> e.items[1]
+);
+----
+[10]
+
+# chained dotted field access on nested structs
+query ?
+SELECT array_transform(
+  make_array(named_struct('metadata', named_struct('rule_action', 'deny'))),
+  e -> e.metadata.rule_action
+);
+----
+[deny]
+
 
 # expr simplifier inside lambda body
 query TT
