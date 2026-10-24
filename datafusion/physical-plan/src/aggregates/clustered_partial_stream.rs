@@ -86,8 +86,10 @@ use crate::{SendableRecordBatchStream, metrics};
 /// memory usage does not grow with the total number of groups.
 ///
 /// If the reservation after an input batch fails, `ClusteredPartialAggregateStream`
-/// still emits the completed groups, and returns the error only when no group is
-/// complete.
+/// emits all current intermediate states, including the active group, and resets
+/// the table, as with partial group clustering below. Emitting only the completed
+/// groups would leave the capacity the table grew for the batch reserved. The
+/// final stage merges the two state rows of the split active group.
 ///
 /// ## Partial group clustering
 ///
@@ -262,8 +264,8 @@ impl ClusteredPartialAggregateStream {
     /// 3. Prepare output:
     ///    - A prefix of groups is complete: materialize the entire prefix once,
     ///      retaining the input and active groups to resume aggregation.
-    ///    - On memory pressure with partial group clustering, materialize all
-    ///      current states, including incomplete groups, and reset the table.
+    ///    - On memory pressure, materialize all current states, including
+    ///      incomplete groups, and reset the table.
     ///    - At EOF, materialize all remaining states and prepare to output.
     /// 4. Input was exhausted with no remaining groups, directly end.
     /// 5. Yield one slice without materializing the table again. Keep the shared
@@ -319,13 +321,10 @@ impl Aggregating {
             let output = match reservation.try_resize(self.table.memory_size()) {
                 Ok(()) => self.table.take_completed_state_batch()?,
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
-                    // Partial group clustering may have an unbounded active key range.
-                    // The final stage can merge incomplete states emitted here.
-                    if matches!(self.table.group_clustering(), GroupClustering::Full(_)) {
-                        Some(self.table.take_completed_state_batch()?.ok_or(oom)?)
-                    } else {
-                        Some(self.table.take_state_batch()?.ok_or(oom)?)
-                    }
+                    // Emit every state, including the active groups, and reset the
+                    // table to release the capacity it grew for this batch. The
+                    // final stage merges the states of a group split across outputs.
+                    Some(self.table.take_state_batch()?.ok_or(oom)?)
                 }
                 Err(e) => return Err(e),
             };
@@ -421,12 +420,14 @@ impl Outputting {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::ops::Range;
+
     use super::*;
     use crate::aggregates::PhysicalGroupBy;
     use crate::test::TestMemoryExec;
-    use arrow::array::Int64Array;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::test_util::batches_to_string;
+    use arrow::array::{ArrayRef, AsArray, Int64Array};
+    use arrow::datatypes::{DataType, Field, Int64Type, Schema};
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
     };
@@ -437,93 +438,36 @@ mod tests {
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-    /// Runs a partial `SUM(k) GROUP BY k` over two batches sorted on `k` that
-    /// share a boundary key. Returns the output and the most memory the stream
-    /// held between batches.
-    async fn run(pool: Arc<dyn MemoryPool>) -> Result<(Vec<RecordBatch>, usize)> {
-        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
-        let batches = [0..=256, 256..=512]
-            .into_iter()
-            .map(|keys| {
-                let k = Int64Array::from_iter_values(keys);
-                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k)])
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let input = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?
-            .try_with_sort_information(vec![
-                LexOrdering::new([PhysicalSortExpr::new_default(col("k", &schema)?)])
-                    .unwrap(),
-            ])?;
-        let aggregate = AggregateExec::try_new(
-            AggregateMode::Partial,
-            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".into())]),
-            vec![Arc::new(
-                AggregateExprBuilder::new(sum_udaf(), vec![col("k", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias("sum")
-                    .build()?,
-            )],
-            vec![None],
-            Arc::new(input),
-            Arc::clone(&schema),
-        )?;
-        let context = Arc::new(
-            TaskContext::default().with_runtime(
-                RuntimeEnvBuilder::new()
-                    .with_memory_pool(Arc::clone(&pool))
-                    .build_arc()?,
-            ),
-        );
-        let mut stream =
-            ClusteredPartialAggregateStream::new(&aggregate, &context, 0)?.into_stream();
-        // Each output batch is a single slice, so the stream releases it before
-        // handing it off and holds only the table.
-        let mut held = pool.reserved();
-        let mut output = vec![];
-        while let Some(batch) = stream.next().await.transpose()? {
-            held = held.max(pool.reserved());
-            output.push(batch);
-        }
-        Ok((output, held))
-    }
-
-    /// The limit fits the table with only the active group, but not the table
-    /// before the completed groups are emitted. The result must not change.
-    #[tokio::test]
-    async fn completed_groups_under_memory_pressure() -> Result<()> {
-        let (expected, held) = run(Arc::new(UnboundedMemoryPool::default())).await?;
-        let (actual, _) = run(Arc::new(GreedyMemoryPool::new(held))).await?;
-        assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
-        Ok(())
-    }
-
-    use arrow::array::ArrayRef;
-
-    const ROWS: usize = 8192;
-
-    /// Runs a partial `SUM(v) GROUP BY <keys>` over three batches sorted on all
-    /// keys, where every row is a distinct group. Each batch completes all but
-    /// its last group.
-    async fn run_distinct_keys(
-        num_keys: usize,
-        pool: Arc<dyn MemoryPool>,
-    ) -> Result<Vec<RecordBatch>> {
+    /// One batch per range, with `num_keys` key columns and a value column
+    /// that all hold the range values.
+    fn batches(num_keys: usize, ranges: &[Range<i64>]) -> Result<Vec<RecordBatch>> {
         let mut fields: Vec<_> = (0..num_keys)
             .map(|i| Field::new(format!("k{i}"), DataType::Int64, false))
             .collect();
         fields.push(Field::new("v", DataType::Int64, false));
         let schema = Arc::new(Schema::new(fields));
-        let batches = (0..3)
-            .map(|b| {
-                let ids = (b * ROWS) as i64..((b + 1) * ROWS) as i64;
-                let cols: Vec<ArrayRef> = (0..=num_keys)
+        ranges
+            .iter()
+            .map(|range| {
+                let columns = (0..=num_keys)
                     .map(|_| {
-                        Arc::new(Int64Array::from_iter_values(ids.clone())) as ArrayRef
+                        Arc::new(Int64Array::from_iter_values(range.clone())) as ArrayRef
                     })
                     .collect();
-                RecordBatch::try_new(Arc::clone(&schema), cols)
+                Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect()
+    }
+
+    /// Runs a partial `SUM(v) GROUP BY k0, ..` over `batches`, which are sorted
+    /// on every key. Returns the output and the most memory the stream held
+    /// between batches.
+    async fn run(
+        num_keys: usize,
+        batches: Vec<RecordBatch>,
+        pool: Arc<dyn MemoryPool>,
+    ) -> Result<(Vec<RecordBatch>, usize)> {
+        let schema = batches[0].schema();
         let keys = (0..num_keys)
             .map(|i| Ok((col(&format!("k{i}"), &schema)?, format!("k{i}"))))
             .collect::<Result<Vec<_>>>()?;
@@ -551,35 +495,79 @@ mod tests {
         let context = Arc::new(
             TaskContext::default().with_runtime(
                 RuntimeEnvBuilder::new()
-                    .with_memory_pool(pool)
+                    .with_memory_pool(Arc::clone(&pool))
                     .build_arc()?,
             ),
         );
         let mut stream =
             ClusteredPartialAggregateStream::new(&aggregate, &context, 0)?.into_stream();
+        // Each output batch is a single slice, so the stream releases it before
+        // handing it off and holds only the table.
+        let mut held = pool.reserved();
         let mut output = vec![];
         while let Some(batch) = stream.next().await.transpose()? {
+            held = held.max(pool.reserved());
             output.push(batch);
         }
-        Ok(output)
+        Ok((output, held))
     }
 
-    /// After the completed groups are emitted on memory pressure only one group
-    /// remains, but the table keeps the capacity it grew for the whole batch:
-    /// the single-key hash table (~272 KB for 8192 keys), the clustered
-    /// `new_groups` scratch and `group_indices` (64 KB each). Re-reserving that
-    /// retained size fails, although the active group fits easily.
+    /// Merges the partial `SUM` states by key, as the final stage does.
+    fn merge(output: &[RecordBatch]) -> BTreeMap<Vec<i64>, i64> {
+        let mut merged = BTreeMap::new();
+        for batch in output {
+            let columns: Vec<_> = batch
+                .columns()
+                .iter()
+                .map(|column| column.as_primitive::<Int64Type>())
+                .collect();
+            let (sum, keys) = columns.split_last().unwrap();
+            for row in 0..batch.num_rows() {
+                let key = keys.iter().map(|k| k.value(row)).collect();
+                *merged.entry(key).or_default() += sum.value(row);
+            }
+        }
+        merged
+    }
+
+    fn num_rows(output: &[RecordBatch]) -> usize {
+        output.iter().map(|batch| batch.num_rows()).sum()
+    }
+
+    /// The limit fits the table with only the active group, but not the table
+    /// before the completed groups are emitted. Key 256 spans both batches, so
+    /// emitting its state early splits it into two state rows, which the final
+    /// stage merges.
     #[tokio::test]
-    async fn completed_groups_under_memory_pressure_retained_capacity() -> Result<()> {
+    async fn completed_groups_under_memory_pressure() -> Result<()> {
+        let input = || batches(1, &[0..257, 256..513]);
+        let (expected, held) =
+            run(1, input()?, Arc::new(UnboundedMemoryPool::default())).await?;
+        let (actual, _) = run(1, input()?, Arc::new(GreedyMemoryPool::new(held))).await?;
+        assert_eq!(num_rows(&actual), num_rows(&expected) + 1);
+        assert_eq!(merge(&actual), merge(&expected));
+        Ok(())
+    }
+
+    /// Every row is a distinct group, so a batch grows the table for 8192
+    /// groups: the single-key hash table (~272 KB), the clustered `new_groups`
+    /// scratch and `group_indices` (64 KB each). Emitting only the completed
+    /// groups would keep that capacity reserved and fail this limit, although
+    /// the active group needs a few KB.
+    #[tokio::test]
+    async fn memory_pressure_releases_retained_capacity() -> Result<()> {
         for num_keys in [1, 2] {
-            let expected =
-                run_distinct_keys(num_keys, Arc::new(UnboundedMemoryPool::default()))
-                    .await?;
-            let actual =
-                run_distinct_keys(num_keys, Arc::new(GreedyMemoryPool::new(100 * 1024)))
-                    .await
-                    .map_err(|e| e.context(format!("num_keys = {num_keys}")))?;
-            assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
+            let input = || batches(num_keys, &[0..8192, 8192..16384, 16384..24576]);
+            let (expected, _) =
+                run(num_keys, input()?, Arc::new(UnboundedMemoryPool::default())).await?;
+            let (actual, _) = run(
+                num_keys,
+                input()?,
+                Arc::new(GreedyMemoryPool::new(100 * 1024)),
+            )
+            .await
+            .map_err(|e| e.context(format!("num_keys = {num_keys}")))?;
+            assert_eq!(merge(&actual), merge(&expected));
         }
         Ok(())
     }

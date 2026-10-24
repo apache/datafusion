@@ -16,12 +16,12 @@
 // under the License.
 
 //! A partial aggregate over input sorted on every grouping key must finish
-//! under memory pressure once its completed groups are emitted.
+//! when its table needs only a few KB between batches.
 //!
-//! On a refused reservation the clustered partial stream emits the completed
-//! groups, leaving one active group. The table still holds the capacity it
-//! grew for the whole batch, so re-reserving it can fail although the active
-//! group alone fits easily.
+//! On a refused reservation the clustered partial stream emits its states and
+//! resets the table. Emitting only the completed groups would leave one active
+//! group but keep the capacity the table grew for the whole batch, so
+//! re-reserving it would fail although the active group alone fits easily.
 //!
 //! The downstream merge and final aggregate cannot spill and need at least
 //! a batch of memory themselves, so a shared limit cannot single out the
@@ -149,8 +149,8 @@ async fn run(num_keys: usize, pool: Arc<dyn MemoryPool>) -> Result<Vec<RecordBat
     df.collect().await
 }
 
-/// One retained table needs about 344 KB for a single key and 131 KB for two
-/// keys, while the active group needs a few KB.
+/// With 8192 distinct keys per batch, the capacity a table grows for a batch
+/// is about 344 KB for a single key and 131 KB for two keys, above the limit.
 #[tokio::test]
 async fn sorted_partial_aggregate_completes_under_memory_pressure() -> Result<()> {
     for num_keys in [1, 2] {
