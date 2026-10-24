@@ -206,7 +206,9 @@ impl InformationSchemaConfig {
             }
         }
 
-        if let Some(system_catalog_name) = &self.system_catalog_name {
+        if let Some(system_catalog_name) = &self.system_catalog_name
+            && !catalog_names.contains(system_catalog_name)
+        {
             for table_name in INFORMATION_SCHEMA_TABLES {
                 builder.add_table(
                     system_catalog_name,
