@@ -144,6 +144,7 @@ impl ScalarUDFImpl for SubstrFunc {
 
         if let ColumnarValue::Array(array) = &args.args[0]
             && matches!(array.data_type(), DataType::Dictionary(_, _))
+            && array.as_any_dictionary().values().len() <= array.len()
             && args.args[1..]
                 .iter()
                 .all(|v| matches!(v, ColumnarValue::Scalar(_)))
