@@ -4092,6 +4092,9 @@ select 2 > all (select v from (values (1), (0)) t(v)), 9 as k;
 ----
 true 9
 
+# A control rather than a regression test: an aliased set comparison already keeps its
+# name on `main`, so this one does not change with the fix. It pins the alias arm of the
+# name comparison against a rule that starts renaming aliased projections.
 query B
 select 2 > all (select v from (values (1), (0)) t(v)) as aliased;
 ----
