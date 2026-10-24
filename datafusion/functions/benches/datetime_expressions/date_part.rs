@@ -188,6 +188,36 @@ fn generate_duration_nanosecond_array_with_nulls(
     )
 }
 
+fn generate_timestamp_ns_array_with_nulls(rng: &mut StdRng) -> TimestampNanosecondArray {
+    TimestampNanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| {
+                if rng.random_bool(NULL_DENSITY) {
+                    None
+                } else {
+                    Some(rng.random_range(0..TS_BOUND * 1_000_000_000))
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_time64_nanosecond_array_with_nulls(
+    rng: &mut StdRng,
+) -> Time64NanosecondArray {
+    Time64NanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| {
+                if rng.random_bool(NULL_DENSITY) {
+                    None
+                } else {
+                    Some(rng.random_range(0..SEC_DAY * 1_000_000_000))
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
 fn bench_date_part(
     c: &mut Criterion,
     udf: &Arc<ScalarUDF>,
@@ -247,6 +277,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     let ts_ns_tz =
         Arc::new(generate_timestamp_ns_array(&mut rng).with_timezone("America/New_York"))
             as ArrayRef;
+    let ts_ns_nulls =
+        Arc::new(generate_timestamp_ns_array_with_nulls(&mut rng)) as ArrayRef;
+    let time64_ns_nulls =
+        Arc::new(generate_time64_nanosecond_array_with_nulls(&mut rng)) as ArrayRef;
 
     let udf = date_part();
 
@@ -378,8 +412,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     ] {
         let mut arrays = vec![
             ("ns_tz", &ts_ns_tz),
+            ("ns_nulls", &ts_ns_nulls),
             ("time32_ms", &time32_ms),
             ("time64_ns", &time64_ns),
+            ("time64_ns_nulls", &time64_ns_nulls),
             ("interval_dt", &interval_dt),
             ("interval_mdn", &interval_mdn),
             ("duration_ns_small", &duration_ns_small),
