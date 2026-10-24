@@ -65,6 +65,17 @@ SELECT next_day('2000-01-01'::DATE, 2.0::float);
 ----
 NULL
 
+# Preserve implicit weekday-to-string conversions.
+query D
+SELECT next_day(DATE '2015-07-23', arrow_cast('Mon', 'Binary'));
+----
+2015-07-27
+
+query D
+SELECT next_day(DATE '2015-07-23', true);
+----
+NULL
+
 query D
 SELECT next_day('2020-01-01'::DATE, 'invalid_day'::string);
 ----
@@ -118,6 +129,12 @@ SELECT next_day('2015-07-23 12:12:12'::timestamp, 'Mon'::string);
 ----
 2015-07-27
 
+# Timestamp-to-date conversion must round down before the Unix epoch.
+query D
+SELECT next_day(TIMESTAMP '1969-12-31 23:59:59', 'Thu');
+----
+1970-01-01
+
 query D
 SELECT next_day(a, 'Mon'::string)
 FROM VALUES
@@ -138,6 +155,17 @@ FROM VALUES
 2015-07-27
 2015-07-24
 NULL
+
+# LargeUtf8 / Utf8View start dates
+query D
+SELECT next_day(arrow_cast('2015-07-23', 'LargeUtf8'), 'Mon');
+----
+2015-07-27
+
+query D
+SELECT next_day(arrow_cast('2015-07-23', 'Utf8View'), 'Mon');
+----
+2015-07-27
 
 # String start date and LargeUtf8 / Utf8View day-of-week
 query D

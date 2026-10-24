@@ -55,7 +55,8 @@ impl SparkNextDay {
                     ),
                     Coercion::new_implicit(
                         TypeSignatureClass::Native(logical_string()),
-                        vec![TypeSignatureClass::Numeric],
+                        // Preserve the previous Exact signature's weekday-to-string coercion.
+                        vec![TypeSignatureClass::Any],
                         NativeType::String,
                     ),
                 ],
