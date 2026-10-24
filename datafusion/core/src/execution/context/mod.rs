@@ -2290,7 +2290,6 @@ mod tests {
     use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
     use std::error::Error;
     use std::path::PathBuf;
-    use std::time::Duration;
 
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common_runtime::SpawnedTask;
@@ -2869,99 +2868,6 @@ mod tests {
         assert!(!ctx.remove_optimizer_rule("simplify_expressions"));
 
         Ok(())
-    }
-
-    #[test]
-    fn test_parse_duration() {
-        const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
-
-        // Valid durations
-        for (duration, want) in [
-            ("1s", Duration::from_secs(1)),
-            ("1m", Duration::from_mins(1)),
-            ("1m0s", Duration::from_mins(1)),
-            ("1m1s", Duration::from_secs(61)),
-        ] {
-            let have =
-                runtime_options::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
-            assert_eq!(want, have);
-        }
-
-        // Invalid durations
-        for duration in [
-            "0s", "0m", "1s0m", "1s1m", "XYZ", "1h", "XYZm2s", "", " ", "-1m", "1m 1s",
-            "1m1s ", " 1m1s", "1\u{b5}",
-        ] {
-            let have = runtime_options::parse_duration(LIST_FILES_CACHE_TTL, duration);
-            assert!(have.is_err());
-            assert!(
-                have.unwrap_err()
-                    .message()
-                    .to_string()
-                    .contains(LIST_FILES_CACHE_TTL)
-            );
-        }
-    }
-
-    #[test]
-    #[expect(
-        clippy::duration_suboptimal_units,
-        reason = "Each `Duration` deliberately uses the same unit as the suffix in the string it is parsed from"
-    )]
-    fn test_parse_duration_with_overflow_check() {
-        const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
-
-        // Valid durations which are close to max allowed limit
-        for (duration, want) in [
-            (
-                "18446744073709551615s",
-                Duration::from_secs(18446744073709551615),
-            ),
-            (
-                "307445734561825860m",
-                Duration::from_mins(307445734561825860),
-            ),
-            (
-                "307445734561825860m10s",
-                Duration::from_secs(307445734561825860 * 60 + 10),
-            ),
-            (
-                "1m18446744073709551555s",
-                Duration::from_secs(60 + 18446744073709551555),
-            ),
-        ] {
-            let have =
-                runtime_options::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
-            assert_eq!(want, have);
-        }
-
-        // Invalid durations which overflow max allowed limit
-        for (duration, error_message_prefix) in [
-            (
-                "18446744073709551616s",
-                "Failed to parse number from duration",
-            ),
-            (
-                "307445734561825861m",
-                "Duration has overflowed allowed maximum limit due to",
-            ),
-            (
-                "307445734561825860m60s",
-                "Duration has overflowed allowed maximum limit due to",
-            ),
-            (
-                "1m18446744073709551556s",
-                "Duration has overflowed allowed maximum limit due to",
-            ),
-        ] {
-            let have = runtime_options::parse_duration(LIST_FILES_CACHE_TTL, duration);
-            assert!(have.is_err());
-            let error_message = have.unwrap_err().message().to_string();
-            assert!(
-                error_message.contains(error_message_prefix)
-                    && error_message.contains(LIST_FILES_CACHE_TTL)
-            );
-        }
     }
 
     #[test]

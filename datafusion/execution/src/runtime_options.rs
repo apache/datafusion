@@ -368,12 +368,6 @@ pub fn parse_capacity_limit(config_name: &str, limit: &str) -> Result<usize> {
     parse_capacity(limit).map_err(|e| name_config(e, config_name))
 }
 
-/// Parse a cache TTL (minutes and/or seconds, such as `1m30s`), with
-/// `config_name` named in any error.
-pub fn parse_duration(config_name: &str, duration: &str) -> Result<Duration> {
-    parse_ttl(duration).map_err(|e| name_config(e, config_name))
-}
-
 /// Parse a byte capacity: `0`, or a number with a `K`, `M` or `G` suffix.
 fn parse_capacity(limit: &str) -> Result<usize> {
     CapacityLimit(parse_bytes(limit)?).as_usize()
@@ -462,6 +456,94 @@ fn checked_secs(mins: Option<u64>, secs: Option<u64>) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_ttl() {
+        // Valid durations
+        for (duration, want) in [
+            ("1s", Duration::from_secs(1)),
+            ("1m", Duration::from_mins(1)),
+            ("1m0s", Duration::from_mins(1)),
+            ("1m1s", Duration::from_secs(61)),
+        ] {
+            assert_eq!(want, parse_ttl(duration).unwrap());
+        }
+
+        // Invalid durations
+        for duration in [
+            "0s", "0m", "1s0m", "1s1m", "XYZ", "1h", "XYZm2s", "", " ", "-1m", "1m 1s",
+            "1m1s ", " 1m1s", "1\u{b5}",
+        ] {
+            assert!(
+                parse_ttl(duration).is_err(),
+                "{duration:?} should not parse"
+            );
+            // The key is named when the value is set through the options.
+            let err = RuntimeOptions::default()
+                .set_entry("list_files_cache_ttl", duration)
+                .unwrap_err();
+            assert!(
+                err.message()
+                    .contains("datafusion.runtime.list_files_cache_ttl"),
+                "{duration:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Each `Duration` deliberately uses the same unit as the suffix in the string it is parsed from"
+    )]
+    fn test_parse_ttl_with_overflow_check() {
+        // Valid durations which are close to max allowed limit
+        for (duration, want) in [
+            (
+                "18446744073709551615s",
+                Duration::from_secs(18446744073709551615),
+            ),
+            (
+                "307445734561825860m",
+                Duration::from_mins(307445734561825860),
+            ),
+            (
+                "307445734561825860m10s",
+                Duration::from_secs(307445734561825860 * 60 + 10),
+            ),
+            (
+                "1m18446744073709551555s",
+                Duration::from_secs(60 + 18446744073709551555),
+            ),
+        ] {
+            assert_eq!(want, parse_ttl(duration).unwrap());
+        }
+
+        // Invalid durations which overflow max allowed limit
+        for (duration, error_message_prefix) in [
+            (
+                "18446744073709551616s",
+                "Failed to parse number from duration",
+            ),
+            (
+                "307445734561825861m",
+                "Duration has overflowed allowed maximum limit due to",
+            ),
+            (
+                "307445734561825860m60s",
+                "Duration has overflowed allowed maximum limit due to",
+            ),
+            (
+                "1m18446744073709551556s",
+                "Duration has overflowed allowed maximum limit due to",
+            ),
+        ] {
+            let error_message = parse_ttl(duration).unwrap_err().message().to_string();
+            assert!(
+                error_message.contains(error_message_prefix),
+                "{duration:?}: {error_message}"
+            );
+        }
+    }
 
     #[test]
     fn defaults_match_the_runtime_constants() {
