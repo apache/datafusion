@@ -3655,7 +3655,7 @@ impl TryFrom<ConfigFileEncryptionProperties> for FileEncryptionProperties {
 #[cfg(feature = "parquet_encryption")]
 impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
     fn from(f: &Arc<FileEncryptionProperties>) -> Self {
-        let (column_names_vec, column_keys_vec, column_metas_vec) = f.column_keys();
+        let (column_names_vec, column_keys_vec, _) = f.column_keys();
 
         let mut column_encryption_properties: HashMap<
             String,
@@ -3665,7 +3665,7 @@ impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
         for (i, column_name) in column_names_vec.iter().enumerate() {
             let column_key_as_hex = hex::encode(&column_keys_vec[i]);
             let column_metadata_as_hex: Option<String> =
-                column_metas_vec.get(i).map(hex::encode);
+                f.column_key_metadata(column_name).map(hex::encode);
             column_encryption_properties.insert(
                 column_name.clone(),
                 ColumnEncryptionProperties {
