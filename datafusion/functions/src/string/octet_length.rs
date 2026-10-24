@@ -23,8 +23,9 @@ use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ExpressionPlacement,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -111,6 +112,14 @@ impl ScalarUDFImpl for OctetLengthFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        if args[0].should_push_to_leaves() {
+            ExpressionPlacement::MoveTowardsLeafNodes
+        } else {
+            ExpressionPlacement::KeepInPlace
+        }
+    }
 }
 
 fn octet_length_scalar(value: &ScalarValue) -> ScalarValue {
@@ -150,12 +159,39 @@ mod tests {
     };
     use arrow::datatypes::DataType::{Int32, Int64};
 
+    use crate::core::get_field;
+    use crate::string::octet_length::OctetLengthFunc;
+    use crate::string::{concat, octet_length};
+    use crate::utils::test::test_function;
     use datafusion_common::ScalarValue;
     use datafusion_common::{Result, exec_err};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ExpressionPlacement, ScalarUDFImpl, col, lit};
 
-    use crate::string::octet_length::OctetLengthFunc;
-    use crate::utils::test::test_function;
+    #[test]
+    fn test_expression_placement() {
+        let octet_length = octet_length();
+        assert_eq!(
+            octet_length.call(vec![col("s")]).placement(),
+            ExpressionPlacement::MoveTowardsLeafNodes,
+        );
+        assert_eq!(
+            octet_length.call(vec![col("s").alias("a")]).placement(),
+            ExpressionPlacement::MoveTowardsLeafNodes,
+        );
+
+        // Do not pull a string computation down along with its byte length.
+        let concat = concat().call(vec![col("s"), lit("suffix")]);
+        assert_eq!(
+            octet_length.call(vec![concat]).placement(),
+            ExpressionPlacement::KeepInPlace,
+        );
+
+        let field = get_field().call(vec![col("s"), lit("text")]);
+        assert_eq!(
+            octet_length.call(vec![field]).placement(),
+            ExpressionPlacement::MoveTowardsLeafNodes,
+        );
+    }
 
     #[test]
     fn test_functions() -> Result<()> {
