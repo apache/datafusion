@@ -412,6 +412,13 @@ enum ChildrenContainer {
     Multiple(Vec<Arc<dyn ExecutionPlan>>),
 }
 
+/// Join inputs after projecting expression keys, with the logical plan used to
+/// restore the original output schema.
+struct PreparedJoinInputs<'a> {
+    logical_plan: Cow<'a, LogicalPlan>,
+    physical_inputs: [Arc<dyn ExecutionPlan>; 2],
+}
+
 impl ChildrenContainer {
     fn one(self) -> Result<Arc<dyn ExecutionPlan>> {
         match self {
@@ -1338,477 +1345,8 @@ impl DefaultPhysicalPlanner {
             }
 
             // 2 Children
-            LogicalPlan::Join(Join {
-                left: original_left,
-                right: original_right,
-                on: keys,
-                filter,
-                join_type,
-                null_equality,
-                null_aware,
-                null_aware_value_keys,
-                schema: join_schema,
-                ..
-            }) => {
-                let [physical_left, physical_right] = children.two()?;
-
-                // If join has expression equijoin keys, add physical projection.
-                let has_expr_join_key = keys.iter().any(|(l, r)| {
-                    !(matches!(l, Expr::Column(_)) && matches!(r, Expr::Column(_)))
-                });
-                let (new_logical, physical_left, physical_right) = if has_expr_join_key {
-                    // TODO: Can we extract this transformation to somewhere before physical plan
-                    //       creation?
-                    let (left_keys, right_keys): (Vec<_>, Vec<_>) =
-                        keys.iter().cloned().unzip();
-
-                    let (left, left_col_keys, left_projected) =
-                        wrap_projection_for_join_if_necessary(
-                            &left_keys,
-                            original_left.as_ref().clone(),
-                        )?;
-                    let (right, right_col_keys, right_projected) =
-                        wrap_projection_for_join_if_necessary(
-                            &right_keys,
-                            original_right.as_ref().clone(),
-                        )?;
-                    let column_on = (left_col_keys, right_col_keys);
-
-                    let left = Arc::new(left);
-                    let right = Arc::new(right);
-                    let (new_join, requalified) = Join::try_new_with_project_input(
-                        node,
-                        Arc::clone(&left),
-                        Arc::clone(&right),
-                        column_on,
-                    )?;
-
-                    let new_join = LogicalPlan::Join(new_join);
-
-                    // If inputs were projected then create ExecutionPlan for these new
-                    // LogicalPlan nodes.
-                    let physical_left = match (left_projected, left.as_ref()) {
-                        // If left_projected is true we are guaranteed that left is a Projection
-                        (
-                            true,
-                            LogicalPlan::Projection(Projection { input, expr, .. }),
-                        ) => self.create_project_physical_exec_with_props(
-                            execution_props,
-                            planning_ctx,
-                            physical_left,
-                            input,
-                            expr,
-                            left.schema(),
-                        )?,
-                        _ => physical_left,
-                    };
-                    let physical_right = match (right_projected, right.as_ref()) {
-                        // If right_projected is true we are guaranteed that right is a Projection
-                        (
-                            true,
-                            LogicalPlan::Projection(Projection { input, expr, .. }),
-                        ) => self.create_project_physical_exec_with_props(
-                            execution_props,
-                            planning_ctx,
-                            physical_right,
-                            input,
-                            expr,
-                            right.schema(),
-                        )?,
-                        _ => physical_right,
-                    };
-
-                    // Remove temporary projected columns
-                    if left_projected || right_projected {
-                        // Re-qualify the join schema only if the inputs were previously requalified in
-                        // `try_new_with_project_input`. This ensures that when building the Projection
-                        // it can correctly resolve field nullability and data types
-                        // by disambiguating fields from the left and right sides of the join.
-                        let qualified_join_schema = if requalified {
-                            Arc::new(qualify_join_schema_sides(
-                                join_schema,
-                                original_left,
-                                original_right,
-                            )?)
-                        } else {
-                            Arc::clone(join_schema)
-                        };
-
-                        let final_join_result = qualified_join_schema
-                            .iter()
-                            .map(Expr::from)
-                            .collect::<Vec<_>>();
-                        let projection = LogicalPlan::Projection(Projection::try_new(
-                            final_join_result,
-                            Arc::new(new_join),
-                        )?);
-                        // LogicalPlan mutated
-                        (Cow::Owned(projection), physical_left, physical_right)
-                    } else {
-                        // LogicalPlan mutated
-                        (Cow::Owned(new_join), physical_left, physical_right)
-                    }
-                } else {
-                    // LogicalPlan unchanged
-                    (Cow::Borrowed(node), physical_left, physical_right)
-                };
-
-                // Retrieving new left/right and join keys (in case plan was mutated above)
-                let (left, right, keys, new_project) = match new_logical.as_ref() {
-                    LogicalPlan::Projection(Projection { input, expr, .. }) => {
-                        if let LogicalPlan::Join(Join {
-                            left, right, on, ..
-                        }) = input.as_ref()
-                        {
-                            (left, right, on, Some((input, expr)))
-                        } else {
-                            unreachable!()
-                        }
-                    }
-                    LogicalPlan::Join(Join {
-                        left, right, on, ..
-                    }) => (left, right, on, None),
-                    // Should either be the original Join, or Join with a Projection on top
-                    _ => unreachable!(),
-                };
-
-                // All equi-join keys are columns now, create physical join plan
-                let left_df_schema = left.schema();
-                let right_df_schema = right.schema();
-                let join_on = keys
-                    .iter()
-                    .map(|(l, r)| {
-                        let l = create_physical_expr(
-                            l,
-                            left_df_schema,
-                            execution_props,
-                            planning_ctx,
-                        )?;
-                        let r = create_physical_expr(
-                            r,
-                            right_df_schema,
-                            execution_props,
-                            planning_ctx,
-                        )?;
-                        Ok((l, r))
-                    })
-                    .collect::<Result<join_utils::JoinOn>>()?;
-
-                // TODO: `num_range_filters` can be used later on for ASOF joins (`num_range_filters > 1`)
-                let mut num_range_filters = 0;
-                let mut range_filters: Vec<Expr> = Vec::new();
-                let mut total_filters = 0;
-
-                let join_filter = match filter {
-                    Some(expr) => {
-                        let split_expr = split_conjunction(expr);
-                        for expr in split_expr.iter() {
-                            match *expr {
-                                Expr::BinaryExpr(BinaryExpr {
-                                    left: _,
-                                    right: _,
-                                    op,
-                                }) => {
-                                    if matches!(
-                                        op,
-                                        Operator::Lt
-                                            | Operator::LtEq
-                                            | Operator::Gt
-                                            | Operator::GtEq
-                                    ) {
-                                        range_filters.push((**expr).clone());
-                                        num_range_filters += 1;
-                                    }
-                                    total_filters += 1;
-                                }
-                                // TODO: Want to deal with `Expr::Between` for IEJoins, it counts as two range predicates
-                                // which is why it is not dealt with in PWMJ
-                                // Expr::Between(_) => {},
-                                _ => {
-                                    total_filters += 1;
-                                }
-                            }
-                        }
-
-                        // Extract columns from filter expression and saved in a HashSet
-                        let cols = expr.column_refs();
-
-                        // Collect left & right field indices, the field indices are sorted in ascending order
-                        let left_field_indices = cols
-                            .iter()
-                            .filter_map(|c| left_df_schema.index_of_column(c).ok())
-                            .sorted()
-                            .collect::<Vec<_>>();
-                        let right_field_indices = cols
-                            .iter()
-                            .filter_map(|c| right_df_schema.index_of_column(c).ok())
-                            .sorted()
-                            .collect::<Vec<_>>();
-
-                        // Collect DFFields and Fields required for intermediate schemas
-                        let (filter_df_fields, filter_fields): (Vec<_>, Vec<_>) =
-                            left_field_indices
-                                .clone()
-                                .into_iter()
-                                .map(|i| {
-                                    (
-                                        left_df_schema.qualified_field(i),
-                                        physical_left.schema().field(i).clone(),
-                                    )
-                                })
-                                .chain(right_field_indices.clone().into_iter().map(|i| {
-                                    (
-                                        right_df_schema.qualified_field(i),
-                                        physical_right.schema().field(i).clone(),
-                                    )
-                                }))
-                                .unzip();
-                        let filter_df_fields = filter_df_fields
-                            .into_iter()
-                            .map(|(qualifier, field)| {
-                                (qualifier.cloned(), Arc::clone(field))
-                            })
-                            .collect();
-
-                        let metadata: HashMap<_, _> = left_df_schema
-                            .metadata()
-                            .clone()
-                            .into_iter()
-                            .chain(right_df_schema.metadata().clone())
-                            .collect();
-
-                        // Construct intermediate schemas used for filtering data and
-                        // convert logical expression to physical according to filter schema
-                        let filter_df_schema = DFSchema::new_with_metadata(
-                            filter_df_fields,
-                            metadata.clone(),
-                        )?;
-                        let filter_schema =
-                            Schema::new_with_metadata(filter_fields, metadata);
-
-                        let filter_expr = create_physical_expr(
-                            expr,
-                            &filter_df_schema,
-                            execution_props,
-                            planning_ctx,
-                        )?;
-                        let column_indices = join_utils::JoinFilter::build_column_indices(
-                            left_field_indices,
-                            right_field_indices,
-                        );
-
-                        Some(join_utils::JoinFilter::new(
-                            filter_expr,
-                            column_indices,
-                            Arc::new(filter_schema),
-                        ))
-                    }
-                    _ => None,
-                };
-
-                let prefer_hash_join =
-                    session_state.config_options().optimizer.prefer_hash_join;
-                // Null-aware joins are pinned to CollectLeft hash joins (see
-                // `HashJoinExec::null_aware`): never repartition them, and
-                // never route them to the sort-merge path below.
-                let can_repartition_join = session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
-                    && !*null_aware;
-
-                // Only `HashJoinExec` implements null-aware semantics, and it
-                // needs equi-join keys to do so. Without them the join would be
-                // planned as a nested loop (or piecewise merge) join, which
-                // silently ignores the flag and returns wrong results for
-                // `NOT IN` over a nullable subquery. Fail loudly instead.
-                if *null_aware && join_on.is_empty() {
-                    return plan_err!(
-                        "null_aware {join_type} join requires equi-join keys, but the join has none"
-                    );
-                }
-
-                // TODO: Allow PWMJ to deal with residual equijoin conditions
-                let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    if join_filter.is_none() && *join_type == JoinType::Inner {
-                        // cross join if there is no join conditions and no join filter set
-                        Arc::new(CrossJoinExec::new(physical_left, physical_right))
-                    } else if num_range_filters == 1
-                        && total_filters == 1
-                        && session_state
-                            .config_options()
-                            .optimizer
-                            .enable_piecewise_merge_join
-                    {
-                        let Expr::BinaryExpr(be) = &range_filters[0] else {
-                            return plan_err!(
-                                "Unsupported expression for PWMJ: Expected `Expr::BinaryExpr`"
-                            );
-                        };
-
-                        let mut op = be.op;
-                        if !matches!(
-                            op,
-                            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
-                        ) {
-                            return plan_err!(
-                                "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
-                                op
-                            );
-                        }
-
-                        fn reverse_ineq(op: Operator) -> Operator {
-                            match op {
-                                Operator::Lt => Operator::Gt,
-                                Operator::LtEq => Operator::GtEq,
-                                Operator::Gt => Operator::Lt,
-                                Operator::GtEq => Operator::LtEq,
-                                _ => op,
-                            }
-                        }
-
-                        // `Neither` covers an operand that references no column from
-                        // either side (e.g. a literal), and `Both` an operand that
-                        // references columns from both. PWMJ needs one operand pinned
-                        // to each side, so both fall back to NestedLoopJoin below rather
-                        // than erroring or (for `Neither`) panicking.
-                        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-                        enum Side {
-                            Left,
-                            Right,
-                            Both,
-                            Neither,
-                        }
-
-                        let side_of = |e: &Expr| -> Side {
-                            let cols = e.column_refs();
-                            let any_left = cols
-                                .iter()
-                                .any(|c| left_df_schema.index_of_column(c).is_ok());
-                            let any_right = cols
-                                .iter()
-                                .any(|c| right_df_schema.index_of_column(c).is_ok());
-
-                            match (any_left, any_right) {
-                                (true, false) => Side::Left,
-                                (false, true) => Side::Right,
-                                (true, true) => Side::Both,
-                                (false, false) => Side::Neither,
-                            }
-                        };
-
-                        let mut lhs_logical = &be.left;
-                        let mut rhs_logical = &be.right;
-
-                        let left_side = side_of(lhs_logical);
-                        let right_side = side_of(rhs_logical);
-
-                        if left_side == Side::Right && right_side == Side::Left {
-                            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
-                            op = reverse_ineq(op);
-                        } else if !(left_side == Side::Left && right_side == Side::Right)
-                        {
-                            // Anything other than a clean left/right split -- both
-                            // operands on one side, one referencing neither side, or
-                            // either referencing both -- isn't a range predicate PWMJ
-                            // can plan, so let NestedLoopJoin evaluate it instead.
-                            return Ok(Arc::new(NestedLoopJoinExec::try_new(
-                                physical_left,
-                                physical_right,
-                                join_filter,
-                                join_type,
-                                None,
-                            )?));
-                        }
-
-                        let on_left = create_physical_expr(
-                            lhs_logical,
-                            left_df_schema,
-                            execution_props,
-                            planning_ctx,
-                        )?;
-                        let on_right = create_physical_expr(
-                            rhs_logical,
-                            right_df_schema,
-                            execution_props,
-                            planning_ctx,
-                        )?;
-
-                        Arc::new(PiecewiseMergeJoinExec::try_new(
-                            physical_left,
-                            physical_right,
-                            (on_left, on_right),
-                            op,
-                            *join_type,
-                            session_state.config().target_partitions(),
-                        )?)
-                    } else {
-                        // there is no equal join condition, use the nested loop join
-                        Arc::new(NestedLoopJoinExec::try_new(
-                            physical_left,
-                            physical_right,
-                            join_filter,
-                            join_type,
-                            None,
-                        )?)
-                    }
-                } else if session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
-                    && !prefer_hash_join
-                    && !*null_aware
-                // Null-aware joins (e.g. `NOT IN` with a nullable subquery) must
-                // use the CollectLeft HashJoin below: SortMergeJoinExec does not
-                // implement null-aware anti-join semantics and would return wrong
-                // results when the right side contains a null join key.
-                {
-                    // Use SortMergeJoin if hash join is not preferred
-                    let join_on_len = join_on.len();
-                    Arc::new(SortMergeJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        *join_type,
-                        vec![SortOptions::default(); join_on_len],
-                        *null_equality,
-                    )?)
-                } else {
-                    // Null-aware joins need global probe-side state, so keep
-                    // them in CollectLeft mode.
-                    let partition_mode = if can_repartition_join {
-                        PartitionMode::Auto
-                    } else {
-                        PartitionMode::CollectLeft
-                    };
-
-                    Arc::new(
-                        HashJoinExecBuilder::new(
-                            physical_left,
-                            physical_right,
-                            join_on,
-                            *join_type,
-                        )
-                        .with_filter(join_filter)
-                        .with_partition_mode(partition_mode)
-                        .with_null_equality(*null_equality)
-                        .with_null_aware(*null_aware)
-                        .with_null_aware_value_keys(*null_aware_value_keys)
-                        .build()?,
-                    )
-                };
-
-                // If plan was mutated previously then need to create the ExecutionPlan
-                // for the new Projection that was applied on top.
-                if let Some((input, expr)) = new_project {
-                    self.create_project_physical_exec_with_props(
-                        execution_props,
-                        planning_ctx,
-                        join,
-                        input,
-                        expr,
-                        new_logical.schema(),
-                    )?
-                } else {
-                    join
-                }
+            LogicalPlan::Join(_) => {
+                self.plan_join(node, session_state, planning_ctx, children)?
             }
             LogicalPlan::AsOfJoin(join) => {
                 let [physical_left, physical_right] = children.two()?;
@@ -1996,6 +1534,577 @@ impl DefaultPhysicalPlanner {
             }
         };
         Ok(exec_node)
+    }
+
+    /// Plan a join, including temporary key projections and algorithm selection.
+    fn plan_join(
+        &self,
+        node: &LogicalPlan,
+        session_state: &dyn Session,
+        planning_ctx: &PhysicalPlanningContext,
+        children: ChildrenContainer,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let LogicalPlan::Join(logical_join) = node else {
+            return internal_err!("Expected a Join logical plan");
+        };
+        let Join {
+            filter,
+            join_type,
+            null_aware,
+            ..
+        } = logical_join;
+        let execution_props = session_state.execution_props();
+        let PreparedJoinInputs {
+            logical_plan: new_logical,
+            physical_inputs: [physical_left, physical_right],
+        } = self.prepare_join_inputs(
+            node,
+            children.two()?,
+            execution_props,
+            planning_ctx,
+        )?;
+
+        // Retrieving new left/right and join keys (in case plan was mutated above)
+        let (left, right, keys, new_project) = match new_logical.as_ref() {
+            LogicalPlan::Projection(Projection { input, expr, .. }) => {
+                if let LogicalPlan::Join(Join {
+                    left, right, on, ..
+                }) = input.as_ref()
+                {
+                    (left, right, on, Some((input, expr)))
+                } else {
+                    unreachable!()
+                }
+            }
+            LogicalPlan::Join(Join {
+                left, right, on, ..
+            }) => (left, right, on, None),
+            // Should either be the original Join, or Join with a Projection on top
+            _ => unreachable!(),
+        };
+
+        // All equi-join keys are columns now, create physical join plan
+        let left_df_schema = left.schema();
+        let right_df_schema = right.schema();
+        let join_on = keys
+            .iter()
+            .map(|(l, r)| {
+                let l = create_physical_expr(
+                    l,
+                    left_df_schema,
+                    execution_props,
+                    planning_ctx,
+                )?;
+                let r = create_physical_expr(
+                    r,
+                    right_df_schema,
+                    execution_props,
+                    planning_ctx,
+                )?;
+                Ok((l, r))
+            })
+            .collect::<Result<join_utils::JoinOn>>()?;
+
+        // TODO: `num_range_filters` can be used later on for ASOF joins (`num_range_filters > 1`)
+        let mut num_range_filters = 0;
+        let mut range_filters: Vec<Expr> = Vec::new();
+        let mut total_filters = 0;
+
+        let join_filter = match filter {
+            Some(expr) => {
+                let split_expr = split_conjunction(expr);
+                for expr in split_expr.iter() {
+                    match *expr {
+                        Expr::BinaryExpr(BinaryExpr {
+                            left: _,
+                            right: _,
+                            op,
+                        }) => {
+                            if matches!(
+                                op,
+                                Operator::Lt
+                                    | Operator::LtEq
+                                    | Operator::Gt
+                                    | Operator::GtEq
+                            ) {
+                                range_filters.push((**expr).clone());
+                                num_range_filters += 1;
+                            }
+                            total_filters += 1;
+                        }
+                        // TODO: Want to deal with `Expr::Between` for IEJoins, it counts as two range predicates
+                        // which is why it is not dealt with in PWMJ
+                        // Expr::Between(_) => {},
+                        _ => {
+                            total_filters += 1;
+                        }
+                    }
+                }
+
+                Some(self.create_join_filter(
+                    expr,
+                    (left_df_schema, right_df_schema),
+                    (&physical_left, &physical_right),
+                    execution_props,
+                    planning_ctx,
+                )?)
+            }
+            _ => None,
+        };
+
+        let prefer_hash_join = session_state.config_options().optimizer.prefer_hash_join;
+        // Only `HashJoinExec` implements null-aware semantics, and it
+        // needs equi-join keys to do so. Without them the join would be
+        // planned as a nested loop (or piecewise merge) join, which
+        // silently ignores the flag and returns wrong results for
+        // `NOT IN` over a nullable subquery. Fail loudly instead.
+        if *null_aware && join_on.is_empty() {
+            return plan_err!(
+                "null_aware {join_type} join requires equi-join keys, but the join has none"
+            );
+        }
+
+        // TODO: Allow PWMJ to deal with residual equijoin conditions
+        let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
+            if join_filter.is_none() && *join_type == JoinType::Inner {
+                // cross join if there is no join conditions and no join filter set
+                Arc::new(CrossJoinExec::new(physical_left, physical_right))
+            } else if num_range_filters == 1
+                && total_filters == 1
+                && session_state
+                    .config_options()
+                    .optimizer
+                    .enable_piecewise_merge_join
+            {
+                self.plan_piecewise_merge_join(
+                    (&range_filters[0], join_filter),
+                    join_type,
+                    [physical_left, physical_right],
+                    (left_df_schema, right_df_schema),
+                    session_state,
+                    planning_ctx,
+                )?
+            } else {
+                // there is no equal join condition, use the nested loop join
+                Arc::new(NestedLoopJoinExec::try_new(
+                    physical_left,
+                    physical_right,
+                    join_filter,
+                    join_type,
+                    None,
+                )?)
+            }
+        } else if session_state.config().target_partitions() > 1
+            && session_state.config().repartition_joins()
+            && !prefer_hash_join
+            && !*null_aware
+        // Null-aware joins (e.g. `NOT IN` with a nullable subquery) must
+        // use the CollectLeft HashJoin below: SortMergeJoinExec does not
+        // implement null-aware anti-join semantics and would return wrong
+        // results when the right side contains a null join key.
+        {
+            self.plan_sort_merge_join(
+                logical_join,
+                [physical_left, physical_right],
+                join_on,
+                join_filter,
+            )?
+        } else {
+            self.plan_hash_join(
+                logical_join,
+                [physical_left, physical_right],
+                join_on,
+                join_filter,
+                session_state,
+            )?
+        };
+
+        // If plan was mutated previously then need to create the ExecutionPlan
+        // for the new Projection that was applied on top.
+        let plan = if let Some((input, expr)) = new_project {
+            self.create_project_physical_exec_with_props(
+                execution_props,
+                planning_ctx,
+                join,
+                input,
+                expr,
+                new_logical.schema(),
+            )?
+        } else {
+            join
+        };
+        Ok(plan)
+    }
+
+    /// Project expression join keys and preserve the original output schema.
+    fn prepare_join_inputs<'a>(
+        &self,
+        node: &'a LogicalPlan,
+        inputs: [Arc<dyn ExecutionPlan>; 2],
+        execution_props: &ExecutionProps,
+        planning_ctx: &PhysicalPlanningContext,
+    ) -> Result<PreparedJoinInputs<'a>> {
+        let LogicalPlan::Join(Join {
+            left: original_left,
+            right: original_right,
+            on: keys,
+            schema: join_schema,
+            ..
+        }) = node
+        else {
+            return internal_err!("Expected a Join logical plan");
+        };
+        let [physical_left, physical_right] = inputs;
+        // If join has expression equijoin keys, add physical projection.
+        let has_expr_join_key = keys.iter().any(|(l, r)| {
+            !(matches!(l, Expr::Column(_)) && matches!(r, Expr::Column(_)))
+        });
+        let (logical_plan, physical_inputs) = if has_expr_join_key {
+            // TODO: Can we extract this transformation to somewhere before physical plan
+            //       creation?
+            let (left_keys, right_keys): (Vec<_>, Vec<_>) = keys.iter().cloned().unzip();
+
+            let (left, left_col_keys, left_projected) =
+                wrap_projection_for_join_if_necessary(
+                    &left_keys,
+                    original_left.as_ref().clone(),
+                )?;
+            let (right, right_col_keys, right_projected) =
+                wrap_projection_for_join_if_necessary(
+                    &right_keys,
+                    original_right.as_ref().clone(),
+                )?;
+            let column_on = (left_col_keys, right_col_keys);
+
+            let left = Arc::new(left);
+            let right = Arc::new(right);
+            let (new_join, requalified) = Join::try_new_with_project_input(
+                node,
+                Arc::clone(&left),
+                Arc::clone(&right),
+                column_on,
+            )?;
+
+            let new_join = LogicalPlan::Join(new_join);
+
+            // If inputs were projected then create ExecutionPlan for these new
+            // LogicalPlan nodes.
+            let physical_left = match (left_projected, left.as_ref()) {
+                // If left_projected is true we are guaranteed that left is a Projection
+                (true, LogicalPlan::Projection(Projection { input, expr, .. })) => self
+                    .create_project_physical_exec_with_props(
+                    execution_props,
+                    planning_ctx,
+                    physical_left,
+                    input,
+                    expr,
+                    left.schema(),
+                )?,
+                _ => physical_left,
+            };
+            let physical_right = match (right_projected, right.as_ref()) {
+                // If right_projected is true we are guaranteed that right is a Projection
+                (true, LogicalPlan::Projection(Projection { input, expr, .. })) => self
+                    .create_project_physical_exec_with_props(
+                    execution_props,
+                    planning_ctx,
+                    physical_right,
+                    input,
+                    expr,
+                    right.schema(),
+                )?,
+                _ => physical_right,
+            };
+
+            // Remove temporary projected columns
+            if left_projected || right_projected {
+                // Re-qualify the join schema only if the inputs were previously requalified in
+                // `try_new_with_project_input`. This ensures that when building the Projection
+                // it can correctly resolve field nullability and data types
+                // by disambiguating fields from the left and right sides of the join.
+                let qualified_join_schema = if requalified {
+                    Arc::new(qualify_join_schema_sides(
+                        join_schema,
+                        original_left,
+                        original_right,
+                    )?)
+                } else {
+                    Arc::clone(join_schema)
+                };
+
+                let final_join_result = qualified_join_schema
+                    .iter()
+                    .map(Expr::from)
+                    .collect::<Vec<_>>();
+                let projection = LogicalPlan::Projection(Projection::try_new(
+                    final_join_result,
+                    Arc::new(new_join),
+                )?);
+                // LogicalPlan mutated
+                (Cow::Owned(projection), [physical_left, physical_right])
+            } else {
+                // LogicalPlan mutated
+                (Cow::Owned(new_join), [physical_left, physical_right])
+            }
+        } else {
+            // LogicalPlan unchanged
+            (Cow::Borrowed(node), [physical_left, physical_right])
+        };
+        Ok(PreparedJoinInputs {
+            logical_plan,
+            physical_inputs,
+        })
+    }
+
+    /// Build the filter schema and map its columns to the two join inputs.
+    fn create_join_filter(
+        &self,
+        expr: &Expr,
+        schemas: (&DFSchema, &DFSchema),
+        inputs: (&Arc<dyn ExecutionPlan>, &Arc<dyn ExecutionPlan>),
+        execution_props: &ExecutionProps,
+        planning_ctx: &PhysicalPlanningContext,
+    ) -> Result<join_utils::JoinFilter> {
+        let (left_df_schema, right_df_schema) = schemas;
+        let (physical_left, physical_right) = inputs;
+        // Extract columns from filter expression and saved in a HashSet
+        let cols = expr.column_refs();
+
+        // Collect left & right field indices, the field indices are sorted in ascending order
+        let left_field_indices = cols
+            .iter()
+            .filter_map(|c| left_df_schema.index_of_column(c).ok())
+            .sorted()
+            .collect::<Vec<_>>();
+        let right_field_indices = cols
+            .iter()
+            .filter_map(|c| right_df_schema.index_of_column(c).ok())
+            .sorted()
+            .collect::<Vec<_>>();
+
+        // Collect DFFields and Fields required for intermediate schemas
+        let (filter_df_fields, filter_fields): (Vec<_>, Vec<_>) = left_field_indices
+            .clone()
+            .into_iter()
+            .map(|i| {
+                (
+                    left_df_schema.qualified_field(i),
+                    physical_left.schema().field(i).clone(),
+                )
+            })
+            .chain(right_field_indices.clone().into_iter().map(|i| {
+                (
+                    right_df_schema.qualified_field(i),
+                    physical_right.schema().field(i).clone(),
+                )
+            }))
+            .unzip();
+        let filter_df_fields = filter_df_fields
+            .into_iter()
+            .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
+            .collect();
+
+        let metadata: HashMap<_, _> = left_df_schema
+            .metadata()
+            .clone()
+            .into_iter()
+            .chain(right_df_schema.metadata().clone())
+            .collect();
+
+        // Construct intermediate schemas used for filtering data and
+        // convert logical expression to physical according to filter schema
+        let filter_df_schema =
+            DFSchema::new_with_metadata(filter_df_fields, metadata.clone())?;
+        let filter_schema = Schema::new_with_metadata(filter_fields, metadata);
+
+        let filter_expr =
+            create_physical_expr(expr, &filter_df_schema, execution_props, planning_ctx)?;
+        let column_indices = join_utils::JoinFilter::build_column_indices(
+            left_field_indices,
+            right_field_indices,
+        );
+
+        Ok(join_utils::JoinFilter::new(
+            filter_expr,
+            column_indices,
+            Arc::new(filter_schema),
+        ))
+    }
+
+    /// Plan a range join, falling back to a nested loop when operands cannot be
+    /// assigned to distinct inputs.
+    fn plan_piecewise_merge_join(
+        &self,
+        filter: (&Expr, Option<join_utils::JoinFilter>),
+        join_type: &JoinType,
+        inputs: [Arc<dyn ExecutionPlan>; 2],
+        schemas: (&DFSchema, &DFSchema),
+        session_state: &dyn Session,
+        planning_ctx: &PhysicalPlanningContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let (range_filter, join_filter) = filter;
+        let [physical_left, physical_right] = inputs;
+        let (left_df_schema, right_df_schema) = schemas;
+        let execution_props = session_state.execution_props();
+        let Expr::BinaryExpr(be) = range_filter else {
+            return plan_err!(
+                "Unsupported expression for PWMJ: Expected `Expr::BinaryExpr`"
+            );
+        };
+
+        let mut op = be.op;
+        if !matches!(
+            op,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+        ) {
+            return plan_err!(
+                "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
+                op
+            );
+        }
+
+        fn reverse_ineq(op: Operator) -> Operator {
+            match op {
+                Operator::Lt => Operator::Gt,
+                Operator::LtEq => Operator::GtEq,
+                Operator::Gt => Operator::Lt,
+                Operator::GtEq => Operator::LtEq,
+                _ => op,
+            }
+        }
+
+        // `Neither` covers an operand that references no column from
+        // either side (e.g. a literal), and `Both` an operand that
+        // references columns from both. PWMJ needs one operand pinned
+        // to each side, so both fall back to NestedLoopJoin below rather
+        // than erroring or (for `Neither`) panicking.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum Side {
+            Left,
+            Right,
+            Both,
+            Neither,
+        }
+
+        let side_of = |e: &Expr| -> Side {
+            let cols = e.column_refs();
+            let any_left = cols
+                .iter()
+                .any(|c| left_df_schema.index_of_column(c).is_ok());
+            let any_right = cols
+                .iter()
+                .any(|c| right_df_schema.index_of_column(c).is_ok());
+
+            match (any_left, any_right) {
+                (true, false) => Side::Left,
+                (false, true) => Side::Right,
+                (true, true) => Side::Both,
+                (false, false) => Side::Neither,
+            }
+        };
+
+        let mut lhs_logical = &be.left;
+        let mut rhs_logical = &be.right;
+
+        let left_side = side_of(lhs_logical);
+        let right_side = side_of(rhs_logical);
+
+        if left_side == Side::Right && right_side == Side::Left {
+            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
+            op = reverse_ineq(op);
+        } else if !(left_side == Side::Left && right_side == Side::Right) {
+            // Anything other than a clean left/right split -- both
+            // operands on one side, one referencing neither side, or
+            // either referencing both -- isn't a range predicate PWMJ
+            // can plan, so let NestedLoopJoin evaluate it instead.
+            return Ok(Arc::new(NestedLoopJoinExec::try_new(
+                physical_left,
+                physical_right,
+                join_filter,
+                join_type,
+                None,
+            )?));
+        }
+
+        let on_left = create_physical_expr(
+            lhs_logical,
+            left_df_schema,
+            execution_props,
+            planning_ctx,
+        )?;
+        let on_right = create_physical_expr(
+            rhs_logical,
+            right_df_schema,
+            execution_props,
+            planning_ctx,
+        )?;
+
+        Ok(Arc::new(PiecewiseMergeJoinExec::try_new(
+            physical_left,
+            physical_right,
+            (on_left, on_right),
+            op,
+            *join_type,
+            session_state.config().target_partitions(),
+        )?))
+    }
+
+    fn plan_sort_merge_join(
+        &self,
+        join: &Join,
+        inputs: [Arc<dyn ExecutionPlan>; 2],
+        join_on: join_utils::JoinOn,
+        join_filter: Option<join_utils::JoinFilter>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let [physical_left, physical_right] = inputs;
+        // Use SortMergeJoin if hash join is not preferred
+        let join_on_len = join_on.len();
+        Ok(Arc::new(SortMergeJoinExec::try_new(
+            physical_left,
+            physical_right,
+            join_on,
+            join_filter,
+            join.join_type,
+            vec![SortOptions::default(); join_on_len],
+            join.null_equality,
+        )?))
+    }
+
+    fn plan_hash_join(
+        &self,
+        join: &Join,
+        inputs: [Arc<dyn ExecutionPlan>; 2],
+        join_on: join_utils::JoinOn,
+        join_filter: Option<join_utils::JoinFilter>,
+        session_state: &dyn Session,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let [physical_left, physical_right] = inputs;
+        // Null-aware joins need global probe-side state and cannot be repartitioned.
+        let can_repartition_join = session_state.config().target_partitions() > 1
+            && session_state.config().repartition_joins()
+            && !join.null_aware;
+        // Null-aware joins need global probe-side state, so keep
+        // them in CollectLeft mode.
+        let partition_mode = if can_repartition_join {
+            PartitionMode::Auto
+        } else {
+            PartitionMode::CollectLeft
+        };
+
+        Ok(Arc::new(
+            HashJoinExecBuilder::new(
+                physical_left,
+                physical_right,
+                join_on,
+                join.join_type,
+            )
+            .with_filter(join_filter)
+            .with_partition_mode(partition_mode)
+            .with_null_equality(join.null_equality)
+            .with_null_aware(join.null_aware)
+            .with_null_aware_value_keys(join.null_aware_value_keys)
+            .build()?,
+        ))
     }
 
     fn plan_aggregate(
