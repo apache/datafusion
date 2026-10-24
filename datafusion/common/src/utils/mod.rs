@@ -435,6 +435,7 @@ where
         dt => return _internal_err!("expected a dictionary array, got {dt}"),
     };
     let dictionary = compacted.as_ref().unwrap_or(array).as_any_dictionary();
+    #[expect(clippy::disallowed_methods)] // the values are bounded above
     Ok(dictionary.with_values(f(dictionary.values())?))
 }
 
