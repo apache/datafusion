@@ -65,11 +65,13 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes_with_extension_codec,
-    physical_plan_from_bytes_with_extension_codec,
-    physical_plan_to_bytes_with_extension_codec,
+    physical_plan_from_bytes_with_proto_converter,
+    physical_plan_to_bytes_with_proto_converter,
 };
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use datafusion_proto::physical_plan::{
+    DeduplicatingProtoConverter, PhysicalExtensionCodec,
+};
 use datafusion_session::{QueryPlanner, Session};
 use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
@@ -166,9 +168,11 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
                 .create_physical_plan(&logical_plan, session)
                 .await
         );
-        let physical_plan = sresult_return!(physical_plan_to_bytes_with_extension_codec(
+        let proto_converter = DeduplicatingProtoConverter {};
+        let physical_plan = sresult_return!(physical_plan_to_bytes_with_proto_converter(
             physical_plan,
             physical_codec.as_ref(),
+            &proto_converter,
         ));
 
         FFI_Result::Ok(SVec::from(physical_plan.as_ref()))
@@ -313,10 +317,12 @@ impl FFI_QueryPlanner {
         let physical_codec: Arc<dyn PhysicalExtensionCodec> =
             (&self.physical_codec).into();
 
-        physical_plan_from_bytes_with_extension_codec(
+        let proto_converter = DeduplicatingProtoConverter {};
+        physical_plan_from_bytes_with_proto_converter(
             physical_plan.as_slice(),
             task_ctx.as_ref(),
             physical_codec.as_ref(),
+            &proto_converter,
         )
     }
 }
@@ -363,7 +369,10 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_execution::TaskContextProvider;
     use datafusion_expr::LogicalPlanBuilder;
+    use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, col, lit};
+    use datafusion_physical_expr::utils::reassign_expr_columns;
     use datafusion_physical_plan::empty::EmptyExec;
+    use datafusion_physical_plan::filter::FilterExec;
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
     use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 
@@ -421,6 +430,70 @@ mod tests {
         assert_eq!(physical_plan.name(), "EmptyExec");
         assert!(physical_plan.is::<EmptyExec>());
 
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct SharedDynamicFilterQueryPlanner;
+
+    #[async_trait]
+    impl QueryPlanner for SharedDynamicFilterQueryPlanner {
+        async fn create_physical_plan(
+            &self,
+            _logical_plan: &LogicalPlan,
+            _session: &dyn Session,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            let input_schema =
+                Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+            let child = col("a", &input_schema)?;
+            let dynamic_filter: Arc<dyn datafusion_physical_plan::PhysicalExpr> =
+                Arc::new(DynamicFilterPhysicalExpr::new(vec![child], lit(true)));
+            let outer_predicate =
+                reassign_expr_columns(Arc::clone(&dynamic_filter), &input_schema)?;
+            let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema));
+            let inner: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(dynamic_filter, input)?);
+            Ok(Arc::new(FilterExec::try_new(outer_predicate, inner)?))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_query_planner_preserves_shared_dynamic_filters() -> Result<()> {
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+        let mut ffi_planner = FFI_QueryPlanner::new(
+            Arc::new(SharedDynamicFilterQueryPlanner),
+            None,
+            &task_ctx_provider,
+            Arc::new(DefaultLogicalExtensionCodec {}),
+            Arc::new(DefaultPhysicalExtensionCodec {}),
+        );
+        ffi_planner.library_marker_id = crate::mock_foreign_marker_id;
+
+        let planner: Arc<dyn QueryPlanner + Send + Sync> = (&ffi_planner).into();
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        let state = ctx.state();
+        let physical_plan = planner.create_physical_plan(&logical_plan, &state).await?;
+
+        let outer = physical_plan
+            .downcast_ref::<FilterExec>()
+            .expect("outer plan should be a FilterExec");
+        let inner = outer
+            .input()
+            .downcast_ref::<FilterExec>()
+            .expect("inner plan should be a FilterExec");
+
+        let outer_dynamic = outer
+            .predicate()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("outer predicate should be a dynamic filter");
+        let inner_dynamic = inner
+            .predicate()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("inner predicate should be a dynamic filter");
+
+        inner_dynamic.update(lit(false))?;
+        assert_eq!(outer_dynamic.current()?.to_string(), "false");
         Ok(())
     }
 
