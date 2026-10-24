@@ -20,7 +20,7 @@
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, FixedSizeListArray,
     GenericStringArray, Int32Array, Int64Array, ListArray, ListViewArray, MapArray,
-    NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, RunArray,
+    NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, RunArray, StringArray,
     StringViewArray, StructArray, UnionArray, make_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
@@ -389,6 +389,19 @@ fn sliced_array_benchmark(c: &mut Criterion) {
             );
         }
 
+        // Sliced DictionaryArray with one value per row of the full array, like
+        // the group keys an aggregation emits in `batch_size` slices
+        {
+            let full_array = distinct_dictionary_array(total_rows);
+            let sliced = full_array.slice(slice_offset, slice_len);
+            c.bench_function(
+                &format!("dictionary_sliced: 1/{ratio} of {total_rows} values"),
+                |b| {
+                    do_hash_test_with_len(b, std::slice::from_ref(&sliced), slice_len);
+                },
+            );
+        }
+
         // Sliced Dense UnionArray
         {
             let full_array = dense_union_array(total_rows);
@@ -418,6 +431,14 @@ fn do_hash_test_with_len(b: &mut Bencher, arrays: &[ArrayRef], expected_len: usi
         })
         .unwrap();
     });
+}
+
+/// A `Dictionary(Int32, Utf8)` with a distinct value for every row
+fn distinct_dictionary_array(num_rows: usize) -> ArrayRef {
+    let values =
+        StringArray::from_iter_values((0..num_rows).map(|i| format!("group_{i}")));
+    let keys = Int32Array::from_iter_values(0..num_rows as i32);
+    Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap())
 }
 
 fn list_array(num_rows: usize) -> ArrayRef {
