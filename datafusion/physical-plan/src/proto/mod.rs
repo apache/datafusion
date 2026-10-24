@@ -79,12 +79,14 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::physical_expr::proto_decode::{
-    PhysicalExprDecode, PhysicalExprDecodeCtx,
+pub use datafusion_physical_expr::proto::{
+    ExtensionExprFromProto, decode_physical_expr, extension_expr_node,
+    physical_expr_names, register_physical_expr,
 };
-use datafusion_physical_expr_common::physical_expr::proto_encode::{
-    PhysicalExprEncode, PhysicalExprEncodeCtx,
-};
+use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
+pub use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode;
+pub use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_proto_models::protobuf::physical_plan_node::PhysicalPlanType;
 use datafusion_proto_models::protobuf::{
     PhysicalExprNode, PhysicalExtensionNode, PhysicalPlanNode,
@@ -434,6 +436,10 @@ impl PhysicalExprDecode for ExecutionPlanDecodeCtx<'_> {
         schema: &Schema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         self.decode_expr(node, schema)
+    }
+
+    fn session(&self) -> Option<&dyn std::any::Any> {
+        Some(self.task_ctx())
     }
 }
 
