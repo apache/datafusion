@@ -154,3 +154,28 @@ query P
 SELECT from_utc_timestamp('2020-11-04T14:06:40'::timestamp, 'America/New_York'::string);
 ----
 2020-11-04T09:06:40
+
+# Spark timezone spellings supplied as column values, including second-resolution offsets.
+query P
+SELECT from_utc_timestamp(column1, column2)
+FROM VALUES
+('2024-07-01T00:00:00.123456'::timestamp, 'PST'::string),
+('2024-07-01T00:00:00.123456'::timestamp, 'GMT+1'::string),
+('2024-07-01T00:00:00.123456'::timestamp, 'UTC+1:2'::string),
+('2024-07-01T00:00:00.123456'::timestamp, 'UT-010203'::string),
+('2024-04-15T00:00:00.123456'::timestamp, 'SystemV/PST8PDT'::string),
+('2024-07-01T00:00:00.123456'::timestamp, 'SystemV/HST10'::string),
+(NULL::timestamp, '+19:00'::string);
+----
+2024-06-30T17:00:00.123456
+2024-07-01T01:00:00.123456
+2024-07-01T01:02:00.123456
+2024-06-30T22:57:57.123456
+2024-04-14T16:00:00.123456
+2024-06-30T14:00:00.123456
+NULL
+
+# Arrow accepts this offset, but Spark limits offsets to 18 hours.
+query error invalid timezone '\+19:00'
+SELECT from_utc_timestamp(column1, column2)
+FROM VALUES ('2024-07-01'::timestamp, '+19:00'::string);
