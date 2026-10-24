@@ -2737,6 +2737,7 @@ dependencies = [
  "recursive",
  "regex",
  "rstest",
+ "serde_json",
  "sqlparser",
  "stacker",
 ]

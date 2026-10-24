@@ -75,3 +75,4 @@ env_logger = { workspace = true }
 insta = { workspace = true }
 itertools = { workspace = true }
 rstest = { workspace = true }
+serde_json = { workspace = true }
