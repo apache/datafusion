@@ -835,13 +835,11 @@ jobs:
             with:
               save-if: ${{ github.ref_name == 'main' }}
               shared-key: "amd-ci-clippy"
-      - name: Run clippy
-        run: ci/scripts/rust_clippy.sh
       - name: Install CMake
         # The all-features check builds snmalloc-sys, which requires CMake.
         run: apt-get install -y --no-install-recommends cmake
-      - name: Run clippy with all features
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Run clippy
+        run: ci/scripts/rust_clippy.sh
 
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting
