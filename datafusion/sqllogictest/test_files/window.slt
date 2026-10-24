@@ -2498,6 +2498,50 @@ select row_number() over (rows between '1' preceding and current row) from (sele
 ----
 1
 
+# RANGE interval offsets must be non-negative before execution.
+statement error Invalid window frame: RANGE frame offsets must be non-negative
+SELECT count(*) OVER (
+  ORDER BY ts RANGE BETWEEN INTERVAL '-1 month' PRECEDING AND CURRENT ROW
+) FROM (VALUES (arrow_cast(1, 'Timestamp(Second, None)'))) t(ts);
+
+# A positive month must not mask a negative day in a mixed-sign interval.
+statement error Invalid window frame: RANGE frame offsets must be non-negative
+SELECT count(*) OVER (
+  ORDER BY ts RANGE BETWEEN CURRENT ROW AND INTERVAL '1 month -40 days' FOLLOWING
+) FROM (VALUES (arrow_cast(1, 'Timestamp(Second, None)'))) t(ts);
+
+statement error Invalid window frame: RANGE frame offsets must be non-negative
+SELECT count(*) OVER (
+  ORDER BY n RANGE BETWEEN INTERVAL '-1' PRECEDING AND CURRENT ROW
+) FROM (VALUES (1)) t(n);
+
+# Decimal coercion must not round a negative offset to zero before validation.
+statement error Invalid window frame: RANGE frame offsets must be non-negative
+SELECT count(*) OVER (
+  ORDER BY n RANGE BETWEEN INTERVAL '-0.001' PRECEDING AND CURRENT ROW
+) FROM (VALUES (1::DECIMAL(10,2))) t(n);
+
+# Floating-point coercion must not hide a negative offset by underflowing.
+statement error Invalid window frame: RANGE frame offsets must be non-negative
+SELECT count(*) OVER (
+  ORDER BY n RANGE BETWEEN CURRENT ROW AND INTERVAL '-1e-1000' FOLLOWING
+) FROM (VALUES (1::DOUBLE)) t(n);
+
+# A signed zero remains a valid numeric offset, regardless of exponent digits.
+query I
+SELECT count(*) OVER (
+  ORDER BY n RANGE BETWEEN INTERVAL '-0e10' PRECEDING AND CURRENT ROW
+) FROM (VALUES (1::DOUBLE)) t(n);
+----
+1
+
+# A negative offset outside the ORDER BY type must not become UNBOUNDED.
+statement error Invalid window frame: RANGE frame offsets must be non-negative
+SELECT count(*) OVER (
+  ORDER BY arrow_cast(n, 'Int8')
+  RANGE BETWEEN INTERVAL '-129' PRECEDING AND CURRENT ROW
+) FROM (VALUES (1)) t(n);
+
 # interval for groups
 query I
 select row_number() over (order by a groups between '1' preceding and current row) from (select 1 a) x
