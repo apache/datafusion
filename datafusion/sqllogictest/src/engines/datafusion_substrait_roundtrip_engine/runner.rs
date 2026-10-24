@@ -173,8 +173,8 @@ async fn run_query_substrait_round_trip(
         | LogicalPlan::Explain(_)
         | LogicalPlan::Dml(_)
         | LogicalPlan::Copy(_)
-        | LogicalPlan::DescribeTable(_)
-        | LogicalPlan::Statement(_) => logical_plan,
+        | LogicalPlan::Show(_)
+        | LogicalPlan::Statement(_) => logical_plan(),
         // For any other plan, convert to Substrait
         logical_plan => {
             let plan = to_substrait_plan(logical_plan, &state)?;

@@ -25,28 +25,6 @@ use crate::planner::object_name_to_table_reference;
 use datafusion_common::TableReference;
 use sqlparser::ast::*;
 
-// following constants are used in `resolve_table_references`
-// and should be same as `datafusion/catalog/src/information_schema.rs`
-const INFORMATION_SCHEMA: &str = "information_schema";
-const TABLES: &str = "tables";
-const VIEWS: &str = "views";
-const COLUMNS: &str = "columns";
-const DF_SETTINGS: &str = "df_settings";
-const SCHEMATA: &str = "schemata";
-const ROUTINES: &str = "routines";
-const PARAMETERS: &str = "parameters";
-
-/// All information schema tables
-const INFORMATION_SCHEMA_TABLES: &[&str] = &[
-    TABLES,
-    VIEWS,
-    COLUMNS,
-    DF_SETTINGS,
-    SCHEMATA,
-    ROUTINES,
-    PARAMETERS,
-];
-
 // Collect table/CTE references as `TableReference`s and normalize them during traversal.
 // This avoids a second normalization/conversion pass after visiting the AST.
 struct RelationVisitor {
@@ -127,34 +105,6 @@ impl Visitor for RelationVisitor {
             self.insert_relation(obj_name)?;
         }
 
-        // SHOW statements will later be rewritten into a SELECT from the information_schema
-        let requires_information_schema = matches!(
-            statement,
-            Statement::ShowFunctions { .. }
-                | Statement::ShowVariable { .. }
-                | Statement::ShowStatus { .. }
-                | Statement::ShowVariables { .. }
-                | Statement::ShowCreate { .. }
-                | Statement::ShowColumns { .. }
-                | Statement::ShowTables { .. }
-                | Statement::ShowCollation { .. }
-        );
-        if requires_information_schema {
-            for s in INFORMATION_SCHEMA_TABLES {
-                // Information schema references are synthesized here, so convert directly.
-                let obj = ObjectName::from(vec![
-                    Ident::new(INFORMATION_SCHEMA),
-                    Ident::new(*s),
-                ]);
-                match object_name_to_table_reference(obj, self.enable_ident_normalization)
-                {
-                    Ok(tbl_ref) => {
-                        self.relations.insert(tbl_ref);
-                    }
-                    Err(e) => return ControlFlow::Break(e),
-                }
-            }
-        }
         ControlFlow::Continue(())
     }
 }

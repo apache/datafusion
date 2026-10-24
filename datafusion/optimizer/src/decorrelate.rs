@@ -372,7 +372,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => {
+            | LogicalPlan::Show(_) => {
                 if holds_outer_reference(&plan) {
                     Ok(self.stop_pull_up(plan))
                 } else {

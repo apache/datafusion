@@ -21,17 +21,16 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::parser::{
-    CopyToSource, CopyToStatement, CreateExternalCatalog, CreateExternalTable, DFParser,
+    CopyToSource, CopyToStatement, CreateExternalCatalog, CreateExternalTable,
     ExplainStatement, LexOrdering, ResetStatement, Statement as DFStatement,
 };
-use crate::planner::{
-    ContextProvider, PlannerContext, SqlToRel, object_name_to_qualifier,
-};
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
 
 use arrow::datatypes::{Field, FieldRef, Fields, Metadata};
 use datafusion_common::error::_plan_err;
 use datafusion_common::format::ExplainStatementOptions;
+use datafusion_common::information_schema::ColumnsDetail;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
@@ -51,9 +50,9 @@ use datafusion_expr::{
     CreateExternalCatalog as PlanCreateExternalCatalog,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
-    DescribeTable, DmlStatement, DropCatalog, DropCatalogSchema, DropFunction, DropTable,
-    DropView, EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable,
-    Filter, LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
+    DmlStatement, DropCatalog, DropCatalogSchema, DropFunction, DropTable, DropView,
+    EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable, Filter,
+    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
     ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
     TransactionAccessMode, TransactionConclusion, TransactionEnd,
     TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast,
@@ -1675,29 +1674,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Generate a logical plan from a "SHOW TABLES" query
     fn show_tables_to_plan(&self) -> Result<LogicalPlan> {
-        if self.has_table("information_schema", "tables") {
-            let query = "SELECT * FROM information_schema.tables;";
-            let mut rewrite = DFParser::parse_sql(query)?;
-            assert_eq!(rewrite.len(), 1);
-            self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
-        } else {
-            plan_err!("SHOW TABLES is not supported unless information_schema is enabled")
-        }
+        LogicalPlanBuilder::show_tables()?.build()
     }
 
     fn describe_table_to_plan(&self, table_name: ObjectName) -> Result<LogicalPlan> {
         let table_ref = self.object_name_to_table_reference(table_name)?;
 
-        let table_source = self.context_provider.get_table_source(table_ref)?;
+        // Do a table lookup to verify the table exists
+        let _ = self.context_provider.get_table_source(table_ref.clone())?;
 
-        let schema = table_source.schema();
-
-        let output_schema = DFSchema::try_from(LogicalPlan::describe_schema()).unwrap();
-
-        Ok(LogicalPlan::DescribeTable(DescribeTable {
-            schema,
-            output_schema: Arc::new(output_schema),
-        }))
+        LogicalPlanBuilder::show_columns(table_ref, ColumnsDetail::Describe)?.build()
     }
 
     fn describe_query_to_plan(&self, query: Query) -> Result<LogicalPlan> {
@@ -1705,12 +1691,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let schema = Arc::new(plan.schema().as_arrow().clone());
 
-        let output_schema = DFSchema::try_from(LogicalPlan::describe_schema()).unwrap();
-
-        Ok(LogicalPlan::DescribeTable(DescribeTable {
-            schema,
-            output_schema: Arc::new(output_schema),
-        }))
+        LogicalPlanBuilder::describe(schema)?.build()
     }
 
     fn copy_to_plan(&self, statement: CopyToStatement) -> Result<LogicalPlan> {
@@ -2210,59 +2191,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
-        if !self.has_table("information_schema", "df_settings") {
-            return plan_err!(
-                "SHOW [VARIABLE] is not supported unless information_schema is enabled"
-            );
-        }
-
         let verbose = variable
             .last()
             .map(|s| ident_to_string(s) == "verbose")
             .unwrap_or(false);
         let mut variable_vec = variable.to_vec();
-        let mut columns: String = "name, value".to_owned();
 
         if verbose {
-            columns = format!("{columns}, description");
             variable_vec = variable_vec.split_at(variable_vec.len() - 1).0.to_vec();
         }
 
         let variable = object_name_to_string(&ObjectName::from(variable_vec));
-        let base_query = format!("SELECT {columns} FROM information_schema.df_settings");
-        let query = if variable == "all" {
-            // Add an ORDER BY so the output comes out in a consistent order
-            format!("{base_query} ORDER BY name")
-        } else if variable == "timezone" || variable == "time.zone" {
-            // we could introduce alias in OptionDefinition if this string matching thing grows
-            format!("{base_query} WHERE name = 'datafusion.execution.time_zone'")
+        let name = if variable == "all" {
+            None
         } else {
-            // These values are what are used to make the information_schema table, so we just
-            // check here, before actually planning or executing the query, if it would produce no
-            // results, and error preemptively if it would (for a better UX)
-            let is_valid_variable = self
-                .context_provider
-                .options()
-                .entries()
-                .iter()
-                .any(|opt| opt.key == variable);
-
-            // Check if it's a runtime variable
-            let is_runtime_variable = variable.starts_with("datafusion.runtime.");
-
-            if !is_valid_variable && !is_runtime_variable {
-                return plan_err!(
-                    "'{variable}' is not a variable which can be viewed with 'SHOW'"
-                );
-            }
-
-            format!("{base_query} WHERE name = '{variable}'")
+            // No need to validate if the variable exists here; that is handled at execution time.
+            Some(variable)
         };
 
-        let mut rewrite = DFParser::parse_sql(&query)?;
-        assert_eq!(rewrite.len(), 1);
-
-        self.statement_to_plan(rewrite.pop_front().unwrap())
+        LogicalPlanBuilder::show_variables(name, verbose)?.build()
     }
 
     fn set_statement_to_plan(&self, statement: Set) -> Result<LogicalPlan> {
@@ -2981,193 +2928,54 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         full: bool,
         sql_table_name: ObjectName,
     ) -> Result<LogicalPlan> {
-        // Figure out the where clause
-        let where_clause = object_name_to_qualifier(
-            &sql_table_name,
-            self.options.enable_ident_normalization,
-        )?;
-
-        if !self.has_table("information_schema", "columns") {
-            return plan_err!(
-                "SHOW COLUMNS is not supported unless information_schema is enabled"
-            );
-        }
+        let table_ref = self.object_name_to_table_reference(sql_table_name)?;
 
         // Do a table lookup to verify the table exists
-        let table_ref = self.object_name_to_table_reference(sql_table_name)?;
-        let _ = self.context_provider.get_table_source(table_ref)?;
+        let _ = self.context_provider.get_table_source(table_ref.clone())?;
 
         // Treat both FULL and EXTENDED as the same
-        let select_list = if full || extended {
-            "*"
+        let detail = if full || extended {
+            ColumnsDetail::Full
         } else {
-            "table_catalog, table_schema, table_name, column_name, data_type, is_nullable"
+            ColumnsDetail::Basic
         };
 
-        let query = format!(
-            "SELECT {select_list} FROM information_schema.columns WHERE {where_clause}"
-        );
-
-        let mut rewrite = DFParser::parse_sql(&query)?;
-        assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
+        LogicalPlanBuilder::show_columns(table_ref, detail)?.build()
     }
 
-    /// Rewrite `SHOW FUNCTIONS` to another SQL query
-    /// The query is based on the `information_schema.routines` and `information_schema.parameters` tables
+    /// `SHOW FUNCTIONS [LIKE <pattern>]`.
     ///
     /// The output columns:
     /// - function_name: The name of function
     /// - return_type: The return type of the function
     /// - parameters: The name of parameters (ordered by the ordinal position)
     /// - parameter_types: The type of parameters (ordered by the ordinal position)
+    /// - function_type: SCALAR / AGGREGATE / WINDOW / TABLE
     /// - description: The description of the function (the description defined in the document)
     /// - syntax_example: The syntax_example of the function (the syntax_example defined in the document)
     fn show_functions_to_plan(
         &self,
         filter: Option<ShowStatementFilter>,
     ) -> Result<LogicalPlan> {
-        let where_clause = if let Some(filter) = filter {
-            match filter {
-                ShowStatementFilter::Like(like) => {
-                    format!("WHERE p.function_name like '{like}'")
-                }
-                _ => return plan_err!("Unsupported SHOW FUNCTIONS filter"),
-            }
-        } else {
-            "".to_string()
+        let filter = match filter {
+            Some(ShowStatementFilter::Like(like)) => Some(like),
+            Some(_) => return plan_err!("Unsupported SHOW FUNCTIONS filter"),
+            None => None,
         };
 
-        // Scalar / aggregate / window functions are resolved by joining
-        // parameters (IN rows aggregated per OUT row) with routines.
-        // Table functions (UDTFs) don't have parameter rows, so they are
-        // sourced directly from routines via a UNION branch. Restricting
-        // the JOIN to non-TABLE routines prevents same-named scalar+UDTF
-        // pairs (e.g. `generate_series`) from cross-joining.
-        let where_clause = where_clause.replace("p.function_name", "sc.function_name");
-        let query = format!(
-            r#"
-SELECT DISTINCT
-    sc.function_name,
-    sc.return_type,
-    sc.parameters,
-    sc.parameter_types,
-    sc.function_type,
-    sc.description,
-    sc.syntax_example
-FROM (
-    SELECT
-        p.function_name,
-        p.return_type,
-        p.parameters,
-        p.parameter_types,
-        r.function_type function_type,
-        r.description description,
-        r.syntax_example syntax_example
-    FROM (
-        SELECT
-            o.specific_name function_name,
-            o.data_type return_type,
-            array_agg(i.parameter_name ORDER BY i.ordinal_position ASC) parameters,
-            array_agg(i.data_type ORDER BY i.ordinal_position ASC) parameter_types
-        FROM (
-                 SELECT
-                     specific_catalog,
-                     specific_schema,
-                     specific_name,
-                     ordinal_position,
-                     parameter_name,
-                     data_type,
-                     rid
-                 FROM
-                     information_schema.parameters
-                 WHERE
-                     parameter_mode = 'OUT'
-             ) o
-                 LEFT JOIN
-             (
-                 SELECT
-                     specific_catalog,
-                     specific_schema,
-                     specific_name,
-                     ordinal_position,
-                     parameter_name,
-                     data_type,
-                     rid
-                 FROM
-                     information_schema.parameters
-                 WHERE
-                     parameter_mode = 'IN'
-             ) i
-             ON i.specific_catalog = o.specific_catalog
-                 AND i.specific_schema = o.specific_schema
-                 AND i.specific_name = o.specific_name
-                 AND i.rid = o.rid
-        GROUP BY 1, 2, o.rid
-    ) as p
-    JOIN information_schema.routines r
-      ON p.function_name = r.routine_name
-     AND r.function_type <> 'TABLE'
-
-    UNION ALL
-
-    SELECT
-        routine_name function_name,
-        data_type return_type,
-        array_agg(NULL) FILTER (WHERE FALSE) parameters,
-        array_agg(NULL) FILTER (WHERE FALSE) parameter_types,
-        function_type,
-        description,
-        syntax_example
-    FROM information_schema.routines
-    WHERE function_type = 'TABLE'
-    GROUP BY routine_name, data_type, function_type, description, syntax_example
-) sc
-{where_clause}
-            "#
-        );
-        let mut rewrite = DFParser::parse_sql(&query)?;
-        assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
+        LogicalPlanBuilder::show_functions(filter)?.build()
     }
 
     fn show_create_table_to_plan(
         &self,
         sql_table_name: ObjectName,
     ) -> Result<LogicalPlan> {
-        if !self.has_table("information_schema", "tables") {
-            return plan_err!(
-                "SHOW CREATE TABLE is not supported unless information_schema is enabled"
-            );
-        }
-        // Figure out the where clause
-        let where_clause = object_name_to_qualifier(
-            &sql_table_name,
-            self.options.enable_ident_normalization,
-        )?;
+        let table_ref = self.object_name_to_table_reference(sql_table_name)?;
 
         // Do a table lookup to verify the table exists
-        let table_ref = self.object_name_to_table_reference(sql_table_name)?;
-        let _ = self.context_provider.get_table_source(table_ref)?;
+        let _ = self.context_provider.get_table_source(table_ref.clone())?;
 
-        let query = format!(
-            "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {where_clause}"
-        );
-
-        let mut rewrite = DFParser::parse_sql(&query)?;
-        assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
-    }
-
-    /// Return true if there is a table provider available for "schema.table"
-    fn has_table(&self, schema: &str, table: &str) -> bool {
-        let tables_reference = TableReference::Partial {
-            schema: schema.into(),
-            table: table.into(),
-        };
-        self.context_provider
-            .get_table_source(tables_reference)
-            .is_ok()
+        LogicalPlanBuilder::show_create_table(table_ref)?.build()
     }
 
     fn validate_transaction_kind(
