@@ -2784,6 +2784,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-functions-aggregate",
+ "futures",
  "half",
  "insta",
  "itertools 0.15.0",

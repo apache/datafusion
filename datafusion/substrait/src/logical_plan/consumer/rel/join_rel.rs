@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{Column, JoinType, NullEquality, not_impl_err, plan_err};
+use datafusion::common::{
+    Column, JoinType, NullEquality, internal_datafusion_err, not_impl_err, plan_err,
+    substrait_err,
+};
 use datafusion::logical_expr::requalify_sides_if_needed;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
@@ -33,12 +36,20 @@ pub async fn from_join_rel(
         return not_impl_err!("JoinRel with post_join_filter is not yet supported");
     }
 
-    let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
-        consumer.consume_rel(join.left.as_ref().unwrap()).await?,
-    );
-    let right = LogicalPlanBuilder::from(
-        consumer.consume_rel(join.right.as_ref().unwrap()).await?,
-    );
+    let (Some(left), Some(right)) = (join.left.as_deref(), join.right.as_deref()) else {
+        return substrait_err!("JoinRel requires left and right inputs");
+    };
+    let [left, right] = consumer
+        .consume_rel_inputs(&[left, right])
+        .await?
+        .try_into()
+        .map_err(|_| {
+            internal_datafusion_err!(
+                "JoinRel consumer returned the wrong number of inputs"
+            )
+        })?;
+    let left = LogicalPlanBuilder::from(left);
+    let right = LogicalPlanBuilder::from(right);
     let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;
 
     let join_type = from_substrait_jointype(join.r#type)?;
