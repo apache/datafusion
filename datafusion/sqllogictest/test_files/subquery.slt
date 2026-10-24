@@ -2124,6 +2124,15 @@ WHERE t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id)
 ----
 11
 
+# correlated_in_groupless_max_agg_embedded_in_or_is_not_count_bug_compensated
+query I
+SELECT t1_id FROM t1
+WHERE t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) OR t1_id = 33
+ORDER BY t1_id
+----
+11
+33
+
 # correlated_in_groupless_count_agg_stays_correlated
 # Errors rather than returning wrong rows. Expected `33`.
 query error Physical plan does not support logical expression InSubquery

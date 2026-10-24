@@ -854,10 +854,10 @@ fn build_join(
     if !pull_up.can_pull_up {
         return Ok(None);
     }
-    // Stopgap until a follow-up adds count-bug compensation for `IN`/`NOT IN`.
+    // TODO(#24960): stopgap until count-bug compensation covers `IN`/`NOT IN`.
     // The subquery stays correlated unless an outer row with no match gets the
     // right answer anyway.
-    if !exists_sub_query {
+    if !exists_sub_query && pull_up.pulled_up_scalar_agg {
         let null_reads_as_false = match join_type {
             JoinType::LeftSemi => true,
             JoinType::LeftMark => !needs_null_aware_mark,
