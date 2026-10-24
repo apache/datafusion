@@ -454,14 +454,6 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     element_array: &ArrayRef,
     arr_n: &[Option<i64>],
 ) -> Result<ArrayRef> {
-    let (DataType::List(list_field) | DataType::LargeList(list_field)) =
-        list_array.data_type()
-    else {
-        return exec_err!(
-            "Expected List or LargeList data type, got {:?}",
-            list_array.data_type()
-        );
-    };
     let original_data = list_array.values().to_data();
     // Build up the offsets for the final output array
     let mut offsets = Vec::<OffsetSize>::with_capacity(list_array.len() + 1);
@@ -545,7 +537,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
 
     let new_values = make_array(mutable.freeze());
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        Arc::clone(list_field),
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::new(offsets.into()),
         new_values,
         valid.finish(),
@@ -565,15 +557,6 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
     if max_removals <= 0 {
         return Ok(Arc::new(list_array.clone()));
     }
-
-    let (DataType::List(list_field) | DataType::LargeList(list_field)) =
-        list_array.data_type()
-    else {
-        return exec_err!(
-            "Expected List or LargeList data type, got {:?}",
-            list_array.data_type()
-        );
-    };
 
     let list_offsets = list_array.offsets();
     let (first_offset, values_range_len) = offset_span(list_offsets);
@@ -642,7 +625,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
 
     let new_values = make_array(mutable.freeze());
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        Arc::clone(list_field),
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::new(offsets.into()),
         new_values,
         nulls,
