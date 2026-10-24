@@ -15,254 +15,170 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int64Array, StringArray, StringViewArray};
-use arrow::datatypes::{DataType, Field};
-use criterion::{BenchmarkId, Criterion, criterion_group};
-use datafusion_common::ScalarValue;
-use datafusion_common::config::ConfigOptions;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
-use datafusion_functions::string::split_part;
-use rand::distr::Alphanumeric;
-use rand::prelude::StdRng;
-use rand::{Rng, SeedableRng};
 use std::hint::black_box;
+use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
-const N_ROWS: usize = 8192;
+use arrow::array::{StringArray, StringViewArray};
+use arrow::datatypes::{Field, Int64Type};
+use arrow::util::bench_util::create_primitive_array_range;
+use criterion::{Criterion, criterion_group};
+use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
+use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
+use datafusion_functions::string::split_part;
+use rand::distr::Alphanumeric;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
-/// Creates an array of strings with `num_parts` random alphanumeric segments
-/// of `part_len` bytes each, joined by `delimiter`.
-fn gen_string_array(
-    n_rows: usize,
-    num_parts: usize,
-    part_len: usize,
-    delimiter: &str,
-    use_string_view: bool,
-) -> ColumnarValue {
-    let mut rng = StdRng::seed_from_u64(42);
+const BATCH_SIZE: usize = 8192;
 
-    let mut strings: Vec<String> = Vec::with_capacity(n_rows);
-    for _ in 0..n_rows {
-        let mut parts: Vec<String> = Vec::with_capacity(num_parts);
-        for _ in 0..num_parts {
-            let part: String = (&mut rng)
-                .sample_iter(&Alphanumeric)
-                .take(part_len)
-                .map(char::from)
-                .collect();
-            parts.push(part);
-        }
-        strings.push(parts.join(delimiter));
-    }
-
-    if use_string_view {
-        let string_array: StringViewArray = strings.into_iter().map(Some).collect();
-        ColumnarValue::Array(Arc::new(string_array) as ArrayRef)
-    } else {
-        let string_array: StringArray = strings.into_iter().map(Some).collect();
-        ColumnarValue::Array(Arc::new(string_array) as ArrayRef)
-    }
+/// How the position argument is passed.
+enum Position {
+    /// The same position for every row, as in `split_part(s, '.', 2)`.
+    Scalar(i64),
+    /// A different position for each row, drawn from the range.
+    PerRow(Range<i64>),
 }
 
-#[expect(clippy::too_many_arguments)]
-fn bench_split_part(
-    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
-    func: &ScalarUDF,
-    config_options: &Arc<ConfigOptions>,
-    name: &str,
-    tag: &str,
-    strings: ColumnarValue,
-    delimiter: ColumnarValue,
-    position: ColumnarValue,
-) {
-    let args = vec![strings, delimiter, position];
-    let arg_fields: Vec<_> = args
-        .iter()
-        .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
-        .collect();
-    let return_type = match args[0].data_type() {
-        DataType::Utf8View => DataType::Utf8View,
-        _ => DataType::Utf8,
-    };
-    let return_field = Field::new("f", return_type, true).into();
-
-    group.bench_function(BenchmarkId::new(name, tag), |b| {
-        b.iter(|| {
-            black_box(
-                func.invoke_with_args(ScalarFunctionArgs {
-                    args: args.clone(),
-                    arg_fields: arg_fields.clone(),
-                    number_rows: N_ROWS,
-                    return_field: Arc::clone(&return_field),
-                    config_options: Arc::clone(config_options),
+/// Returns strings of alphanumeric fields joined by `delimiter`. Each row's
+/// number of fields and each field's length are drawn from the given ranges.
+fn create_strings(
+    field_len: &RangeInclusive<usize>,
+    num_fields: &RangeInclusive<usize>,
+    delimiter: &str,
+) -> Vec<Option<String>> {
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..BATCH_SIZE)
+        .map(|_| {
+            if rng.random::<f32>() < 0.1 {
+                return None;
+            }
+            let fields: Vec<String> = (0..rng.random_range(num_fields.clone()))
+                .map(|_| {
+                    let len = rng.random_range(field_len.clone());
+                    (&mut rng)
+                        .sample_iter(&Alphanumeric)
+                        .take(len)
+                        .map(char::from)
+                        .collect()
                 })
-                .expect("split_part should work"),
-            )
+                .collect();
+            Some(fields.join(delimiter))
         })
-    });
+        .collect()
+}
+
+fn create_args(
+    field_len: &RangeInclusive<usize>,
+    num_fields: &RangeInclusive<usize>,
+    delimiter: &str,
+    position: &Position,
+    is_string_view: bool,
+) -> Vec<ColumnarValue> {
+    let strings = create_strings(field_len, num_fields, delimiter);
+    let string_arg = if is_string_view {
+        ColumnarValue::Array(Arc::new(strings.into_iter().collect::<StringViewArray>()))
+    } else {
+        ColumnarValue::Array(Arc::new(strings.into_iter().collect::<StringArray>()))
+    };
+
+    let position_arg = match position {
+        Position::Scalar(n) => ColumnarValue::Scalar(ScalarValue::Int64(Some(*n))),
+        Position::PerRow(range) => ColumnarValue::Array(Arc::new(
+            create_primitive_array_range::<Int64Type>(BATCH_SIZE, 0.0, range.clone()),
+        )),
+    };
+
+    vec![
+        string_arg,
+        ColumnarValue::Scalar(ScalarValue::from(delimiter)),
+        position_arg,
+    ]
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let split_part_func = split_part();
+    // Field lengths and counts vary within each case, as in real data: with
+    // fixed lengths, per-row work that depends on them is unrealistically
+    // predictable.
+    let cases = [
+        // Fields of up to 8 bytes, stored inline in StringView arrays (≤12 bytes).
+        ("short_fields", 1..=8, 3..=6, ".", Position::Scalar(2)),
+        // Fields of more than 12 bytes, stored out of line.
+        ("long_fields", 16..=48, 3..=6, ".", Position::Scalar(2)),
+        // A field near the middle of many fields.
+        ("many_fields", 1..=16, 20..=50, ".", Position::Scalar(10)),
+        // A negative position counts fields from the end.
+        (
+            "negative_position",
+            1..=32,
+            3..=6,
+            ".",
+            Position::Scalar(-1),
+        ),
+        // A delimiter of more than one character.
+        (
+            "multi_char_delimiter",
+            1..=32,
+            3..=6,
+            "~@~",
+            Position::Scalar(2),
+        ),
+        // The position computed per row.
+        (
+            "per_row_position",
+            1..=32,
+            3..=6,
+            ".",
+            Position::PerRow(1..4),
+        ),
+    ];
+    let function = split_part();
     let config_options = Arc::new(ConfigOptions::default());
-    let mut group = c.benchmark_group("split_part");
+    let mut group = c.benchmark_group(function.name().to_string());
 
-    // ── Scalar delimiter and position ────────────────
+    for is_string_view in [false, true] {
+        let array_type = if is_string_view {
+            "string_view"
+        } else {
+            "string"
+        };
 
-    // Utf8, single-char delimiter, scalar args
-    {
-        let strings = gen_string_array(N_ROWS, 10, 8, ".", false);
-        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8(Some(".".into())));
-        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        bench_split_part(
-            &mut group,
-            &split_part_func,
-            &config_options,
-            "scalar_utf8_single_char",
-            "pos_first",
-            strings,
-            delimiter,
-            position,
-        );
-    }
+        for (case_name, field_len, num_fields, delimiter, position) in &cases {
+            let args =
+                create_args(field_len, num_fields, delimiter, position, is_string_view);
 
-    {
-        let strings = gen_string_array(N_ROWS, 10, 8, ".", false);
-        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8(Some(".".into())));
-        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(5)));
-        bench_split_part(
-            &mut group,
-            &split_part_func,
-            &config_options,
-            "scalar_utf8_single_char",
-            "pos_middle",
-            strings,
-            delimiter,
-            position,
-        );
-    }
+            let arg_fields: Vec<_> = args
+                .iter()
+                .enumerate()
+                .map(|(idx, arg)| {
+                    Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+                })
+                .collect();
+            let scalar_arguments = vec![None; arg_fields.len()];
+            let return_field = function
+                .return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &arg_fields,
+                    scalar_arguments: &scalar_arguments,
+                })
+                .expect("should resolve return field");
 
-    {
-        let strings = gen_string_array(N_ROWS, 10, 8, ".", false);
-        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8(Some(".".into())));
-        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(-1)));
-        bench_split_part(
-            &mut group,
-            &split_part_func,
-            &config_options,
-            "scalar_utf8_single_char",
-            "pos_negative",
-            strings,
-            delimiter,
-            position,
-        );
-    }
-
-    // Utf8, multi-char delimiter, scalar args
-    {
-        let strings = gen_string_array(N_ROWS, 10, 8, "~@~", false);
-        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8(Some("~@~".into())));
-        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(5)));
-        bench_split_part(
-            &mut group,
-            &split_part_func,
-            &config_options,
-            "scalar_utf8_multi_char",
-            "pos_middle",
-            strings,
-            delimiter,
-            position,
-        );
-    }
-
-    // Utf8, long strings, scalar args
-    {
-        let strings = gen_string_array(N_ROWS, 50, 16, ".", false);
-        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8(Some(".".into())));
-        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(25)));
-        bench_split_part(
-            &mut group,
-            &split_part_func,
-            &config_options,
-            "scalar_utf8_long_strings",
-            "pos_middle",
-            strings,
-            delimiter,
-            position,
-        );
-    }
-
-    // Utf8View, long parts, scalar args
-    {
-        let strings = gen_string_array(N_ROWS, 10, 32, ".", true);
-        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8View(Some(".".into())));
-        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(5)));
-        bench_split_part(
-            &mut group,
-            &split_part_func,
-            &config_options,
-            "scalar_utf8view_long_parts",
-            "pos_middle",
-            strings,
-            delimiter,
-            position,
-        );
-    }
-
-    // Utf8View, very long parts (256 bytes), position 1
-    {
-        let strings = gen_string_array(N_ROWS, 5, 256, ".", true);
-        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8View(Some(".".into())));
-        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        bench_split_part(
-            &mut group,
-            &split_part_func,
-            &config_options,
-            "scalar_utf8view_very_long_parts",
-            "pos_first",
-            strings,
-            delimiter,
-            position,
-        );
-    }
-
-    // ── Array delimiter and position ─────────────────
-
-    // Utf8, single-char delimiter, array args
-    {
-        let strings = gen_string_array(N_ROWS, 10, 8, ".", false);
-        let delimiters: StringArray = vec![Some("."); N_ROWS].into_iter().collect();
-        let delimiter = ColumnarValue::Array(Arc::new(delimiters) as ArrayRef);
-        let positions = ColumnarValue::Array(Arc::new(Int64Array::from(vec![5; N_ROWS])));
-        bench_split_part(
-            &mut group,
-            &split_part_func,
-            &config_options,
-            "array_utf8_single_char",
-            "pos_middle",
-            strings,
-            delimiter,
-            positions,
-        );
-    }
-
-    // Utf8, multi-char delimiter, array args
-    {
-        let strings = gen_string_array(N_ROWS, 10, 8, "~@~", false);
-        let delimiters: StringArray = vec![Some("~@~"); N_ROWS].into_iter().collect();
-        let delimiter = ColumnarValue::Array(Arc::new(delimiters) as ArrayRef);
-        let positions = ColumnarValue::Array(Arc::new(Int64Array::from(vec![5; N_ROWS])));
-        bench_split_part(
-            &mut group,
-            &split_part_func,
-            &config_options,
-            "array_utf8_multi_char",
-            "pos_middle",
-            strings,
-            delimiter,
-            positions,
-        );
+            group.bench_function(format!("{array_type} {case_name}"), |b| {
+                b.iter(|| {
+                    black_box(
+                        function
+                            .invoke_with_args(ScalarFunctionArgs {
+                                args: args.clone(),
+                                arg_fields: arg_fields.clone(),
+                                number_rows: BATCH_SIZE,
+                                return_field: Arc::clone(&return_field),
+                                config_options: Arc::clone(&config_options),
+                            })
+                            .expect("should work"),
+                    )
+                })
+            });
+        }
     }
 
     group.finish();

@@ -63,18 +63,18 @@ Do not expose internal APIs solely for tests or microbenchmarks. Some legacy cod
 does so, but new tests and benchmarks should exercise observable behavior to
 simplify maintenance.
 
-For APIs intended only for internal use, add `#[doc(hidden)]` and a doc comment
-section headed `# Public Only for Internal Use:`. Name the crate or component
-that requires access and explain why the API is not intended for downstream use.
-For example:
+For APIs intended only for internal use, add `#[doc(hidden)]` and use the
+following doc comment format, including the API policy link:
 
 ```txt
 impl HashTableLookupExpr {
     /// ...
     ///
     /// # Public Only for Internal Use:
-    /// `datafusion-proto` tests require this constructor, but it is not part of
-    /// the supported public API.
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn new(...) {...}
 }

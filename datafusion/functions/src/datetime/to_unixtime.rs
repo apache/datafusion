@@ -19,6 +19,7 @@ use super::to_timestamp::ToTimestampSecondsFunc;
 use crate::datetime::common::*;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{Result, exec_err};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -141,6 +142,42 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
                 exec_err!("Unsupported data type {} for function to_unixtime", other)
             }
         }
+    }
+
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        if self.preserves_lex_ordering(input)? {
+            // Conversions preserve epoch order and report overflow instead of adding NULLs.
+            Ok(input[0].sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
+    }
+
+    fn preserves_lex_ordering(&self, input: &[ExprProperties]) -> Result<bool> {
+        let [value] = input else {
+            return Ok(false);
+        };
+        let data_type = value.range.data_type();
+        Ok(data_type.is_integer()
+            || matches!(
+                data_type,
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+            ))
+    }
+
+    fn strictly_order_preserving(&self, input: &[ExprProperties]) -> Result<bool> {
+        let [value] = input else {
+            return Ok(false);
+        };
+        let data_type = value.range.data_type();
+        // Exact or scaled-by-constant conversions are one-to-one; Date64 and
+        // sub-second timestamps truncate to seconds.
+        Ok(value.strictly_order_preserving
+            && (data_type.is_integer()
+                || matches!(
+                    data_type,
+                    DataType::Date32 | DataType::Timestamp(TimeUnit::Second, _)
+                )))
     }
 
     fn documentation(&self) -> Option<&Documentation> {

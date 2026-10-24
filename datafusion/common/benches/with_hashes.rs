@@ -18,9 +18,10 @@
 //! Benchmarks for `with_hashes` function
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, GenericStringArray, Int32Array,
-    Int64Array, ListArray, MapArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray,
-    RunArray, StringViewArray, StructArray, UnionArray, make_array,
+    Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, FixedSizeListArray,
+    GenericStringArray, Int32Array, Int64Array, ListArray, ListViewArray, MapArray,
+    NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, RunArray,
+    StringViewArray, StructArray, UnionArray, make_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{
@@ -125,6 +126,21 @@ fn criterion_benchmark(c: &mut Criterion) {
         BenchData {
             name: "run_array_int32",
             array: create_run_array::<Int32Type>(BATCH_SIZE),
+            supports_nulls: true,
+        },
+        BenchData {
+            name: "null",
+            array: Arc::new(NullArray::new(BATCH_SIZE)),
+            supports_nulls: false,
+        },
+        BenchData {
+            name: "list_view_array",
+            array: list_view_array(BATCH_SIZE),
+            supports_nulls: true,
+        },
+        BenchData {
+            name: "fixed_size_list_array",
+            array: fixed_size_list_array(BATCH_SIZE),
             supports_nulls: true,
         },
     ];
@@ -603,5 +619,49 @@ where
     )
 }
 
-criterion_group!(benches, criterion_benchmark, sliced_array_benchmark);
+fn list_view_array(num_rows: usize) -> ArrayRef {
+    let elements_per_row = 5;
+    let values = primitive_array::<Int64Type>(num_rows * elements_per_row);
+    let offsets: ScalarBuffer<i32> = (0..num_rows)
+        .map(|i| (i * elements_per_row) as i32)
+        .collect();
+    let sizes: ScalarBuffer<i32> =
+        (0..num_rows).map(|_| elements_per_row as i32).collect();
+    Arc::new(ListViewArray::new(
+        Arc::new(Field::new("item", DataType::Int64, true)),
+        offsets,
+        sizes,
+        values,
+        None,
+    ))
+}
+
+fn fixed_size_list_array(num_rows: usize) -> ArrayRef {
+    let list_size = 4;
+    Arc::new(FixedSizeListArray::new(
+        Arc::new(Field::new("item", DataType::Int64, true)),
+        list_size as i32,
+        primitive_array::<Int64Type>(num_rows * list_size),
+        None,
+    ))
+}
+
+/// Heterogeneous key columns
+fn mixed_columns_benchmark(c: &mut Criterion) {
+    let pool = StringPool::new(100, 64);
+    let int64 = primitive_array::<Int64Type>(BATCH_SIZE);
+    let utf8 = pool.string_array::<i32>(BATCH_SIZE);
+    let utf8_view = pool.string_view_array(BATCH_SIZE);
+    let arrays = vec![int64, utf8, utf8_view];
+    c.bench_function("mixed: 3 columns (int64, utf8, utf8_view)", |b| {
+        do_hash_test(b, &arrays)
+    });
+}
+
+criterion_group!(
+    benches,
+    criterion_benchmark,
+    sliced_array_benchmark,
+    mixed_columns_benchmark
+);
 criterion_main!(benches);

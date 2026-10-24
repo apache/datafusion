@@ -343,7 +343,8 @@ where
     }
 
     fn size(&self) -> usize {
-        self.buffer.capacity() * size_of::<u8>()
+        size_of::<Self>()
+            + self.buffer.capacity() * size_of::<u8>()
             + self.offsets.allocated_size()
             + self.nulls.allocated_size()
     }

@@ -32,8 +32,8 @@ use datafusion_macros::user_doc;
 use std::sync::Arc;
 
 use crate::lambda_utils::{
-    EvaluatedListLambda, SingleListLambdaResult, coerce_single_list_arg,
-    evaluate_single_list_predicate, single_list_lambda_parameters, value_lambda_pair,
+    SingleListLambdaResult, coerce_single_list_arg, evaluate_single_list_predicate,
+    single_list_lambda_parameters, value_lambda_pair,
 };
 
 make_higher_order_function_expr_and_func!(
@@ -150,7 +150,7 @@ impl HigherOrderUDFImpl for ArrayFirst {
         let predicate = evaluated.boolean_predicate(self.name())?;
         let indices = match evaluated.original_list.data_type() {
             DataType::List(_) | DataType::LargeList(_) => {
-                first_match_indices(&evaluated, &predicate)
+                first_match_indices(&evaluated.row_offsets()?, &predicate)
             }
             other => return exec_err!("expected list, got {other}"),
         };
@@ -170,14 +170,11 @@ impl HigherOrderUDFImpl for ArrayFirst {
 ///
 /// A null predicate value is treated as not matching. The matched element itself
 /// may be null and is still returned.
-fn first_match_indices(
-    evaluated: &EvaluatedListLambda,
-    predicate: &BooleanArray,
-) -> UInt64Array {
-    let mut builder = UInt64Builder::with_capacity(evaluated.len());
+fn first_match_indices(row_offsets: &[usize], predicate: &BooleanArray) -> UInt64Array {
+    let mut builder = UInt64Builder::with_capacity(row_offsets.len() - 1);
 
-    for i in 0..evaluated.len() {
-        let (start, end) = evaluated.row_range(i);
+    for window in row_offsets.windows(2) {
+        let (start, end) = (window[0], window[1]);
 
         match (start..end).find(|&j| predicate.is_valid(j) && predicate.value(j)) {
             Some(j) => builder.append_value(j as u64),

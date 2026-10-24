@@ -756,7 +756,8 @@ impl MemorySourceConfig {
         // Stored sort information has already been projected by
         // `try_with_sort_information`; decode it against that same schema and
         // do not project it a second time.
-        let mut decoded_sort_information = vec![];
+        let mut decoded_sort_information =
+            Vec::with_capacity(proto_sort_information.len());
         for ordering in proto_sort_information {
             let protobuf::PhysicalSortExprNodeCollection {
                 physical_sort_expr_nodes,

@@ -250,6 +250,22 @@ impl MetricsSet {
         self.metrics.push(metric)
     }
 
+    /// Returns this set with the derived `output_rows_skew` metric appended,
+    /// or unchanged if no partition reported `output_rows` yet.
+    ///
+    /// This is typically used in `ExecutionPlan::metrics` of operators that
+    /// execute in multiple partitions (e.g. repartitions, partitioned joins and
+    /// aggregations), where it shows how evenly their output rows are spread
+    /// across partitions. With a single partition the skew is always `0%`.
+    ///
+    /// See [`BaselineMetrics::output_rows_skew_metric`] for how skew is computed.
+    pub fn with_output_rows_skew(mut self) -> Self {
+        if let Some(output_rows_skew) = BaselineMetrics::output_rows_skew_metric(&self) {
+            self.push(output_rows_skew);
+        }
+        self
+    }
+
     /// Return the metrics whose partition ID equals `partition`.
     ///
     /// Unpartitioned metrics are excluded; an unknown partition yields an empty

@@ -21,7 +21,6 @@
 use std::sync::Arc;
 
 use datafusion_common::error::Result;
-use datafusion_common::internal_err;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateKind, AggregateMode, PhysicalGroupBy,
@@ -103,7 +102,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                 };
 
                 // Re-apply distinct limit optimization.
-                // 
+                //
                 // The optimizer related to aggregates are (in order):
                 // - 1. Initial planning: always final/partial two stage
                 // - 2. `LimitedDistinctAggregation`: push limit into `AggregateExec`,
@@ -126,11 +125,9 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                         group_by: Arc::clone(group_by),
                         limit: *limit,
                     },
-                    _ => {
-                        return internal_err!(
-                            "The AggregateKind should stay either (a) General (b) DistinctLimit introduced with the previous optimizer pass `LimitedDistinctAggregation`, it's impossible to have other variant"
-                        );
-                    }
+                    // Step 2 may limit only the final aggregate, e.g. when its
+                    // grouping differs from the partial's. Keep both stages.
+                    _ => return Ok(Transformed::no(plan)),
                 };
                 combined_agg.kind = combined_aggr_kind;
                 Some(Arc::new(combined_agg))

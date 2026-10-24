@@ -996,7 +996,8 @@ fn build_batch(
     let transformed = match list_type_columns.len() {
         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
         _ => {
-            let mut temp_unnested_result = HashMap::new();
+            let mut temp_unnested_result =
+                HashMap::with_capacity(list_type_columns.len());
             let max_recursion = list_type_columns
                 .iter()
                 .fold(0, |highest_depth, ListUnnest { depth, .. }| {
@@ -1036,7 +1037,7 @@ fn build_batch(
             }
             let unnested_array_map: HashMap<usize, Vec<UnnestingResult>> =
                 temp_unnested_result.into_iter().fold(
-                    HashMap::new(),
+                    HashMap::with_capacity(list_type_columns.len()),
                     |mut acc,
                      (
                         ListUnnest {
