@@ -391,6 +391,15 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 })
                 .transpose()?,
             enable_rle_to_dictionary: proto.enable_rle_to_dictionary,
+            rle_to_dictionary_max_distinct_values: proto
+                .rle_to_dictionary_max_distinct_values_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::RleToDictionaryMaxDistinctValuesOpt::RleToDictionaryMaxDistinctValues(size) => {
+                        to_usize(*size, "rle_to_dictionary_max_distinct_values")
+                    }
+                })
+                .transpose()?,
             dictionary_enabled: proto.dictionary_enabled_opt.as_ref().map(|opt| {
                 match opt {
                     parquet_options::DictionaryEnabledOpt::DictionaryEnabled(

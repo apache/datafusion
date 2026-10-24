@@ -59,6 +59,95 @@ use std::sync::Arc;
 /// would be too unreliable otherwise.
 const PARTIAL_NDV_THRESHOLD: f64 = 0.75;
 
+#[derive(Default)]
+struct DictionaryPromotionCandidate {
+    distinct_count_upper_bound: u128,
+    missing_distinct_count: bool,
+}
+
+impl DictionaryPromotionCandidate {
+    fn add_row_group(&mut self, distinct_count: Option<u64>) {
+        match distinct_count {
+            Some(distinct_count) => {
+                self.distinct_count_upper_bound = self
+                    .distinct_count_upper_bound
+                    .saturating_add(distinct_count as u128);
+            }
+            None => self.missing_distinct_count = true,
+        }
+    }
+
+    fn is_within_cap(&self, max_distinct_values: usize) -> bool {
+        if self.missing_distinct_count {
+            return false;
+        }
+
+        self.distinct_count_upper_bound <= max_distinct_values as u128
+    }
+}
+
+fn dictionary_promotion_candidates(
+    metadata: &ParquetMetaData,
+    schema_descr: &SchemaDescriptor,
+    max_distinct_values: Option<usize>,
+) -> HashSet<String> {
+    let mut dict_cols = HashSet::new();
+
+    for rg in metadata.row_groups() {
+        for (col_idx, col) in rg.columns().iter().enumerate() {
+            if col.dictionary_page_offset().is_none() {
+                continue;
+            }
+
+            let col_desc = schema_descr.column(col_idx);
+            let parts = col_desc.path().parts();
+            // Skip nested columns: their leaf name doesn't match the Arrow
+            // top-level field name.
+            if parts.len() != 1 {
+                continue;
+            }
+
+            dict_cols.insert(parts[0].clone());
+        }
+    }
+
+    if max_distinct_values.is_none() {
+        return dict_cols;
+    }
+
+    let mut threshold_candidates = HashMap::new();
+    for rg in metadata.row_groups() {
+        for (col_idx, col) in rg.columns().iter().enumerate() {
+            let col_desc = schema_descr.column(col_idx);
+            let parts = col_desc.path().parts();
+            if parts.len() != 1 {
+                continue;
+            }
+
+            let field_name = &parts[0];
+            if dict_cols.contains(field_name) {
+                threshold_candidates
+                    .entry(field_name.clone())
+                    .or_insert_with(DictionaryPromotionCandidate::default)
+                    .add_row_group(
+                        col.statistics()
+                            .and_then(|stats| stats.distinct_count_opt()),
+                    );
+            }
+        }
+    }
+
+    let max_distinct_values = max_distinct_values.expect("checked above");
+    threshold_candidates
+        .into_iter()
+        .filter_map(|(field_name, candidate)| {
+            candidate
+                .is_within_cap(max_distinct_values)
+                .then_some(field_name)
+        })
+        .collect()
+}
+
 fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
     matches!(
         column.physical_type(),
@@ -155,6 +244,9 @@ pub struct DFParquetMetadata<'a> {
     pub coerce_int96_tz: Option<Arc<str>>,
     /// If true, promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
     enable_rle_to_dictionary: bool,
+    /// If set, only promote dictionary columns whose row-group NDV upper
+    /// bound is at most this value.
+    rle_to_dictionary_max_distinct_values: Option<usize>,
 }
 
 impl<'a> DFParquetMetadata<'a> {
@@ -173,12 +265,24 @@ impl<'a> DFParquetMetadata<'a> {
             coerce_int96: None,
             coerce_int96_tz: None,
             enable_rle_to_dictionary: false,
+            rle_to_dictionary_max_distinct_values: None,
         }
     }
 
     /// Promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
     pub fn with_enable_rle_to_dictionary(mut self, enable: bool) -> Self {
         self.enable_rle_to_dictionary = enable;
+        self
+    }
+
+    /// Limit dictionary promotion to columns whose NDV upper bound is at most
+    /// `max_distinct_values`. `None` preserves the existing
+    /// promote-any-dictionary behavior.
+    pub fn with_rle_to_dictionary_max_distinct_values(
+        mut self,
+        max_distinct_values: Option<usize>,
+    ) -> Self {
+        self.rle_to_dictionary_max_distinct_values = max_distinct_values;
         self
     }
 
@@ -462,24 +566,11 @@ impl<'a> DFParquetMetadata<'a> {
 
         let schema = if self.enable_rle_to_dictionary {
             let schema_descr = file_metadata.schema_descr();
-            // Top-level columns that have a dictionary page in at least one row group.
-            let dict_cols: HashSet<String> = metadata
-                .row_groups()
-                .iter()
-                .flat_map(|rg| {
-                    rg.columns()
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(col_idx, col)| {
-                            col.dictionary_page_offset()?;
-                            let col_desc = schema_descr.column(col_idx);
-                            let parts = col_desc.path().parts();
-                            // Skip nested columns: their leaf name doesn't match the
-                            // Arrow top-level field name.
-                            (parts.len() == 1).then(|| parts[0].clone())
-                        })
-                })
-                .collect();
+            let dict_cols = dictionary_promotion_candidates(
+                &metadata,
+                schema_descr,
+                self.rle_to_dictionary_max_distinct_values,
+            );
             if dict_cols.is_empty() {
                 schema
             } else {
