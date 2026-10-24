@@ -195,6 +195,80 @@ a -1 -1
 NULL 0 0
 a 1 1
 
+# Computed projections can change which groups belong in the top K, even when
+# their output names match the original aggregate columns (issue #26691).
+statement ok
+CREATE TABLE topk_projection AS
+SELECT column1 AS g, column2 AS v
+FROM (VALUES ('a', 2), ('b', 10), ('c', 9), ('d', 3), ('e', 7));
+
+query TI
+SELECT g, -"max(topk_projection.v)" AS "max(topk_projection.v)"
+FROM (SELECT g, max(v) FROM topk_projection GROUP BY g)
+ORDER BY 2 DESC LIMIT 2;
+----
+a -2
+d -3
+
+# The same ordering change also applies to TopK distinct aggregation.
+query I
+SELECT -v AS v FROM (SELECT DISTINCT v FROM topk_projection)
+ORDER BY v LIMIT 2;
+----
+-10
+-9
+
+# A materialized CTE produces rows from its continuation, whose column positions
+# can differ from those of the CTE body. Ordering by g must not rank by max(v).
+statement ok
+SET datafusion.sql_parser.dialect = 'PostgreSQL';
+
+statement ok
+CREATE TABLE topk_cte AS
+SELECT column1 AS g, column2 AS v
+FROM (VALUES (1, 100), (2, 20), (3, 30), (4, 40), (5, 50));
+
+query II
+SELECT q.g, q.score FROM (
+  WITH c AS MATERIALIZED (SELECT max(v) AS score, g FROM topk_cte GROUP BY g)
+  SELECT g, score FROM c
+) q ORDER BY q.g DESC NULLS LAST LIMIT 2;
+----
+5 50
+4 40
+
+statement ok
+SET datafusion.sql_parser.dialect = 'Generic';
+
+# A direct sort column remains eligible through renaming and reordering, even
+# when another projected column is computed.
+query ITI
+SELECT score AS rank, g AS label, -score AS decoration
+FROM (SELECT g, max(v) AS score FROM topk_projection GROUP BY g)
+ORDER BY 1 DESC LIMIT 2;
+----
+10 b -10
+9 c -9
+
+query TT
+EXPLAIN SELECT score AS rank, g AS label, -score AS decoration
+FROM (SELECT g, max(v) AS score FROM topk_projection GROUP BY g)
+ORDER BY 1 DESC LIMIT 2;
+----
+logical_plan
+01)Sort: rank DESC NULLS FIRST, fetch=2
+02)--Projection: max(topk_projection.v) AS rank, topk_projection.g AS label, (- max(topk_projection.v)) AS decoration
+03)----Aggregate: groupBy=[[topk_projection.g]], aggr=[[max(topk_projection.v)]]
+04)------TableScan: topk_projection projection=[g, v]
+physical_plan
+01)SortPreservingMergeExec: [rank@0 DESC], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[rank@0 DESC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[max(topk_projection.v)@1 as rank, g@0 as label, (- max(topk_projection.v)@1) as decoration]
+04)------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[max(topk_projection.v)], lim=[2]
+05)--------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[max(topk_projection.v)], lim=[2]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 CREATE TABLE string_topk(category varchar, val varchar) AS VALUES
 ('x', 'apple'),
