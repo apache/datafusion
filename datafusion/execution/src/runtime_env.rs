@@ -30,7 +30,7 @@ use crate::{
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 #[cfg(feature = "parquet_encryption")]
 use crate::parquet_encryption::{EncryptionFactory, EncryptionFactoryRegistry};
-use crate::runtime_options::RuntimeOptions;
+use crate::runtime_options::{self, RuntimeOptions};
 use datafusion_common::{Result, config::ConfigEntry};
 use object_store::ObjectStore;
 use std::sync::Arc;
@@ -318,6 +318,35 @@ impl RuntimeEnvBuilder {
     pub fn with_file_statistics_cache_limit(mut self, limit: usize) -> Self {
         self.cache_manager = self.cache_manager.with_file_statistics_cache_limit(limit);
         self
+    }
+
+    /// Set the `datafusion.runtime.*` entry `key` from its string form, such as
+    /// `("datafusion.runtime.memory_limit", "2G")`.
+    ///
+    /// Takes the same keys and values as `SET`, and the keys reported by
+    /// [`RuntimeEnv::config_entries`]. Only the named entry changes.
+    ///
+    /// # Errors
+    ///
+    /// If `key` is not a runtime entry or `value` does not parse.
+    pub fn with_config_entry(self, key: &str, value: &str) -> Result<Self> {
+        let key = runtime_options::strip_prefix(key)?;
+        let mut options = RuntimeOptions::default();
+        options.set_entry(key, value)?;
+        options.apply_key(key, self)
+    }
+
+    /// Restore the `datafusion.runtime.*` entry `key` to its default, like
+    /// `RESET`. Only the named entry changes.
+    ///
+    /// # Errors
+    ///
+    /// If `key` is not a runtime entry.
+    pub fn with_default_config_entry(self, key: &str) -> Result<Self> {
+        let key = runtime_options::strip_prefix(key)?;
+        let mut options = RuntimeOptions::default();
+        options.reset_entry(key)?;
+        options.apply_key(key, self)
     }
 
     /// Build a RuntimeEnv
