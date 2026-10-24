@@ -172,7 +172,24 @@ impl PartialReduceHashAggregateStream {
             let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
             while let Some(batch) = self.input.next().await.transpose()? {
-                let timer = elapsed_compute.timer();
+                let mut timer = elapsed_compute.timer();
+
+                // If the hash table cannot grow to hold the groups of this
+                // batch while it still holds its current table, emit first.
+                if !hash_table
+                    .try_reserve_hash_table_growth(&self.reservation, batch.num_rows())?
+                {
+                    let materialized_group_states =
+                        self.take_early_emit_states(&mut hash_table)?;
+                    timer.stop();
+                    self.emit_on_memory_pressure(
+                        materialized_group_states,
+                        &mut emitter,
+                        hash_table.memory_size(),
+                    )
+                    .await?;
+                    timer.restart();
+                }
 
                 let state = self.handle_input_batch(&batch, &mut hash_table)?;
                 // Avoid holding on the batch
@@ -181,13 +198,8 @@ impl PartialReduceHashAggregateStream {
                 match state {
                     HandleInputResult::ProcessNext => {}
                     HandleInputResult::OOM => {
-                        let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
-                            internal_datafusion_err!(
-                                "Partial reduce hash aggregate ran out of memory with no aggregated groups"
-                            )
-                        })?;
-
-                        self.early_emit_count.add(1);
+                        let materialized_group_states =
+                            self.take_early_emit_states(&mut hash_table)?;
                         timer.done();
                         self.emit_on_memory_pressure(
                             materialized_group_states,
@@ -227,6 +239,21 @@ impl PartialReduceHashAggregateStream {
             Err(DataFusionError::ResourcesExhausted(_)) => Ok(HandleInputResult::OOM),
             Err(e) => Err(e),
         }
+    }
+
+    /// Takes the partial states of the groups aggregated so far, to emit them
+    /// on memory pressure.
+    fn take_early_emit_states(
+        &mut self,
+        hash_table: &mut AggregateHashTable<PartialReduceMarker>,
+    ) -> Result<RecordBatch> {
+        let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
+            internal_datafusion_err!(
+                "Partial reduce hash aggregate ran out of memory with no aggregated groups"
+            )
+        })?;
+        self.early_emit_count.add(1);
+        Ok(materialized_group_states)
     }
 
     /// emit a materialized partial-state on memory pressure

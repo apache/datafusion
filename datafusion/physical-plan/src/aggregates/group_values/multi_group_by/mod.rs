@@ -47,6 +47,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::utils::memory::estimate_hash_table_growth;
 use datafusion_common::utils::{has_float_leaf, normalize_float_zero};
 use datafusion_common::{Result, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
@@ -1103,6 +1104,10 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             + self.emit_group_index_list_buffer.allocated_size()
             + self.vectorized_operation_buffers.size()
             + self.hashes_buffer.allocated_size()
+    }
+
+    fn hash_table_growth_size(&self, num_groups: usize) -> usize {
+        estimate_hash_table_growth(&self.map, num_groups)
     }
 
     fn is_empty(&self) -> bool {

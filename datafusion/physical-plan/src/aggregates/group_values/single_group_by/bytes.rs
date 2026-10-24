@@ -80,6 +80,10 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         self.map.size() + size_of::<Self>()
     }
 
+    fn hash_table_growth_size(&self, num_groups: usize) -> usize {
+        self.map.hash_table_growth_size(num_groups)
+    }
+
     fn is_empty(&self) -> bool {
         self.num_groups == 0
     }

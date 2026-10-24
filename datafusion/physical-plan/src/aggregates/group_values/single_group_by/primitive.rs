@@ -24,6 +24,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
+use datafusion_common::utils::memory::estimate_hash_table_growth;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupSelection};
@@ -178,6 +179,10 @@ where
 
     fn size(&self) -> usize {
         size_of::<Self>() + self.map.allocation_size() + self.values.allocated_size()
+    }
+
+    fn hash_table_growth_size(&self, num_groups: usize) -> usize {
+        estimate_hash_table_growth(&self.map, num_groups)
     }
 
     fn is_empty(&self) -> bool {
