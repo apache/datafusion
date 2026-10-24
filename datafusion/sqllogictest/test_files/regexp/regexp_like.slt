@@ -494,3 +494,53 @@ NULL
 
 statement ok
 DROP TABLE t_null_value;
+
+# RLIKE and REGEXP plan as regexp_like
+query BBBB
+SELECT str RLIKE pattern AS r, str REGEXP pattern AS re, str NOT RLIKE pattern AS nr, str NOT REGEXP pattern AS nre FROM regexp_test_data;
+----
+NULL NULL NULL NULL
+true true false false
+true true false false
+false false true true
+false false true true
+false false true true
+false false true true
+true true false false
+true true false false
+true true false false
+true true false false
+true true false false
+
+query B
+SELECT str RLIKE '^a' FROM regexp_test_data WHERE str IS NOT NULL;
+----
+true
+false
+true
+false
+true
+false
+false
+false
+false
+false
+false
+
+# The pattern NULL is parenthesised: sqlparser reads a bare NULL after RLIKE as a keyword
+query BBB
+SELECT 'abc' RLIKE (NULL), NULL RLIKE 'a', 'abc' NOT RLIKE (NULL);
+----
+NULL NULL NULL
+
+query T
+SELECT str FROM regexp_test_data WHERE str REGEXP '^[A-Z]' AND str NOT RLIKE 'C$';
+----
+Düsseldorf
+Köln
+
+# RLIKE and the explicit call agree row for row
+query I
+SELECT count(*) FROM regexp_test_data WHERE (str RLIKE pattern) IS DISTINCT FROM regexp_like(str, pattern);
+----
+0

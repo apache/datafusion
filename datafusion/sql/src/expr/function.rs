@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{
@@ -23,8 +24,8 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
-    Expr, ExprSchemable, LambdaParametersProgress, SortExpr, ValueOrLambda, WindowFrame,
-    WindowFunctionDefinition,
+    Expr, ExprSchemable, LambdaParametersProgress, ScalarUDF, SortExpr, ValueOrLambda,
+    WindowFrame, WindowFunctionDefinition,
     arguments::ArgumentName,
     expr::{
         self, HigherOrderFunction, Lambda, NullTreatment, ScalarFunction, Unnest,
@@ -225,6 +226,30 @@ impl FunctionArgs {
 type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<ArgumentName>>);
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
+    /// Plans a call to the scalar function `func`, giving each registered
+    /// [`ExprPlanner::plan_scalar`] hook the chance to rewrite it first.
+    ///
+    /// Returns [`PlannerResult::Planned`] with the first planner's rewrite, or
+    /// [`PlannerResult::Original`] with the plain call when no planner rewrites it.
+    ///
+    /// [`ExprPlanner::plan_scalar`]: datafusion_expr::planner::ExprPlanner::plan_scalar
+    pub(super) fn plan_scalar_udf(
+        &self,
+        func: Arc<ScalarUDF>,
+        args: Vec<Expr>,
+        schema: &DFSchema,
+    ) -> Result<PlannerResult<ScalarFunction>> {
+        let mut scalar_expr = RawScalarExpr { func, args };
+        for planner in self.context_provider.get_expr_planners().iter() {
+            match planner.plan_scalar(scalar_expr, schema)? {
+                PlannerResult::Planned(expr) => return Ok(PlannerResult::Planned(expr)),
+                PlannerResult::Original(expr) => scalar_expr = expr,
+            }
+        }
+        let RawScalarExpr { func, args } = scalar_expr;
+        Ok(PlannerResult::Original(ScalarFunction::new_udf(func, args)))
+    }
+
     pub(super) fn sql_function_to_expr(
         &self,
         function: SQLFunction,
@@ -346,20 +371,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             // After resolution, all arguments are positional
-            let mut scalar_expr = RawScalarExpr {
-                func: fm,
-                args: resolved_args,
+            let inner = match self.plan_scalar_udf(fm, resolved_args, schema)? {
+                PlannerResult::Planned(expr) => return Ok(expr),
+                PlannerResult::Original(inner) => inner,
             };
-
-            for planner in self.context_provider.get_expr_planners().iter() {
-                match planner.plan_scalar(scalar_expr, schema)? {
-                    PlannerResult::Planned(expr) => return Ok(expr),
-                    PlannerResult::Original(expr) => scalar_expr = expr,
-                }
-            }
-
-            let RawScalarExpr { func, args } = scalar_expr;
-            let inner = ScalarFunction::new_udf(func, args);
 
             if name.eq_ignore_ascii_case(inner.name()) {
                 return Ok(Expr::ScalarFunction(inner));
