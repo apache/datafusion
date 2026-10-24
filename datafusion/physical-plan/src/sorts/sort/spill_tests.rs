@@ -16,7 +16,8 @@
 // under the License.
 
 use super::{
-    ExternalSorter, get_reserved_bytes_for_record_batch, sort_batch, sort_batch_chunked,
+    ExternalSorter, get_reserved_bytes_for_record_batch,
+    get_reserved_bytes_for_record_batch_size, sort_batch, sort_batch_chunked,
 };
 use crate::metrics::ExecutionPlanMetricsSet;
 use crate::spill::get_record_batch_memory_size;
@@ -1052,6 +1053,77 @@ async fn test_single_batch_spill_returns_live_workspace_loan_on_drop() -> Result
 
     // The stream is the remaining owner of the positive loan. Drop it without
     // consuming the remaining batches and require both reservations to retire.
+    drop(stream);
+    assert_released(&pool, &runtime).await;
+    Ok(())
+}
+
+/// The final merge of a spilled sort shares the pool with the operator that
+/// consumes its output and with sibling partitions still sorting their input.
+/// Seating every run the pool admits leaves them nothing, so whatever the
+/// merge takes beyond its own workspace, it must leave as much free.
+#[tokio::test]
+async fn test_final_spilled_merge_leaves_headroom() -> Result<()> {
+    let fixture = fixture()?;
+    let schema = fixture.parent.schema();
+    let capacity = 16 * fixture.capacity;
+    let pool = AdjustablePool::new(capacity);
+    // Spill under the fixture's limit, then merge with room for every run.
+    pool.set_limit(fixture.capacity);
+    let (mut sorter, runtime) = sorter(&fixture, Arc::clone(&pool))?;
+    for batch in &fixture.batches {
+        sorter.insert_batch(batch.clone()).await?;
+    }
+    if !sorter.in_mem_batches.is_empty() {
+        sorter.sort_and_spill_in_mem_batches().await?;
+    }
+    // What the merge reserves to read each run with two buffers.
+    let needs: Vec<usize> = sorter
+        .finished_spill_files
+        .iter()
+        .map(|spill| {
+            let size = spill.max_record_batch_memory;
+            2 * get_reserved_bytes_for_record_batch_size(size, size)
+        })
+        .collect();
+    assert!(needs.len() >= 3, "need three runs, got {}", needs.len());
+    let all: usize = needs.iter().sum();
+    let smallest = *needs.iter().min().unwrap();
+    pool.set_limit(capacity);
+
+    let mut stream = sorter.sort().await?;
+    drop(sorter);
+    // The merge already holds its workspace. Leave it room to seat every
+    // run, but not to seat them all and leave as much free.
+    let workspace = pool.reserved();
+    let free = (2 * all)
+        .checked_sub(2 * workspace + smallest)
+        .expect("the runs must need more than the workspace");
+    assert!(all <= free + workspace);
+    let contender =
+        MemoryConsumer::new("sibling partition").register(&runtime.memory_pool);
+    contender.try_grow(capacity - workspace - free)?;
+
+    let first = stream
+        .try_next()
+        .await?
+        .expect("the merge must produce output");
+    let taken = (pool.reserved() - contender.size()).saturating_sub(workspace);
+    assert!(
+        capacity - pool.reserved() >= taken,
+        "the final merge takes {taken} bytes beyond its workspace and leaves {} free",
+        capacity - pool.reserved()
+    );
+    drop(contender);
+
+    let mut output = vec![first];
+    while let Some(batch) = stream.try_next().await? {
+        output.push(batch);
+    }
+    assert_eq!(
+        concat_batches(&schema, &output)?,
+        sort_batch(&fixture.parent, &fixture.ordering, None)?
+    );
     drop(stream);
     assert_released(&pool, &runtime).await;
     Ok(())

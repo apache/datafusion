@@ -28,7 +28,7 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, internal_err, resources_err};
-use datafusion_execution::memory_pool::{MemoryReservation, MergeMemoryPool};
+use datafusion_execution::memory_pool::{MemoryPool, MemoryReservation, MergeMemoryPool};
 
 use crate::sorts::builder::try_grow_reservation_to_at_least;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
@@ -159,6 +159,10 @@ pub(crate) struct MultiLevelMergeBuilder {
     merge_pool: Option<Arc<MergeMemoryPool>>,
     /// Leave memory for the aggregate consuming the merged spill rows.
     reserve_replay_headroom: bool,
+    /// Seat runs beyond the minimum two only while the pool can admit their
+    /// buffers plus equal headroom, so a merge does not take memory that the
+    /// operator consuming it and other partitions sharing the pool need.
+    reserve_fan_in_headroom: bool,
     /// Avoid merging more runs than needed before the final replay pass.
     size_intermediate_merges: bool,
     fetch: Option<usize>,
@@ -201,6 +205,7 @@ impl MultiLevelMergeBuilder {
             reservation,
             merge_pool: None,
             reserve_replay_headroom: false,
+            reserve_fan_in_headroom: false,
             size_intermediate_merges: false,
             enable_round_robin_tie_breaker,
             fetch,
@@ -216,6 +221,13 @@ impl MultiLevelMergeBuilder {
     /// workspace can still use the full pool because replay has not started.
     pub(super) fn with_replay_headroom(mut self, reserve: bool) -> Self {
         self.reserve_replay_headroom = reserve;
+        self
+    }
+
+    /// Leave headroom when seating runs beyond the minimum two. The minimum
+    /// merge is admitted against the pool alone, as without headroom.
+    pub(super) fn with_fan_in_headroom(mut self, reserve: bool) -> Self {
+        self.reserve_fan_in_headroom = reserve;
         self
     }
 
@@ -586,6 +598,12 @@ impl MultiLevelMergeBuilder {
         // allocation, preventing starvation under memory pressure.
         let mut total_needed: usize = 0;
         let mut accepted_memory: usize = 0;
+        // What this merge already holds from the pool: its retained workspace
+        // when it has one. Seating runs within it takes nothing from others.
+        let owned = self
+            .merge_pool
+            .as_ref()
+            .map_or_else(|| reservation.size(), |pool| pool.reserved());
 
         for (spill, _) in &self.sorted_spill_files {
             if number_of_spills_to_read_for_current_phase >= max_spill_files
@@ -611,7 +629,20 @@ impl MultiLevelMergeBuilder {
                 && number_of_spills_to_read_for_current_phase
                     < minimum_number_of_required_streams;
             let check_headroom = self.reserve_replay_headroom && !skip_headroom;
-            let admission = if check_headroom {
+            let check_fan_in_headroom = !check_headroom
+                && self.reserve_fan_in_headroom
+                && number_of_spills_to_read_for_current_phase
+                    >= minimum_number_of_required_streams;
+            let admission = if check_fan_in_headroom {
+                // Ask the pool for what this merge takes beyond its own
+                // workspace, plus as much again, then return the spare bytes.
+                match total_needed.checked_add(total_needed.saturating_sub(owned)) {
+                    Some(with_headroom) => {
+                        try_grow_reservation_to_at_least(reservation, with_headroom)
+                    }
+                    None => resources_err!("Spill merge headroom exceeds usize::MAX"),
+                }
+            } else if check_headroom {
                 // Ask the pool for merge buffers plus equal replay space, then
                 // return the spare bytes before exposing the merge stream.
                 match total_needed.checked_mul(2) {
@@ -679,7 +710,7 @@ impl MultiLevelMergeBuilder {
             }
         }
 
-        if self.reserve_replay_headroom {
+        if self.reserve_replay_headroom || self.reserve_fan_in_headroom {
             // `total_needed` may include a rejected candidate. Keep only the
             // buffers that were admitted, releasing temporary replay headroom.
             reservation.shrink(reservation.size() - accepted_memory);
@@ -979,7 +1010,7 @@ mod tests {
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field, Int64Type, Schema};
     use datafusion_execution::memory_pool::{
-        GreedyMemoryPool, MemoryConsumer, MemoryPool,
+        GreedyMemoryPool, MemoryConsumer, MemoryPool, UnboundedMemoryPool,
     };
     use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
     use datafusion_physical_expr::expressions::{Column, col};
@@ -1473,6 +1504,71 @@ mod tests {
         assert_eq!(pool.reserved(), 0);
         assert_eq!(env.disk_manager.spilling_progress().current_bytes, 0);
         assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::without_headroom(false, 4, 8)]
+    #[case::with_headroom(true, 3, 6)]
+    fn fan_in_headroom_limits_runs_beyond_the_minimum(
+        #[case] headroom: bool,
+        #[case] seated: usize,
+        #[case] retained_batches: usize,
+    ) -> Result<()> {
+        let env = Arc::new(RuntimeEnv::default());
+        let schema = test_schema();
+        let spill_manager = build_spill_manager(&env, &schema);
+        let spills = (0..4)
+            .map(|value| make_sorted_spill_file(&spill_manager, &schema, vec![value]))
+            .collect::<Vec<_>>();
+        let batch_memory = spills[0].max_record_batch_memory;
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(13 * batch_memory));
+        let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1)
+            .with_fan_in_headroom(headroom);
+        let mut reservation = builder.reservation.new_empty();
+        let SpillFilesToMerge::Ready(spills, buffer_len) =
+            builder.get_sorted_spill_files_to_merge(1, 2, &mut reservation, false)?
+        else {
+            panic!("the minimum merge should fit the pool");
+        };
+        assert_eq!(buffer_len, 1);
+        // Each run takes two batches. With headroom, the third run needs 12
+        // batches and is seated; the fourth needs 16 and is not.
+        assert_eq!(spills.len(), seated);
+        assert_eq!(reservation.size(), retained_batches * batch_memory);
+        drop((reservation, spills, builder));
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn fan_in_headroom_beyond_usize_stops_seating_runs() -> Result<()> {
+        let env = Arc::new(RuntimeEnv::default());
+        let schema = test_schema();
+        let spill_manager = build_spill_manager(&env, &schema);
+        // Three runs whose buffers fit in a usize, but whose headroom for the
+        // third does not.
+        let batch_memory = usize::MAX / 10;
+        let spills = (0..3)
+            .map(|value| SortedSpillFile {
+                max_record_batch_memory: batch_memory,
+                ..make_sorted_spill_file(&spill_manager, &schema, vec![value])
+            })
+            .collect::<Vec<_>>();
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1)
+            .with_fan_in_headroom(true);
+        let mut reservation = builder.reservation.new_empty();
+        let SpillFilesToMerge::Ready(spills, _) =
+            builder.get_sorted_spill_files_to_merge(1, 2, &mut reservation, false)?
+        else {
+            panic!("the minimum merge should fit an unbounded pool");
+        };
+        assert_eq!(spills.len(), 2);
+        assert_eq!(reservation.size(), 4 * batch_memory);
+        drop((reservation, spills, builder));
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 
