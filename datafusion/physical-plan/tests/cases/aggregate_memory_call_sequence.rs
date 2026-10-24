@@ -593,9 +593,9 @@ async fn without_spilling_returns_refusal() -> Result<()> {
 /// (`try_resize(memory_size())` on the first of several output batches) is
 /// refused. The streams disagree: Final returns the error, Single hands the
 /// output off unreserved (`reserved = false`, no further calls), and Partial
-/// ignores it (and retries on every batch). Final is the only one that fails
-/// the query, although the output is already materialized, which #26701
-/// reports. This pins each behavior as it is.
+/// and PartialReduce ignore it (and retry on every batch). Final is the only
+/// one that fails the query, although the output is already materialized,
+/// which #26701 reports. This pins each behavior as it is.
 ///
 /// Built-in aggregates materialize at most a little more than their accounted
 /// state (`string_agg` does, see #26701), so this uses [`PaddedOutputUdaf`],
@@ -646,6 +646,21 @@ async fn output_materialization_refused() -> Result<()> {
     PartialHashAggregateStream[0] try_grow [bytes] -> refused
     PartialHashAggregateStream[0] shrink [bytes]
     PartialHashAggregateStream[0] unregister
+    => Ok(256 rows in 4 batches)
+    ");
+
+    let run = padded(AggregateMode::PartialReduce).run().await?;
+    assert_eq!(run.metric("early_emit_count"), 0);
+    assert_eq!(run.output_batch_rows, vec![64; 4]);
+    assert_snapshot!(run.snapshot, @r"
+    PartialReduceHashAggregateStream[0] register can_spill=true
+    PartialReduceHashAggregateStream[0] try_grow [bytes]
+    PartialReduceHashAggregateStream[0] try_grow [bytes]
+    PartialReduceHashAggregateStream[0] try_grow [bytes] -> refused
+    PartialReduceHashAggregateStream[0] try_grow [bytes] -> refused
+    PartialReduceHashAggregateStream[0] try_grow [bytes] -> refused
+    PartialReduceHashAggregateStream[0] shrink [bytes]
+    PartialReduceHashAggregateStream[0] unregister
     => Ok(256 rows in 4 batches)
     ");
     Ok(())
