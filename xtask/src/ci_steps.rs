@@ -397,23 +397,32 @@ impl StepContext {
                 }
             }
             "extended" => {
+                // Run only the tests that the `workspace` step does not. The
+                // merge queue runs that step on the same commit.
                 command
                     .args([
                         "test",
                         "--profile",
                         "ci",
-                        "--exclude",
-                        "datafusion-examples",
-                        "--exclude",
-                        "datafusion-benchmarks",
-                        "--exclude",
-                        "datafusion-cli",
-                        "--workspace",
+                        "-p",
+                        "datafusion",
+                        "-p",
+                        "datafusion-physical-plan",
                         "--lib",
-                        "--tests",
-                        "--bins",
+                        "--test",
+                        "fuzz",
+                        "--test",
+                        "core_integration",
                         "--features",
-                        "avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption",
+                        "avro,backtrace,extended_tests,parquet_encryption",
+                        "--",
+                        // Tests behind the `extended_tests` feature. A new test
+                        // behind it needs a filter here too, otherwise it never
+                        // runs in CI.
+                        "fuzz_cases::",
+                        "memory_limit_validation::",
+                        // Runs with more iterations, see below.
+                        "spill_pool_scenario_fuzz",
                     ])
                     .env("RUST_BACKTRACE", "1")
                     // Run more random scenarios of the spill pool fuzzer than the
@@ -931,14 +940,13 @@ DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS=1000 \
 RUST_BACKTRACE=1 \
 cargo test \
 --profile ci \
---exclude datafusion-examples \
---exclude datafusion-benchmarks \
---exclude datafusion-cli \
---workspace \
+-p datafusion \
+-p datafusion-physical-plan \
 --lib \
---tests \
---bins \
---features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
+--test fuzz \
+--test core_integration \
+--features avro,backtrace,extended_tests,parquet_encryption \
+-- fuzz_cases:: memory_limit_validation:: spill_pool_scenario_fuzz
 ")
                 },
             },
