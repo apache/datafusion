@@ -824,3 +824,50 @@ drop table nested_progress;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# The TopK dynamic filter must keep `-0.0` rows when the threshold is `0.0`
+# (and vice versa): the heap orders `-0.0` before `0.0`, but comparisons treat
+# them as equal. https://github.com/apache/datafusion/issues/26618
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+create table float_zero (x double, y int) as values (0.0, 1), (-0.0, 7);
+
+statement ok
+insert into float_zero values (-0.0, 5);
+
+# `-0.0` is displayed as `0`; `y` tells the rows apart.
+query RI
+select x, y from float_zero order by x, y;
+----
+0 5
+0 7
+0 1
+
+query RI
+select x, y from float_zero order by x, y limit 2;
+----
+0 5
+0 7
+
+statement ok
+create table float_zero_desc (x double, y int) as values (-0.0, 1), (0.0, 7);
+
+statement ok
+insert into float_zero_desc values (0.0, 5);
+
+query RI
+select x, y from float_zero_desc order by x desc, y limit 2;
+----
+0 5
+0 7
+
+statement ok
+drop table float_zero;
+
+statement ok
+drop table float_zero_desc;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
