@@ -613,4 +613,49 @@ mod tests {
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn json_exec_coerce_primitive() -> Result<()> {
+        use crate::physical_plan::collect;
+        use crate::test::object_store::local_unpartitioned_file;
+        use arrow::datatypes::{DataType, Schema};
+        use datafusion_common::assert_contains;
+        use datafusion_datasource::PartitionedFile;
+
+        let tmp_dir = TempDir::new()?;
+        let path = tmp_dir.path().join("coerce.json");
+        fs::write(&path, "{\"a\": false}\n{\"a\": 3.5}\n{\"a\": \"text\"}\n")?;
+        let file = PartitionedFile::from(local_unpartitioned_file(&path));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+
+        let read = |coerce| {
+            let source =
+                JsonSource::new(Arc::clone(&schema)).with_coerce_primitive(coerce);
+            let conf = FileScanConfigBuilder::new(
+                ObjectStoreUrl::local_filesystem(),
+                Arc::new(source),
+            )
+            .with_file(file.clone())
+            .build();
+            collect(
+                DataSourceExec::from_data_source(conf),
+                SessionContext::new().task_ctx(),
+            )
+        };
+
+        assert_snapshot!(batches_to_string(&read(true).await?), @r"
+        +-------+
+        | a     |
+        +-------+
+        | false |
+        | 3.5   |
+        | text  |
+        +-------+
+        ");
+        assert_contains!(
+            read(false).await.unwrap_err().to_string(),
+            "expected string got false"
+        );
+        Ok(())
+    }
 }

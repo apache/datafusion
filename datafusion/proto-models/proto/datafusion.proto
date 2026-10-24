@@ -1419,6 +1419,8 @@ message JsonScanExecNode {
   FileScanExecConf base_conf = 1;
   // Absent means newline-delimited JSON for compatibility with older payloads.
   optional bool newline_delimited = 2;
+  // Absent means false: a JSON number or boolean in a string column is an error.
+  optional bool coerce_primitive = 3;
 }
 
 message AvroScanExecNode {
