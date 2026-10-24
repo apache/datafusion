@@ -76,6 +76,9 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
 /// where post-aggregation, `a + b` need not be a projection against the
 /// individual columns `a` and `b`, but rather it is a projection against the
 /// `a + b` found in the GROUP BY.
+///
+/// A base expression of the form `e AS name` also matches `e`, which is then
+/// replaced with the column `name`.
 pub(crate) fn rebase_expr(
     expr: &Expr,
     base_exprs: &[Expr],
@@ -83,10 +86,13 @@ pub(crate) fn rebase_expr(
 ) -> Result<Expr> {
     expr.clone()
         .transform_down(|nested_expr| {
-            if base_exprs.contains(&nested_expr) {
-                Ok(Transformed::yes(expr_as_column_expr(&nested_expr, plan)?))
-            } else {
-                Ok(Transformed::no(nested_expr))
+            let base = base_exprs.iter().find(|base| {
+                **base == nested_expr
+                    || matches!(base, Expr::Alias(alias) if *alias.expr == nested_expr)
+            });
+            match base {
+                Some(base) => Ok(Transformed::yes(expr_as_column_expr(base, plan)?)),
+                None => Ok(Transformed::no(nested_expr)),
             }
         })
         .data()
