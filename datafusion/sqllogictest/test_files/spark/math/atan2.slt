@@ -150,16 +150,57 @@ SELECT atan2(-1.0::double, '-Infinity'::double);
 ----
 -3.141592653589793
 
-# signed zeros: -0 flips the sign on the negative x-axis (atan2(+0, -1) = pi above; atan2(-0, -1) = -pi)
+# signed zeros: Spark adds 0.0 to both arguments, which turns -0.0 into 0.0,
+# so the sign of a zero argument never changes the result
+# https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala#L1229-L1239
 query R
 SELECT atan2(-0.0::double, -1.0::double);
 ----
--3.141592653589793
+3.141592653589793
+
+query R
+SELECT atan2(0.0::double, -0.0::double);
+----
+0
+
+query R
+SELECT atan2(-0.0::double, -0.0::double);
+----
+0
 
 # -0 in the first argument still returns 0 on the positive x-axis
 query R
 SELECT atan2(-0.0::double, 1.0::double);
 ----
+0
+
+# the result is +0.0, not -0.0 (a numeric comparison cannot tell them apart)
+query T
+SELECT arrow_cast(atan2(-0.0::double, 1.0::double), 'Utf8');
+----
+0.0
+
+query T
+SELECT arrow_cast(atan2(-0.0::double, 0.0::double), 'Utf8');
+----
+0.0
+
+query T
+SELECT arrow_cast(atan2(0.0::double, -0.0::double), 'Utf8');
+----
+0.0
+
+query T
+SELECT arrow_cast(atan2(-0.0::double, -0.0::double), 'Utf8');
+----
+0.0
+
+# array path with signed zeros
+query R
+SELECT atan2(a, b) FROM (VALUES (-0.0::double, -1.0::double), (0.0::double, -0.0::double), (-0.0::double, -0.0::double)) AS t(a, b);
+----
+3.141592653589793
+0
 0
 
 # array path, including a NULL row
