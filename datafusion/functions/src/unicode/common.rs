@@ -89,14 +89,117 @@ impl LeftRightSlicer for RightSlicer {
     }
 }
 
+const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+const LOW_BITS: u64 = 0x0101_0101_0101_0101;
+
+/// Whether `byte` starts a codepoint, i.e. is not a continuation byte
+/// `0b10xx_xxxx`.
+#[inline(always)]
+fn is_char_start(byte: u8) -> bool {
+    (byte as i8) >= -64
+}
+
+/// Number of codepoints starting in `block`. The sum fits in a `u8`, which
+/// lets LLVM keep it in byte lanes and vectorize it even for baseline x86-64.
+#[inline(always)]
+fn count_char_starts(block: &[u8; 64]) -> usize {
+    block
+        .iter()
+        .fold(0u8, |count, &byte| count + is_char_start(byte) as u8) as usize
+}
+
+/// Byte `k` of the result holds the number of codepoints starting in bytes
+/// `0..=k` of `word`, so the top byte holds the total.
+#[inline(always)]
+fn char_start_prefix_counts(word: [u8; 8]) -> u64 {
+    let word = u64::from_le_bytes(word);
+    // Bit 7 of each byte is set unless the byte is `0b10xx_xxxx`
+    let starts = !(word & !(word << 1)) & HIGH_BITS;
+    (starts >> 7).wrapping_mul(LOW_BITS)
+}
+
+/// Index of the byte where the `n`-th (0-based) codepoint of a word starts,
+/// given its [`char_start_prefix_counts`]. `n` must be below the total.
+#[inline(always)]
+fn select_char_start(prefix_counts: u64, n: usize) -> usize {
+    // Bit 7 of `count + 0x7f - n` is set exactly for the bytes whose count
+    // exceeds `n`. Counts are at most 8, so no byte carries into the next.
+    let above = (prefix_counts + (0x7f - n as u64) * LOW_BITS) & HIGH_BITS;
+    above.trailing_zeros() as usize / 8
+}
+
 /// Returns the byte offset of the `n`th codepoint in `string`,
 /// or `string.len()` if the string has fewer than `n` codepoints.
-#[inline]
-pub(crate) fn byte_offset_of_char(string: &str, n: usize) -> usize {
-    string
-        .char_indices()
+#[inline(never)]
+pub(crate) fn byte_offset_of_char(string: &str, mut n: usize) -> usize {
+    let bytes = string.as_bytes();
+    let mut start = 0;
+    // A codepoint is at most 4 bytes, so for `n < 16` the answer is within the
+    // first 64 bytes and counting whole blocks does not pay off.
+    if n >= 16 {
+        for block in bytes.as_chunks::<64>().0 {
+            let count = count_char_starts(block);
+            if n < count {
+                break;
+            }
+            n -= count;
+            start += 64;
+        }
+    }
+    let (words, tail) = bytes[start..].as_chunks::<8>();
+    for &word in words {
+        let prefix_counts = char_start_prefix_counts(word);
+        let count = (prefix_counts >> 56) as usize;
+        if n < count {
+            return start + select_char_start(prefix_counts, n);
+        }
+        n -= count;
+        start += 8;
+    }
+    tail.iter()
+        .enumerate()
+        .filter(|&(_, &byte)| is_char_start(byte))
         .nth(n)
-        .map_or(string.len(), |(i, _)| i)
+        .map_or(string.len(), |(i, _)| start + i)
+}
+
+/// Returns the byte offset where the last `n` codepoints of `string` start,
+/// or 0 if the string has fewer than `n` codepoints.
+#[inline(never)]
+pub(crate) fn byte_offset_of_char_from_end(string: &str, mut n: usize) -> usize {
+    if n == 0 {
+        return string.len();
+    }
+    let bytes = string.as_bytes();
+    let mut end = bytes.len();
+    // Mirror of `byte_offset_of_char`, with `n` counting from 1: for
+    // `n <= 16` the answer is within the last 64 bytes.
+    if n > 16 {
+        for block in bytes.as_rchunks::<64>().1.iter().rev() {
+            let count = count_char_starts(block);
+            if n <= count {
+                break;
+            }
+            n -= count;
+            end -= 64;
+        }
+    }
+    let (head, words) = bytes[..end].as_rchunks::<8>();
+    for &word in words.iter().rev() {
+        let prefix_counts = char_start_prefix_counts(word);
+        let count = (prefix_counts >> 56) as usize;
+        if n <= count {
+            return end - 8 + select_char_start(prefix_counts, count - n);
+        }
+        n -= count;
+        end -= 8;
+    }
+    head.iter()
+        .enumerate()
+        .rev()
+        .filter(|&(_, &byte)| is_char_start(byte))
+        .nth(n - 1)
+        .map_or(0, |(i, _)| i)
 }
 
 /// If `string` has more than `n` codepoints, returns the byte offset of
@@ -123,7 +226,10 @@ pub(crate) enum StringCharLen {
 }
 
 /// Calculate the byte length of the substring of `n` chars from string `string`
-#[inline]
+// Neither this nor the scans it calls are inlined: inlining the scans here
+// makes every call save registers, which costs the ASCII paths about 5%,
+// and inlining this into the per-row loops costs more than the call.
+#[inline(never)]
 fn left_right_byte_length(string: &str, n: i64) -> usize {
     let abs = n.unsigned_abs().min(usize::MAX as u64) as usize;
     let bytes = string.as_bytes();
@@ -139,10 +245,7 @@ fn left_right_byte_length(string: &str, n: i64) -> usize {
             if bytes[start..].is_ascii() {
                 start
             } else {
-                string
-                    .char_indices()
-                    .nth_back(abs - 1)
-                    .map_or(0, |(index, _)| index)
+                byte_offset_of_char_from_end(string, abs)
             }
         }
         // Byte offset of the `abs`-th character from the start.
@@ -240,5 +343,67 @@ fn general_left_right_view<F: LeftRightSlicer>(
     unsafe {
         let array = StringViewArray::new_unchecked(views, data_buffers, new_nulls);
         Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Strings mixing 1 to 4 byte codepoints, with lengths crossing the 8 and
+    /// 64 byte boundaries of the word and block loops.
+    fn mixed_strings() -> Vec<String> {
+        let chars = ['a', 'é', 'ж', '€', '数', '𝄞', '🔥', ' '];
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut strings = vec![];
+        for len in 0..200 {
+            let mut string = String::new();
+            for _ in 0..len {
+                // xorshift64
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                string.push(chars[(state % chars.len() as u64) as usize]);
+            }
+            strings.push(string);
+        }
+        // Runs of a single width, so whole words and blocks repeat one pattern
+        for c in chars {
+            strings.push(c.to_string().repeat(100));
+        }
+        strings
+    }
+
+    #[test]
+    fn byte_offset_of_char_matches_char_indices() {
+        for string in mixed_strings() {
+            let char_count = string.chars().count();
+            for n in 0..=char_count + 2 {
+                let expected = string
+                    .char_indices()
+                    .nth(n)
+                    .map_or(string.len(), |(i, _)| i);
+                assert_eq!(byte_offset_of_char(&string, n), expected, "{string:?} {n}");
+
+                let expected = match n {
+                    0 => string.len(),
+                    _ => string.char_indices().nth_back(n - 1).map_or(0, |(i, _)| i),
+                };
+                assert_eq!(
+                    byte_offset_of_char_from_end(&string, n),
+                    expected,
+                    "{string:?} {n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn left_right_byte_length_extreme_n() {
+        let string = "aжb€c🔥";
+        assert_eq!(left_right_byte_length(string, i64::MAX), string.len());
+        assert_eq!(left_right_byte_length(string, i64::MIN), 0);
+        assert_eq!(left_right_byte_length(string, -2), "aжb€".len());
+        assert_eq!(left_right_byte_length(string, 2), "aж".len());
     }
 }
