@@ -960,6 +960,41 @@ SELECT CAST(NULL::STRUCT(b INT, a INT) AS STRUCT(a INT, b INT));
 ----
 NULL
 
+# TRY_CAST plans struct casts by field name, like CAST
+query ?
+SELECT TRY_CAST({a: 1} AS STRUCT(a INT, b INT));
+----
+{a: 1, b: NULL}
+
+query ?
+SELECT TRY_CAST({b: 3, a: 4} AS STRUCT(a BIGINT, b INT));
+----
+{a: 4, b: 3}
+
+query ?
+SELECT TRY_CAST({a: 1, b: 2, extra: 3} AS STRUCT(a INT, b INT));
+----
+{a: 1, b: 2}
+
+# TRY_CAST returns NULL for field values that can't be cast
+query ?
+SELECT TRY_CAST({a: 'x', b: 1} AS STRUCT(a INT, b INT, c INT));
+----
+{a: NULL, b: 1, c: NULL}
+
+query ?
+SELECT TRY_CAST(make_array({a: 1}, {a: 2}) AS STRUCT(a INT, b INT)[]);
+----
+[{a: 1, b: NULL}, {a: 2, b: NULL}]
+
+query ?
+SELECT TRY_CAST(NULL::STRUCT(b INT, a INT) AS STRUCT(a INT, b INT, c INT));
+----
+NULL
+
+statement error DataFusion error: (Plan error|Error during planning|This feature is not implemented): (Cannot cast struct: at least one field name must match between source and target|Cannot cast struct with 3 fields to 2 fields without name overlap|Unsupported TRY_CAST from Struct)
+SELECT TRY_CAST(struct(1, 'x', 'y') AS STRUCT(a INT, b VARCHAR));
+
 ############################
 # Implicit Coercion Tests with CREATE TABLE AS VALUES
 ############################
