@@ -173,6 +173,22 @@ SELECT
 ----
 -1 -1 -1 -1000
 
+# Nanoseconds to seconds floor negative remainders but preserve exact multiples.
+query II
+SELECT
+  unix_seconds(arrow_cast(-1000000001, 'Timestamp(Nanosecond, None)')),
+  unix_seconds(arrow_cast(-1000000000, 'Timestamp(Nanosecond, None)'));
+----
+-2 -1
+
+# Timezone metadata does not change the epoch-based result.
+query II
+SELECT
+  unix_millis(arrow_cast(-1, 'Timestamp(Microsecond, Some("+02:00"))')),
+  unix_seconds(arrow_cast(-1, 'Timestamp(Microsecond, Some("+02:00"))'));
+----
+-1 -1
+
 # Extreme values do not overflow
 query II
 SELECT
