@@ -862,3 +862,23 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
+
+# Regression for #26617: count all rows before applying LIMIT.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+query II
+SELECT count(*) OVER () AS n,
+       row_number() OVER (PARTITION BY length('x') ORDER BY a) AS r
+FROM (SELECT 1 AS a UNION ALL SELECT 2 UNION ALL SELECT 3)
+ORDER BY r LIMIT 1;
+----
+3 1
+
+query II
+SELECT count(*) OVER () AS n,
+       row_number() OVER (PARTITION BY length('x') ORDER BY a) AS r
+FROM (SELECT 1 AS a UNION ALL SELECT 2 UNION ALL SELECT 3)
+ORDER BY r LIMIT 1 OFFSET 1;
+----
+3 2
