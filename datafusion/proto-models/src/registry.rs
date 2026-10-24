@@ -64,9 +64,8 @@ struct Registered {
 /// ```rust,ignore
 /// // in each library
 /// pub fn register(config: &mut SessionConfig) -> Result<()> {
-///     config.update_extension(|registry: &mut ProtoDecoderRegistry| {
-///         register_execution_plan::<MyExec>(registry)
-///     })
+///     config.update_extension(MyExec::register)?;
+///     config.update_extension(MyExpr::register)
 /// }
 ///
 /// // in the application that owns the session

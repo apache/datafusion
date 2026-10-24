@@ -40,7 +40,6 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::proto::{
     ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx, ExtensionPlanFromProto,
-    ProtoDecoderRegistry, register_execution_plan,
 };
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -56,16 +55,13 @@ pub fn extension_plan_registry() -> Result<()> {
         input: Arc::new(ChildExec {}),
     });
 
-    // Each crate exposes a function that fills a registry it is handed; the
-    // application that owns the session composes them. The two crates need to
-    // know nothing about each other, and the call order does not matter.
-    let mut registry = ProtoDecoderRegistry::new();
-    crate_a::register(&mut registry)?;
-    crate_b::register(&mut registry)?;
-
-    let ctx = SessionContext::new_with_config(
-        SessionConfig::new().with_extension(Arc::new(registry)),
-    );
+    // Each crate exposes a function that adds its decoders to the session's
+    // registry. The two crates need to know nothing about each other, and the
+    // call order does not matter.
+    let mut config = SessionConfig::new();
+    crate_a::register(&mut config)?;
+    crate_b::register(&mut config)?;
+    let ctx = SessionContext::new_with_config(config);
 
     // `DefaultPhysicalExtensionCodec` decodes nothing at all, so whatever
     // survives the round trip came from the registry.
@@ -98,8 +94,8 @@ pub fn extension_plan_registry() -> Result<()> {
 mod crate_a {
     use super::*;
 
-    pub fn register(registry: &mut ProtoDecoderRegistry) -> Result<()> {
-        register_execution_plan::<ParentExec>(registry)
+    pub fn register(config: &mut SessionConfig) -> Result<()> {
+        config.update_extension(ParentExec::register)
     }
 }
 
@@ -107,8 +103,8 @@ mod crate_a {
 mod crate_b {
     use super::*;
 
-    pub fn register(registry: &mut ProtoDecoderRegistry) -> Result<()> {
-        register_execution_plan::<ChildExec>(registry)
+    pub fn register(config: &mut SessionConfig) -> Result<()> {
+        config.update_extension(ChildExec::register)
     }
 }
 
