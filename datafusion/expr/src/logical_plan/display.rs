@@ -24,7 +24,7 @@ use crate::{
     Aggregate, AsOfJoin, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter,
     Join, Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition,
     Sort, Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest,
-    Values, Window, expr_vec_fmt,
+    Values, Window, WriteOp, expr_vec_fmt,
 };
 
 use crate::dml::CopyTo;
@@ -463,11 +463,27 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 )
             }
             LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
-                pg_fields!(
-                    "Node Type": "Projection",
+                let mut object = pg_fields!(
+                    "Node Type": "Dml",
                     "Operation": op.name(),
                     "Table Name": table_name.table()
-                )
+                );
+                if let WriteOp::MergeInto(merge_op) = op {
+                    object.push("On", serde_json::Value::String(merge_op.on.to_string()));
+                    object.push(
+                        "Clauses",
+                        serde_json::Value::Array(
+                            merge_op
+                                .clauses
+                                .iter()
+                                .map(|clause| {
+                                    serde_json::Value::String(clause.to_string())
+                                })
+                                .collect(),
+                        ),
+                    );
+                }
+                object
             }
             LogicalPlan::Copy(CopyTo {
                 input: _,
