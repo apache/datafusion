@@ -291,6 +291,50 @@ pub extern "C" fn datafusion_ffi_test_create_exec_with_byte_metrics() -> FFI_Exe
     FFI_ExecutionPlan::new(plan, None)
 }
 
+/// Builds a [`FFI_PhysicalExtensionCodec`] wrapping
+/// [`crate::proto::physical_extension_codec::fixtures::ScalarSubqueryExprExecCodec`]
+/// whose function pointers - including `try_decode_with_ctx` - point at code
+/// compiled into *this* image.
+///
+/// A consumer that loads this through `libloading` (see
+/// [`crate::tests::utils::get_scalar_subquery_expr_exec_codec`]) and converts
+/// the result into `Arc<dyn PhysicalExtensionCodec>` takes the real
+/// `ForeignPhysicalExtensionCodec` branch, because the two copies of this
+/// crate's `LIBRARY_MARKER` static sit at different addresses. Calling the
+/// real `try_decode_with_ctx` on that `Arc` - the same production entry
+/// point `try_decode_with_ctx_fn_wrapper` dispatches through for any foreign
+/// codec - then makes `ForeignPhysicalExtensionCodec::try_decode_with_ctx`
+/// wrap the caller's live
+/// [`datafusion_expr::physical_planning_context::ScalarSubqueryResults`] in a
+/// genuinely foreign `FFI_ScalarSubqueryResults`, so the `ScalarSubqueryExpr`
+/// decoded on this side reads through `ForeignScalarSubqueryResultsBackend`
+/// instead of the local-bypass fast path - the cross-library coverage gap
+/// the in-process, marker-mocked unit test in
+/// `datafusion/ffi/src/proto/physical_extension_codec.rs` cannot close on
+/// its own. The decoded plan's `execute` (also dispatched through the real
+/// `FFI_ExecutionPlan`) then carries that value back out as a `RecordBatch`
+/// over the Arrow C Data Interface, with no need for a generic
+/// `FFI_PhysicalExpr` wrapper.
+///
+/// Exported as its own top-level symbol rather than a new field on
+/// [`ForeignLibraryModule`] for the same reason as
+/// [`datafusion_ffi_test_create_exec_with_byte_metrics`]: that struct is
+/// public, `#[repr(C)]`, and has no private/gated constructor, so adding a
+/// field changes its exhaustive-construction ABI surface even for this
+/// test-only, `integration-tests`-gated struct.
+#[unsafe(no_mangle)]
+pub extern "C" fn datafusion_ffi_test_create_scalar_subquery_expr_exec_codec(
+    task_ctx_provider: crate::execution::FFI_TaskContextProvider,
+) -> FFI_PhysicalExtensionCodec {
+    use crate::proto::physical_extension_codec::fixtures::ScalarSubqueryExprExecCodec;
+
+    FFI_PhysicalExtensionCodec::new(
+        Arc::new(ScalarSubqueryExprExecCodec),
+        None,
+        task_ctx_provider,
+    )
+}
+
 /// Thin wrapper that attaches a fixed [`Statistics`] snapshot to any inner
 /// [`TableProvider`] without changing its scan behaviour.
 #[derive(Debug)]
