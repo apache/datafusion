@@ -1144,6 +1144,20 @@ query TITT
 ----
 ns3 4 t3 m
 
+# repro for https://github.com/apache/datafusion/issues/26516
+# should not error when only a later union input remains
+query I
+SELECT 1 WHERE false UNION ALL (SELECT 2 LIMIT 1);
+----
+2
+
+query I
+SELECT a FROM (VALUES (1)) t(a) WHERE false
+UNION ALL
+(SELECT b FROM (VALUES (2)) s(b) LIMIT 1);
+----
+2
+
 # Config reset
 statement ok
 RESET datafusion.execution.batch_size;
