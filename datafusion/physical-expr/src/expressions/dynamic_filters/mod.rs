@@ -348,6 +348,8 @@ impl DynamicFilterPhysicalExpr {
     /// during a later execution of the same plan.
     pub fn reset(&self) {
         let mut current = self.inner.write();
+        // Keep the generation increasing: `current()` caches by generation, so going
+        // back would let a later update hit the previous run's cached expression.
         let new_generation = current.generation + 1;
         *current = Inner {
             expression_id: current.expression_id,
@@ -357,6 +359,8 @@ impl DynamicFilterPhysicalExpr {
         };
         drop(current);
 
+        // The channel still holds `Complete` from the previous run; publish
+        // `InProgress` so `wait_complete()` waits for this run's filter.
         let _ = self.state_watch.send(FilterState::InProgress {
             generation: new_generation,
         });

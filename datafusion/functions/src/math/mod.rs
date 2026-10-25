@@ -18,7 +18,6 @@
 //! "math" DataFusion functions
 
 use crate::math::monotonicity::*;
-use datafusion_common::{Result, exec_err};
 use datafusion_expr::ScalarUDF;
 use std::sync::Arc;
 
@@ -44,12 +43,10 @@ pub mod round;
 pub mod signum;
 pub mod trunc;
 
-fn validate_sqrt_input(value: f64) -> Result<()> {
-    if value < 0.0 {
-        exec_err!("cannot take square root of a negative number")
-    } else {
-        Ok(())
-    }
+/// `f64::sqrt` returns NaN for negative numbers; like PostgreSQL, `sqrt`
+/// returns an error instead.
+fn sqrt_input_error(value: f64) -> Option<&'static str> {
+    (value < 0.0).then_some("cannot take square root of a negative number")
 }
 
 // Create UDFs
@@ -238,7 +235,7 @@ make_math_unary_udf!(
     super::bounds::sqrt_bounds,
     true,
     super::get_sqrt_doc,
-    Some(super::validate_sqrt_input)
+    Some(super::sqrt_input_error)
 );
 make_math_unary_udf!(
     TanFunc,
@@ -264,7 +261,7 @@ make_udf_function!(trunc::TruncFunc, trunc);
 mod strict_tests {
     use super::*;
     use arrow::datatypes::Field;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{
         ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
     };

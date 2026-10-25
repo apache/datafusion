@@ -24,11 +24,8 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
+use arrow::datatypes::DataType::{LargeList, List};
 use arrow::datatypes::Field;
-use arrow::datatypes::{
-    DataType::{LargeList, List},
-    FieldRef,
-};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
@@ -177,13 +174,13 @@ fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     match &arg[0].data_type() {
-        List(field) => {
+        List(_) => {
             let array = as_list_array(&arg[0])?;
-            general_list_resize::<i32>(array, new_len, field, new_element)
+            general_list_resize::<i32>(array, new_len, new_element)
         }
-        LargeList(field) => {
+        LargeList(_) => {
             let array = as_large_list_array(&arg[0])?;
-            general_list_resize::<i64>(array, new_len, field, new_element)
+            general_list_resize::<i64>(array, new_len, new_element)
         }
         array_type => exec_err!("array_resize does not support type '{array_type}'."),
     }
@@ -200,7 +197,6 @@ fn resize_count(count_array: &Int64Array, idx: usize) -> Result<usize> {
 fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     array: &GenericListArray<O>,
     count_array: &Int64Array,
-    field: &FieldRef,
     default_element: Option<ArrayRef>,
 ) -> Result<ArrayRef> {
     let data_type = array.value_type();
@@ -268,7 +264,6 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
         build_resized_list(
             array,
             count_array,
-            field,
             &original_data,
             Some(&default_value_data),
             output_values_len,
@@ -287,7 +282,6 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
         build_resized_list(
             array,
             count_array,
-            field,
             &original_data,
             default_value_data.as_ref(),
             output_values_len,
@@ -308,7 +302,6 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
 fn build_resized_list<O, F>(
     array: &GenericListArray<O>,
     count_array: &Int64Array,
-    field: &FieldRef,
     original_data: &arrow::array::ArrayData,
     default_value_data: Option<&arrow::array::ArrayData>,
     output_values_len: usize,
@@ -319,7 +312,8 @@ where
     F: FnMut(&mut MutableArrayData, usize, usize) -> Result<()>,
 {
     let capacity = Capacities::Array(output_values_len);
-    let mut offsets = vec![O::usize_as(0)];
+    let mut offsets = Vec::with_capacity(array.len() + 1);
+    offsets.push(O::usize_as(0));
     let sources = match default_value_data {
         Some(default_value_data) => vec![original_data, default_value_data],
         None => vec![original_data],
@@ -357,7 +351,7 @@ where
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::clone(field),
+        Arc::clone(array.value_field()),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
         null_builder.finish(),
