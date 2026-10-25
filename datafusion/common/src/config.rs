@@ -984,6 +984,12 @@ config_namespace! {
         /// the refactored implementation. When set to `false`, these joins use
         /// the existing implementation. Other join types always use the existing
         /// implementation.
+        ///
+        /// The fallback exists only as a workaround for bugs in the new
+        /// implementation and will be removed, together with this option, once
+        /// the migration is complete.
+        ///
+        /// See <https://github.com/apache/datafusion/issues/26361> for details.
         pub enable_migration_hash_join: bool, default = true
 
         /// Sets the compression codec used when spilling data to disk.

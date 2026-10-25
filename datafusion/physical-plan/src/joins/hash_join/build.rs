@@ -88,7 +88,7 @@ impl JoinBuildState {
 
 /// Collecting the build side data of hash join.
 ///
-/// It handles coordination/syncrhonization among all parallel paartitions for:
+/// It handles coordination/synchronization among all parallel partitions for:
 /// - Input batches collecting
 /// - Dynamic filter preparation
 pub(super) struct HashJoinBuild {
@@ -96,7 +96,7 @@ pub(super) struct HashJoinBuild {
     mode: PartitionMode,
 
     // ---------------------------------------------------
-    // Shared structures for coordiation among partitions.
+    // Shared structures for coordination among partitions.
     // ---------------------------------------------------
     /// Coordination for dynamic filter
     build_accumulator: Option<Arc<SharedBuildAccumulator>>,

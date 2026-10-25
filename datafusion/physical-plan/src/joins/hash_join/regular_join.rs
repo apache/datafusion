@@ -96,8 +96,8 @@ impl RegularHashJoinStream {
     ///   see [`HashJoinBuild`] for different physical strategies
     /// - Probing: Joining probe batch with build data incrementally, until probe
     ///   side input is exhausted.
-    /// - Outputting: Actually joining the probe batch and buffered build side, and
-    ///   produce final output.
+    /// - Outputting: Drain buffered output, then emit unmatched build rows for
+    ///   left/full joins.
     ///
     /// # Transition edges
     ///
