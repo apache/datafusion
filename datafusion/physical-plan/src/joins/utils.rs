@@ -2664,9 +2664,13 @@ pub fn compare_join_arrays(
     sort_options: &[SortOptions],
     null_equality: NullEquality,
 ) -> Result<Ordering> {
-    let cmp =
-        JoinKeyComparator::new(left_arrays, right_arrays, sort_options, null_equality)?;
-    Ok(cmp.compare(left, right))
+    // Slicing to single-row array views avoids full-array normalization overhead (e.g. float zeros,
+    // dictionary keys) and preserves strictly O(1) comparator construction per comparison call.
+    let left_row: Vec<ArrayRef> = left_arrays.iter().map(|a| a.slice(left, 1)).collect();
+    let right_row: Vec<ArrayRef> =
+        right_arrays.iter().map(|a| a.slice(right, 1)).collect();
+    let cmp = JoinKeyComparator::new(&left_row, &right_row, sort_options, null_equality)?;
+    Ok(cmp.compare(0, 0))
 }
 
 #[cfg(test)]
