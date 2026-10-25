@@ -442,7 +442,10 @@ where
 /// The most dictionary values per row that code processing every value of a
 /// dictionary should handle. Past this, taking the values the rows reference
 /// is cheaper than processing all of them, even for the cheapest per-value
-/// work, such as hashing integers or changing the case of ASCII strings.
+/// work: the break-even is about 4 values per row for hashing and about 13 for
+/// ASCII `lower`/`upper`, which convert the whole values buffer at once. Any
+/// bound removes the cost that grows with the dictionary size; the exact value
+/// only trades a constant factor.
 pub const MAX_DICTIONARY_VALUES_PER_ROW: usize = 16;
 
 /// Returns `None` when `array` has at most [`MAX_DICTIONARY_VALUES_PER_ROW`]
