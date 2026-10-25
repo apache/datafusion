@@ -22,3 +22,4 @@ See the [Contributor Guide](https://datafusion.apache.org/contributor-guide/inde
 ## Quick links
 
 - [Set up your development environment](https://datafusion.apache.org/contributor-guide/development_environment.html#quick-start)
+- [Run tests](https://datafusion.apache.org/contributor-guide/testing.html#testing-quick-start)
