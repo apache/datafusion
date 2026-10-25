@@ -70,12 +70,10 @@ impl PreparedHashJoinBuild {
     pub(super) fn probe_data(&self, probe_threads: usize) -> JoinLeftData {
         JoinLeftData {
             build: Arc::clone(&self.build),
-            null_aware_scope_map: None,
-            null_value_build_rows: None,
+            // Prepared builds exclude null-aware joins.
+            not_in: None,
             visited_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
-            null_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
             probe_completion: ProbeCompletion::new(probe_threads),
-            build_side_has_null: false,
         }
     }
 

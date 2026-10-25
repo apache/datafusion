@@ -31,6 +31,7 @@ mod build;
 mod exec;
 mod hash_join_table;
 mod inlist_builder;
+mod not_in;
 mod partitioned_hash_eval;
 mod probe_completion;
 mod regular_join;
