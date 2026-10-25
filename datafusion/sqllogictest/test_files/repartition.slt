@@ -152,3 +152,67 @@ statement ok
 DROP TABLE t1;
 
 # End repartition on empty columns test
+
+# Start Full join repartition test.
+# The filter keeps `c = coalesce(y, 0)`, which fails on the left-only row, so both rows
+# land in group 0 only if the aggregate repartitions the Full join output.
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+statement ok
+CREATE TABLE t1 AS SELECT * FROM (VALUES (CAST(0 AS BIGINT)), (NULL)) t(a);
+
+statement ok
+CREATE TABLE t2 AS SELECT * FROM (VALUES (CAST(0 AS BIGINT), CAST(0 AS BIGINT)), (NULL, NULL)) t(c, y);
+
+query TT
+EXPLAIN SELECT coalesce(a, coalesce(y, 0)) AS k, count(*), count(c)
+FROM t1 FULL JOIN (SELECT * FROM t2 WHERE c = coalesce(y, 0)) r ON a = c
+GROUP BY coalesce(a, coalesce(y, 0));
+----
+logical_plan
+01)Projection: coalesce(t1.a,coalesce(r.y,Int64(0))) AS k, count(Int64(1)) AS count(*), count(r.c)
+02)--Aggregate: groupBy=[[CASE WHEN t1.a IS NOT NULL THEN t1.a ELSE CASE WHEN r.y IS NOT NULL THEN r.y ELSE Int64(0) END END AS coalesce(t1.a,coalesce(r.y,Int64(0)))]], aggr=[[count(Int64(1)), count(r.c)]]
+03)----Full Join: t1.a = r.c
+04)------TableScan: t1 projection=[a]
+05)------SubqueryAlias: r
+06)--------Filter: t2.c = CASE WHEN t2.y IS NOT NULL THEN t2.y ELSE Int64(0) END
+07)----------TableScan: t2 projection=[c, y]
+physical_plan
+01)ProjectionExec: expr=[coalesce(t1.a,coalesce(r.y,Int64(0)))@0 as k, count(Int64(1))@1 as count(*), count(r.c)@2 as count(r.c)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[coalesce(t1.a,coalesce(r.y,Int64(0)))@0 as coalesce(t1.a,coalesce(r.y,Int64(0)))], aggr=[count(Int64(1)), count(r.c)]
+03)----RepartitionExec: partitioning=Hash([coalesce(t1.a,coalesce(r.y,Int64(0)))@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[CASE WHEN a@0 IS NOT NULL THEN a@0 ELSE CASE WHEN y@2 IS NOT NULL THEN y@2 ELSE 0 END END as coalesce(t1.a,coalesce(r.y,Int64(0)))], aggr=[count(Int64(1)), count(r.c)]
+05)--------HashJoinExec: mode=Partitioned, join_type=Full, on=[(c@0, a@0)], projection=[a@2, c@0, y@1]
+06)----------RepartitionExec: partitioning=Hash([c@0], 4), input_partitions=1
+07)------------FilterExec: c@0 = CASE WHEN y@1 IS NOT NULL THEN y@1 ELSE 0 END
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+10)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query III
+SELECT coalesce(a, coalesce(y, 0)) AS k, count(*), count(c)
+FROM t1 FULL JOIN (SELECT * FROM t2 WHERE c = coalesce(y, 0)) r ON a = c
+GROUP BY coalesce(a, coalesce(y, 0));
+----
+0 2 1
+
+# Config reset
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold;
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold_rows;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+# End Full join repartition test
