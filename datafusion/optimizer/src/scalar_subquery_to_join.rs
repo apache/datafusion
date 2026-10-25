@@ -33,9 +33,18 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, plan_err};
-use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
-use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
+use datafusion_expr::expr::{BinaryExpr, Sort};
+use datafusion_expr::expr_rewriter::{
+    create_col_from_scalar_expr, strip_outer_reference,
+};
+use datafusion_expr::logical_plan::{
+    AsOfJoin, AsOfMatch, FetchType, Filter, JoinConstraint, JoinType, Projection,
+    SkipType, Subquery,
+};
+use datafusion_expr::utils::{conjunction, split_conjunction};
+use datafusion_expr::{
+    Expr, ExprFunctionExt, LogicalPlan, LogicalPlanBuilder, Operator, lit, not, when,
+};
 
 /// Optimizer rule that rewrites scalar subquery filters to joins and places an
 /// additional projection on top of the filter to preserve the original schema.
@@ -120,7 +129,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 let mut cur_input = filter.input.as_ref().clone();
                 for (subquery, alias) in subqueries {
                     if let Some((optimized_subquery, compensation_exprs)) =
-                        build_join(&subquery, &cur_input, &alias)?
+                        build_join(&subquery, &cur_input, &alias, config)?
                     {
                         if !compensation_exprs.is_empty() {
                             rewrite_expr = rewrite_expr
@@ -189,7 +198,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueries {
                     if let Some((optimized_subquery, compensation_exprs)) =
-                        build_join(&subquery, &cur_input, &alias)?
+                        build_join(&subquery, &cur_input, &alias, config)?
                     {
                         cur_input = optimized_subquery;
                         if !compensation_exprs.is_empty()
@@ -343,6 +352,7 @@ fn build_join(
     subquery: &Subquery,
     outer_input: &LogicalPlan,
     subquery_alias: &str,
+    config: &dyn OptimizerConfig,
 ) -> Result<Option<(LogicalPlan, HashMap<Column, Expr>)>> {
     // `build_join` also handles uncorrelated scalar subqueries (as a left
     // join with `Boolean(true)`) when the
@@ -351,7 +361,7 @@ fn build_join(
     let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let decorrelated_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
-        return Ok(None);
+        return build_top1_join(subquery, outer_input, subquery_alias, config);
     }
 
     let collected_count_expr_map = pull_up
@@ -423,6 +433,348 @@ fn build_join(
     }
 
     Ok(Some((new_plan, compensation_exprs)))
+}
+
+/// Rewrites a correlated scalar subquery whose plan selects one row per outer
+/// row via `ORDER BY ... LIMIT 1` — the shape [`PullUpCorrelatedExpr`] cannot
+/// handle because a `Sort` (or `Limit`) sits between the subquery head and the
+/// correlated filter.
+///
+/// Two rewrites, both preserving the scalar-subquery contract of at most one
+/// row per outer row:
+///
+/// * **ASOF join**: equalities plus a single range predicate on the (only)
+///   sort key, in the direction the sort picks, e.g. `ORDER BY k DESC` over
+///   `inner.k <= outer.v` becomes `ASOF JOIN ... MATCH_CONDITION outer.v >=
+///   inner.k`, which returns the greatest `k <= v` per outer row.
+/// * **`first_value` + LEFT JOIN**: equalities only; the subquery becomes an
+///   aggregate grouped by the equality inner columns computing
+///   `first_value(<output column> ORDER BY <sort keys>)`, left-joined on the
+///   equality keys.
+///
+/// Correlated predicates the rewrites cannot express (e.g. a range not on the
+/// sort key, `!=`, or `OR`) yield `Ok(None)` and the subquery is left as-is.
+fn build_top1_join(
+    subquery: &Subquery,
+    outer_input: &LogicalPlan,
+    subquery_alias: &str,
+    config: &dyn OptimizerConfig,
+) -> Result<Option<(LogicalPlan, HashMap<Column, Expr>)>> {
+    // `LIMIT 1` (skip 0) on top of the subquery.
+    let LogicalPlan::Limit(limit) = subquery.subquery.as_ref() else {
+        return Ok(None);
+    };
+    if !matches!(limit.get_skip_type()?, SkipType::Literal(0))
+        || !matches!(limit.get_fetch_type()?, FetchType::Literal(Some(1)))
+    {
+        return Ok(None);
+    }
+
+    // Zero or more projections may sit between the Limit and the Sort (the
+    // output projection is elided when the output column is the sort key).
+    let mut above: Vec<&Projection> = vec![];
+    let mut node = limit.input.as_ref();
+    while let LogicalPlan::Projection(p) = node {
+        above.push(p);
+        node = p.input.as_ref();
+    }
+    let LogicalPlan::Sort(sort) = node else {
+        return Ok(None);
+    };
+
+    // Sort keys carrying outer references (e.g. `ORDER BY outer.x`) cannot be
+    // moved to the decorrelated side.
+    if sort.expr.iter().any(|s| s.expr.contains_outer()) {
+        return Ok(None);
+    }
+
+    // Projection(s) below the Sort (the planner projects the sort keys before
+    // sorting). Resolve columns referenced from the Sort's input schema back
+    // to the base subtree's columns.
+    let mut projs: Vec<&Projection> = vec![];
+    let mut base = sort.input.as_ref();
+    while let LogicalPlan::Projection(p) = base {
+        projs.push(p);
+        base = p.input.as_ref();
+    }
+
+    // Resolves a column through `projs` (top to bottom); returns `None` for
+    // projections that compute rather than pass the column through.
+    fn resolve_col(col: &Column, projs: &[&Projection]) -> Option<Column> {
+        let mut cur = col.clone();
+        for p in projs {
+            let idx = p.schema.index_of_column(&cur).ok()?;
+            let Expr::Column(c) = &p.expr[idx] else {
+                return None;
+            };
+            cur = c.clone();
+        }
+        Some(cur)
+    }
+
+    // Rewrites every column reference in `expr` through `projs`.
+    let resolve_expr = |expr: &Expr| -> Option<Expr> {
+        expr.clone()
+            .transform(|e| match e {
+                Expr::Column(c) => match resolve_col(&c, &projs) {
+                    Some(rc) => Ok(Transformed::yes(Expr::Column(rc))),
+                    None => plan_err!("unsupported expression in subquery projection"),
+                },
+                _ => Ok(Transformed::no(e)),
+            })
+            .map(|t| t.data)
+            .ok()
+    };
+
+    // Every conjunct that mentions an outer reference must be a top-level
+    // conjunct of a `Filter` inside the base subtree. Outer references
+    // anywhere else (join keys, projections, nested plans) cannot be
+    // re-expressed as join keys.
+    let mut correlated: Vec<Expr> = vec![];
+    let mut unhandled = false;
+    base.apply(|plan| {
+        Ok(match plan {
+            // A nested subquery keeps its own correlation scope.
+            LogicalPlan::Subquery(_) => TreeNodeRecursion::Jump,
+            LogicalPlan::Filter(filter) => {
+                for conjunct in split_conjunction(&filter.predicate) {
+                    if conjunct.contains_outer() {
+                        correlated.push(conjunct.clone());
+                    }
+                }
+                TreeNodeRecursion::Continue
+            }
+            _ if plan.contains_outer_reference() => {
+                unhandled = true;
+                TreeNodeRecursion::Stop
+            }
+            _ => TreeNodeRecursion::Continue,
+        })
+    })?;
+    if unhandled || correlated.is_empty() {
+        return Ok(None);
+    }
+
+    // The scalar output column — the first field of the subquery's output
+    // schema — must resolve through every projection to a plain column of the
+    // base subtree.
+    let Some(output_col) = subquery.subquery.schema().columns().into_iter().next() else {
+        return Ok(None);
+    };
+    let all_projs: Vec<&Projection> =
+        above.iter().copied().chain(projs.iter().copied()).collect();
+    let Some(inner_output_col) = resolve_col(&output_col, &all_projs) else {
+        return Ok(None);
+    };
+
+    // Classify each correlated conjunct as an equality key or a range
+    // predicate, normalized so the inner side is on the left.
+    let mut eqs: Vec<(Column, Expr)> = vec![];
+    let mut ranges: Vec<(Column, Operator, Expr)> = vec![];
+    for conjunct in &correlated {
+        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = conjunct else {
+            return Ok(None);
+        };
+        let (inner, op, outer) = match (left.contains_outer(), right.contains_outer()) {
+            (false, true) => (left.as_ref(), *op, right.as_ref()),
+            (true, false) => {
+                let Some(swapped) = op.swap() else {
+                    return Ok(None);
+                };
+                (right.as_ref(), swapped, left.as_ref())
+            }
+            _ => return Ok(None),
+        };
+        let Expr::Column(inner_col) = inner else {
+            return Ok(None);
+        };
+        let outer_expr = strip_outer_reference(outer.clone());
+        // ASOF requires deterministic keys that reference the outer input.
+        if outer_expr.is_volatile() || outer_expr.column_refs().is_empty() {
+            return Ok(None);
+        }
+        match op {
+            Operator::Eq => eqs.push((inner_col.clone(), outer_expr)),
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
+                ranges.push((inner_col.clone(), op, outer_expr))
+            }
+            _ => return Ok(None),
+        }
+    }
+
+    // Rebuild the base subtree with the correlated conjuncts removed; filters
+    // left with no predicate are dropped.
+    let inner_plan = base
+        .clone()
+        .transform_up(|plan| match plan {
+            LogicalPlan::Filter(f) => {
+                let remaining = split_conjunction(&f.predicate)
+                    .into_iter()
+                    .filter(|e| !e.contains_outer())
+                    .cloned();
+                match conjunction(remaining) {
+                    Some(predicate) => Ok(Transformed::yes(LogicalPlan::Filter(
+                        Filter::try_new(predicate, f.input)?,
+                    ))),
+                    None => Ok(Transformed::yes((*f.input).clone())),
+                }
+            }
+            _ => Ok(Transformed::no(plan)),
+        })
+        .data()?;
+
+    let aliased = |c: &Column| Column::new(Some(subquery_alias), &c.name);
+
+    // The decorrelated side is re-qualified under `subquery_alias`, so every
+    // column it must provide has to have a unique unqualified name there.
+    let mut needed_cols: Vec<Column> = vec![inner_output_col.clone()];
+    for inner_col in eqs
+        .iter()
+        .map(|(inner_col, _)| inner_col)
+        .chain(ranges.iter().map(|(range_col, _, _)| range_col))
+    {
+        if !needed_cols.contains(inner_col) {
+            needed_cols.push(inner_col.clone());
+        }
+    }
+    let mut needed_names: Vec<&str> =
+        needed_cols.iter().map(|c| c.name.as_str()).collect();
+    needed_names.sort_unstable();
+    needed_names.dedup();
+    if needed_names.len() != needed_cols.len() {
+        return Ok(None);
+    }
+
+    // ASOF path: the single range predicate must be on the only sort key and
+    // bound it in the direction the sort picks (`ORDER BY k DESC` picks the
+    // greatest `k <= v`; `ASC` the least `k >= v`).
+    if ranges.len() == 1 && sort.expr.len() == 1 {
+        let (range_col, range_op, range_outer) = &ranges[0];
+        let sort_key = &sort.expr[0];
+        let direction_matches = if sort_key.asc {
+            matches!(range_op, Operator::Gt | Operator::GtEq)
+        } else {
+            matches!(range_op, Operator::Lt | Operator::LtEq)
+        };
+        // The physical ASOF join additionally requires hashable,
+        // non-floating equality key types.
+        let eq_types_ok = eqs.iter().all(|(inner_col, _)| {
+            inner_plan
+                .schema()
+                .qualified_field_from_column(inner_col)
+                .map(|(_, f)| {
+                    let t = f.data_type();
+                    !t.is_floating() && datafusion_expr::utils::can_hash(t)
+                })
+                .unwrap_or(false)
+        });
+        if direction_matches
+            && eq_types_ok
+            && let Expr::Column(sort_col) = &sort_key.expr
+            && resolve_col(sort_col, &projs).as_ref() == Some(range_col)
+        {
+            // Project the output and key columns of the base subtree; the
+            // extracted scalar expression already references
+            // `subquery_alias.<name>`.
+            let right_plan = LogicalPlanBuilder::from(inner_plan)
+                .project(needed_cols.iter().cloned().map(Expr::Column))?
+                .alias(subquery_alias.to_string())?
+                .build()?;
+
+            let on: Vec<(Expr, Expr)> = eqs
+                .iter()
+                .map(|(inner_col, outer)| {
+                    (outer.clone(), Expr::Column(aliased(inner_col)))
+                })
+                .collect();
+            // The stored op is normalized with the inner side on the left; the
+            // match condition puts the outer (left-input) expression first.
+            let match_op = range_op
+                .swap()
+                .expect("comparison operators always have a flipped form");
+            let asof = AsOfJoin::try_new(
+                Arc::new(outer_input.clone()),
+                Arc::new(right_plan),
+                on,
+                AsOfMatch::new(
+                    range_outer.clone(),
+                    match_op,
+                    Expr::Column(aliased(range_col)),
+                ),
+                JoinConstraint::On,
+            )?;
+            return Ok(Some((LogicalPlan::AsOfJoin(asof), HashMap::new())));
+        }
+    }
+
+    // `first_value` path: equality-only correlation.
+    if ranges.is_empty() && !eqs.is_empty() {
+        let order_by = sort
+            .expr
+            .iter()
+            .map(|s| {
+                resolve_expr(&s.expr).map(|expr| Sort {
+                    expr,
+                    asc: s.asc,
+                    nulls_first: s.nulls_first,
+                })
+            })
+            .collect::<Option<Vec<_>>>();
+
+        if let Some(order_by) = order_by {
+            // The aggregate output field must carry the output column's
+            // (unqualified) name so the extracted `subquery_alias.<name>`
+            // reference resolves; group keys keep their own names.
+            let mut group_cols: Vec<Column> = vec![];
+            for inner_col in eqs.iter().map(|(inner_col, _)| inner_col) {
+                if !group_cols.contains(inner_col) {
+                    group_cols.push(inner_col.clone());
+                }
+            }
+            // When the output column is itself an equality key its value is
+            // already the group's key, so no aggregate is needed — and
+            // aliasing one to the same name would make `subquery_alias.<name>`
+            // ambiguous.
+            let aggr_exprs = if group_cols.contains(&inner_output_col) {
+                Vec::<Expr>::new()
+            } else {
+                // Resolved through the session's function registry rather
+                // than a direct dependency on the functions crates.
+                let Some(registry) = config.function_registry() else {
+                    return Ok(None);
+                };
+                let Ok(first_value_udaf) = registry.udaf("first_value") else {
+                    return Ok(None);
+                };
+                vec![
+                    first_value_udaf
+                        .call(vec![Expr::Column(inner_output_col.clone())])
+                        .order_by(order_by)
+                        .build()
+                        // guaranteed to be `Expr::AggregateFunction`
+                        .unwrap()
+                        .alias(inner_output_col.name),
+                ]
+            };
+            let right_plan = LogicalPlanBuilder::from(inner_plan)
+                .aggregate(group_cols.iter().cloned().map(Expr::Column), aggr_exprs)?
+                .alias(subquery_alias.to_string())?
+                .build()?;
+
+            let on_exprs: Vec<Expr> = eqs
+                .iter()
+                .map(|(inner_col, outer)| {
+                    outer.clone().eq(Expr::Column(aliased(inner_col)))
+                })
+                .collect();
+            let new_plan = LogicalPlanBuilder::from(outer_input.clone())
+                .join_on(right_plan, JoinType::Left, on_exprs)?
+                .build()?;
+            return Ok(Some((new_plan, HashMap::new())));
+        }
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -1315,6 +1667,237 @@ mod tests {
                   Projection: n, orders.o_custkey, __always_true [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
                     Aggregate: groupBy=[[orders.o_custkey, Boolean(true) AS __always_true]], aggr=[[max(orders.o_custkey) AS n]] [o_custkey:Int64, __always_true:Boolean, n:Int64;N]
                       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "
+        )
+    }
+
+    /// Correlated scalar subquery with `ORDER BY sort_key DESC LIMIT 1` where
+    /// the range predicate is on the sort key becomes an ASOF join.
+    #[test]
+    fn correlated_scalar_top1_asof() -> Result<()> {
+        let sq =
+            Arc::new(
+                LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                    .filter(
+                        col("orders.o_custkey")
+                            .eq(out_ref_col(DataType::Int64, "customer.c_custkey"))
+                            .and(col("orders.o_orderkey").lt_eq(out_ref_col(
+                                DataType::Int64,
+                                "customer.c_custkey",
+                            ))),
+                    )?
+                    .project(vec![
+                        col("orders.o_orderstatus"),
+                        col("orders.o_custkey"),
+                        col("orders.o_orderkey"),
+                    ])?
+                    .sort(vec![col("orders.o_orderkey").sort(false, true)])?
+                    .project(vec![col("orders.o_orderstatus")])?
+                    .limit(0, Some(1))?
+                    .build()?,
+            );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey [c_custkey:Int64]
+          Projection: customer.c_custkey, customer.c_name [c_custkey:Int64, c_name:Utf8]
+            Filter: customer.c_custkey = __scalar_sq_1.o_orderstatus [c_custkey:Int64, c_name:Utf8, o_orderstatus:Utf8;N, o_custkey:Int64;N, o_orderkey:Int64;N]
+              AsOf Join: match=[customer.c_custkey >= __scalar_sq_1.o_orderkey], constraint=On, on=[customer.c_custkey = __scalar_sq_1.o_custkey] [c_custkey:Int64, c_name:Utf8, o_orderstatus:Utf8;N, o_custkey:Int64;N, o_orderkey:Int64;N]
+                TableScan: customer [c_custkey:Int64, c_name:Utf8]
+                SubqueryAlias: __scalar_sq_1 [o_orderstatus:Utf8, o_custkey:Int64, o_orderkey:Int64]
+                  Projection: orders.o_orderstatus, orders.o_custkey, orders.o_orderkey [o_orderstatus:Utf8, o_custkey:Int64, o_orderkey:Int64]
+                    TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "
+        )
+    }
+
+    /// The same `ORDER BY ... LIMIT 1` shape in a projection position.
+    #[test]
+    fn correlated_scalar_top1_asof_projection() -> Result<()> {
+        let sq =
+            Arc::new(
+                LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                    .filter(
+                        col("orders.o_custkey")
+                            .eq(out_ref_col(DataType::Int64, "customer.c_custkey"))
+                            .and(col("orders.o_orderkey").lt_eq(out_ref_col(
+                                DataType::Int64,
+                                "customer.c_custkey",
+                            ))),
+                    )?
+                    .project(vec![
+                        col("orders.o_orderstatus"),
+                        col("orders.o_custkey"),
+                        col("orders.o_orderkey"),
+                    ])?
+                    .sort(vec![col("orders.o_orderkey").sort(false, true)])?
+                    .project(vec![col("orders.o_orderstatus")])?
+                    .limit(0, Some(1))?
+                    .build()?,
+            );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .project(vec![col("customer.c_custkey"), scalar_subquery(sq)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey, __scalar_sq_1.o_orderstatus AS o_orderstatus [c_custkey:Int64, o_orderstatus:Utf8;N]
+          AsOf Join: match=[customer.c_custkey >= __scalar_sq_1.o_orderkey], constraint=On, on=[customer.c_custkey = __scalar_sq_1.o_custkey] [c_custkey:Int64, c_name:Utf8, o_orderstatus:Utf8;N, o_custkey:Int64;N, o_orderkey:Int64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+            SubqueryAlias: __scalar_sq_1 [o_orderstatus:Utf8, o_custkey:Int64, o_orderkey:Int64]
+              Projection: orders.o_orderstatus, orders.o_custkey, orders.o_orderkey [o_orderstatus:Utf8, o_custkey:Int64, o_orderkey:Int64]
+                TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "
+        )
+    }
+
+    /// A range predicate that does not bound the sort key in the sorted
+    /// direction is left alone.
+    #[test]
+    fn correlated_scalar_top1_wrong_direction() -> Result<()> {
+        let sq =
+            Arc::new(
+                LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                    .filter(
+                        col("orders.o_custkey")
+                            .eq(out_ref_col(DataType::Int64, "customer.c_custkey"))
+                            .and(col("orders.o_orderkey").lt_eq(out_ref_col(
+                                DataType::Int64,
+                                "customer.c_custkey",
+                            ))),
+                    )?
+                    .project(vec![
+                        col("orders.o_orderstatus"),
+                        col("orders.o_custkey"),
+                        col("orders.o_orderkey"),
+                    ])?
+                    .sort(vec![col("orders.o_orderkey").sort(true, false)])?
+                    .project(vec![col("orders.o_orderstatus")])?
+                    .limit(0, Some(1))?
+                    .build()?,
+            );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        // `o_orderkey <= outer` with an ASC sort would pick the globally
+        // smallest key, not an ASOF match; the subquery is left in place.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey [c_custkey:Int64]
+          Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]
+            Subquery: [o_orderstatus:Utf8]
+              Limit: skip=0, fetch=1 [o_orderstatus:Utf8]
+                Projection: orders.o_orderstatus [o_orderstatus:Utf8]
+                  Sort: orders.o_orderkey ASC NULLS LAST [o_orderstatus:Utf8, o_custkey:Int64, o_orderkey:Int64]
+                    Projection: orders.o_orderstatus, orders.o_custkey, orders.o_orderkey [o_orderstatus:Utf8, o_custkey:Int64, o_orderkey:Int64]
+                      Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND orders.o_orderkey <= outer_ref(customer.c_custkey) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+                        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+        "
+        )
+    }
+
+    /// An equality-only `ORDER BY ... LIMIT 1` needs `first_value` from the
+    /// function registry; without a registry the subquery is left in place.
+    #[test]
+    fn correlated_scalar_top1_eq_only_no_registry() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    col("orders.o_custkey")
+                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                )?
+                .project(vec![
+                    col("orders.o_orderstatus"),
+                    col("orders.o_custkey"),
+                    col("orders.o_orderkey"),
+                ])?
+                .sort(vec![
+                    col("orders.o_orderkey").sort(false, true),
+                    col("orders.o_orderstatus").sort(false, true),
+                ])?
+                .project(vec![col("orders.o_orderstatus")])?
+                .limit(0, Some(1))?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey [c_custkey:Int64]
+          Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]
+            Subquery: [o_orderstatus:Utf8]
+              Limit: skip=0, fetch=1 [o_orderstatus:Utf8]
+                Projection: orders.o_orderstatus [o_orderstatus:Utf8]
+                  Sort: orders.o_orderkey DESC NULLS FIRST, orders.o_orderstatus DESC NULLS FIRST [o_orderstatus:Utf8, o_custkey:Int64, o_orderkey:Int64]
+                    Projection: orders.o_orderstatus, orders.o_custkey, orders.o_orderkey [o_orderstatus:Utf8, o_custkey:Int64, o_orderkey:Int64]
+                      Filter: orders.o_custkey = outer_ref(customer.c_custkey) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+                        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+        "
+        )
+    }
+
+    /// Correlated predicates that are neither equalities nor ranges on the
+    /// sort key cannot become join keys; the subquery is left in place.
+    #[test]
+    fn correlated_scalar_top1_unhandled_predicate() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    col("orders.o_custkey")
+                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey"))
+                        .and(
+                            col("orders.o_orderstatus")
+                                .not_eq(out_ref_col(DataType::Utf8, "customer.c_name")),
+                        ),
+                )?
+                .project(vec![
+                    col("orders.o_orderstatus"),
+                    col("orders.o_custkey"),
+                    col("orders.o_orderkey"),
+                ])?
+                .sort(vec![col("orders.o_orderkey").sort(false, true)])?
+                .project(vec![col("orders.o_orderstatus")])?
+                .limit(0, Some(1))?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey [c_custkey:Int64]
+          Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]
+            Subquery: [o_orderstatus:Utf8]
+              Limit: skip=0, fetch=1 [o_orderstatus:Utf8]
+                Projection: orders.o_orderstatus [o_orderstatus:Utf8]
+                  Sort: orders.o_orderkey DESC NULLS FIRST [o_orderstatus:Utf8, o_custkey:Int64, o_orderkey:Int64]
+                    Projection: orders.o_orderstatus, orders.o_custkey, orders.o_orderkey [o_orderstatus:Utf8, o_custkey:Int64, o_orderkey:Int64]
+                      Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND orders.o_orderstatus != outer_ref(customer.c_name) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+                        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }

@@ -4245,3 +4245,125 @@ SELECT * FROM (VALUES (1)) AS x(d)
 WHERE x.d IN (SELECT t.c FROM (SELECT * FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0);
 ----
 1
+
+#############
+## Correlated scalar subquery with ORDER BY ... LIMIT 1 (#26710)
+#############
+
+statement ok
+CREATE TABLE top1_rates(base TEXT, quote TEXT, rate DOUBLE, as_of DATE) AS VALUES
+('USD','EUR',0.90,DATE '2024-01-01'),
+('USD','EUR',0.92,DATE '2024-02-01'),
+('USD','EUR',0.95,DATE '2024-03-01'),
+('USD','GBP',1.20,DATE '2024-02-15');
+
+statement ok
+CREATE TABLE top1_orders(id INT, currency TEXT, closed_at DATE) AS VALUES
+(1,'EUR',DATE '2024-02-10'),
+(2,'EUR',DATE '2024-04-01'),
+(3,'GBP',DATE '2024-02-20'),
+(4,'CHF',DATE '2024-01-15');
+
+# equality key plus a range on the sort key decorrelates to an ASOF join
+query IR
+SELECT o.id, (SELECT r.rate FROM top1_rates r WHERE r.quote = o.currency AND r.as_of <= o.closed_at ORDER BY r.as_of DESC LIMIT 1) AS rate
+FROM top1_orders o ORDER BY o.id;
+----
+1 0.92
+2 0.95
+3 1.2
+4 NULL
+
+# the decorrelated side is an ASOF join
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT o.id, (SELECT r.rate FROM top1_rates r WHERE r.quote = o.currency AND r.as_of <= o.closed_at ORDER BY r.as_of DESC LIMIT 1) AS rate
+FROM top1_orders o;
+----
+logical_plan
+01)Projection: o.id, __scalar_sq_1.rate AS rate
+02)--AsOf Join: match=[o.closed_at >= __scalar_sq_1.as_of], constraint=On, on=[o.currency = __scalar_sq_1.quote]
+03)----SubqueryAlias: o
+04)------TableScan: top1_orders projection=[id, currency, closed_at]
+05)----SubqueryAlias: __scalar_sq_1
+06)------Projection: r.rate, r.quote, r.as_of
+07)--------SubqueryAlias: r
+08)----------TableScan: top1_rates projection=[quote, rate, as_of]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+# scalar output column that is also the sort key
+query ID
+SELECT o.id, (SELECT r.as_of FROM top1_rates r WHERE r.quote = o.currency AND r.as_of <= o.closed_at ORDER BY r.as_of DESC LIMIT 1) AS prev_asof
+FROM top1_orders o ORDER BY o.id;
+----
+1 2024-02-01
+2 2024-03-01
+3 2024-02-15
+4 NULL
+
+# ascending sort with a lower bound on the sort key
+query ID
+SELECT o.id, (SELECT r.as_of FROM top1_rates r WHERE r.quote = o.currency AND r.as_of >= o.closed_at ORDER BY r.as_of ASC LIMIT 1) AS next_asof
+FROM top1_orders o ORDER BY o.id;
+----
+1 2024-03-01
+2 NULL
+3 NULL
+4 NULL
+
+# equality-only correlation decorrelates to first_value + left join
+statement ok
+CREATE TABLE top1_invoices(id INT, order_id INT, issued_at TIMESTAMP, amount DOUBLE) AS VALUES
+(10, 1, TIMESTAMP '2024-01-05 00:00:00', 50.0),
+(11, 1, TIMESTAMP '2024-02-01 00:00:00', 75.0),
+(12, 1, TIMESTAMP '2024-01-20 00:00:00', 60.0),
+(13, 2, TIMESTAMP '2024-03-10 00:00:00', 100.0);
+
+query II
+SELECT o.id, (SELECT i.id FROM top1_invoices i WHERE i.order_id = o.id ORDER BY i.issued_at DESC, i.id DESC LIMIT 1) AS latest_invoice
+FROM top1_orders o ORDER BY o.id;
+----
+1 11
+2 13
+3 NULL
+4 NULL
+
+# in a filter position
+query I
+SELECT o.id FROM top1_orders o WHERE (SELECT i.amount FROM top1_invoices i WHERE i.order_id = o.id ORDER BY i.issued_at DESC LIMIT 1) > 60.0;
+----
+1
+2
+
+# inside a larger expression
+query IR
+SELECT o.id, 2 * (SELECT i.amount FROM top1_invoices i WHERE i.order_id = o.id ORDER BY i.issued_at DESC LIMIT 1) AS doubled
+FROM top1_orders o ORDER BY o.id;
+----
+1 150
+2 200
+3 NULL
+4 NULL
+
+# a range predicate that does not bound the sorted direction is left alone
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT o.id, (SELECT r.as_of FROM top1_rates r WHERE r.quote = o.currency AND r.as_of <= o.closed_at ORDER BY r.as_of ASC LIMIT 1) AS bad
+FROM top1_orders o;
+
+# a correlated predicate that is not an equality or a range is left alone
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT o.id, (SELECT i.amount FROM top1_invoices i WHERE i.order_id = o.id AND i.id <> CAST(o.id AS BIGINT) ORDER BY i.issued_at DESC LIMIT 1) AS bad
+FROM top1_orders o;
+
+statement ok
+DROP TABLE top1_rates;
+
+statement ok
+DROP TABLE top1_orders;
+
+statement ok
+DROP TABLE top1_invoices;
