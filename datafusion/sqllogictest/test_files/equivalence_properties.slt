@@ -148,6 +148,39 @@ SELECT l.c, s.x FROM (SELECT c FROM t) l CROSS JOIN (SELECT x FROM small WHERE x
 2 1
 
 ###
+### Equal expressions need not be injective
+###
+
+# c = abs(a) transfers ordering to abs(a), but equal c values do not pin
+# down a. The sort on b must remain for the two rows with c = 1.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query I
+COPY (VALUES (-1, 2, 1), (1, 1, 1))
+TO 'test_files/scratch/equivalence_properties/abs.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE abs_equivalence (a INT, b INT, c INT)
+STORED AS CSV
+WITH ORDER (a, b)
+WITH ORDER (c)
+LOCATION 'test_files/scratch/equivalence_properties/abs.csv'
+OPTIONS ('format.has_header' 'true');
+
+query III
+SELECT a, b, c FROM abs_equivalence WHERE c = abs(a) ORDER BY c, b;
+----
+1 1 1
+-1 2 1
+
+statement ok
+DROP TABLE abs_equivalence;
+
+###
 ### Order-preserving repartition of an unbounded input
 ###
 

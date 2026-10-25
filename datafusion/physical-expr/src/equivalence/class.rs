@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use super::ProjectionMapping;
-use crate::expressions::Literal;
+use crate::expressions::{CastExpr, Literal};
 use crate::physical_expr::add_offset_to_expr;
 use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
@@ -741,6 +741,7 @@ impl EquivalenceGroup {
         let mut new_constants = vec![];
         let mut new_classes =
             IndexMap::<_, EquivalenceClass>::with_capacity(mapping.len());
+        let mut augmented = None;
         for (source, targets) in mapping.iter() {
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and
@@ -751,6 +752,13 @@ impl EquivalenceGroup {
             let cls = new_classes.entry(normalized_expr).or_default();
             for (target, _) in targets.iter() {
                 cls.push(Arc::clone(target));
+            }
+            if source.is::<CastExpr>() {
+                let augmented = augmented
+                    .get_or_insert_with(|| self.augment_projection_mapping(mapping));
+                if let Some(projected) = Self::project_expr_indirect(augmented, source) {
+                    cls.push(projected);
+                }
             }
             // Save new constants arising from the projection:
             if let Some(across) = self.is_expr_constant(source) {

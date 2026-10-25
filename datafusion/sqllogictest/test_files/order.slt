@@ -2328,6 +2328,30 @@ physical_plan
 02)--SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=10
 03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/spm_orderings/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/spm_orderings/2.csv]]}, projection=[a, b], limit=10, output_orderings=[[a@0 ASC NULLS LAST], [b@1 ASC NULLS LAST]], file_type=csv, has_header=true
 
+# An order-preserving RepartitionExec also only guarantees its merge key
+# ordering. Grouping by both columns merges on [a, b], so ORDER BY b still
+# needs a sort even though each input file is individually sorted by b.
+# https://github.com/apache/datafusion/issues/26745
+statement ok
+SET datafusion.optimizer.prefer_existing_sort = true;
+
+statement ok
+SET datafusion.optimizer.repartition_file_scans = false;
+
+query III
+SELECT a, b, count(*) FROM spm_orderings GROUP BY a, b ORDER BY b;
+----
+1 1 1
+3 2 1
+1 10 1
+2 20 1
+
+statement ok
+RESET datafusion.optimizer.prefer_existing_sort;
+
+statement ok
+RESET datafusion.optimizer.repartition_file_scans;
+
 statement ok
 DROP TABLE spm_orderings;
 

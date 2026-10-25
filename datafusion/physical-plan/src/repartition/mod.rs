@@ -2200,15 +2200,17 @@ impl RepartitionExec {
         input: &Arc<dyn ExecutionPlan>,
         preserve_order: bool,
     ) -> EquivalenceProperties {
-        // Equivalence Properties
         let mut eq_properties = input.equivalence_properties().clone();
-        // If the ordering is lost, reset the ordering equivalence class:
+        let input_partitions = input.output_partitioning().partition_count();
         if !Self::maintains_input_order_helper(input, preserve_order)[0] {
             eq_properties.clear_orderings();
+        } else if input_partitions > 1 {
+            eq_properties.clear_orderings();
+            if let Some(ordering) = input.output_ordering() {
+                eq_properties.add_ordering(ordering.clone());
+            }
         }
-        // When there are more than one input partitions, they will be fused at the output.
-        // Therefore, remove per partition constants.
-        if input.output_partitioning().partition_count() > 1 {
+        if input_partitions > 1 {
             eq_properties.clear_per_partition_constants();
         }
         eq_properties

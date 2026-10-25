@@ -598,9 +598,9 @@ EXPLAIN SELECT a, b, cnt FROM (
 physical_plan
 01)FilterExec: cnt@2 = 2
 02)--ProjectionExec: expr=[a@0 as a, b@1 as b, count(agg_filter_pushdown.b)@2 as cnt]
-03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[count(agg_filter_pushdown.b)]
+03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[count(agg_filter_pushdown.b)], group_clustering_mode=Partial([1])
 04)------RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=4
-05)--------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[count(agg_filter_pushdown.b)]
+05)--------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[count(agg_filter_pushdown.b)], group_clustering_mode=Partial([1])
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet]]}, projection=[a, b], file_type=parquet, predicate=b@1 = CAST(foo AS Utf8View), pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= foo AND foo <= b_max@1, required_guarantees=[]
 

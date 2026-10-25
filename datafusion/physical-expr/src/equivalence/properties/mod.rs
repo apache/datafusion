@@ -702,7 +702,17 @@ impl EquivalenceProperties {
     /// sorted within each such group.
     fn add_satisfied_key_constants(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
         let mut stack = vec![expr];
+        let mut visited = IndexSet::new();
         while let Some(expr) = stack.pop() {
+            if let Some(class) = self.eq_group.get_equivalence_class(&expr) {
+                for equivalent in class.iter() {
+                    if !equivalent.children().is_empty()
+                        && visited.insert(Arc::clone(equivalent))
+                    {
+                        stack.push(Arc::clone(equivalent));
+                    }
+                }
+            }
             let properties = self.get_expr_properties(Arc::clone(&expr));
             if properties.strictly_order_preserving {
                 for child in expr.children() {
@@ -1402,6 +1412,28 @@ impl EquivalenceProperties {
     /// Returns an [`ExprProperties`] object containing the ordering and range
     /// information for the given expression.
     pub fn get_expr_properties(&self, expr: Arc<dyn PhysicalExpr>) -> ExprProperties {
+        let class = self.eq_group.get_equivalence_class(&expr);
+        let mut properties = self.get_expr_properties_from_tree(expr);
+        if properties.sort_properties != SortProperties::Unordered {
+            return properties;
+        }
+         if let Some(class) = class {
+            for equivalent in class.iter() {
+                let equivalent_properties =
+                    self.get_expr_properties_from_tree(Arc::clone(equivalent));
+                if equivalent_properties.sort_properties != SortProperties::Unordered {
+                    properties.sort_properties = equivalent_properties.sort_properties;
+                    return properties;
+                }
+            }
+        }
+        properties
+    }
+
+    fn get_expr_properties_from_tree(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> ExprProperties {
         ExprPropertiesNode::new_unknown(expr)
             .transform_up(|expr| update_properties(expr, self))
             .data()
