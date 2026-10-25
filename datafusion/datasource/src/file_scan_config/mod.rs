@@ -872,6 +872,23 @@ impl DataSource for FileScanConfig {
             return Ok(None);
         }
 
+        // An ordered scan can use the size-balanced split of an unordered
+        // scan when every new group is still sorted. That split keeps the
+        // files in group order and only moves the group boundaries, so groups
+        // like `[f1, f2], [f3, f4]` with a large `f1` become
+        // `[f1 head], [f1 tail, f2], ...`.
+        if output_ordering.is_some()
+            && let Some(balanced) = self.file_source.repartitioned(
+                target_partitions,
+                repartition_file_min_size,
+                None,
+                self,
+            )?
+            && balanced.validated_output_ordering() == self.validated_output_ordering()
+        {
+            return Ok(Some(Arc::new(balanced)));
+        }
+
         let source = self.file_source.repartitioned(
             target_partitions,
             repartition_file_min_size,
@@ -3359,6 +3376,176 @@ mod tests {
                 }],
             },
         ))
+    }
+
+    fn ordered_scan_with_groups(file_groups: Vec<FileGroup>) -> FileScanConfig {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(MockSource::new(schema)),
+        )
+        .with_file_groups(file_groups)
+        .with_output_ordering(vec![LexOrdering::new(vec![sort_expr]).unwrap()])
+        .build()
+    }
+
+    fn sized_file_with_stats(
+        name: &str,
+        size: u64,
+        min: f64,
+        max: f64,
+    ) -> PartitionedFile {
+        let mut file = make_file_with_stats(name, min, max);
+        file.object_meta.size = size;
+        file
+    }
+
+    /// The files of each group, with whether each file reads only a range
+    fn group_files(config: &FileScanConfig) -> Vec<Vec<(&str, bool)>> {
+        config
+            .file_groups
+            .iter()
+            .map(|group| {
+                group
+                    .iter()
+                    .map(|f| (f.object_meta.location.as_ref(), f.range.is_some()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn group_sizes(config: &FileScanConfig) -> Vec<u64> {
+        config
+            .file_groups
+            .iter()
+            .map(|group| group.iter().map(|f| f.effective_size()).sum())
+            .collect()
+    }
+
+    /// An ordered scan whose files are sorted across groups gets the same
+    /// size-balanced split as an unordered scan and keeps its ordering.
+    #[test]
+    fn repartition_balances_ordered_groups() -> Result<()> {
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![
+                sized_file_with_stats("f1", 8000, 0.0, 9.0),
+                sized_file_with_stats("f2", 8000, 10.0, 19.0),
+            ]),
+            FileGroup::new(vec![
+                sized_file_with_stats("f3", 1000, 20.0, 29.0),
+                sized_file_with_stats("f4", 1000, 30.0, 39.0),
+            ]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(group_sizes(&config), vec![16000, 2000]);
+
+        let repartitioned = DataSource::repartitioned(&config, 4, 0, ordering)?
+            .expect("ordered groups should be rebalanced");
+        let repartitioned = repartitioned
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig");
+        assert_eq!(group_sizes(repartitioned), vec![4500, 4500, 4500, 4500]);
+        assert_eq!(
+            repartitioned.validated_output_ordering(),
+            config.validated_output_ordering()
+        );
+        Ok(())
+    }
+
+    /// If moving the group boundaries would put overlapping files in one
+    /// group, the scan keeps its groups and its ordering.
+    #[test]
+    fn repartition_keeps_ordered_groups_when_rebalancing_breaks_order() -> Result<()> {
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![
+                sized_file_with_stats("f1", 8000, 0.0, 9.0),
+                sized_file_with_stats("f2", 8000, 10.0, 19.0),
+            ]),
+            FileGroup::new(vec![
+                sized_file_with_stats("f3", 1000, 5.0, 15.0),
+                sized_file_with_stats("f4", 1000, 16.0, 25.0),
+            ]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(config.validated_output_ordering().len(), 1);
+
+        assert!(DataSource::repartitioned(&config, 4, 0, ordering)?.is_none());
+        Ok(())
+    }
+
+    /// With `NULLS FIRST`, a file with NULLs can only be the first file of a
+    /// group, so a size-balanced split that puts it after another file is not
+    /// used.
+    #[test]
+    fn repartition_keeps_ordered_groups_when_rebalancing_misplaces_nulls() -> Result<()> {
+        let mut with_nulls = sized_file_with_stats("f2", 1000, 10.0, 19.0);
+        Arc::make_mut(with_nulls.statistics.as_mut().unwrap()).column_statistics[0]
+            .null_count = Precision::Exact(1);
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![sized_file_with_stats("f1", 8000, 0.0, 9.0)]),
+            FileGroup::new(vec![with_nulls]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(config.validated_output_ordering().len(), 1);
+
+        let repartitioned = DataSource::repartitioned(&config, 4, 0, ordering)?
+            .expect("the large file should be split");
+        let repartitioned = repartitioned
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig");
+        assert_eq!(
+            group_files(repartitioned),
+            vec![
+                vec![("f1", true)],
+                vec![("f2", true)],
+                vec![("f1", true)],
+                vec![("f1", true)],
+            ]
+        );
+        assert_eq!(
+            repartitioned.validated_output_ordering(),
+            config.validated_output_ordering()
+        );
+        Ok(())
+    }
+
+    /// If moving the group boundaries would put overlapping files in one
+    /// group, the ordered split is used instead: it keeps multi-file groups
+    /// and only splits single-file groups.
+    #[test]
+    fn repartition_falls_back_to_ordered_split_when_rebalancing_breaks_order()
+    -> Result<()> {
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![
+                sized_file_with_stats("f1", 8000, 0.0, 9.0),
+                sized_file_with_stats("f2", 8000, 10.0, 19.0),
+            ]),
+            FileGroup::new(vec![sized_file_with_stats("f3", 1000, 5.0, 15.0)]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(config.validated_output_ordering().len(), 1);
+
+        let repartitioned = DataSource::repartitioned(&config, 4, 0, ordering)?
+            .expect("the single-file group should be split");
+        let repartitioned = repartitioned
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig");
+        assert_eq!(
+            group_files(repartitioned),
+            vec![
+                vec![("f1", false), ("f2", false)],
+                vec![("f3", true)],
+                vec![("f3", true)],
+                vec![("f3", true)],
+            ]
+        );
+        assert_eq!(
+            repartitioned.validated_output_ordering(),
+            config.validated_output_ordering()
+        );
+        Ok(())
     }
 
     fn make_exact_empty_file(name: &str) -> PartitionedFile {

@@ -21,10 +21,11 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
+use crate::decorrelate::{
+    PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, build_join_filter,
+};
 use crate::extract_equijoin_predicate::split_eq_and_noneq_join_predicate;
 use crate::optimizer::ApplyOrder;
-use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
@@ -772,7 +773,11 @@ fn subquery_operands_are_bare_columns(
         filter
             .apply(|e| {
                 let refs = e.column_refs();
-                if !refs.is_empty() && refs.iter().all(|c| subquery_cols.contains(*c)) {
+                // `column_refs` skips outer references, which the join filters keep, so check them separately.
+                if !refs.is_empty()
+                    && !e.contains_outer()
+                    && refs.iter().all(|c| subquery_cols.contains(*c))
+                {
                     bare = matches!(e, Expr::Column(_));
                     return Ok(if bare {
                         TreeNodeRecursion::Jump
@@ -849,21 +854,44 @@ fn build_join(
     if !pull_up.can_pull_up {
         return Ok(None);
     }
+    // TODO(#24960): stopgap until count-bug compensation covers `IN`/`NOT IN`.
+    // The subquery stays correlated unless an outer row with no match gets the
+    // right answer anyway.
+    if !exists_sub_query && pull_up.pulled_up_scalar_agg {
+        let null_reads_as_false = match join_type {
+            JoinType::LeftSemi => true,
+            JoinType::LeftMark => !needs_null_aware_mark,
+            _ => false,
+        };
+        let count_bug_is_harmless = match rewrite(true) {
+            Ok((plan, pull_up)) => pull_up
+                .collected_count_expr_map
+                .get(&plan)
+                .filter(|m| !m.is_empty())
+                .is_none_or(|empty_input_values| {
+                    null_reads_as_false
+                        && empty_input_values
+                            .get(subquery.schema().field(0).name())
+                            .is_some_and(|value| {
+                                matches!(value, Expr::Literal(v, _) if v.is_null())
+                            })
+                }),
+            // Count-bug handling errors on some shapes it cannot compensate.
+            Err(_) => false,
+        };
+        if !count_bug_is_harmless {
+            return Ok(None);
+        }
+    }
 
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(alias.to_string())?
         .build()?;
-    let mut all_correlated_cols = BTreeSet::new();
-    pull_up
-        .correlated_subquery_cols_map
-        .values()
-        .for_each(|cols| all_correlated_cols.extend(cols.iter().cloned()));
-
-    // alias the join filter
-    let join_filter_opt = conjunction(pull_up.join_filters)
-        .map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, alias).map(Some)
-        })?;
+    let join_filter_opt = build_join_filter(
+        pull_up.join_filters,
+        pull_up.correlated_subquery_cols_map.values().flatten(),
+        alias,
+    )?;
 
     if let Some(expr_map) = count_bug_compensation
         && !expr_map.is_empty()
@@ -2662,6 +2690,34 @@ mod tests {
         )
     }
 
+    #[test]
+    fn in_subquery_correlated_with_same_table() -> Result<()> {
+        let outer_scan = test_table_scan()?;
+        let subquery_scan = test_table_scan()?;
+        let subquery = LogicalPlanBuilder::from(subquery_scan)
+            .filter(out_ref_col(DataType::UInt32, "test.a").gt(col("test.a")))?
+            .project(vec![col("c")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(in_subquery(col("test.b"), Arc::new(subquery)))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        // The outer `test.a` and the subquery's `test.a` stay apart in the join filter.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          LeftSemi Join:  Filter: test.b = __correlated_sq_1.c AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_1 [c:UInt32, a:UInt32]
+              Projection: test.c, test.a [c:UInt32, a:UInt32]
+                TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
     /// Test for multiple exists subqueries in the same filter expression
     #[test]
     fn multiple_exists_subqueries() -> Result<()> {
@@ -3477,6 +3533,40 @@ mod tests {
                   Filter: sq.arr = outer_ref(outer_t.arr) [id:Int32;N, arr:List(Int32);N]
                     TableScan: sq [id:Int32;N, arr:List(Int32);N]
             TableScan: outer_t [id:Int32;N, arr:List(Int32);N]
+        "
+        )
+    }
+
+    #[test]
+    fn exists_subquery_filter_above_correlated_derived_table() -> Result<()> {
+        let sq_scan = test_table_scan_with_name("sq")?;
+        let derived = LogicalPlanBuilder::from(sq_scan)
+            .filter(col("sq.c").eq(out_ref_col(DataType::UInt32, "test.a")))?
+            .project(vec![col("sq.c")])?
+            .alias("t")?
+            .build()?;
+        let subquery = LogicalPlanBuilder::from(derived)
+            .filter(out_ref_col(DataType::UInt32, "test.b").gt(lit(0u32)))?
+            .project(vec![lit(1)])?
+            .build()?;
+
+        let outer_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(exists(Arc::new(subquery)))?
+            .project(vec![col("test.a")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a [a:UInt32]
+          LeftSemi Join:  Filter: __correlated_sq_1.c = test.a AND test.b > UInt32(0) [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_1 [Int32(1):Int32, c:UInt32]
+              Projection: Int32(1), t.c [Int32(1):Int32, c:UInt32]
+                SubqueryAlias: t [c:UInt32]
+                  Projection: sq.c [c:UInt32]
+                    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
