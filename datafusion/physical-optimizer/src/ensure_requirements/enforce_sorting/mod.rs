@@ -170,8 +170,10 @@ fn update_coalesce_ctx_children(
         // Plan has no children, it cannot be a `CoalescePartitionsExec`.
         false
     } else if is_coalesce_partitions(&coalesce_context.plan) {
-        // Initiate a connection:
-        true
+        // A fetched coalesce selects rows before the sort. Removing it would
+        // lose that limit, and moving its fetch onto the sort changes which
+        // rows are selected.
+        coalesce_context.plan.fetch().is_none()
     } else {
         children.iter().enumerate().any(|(idx, node)| {
             // Only consider operators that don't require a single partition,
@@ -212,7 +214,7 @@ pub fn replace_with_partial_sort(
 
     let mut common_prefix_length = 0;
     while child_eq_properties
-        .ordering_satisfy(sort_exprs[0..=common_prefix_length].to_vec())?
+        .ordering_satisfy(sort_exprs[0..=common_prefix_length].iter().cloned())?
     {
         common_prefix_length += 1;
     }
@@ -418,7 +420,7 @@ pub fn ensure_sorting(
     };
 
     let plan = &requirements.plan;
-    let mut updated_children = vec![];
+    let mut updated_children = Vec::with_capacity(requirements.children.len());
     for (idx, (required_ordering, mut child)) in plan
         .required_input_ordering()
         .into_iter()
@@ -465,8 +467,7 @@ pub fn ensure_sorting(
         // single partition.
         let child_node = requirements.children.swap_remove(0);
         if let Some(fetch) = requirements.plan.fetch() {
-            let mut limit = LocalLimitExec::new(Arc::clone(&child_node.plan), fetch);
-            limit.set_required_ordering(requirements.plan.output_ordering().cloned());
+            let limit = LocalLimitExec::new(Arc::clone(&child_node.plan), fetch);
             return Ok(Transformed::yes(PlanContext::new(
                 Arc::new(limit),
                 false,
@@ -514,17 +515,11 @@ fn analyze_immediate_sort_removal(
         // Remove the sort:
         node.children = node.children.swap_remove(0).children;
         if let Some(fetch) = sort_exec.fetch() {
-            let required_ordering = sort_exec.properties().output_ordering().cloned();
             // If the sort has a fetch, we need to add a limit:
             if properties.output_partitioning().partition_count() == 1 {
-                let mut global_limit =
-                    GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch));
-                global_limit.set_required_ordering(required_ordering);
-                Arc::new(global_limit)
+                Arc::new(GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch)))
             } else {
-                let mut local_limit = LocalLimitExec::new(Arc::clone(sort_input), fetch);
-                local_limit.set_required_ordering(required_ordering);
-                Arc::new(local_limit)
+                Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
             }
         } else {
             Arc::clone(sort_input)
@@ -668,11 +663,9 @@ fn remove_bottleneck_in_subplan_impl(
                 Some(Distribution::SinglePartition)
             )
     };
-    let remove_from_first_child = requirements
-        .children
-        .first()
-        .is_some_and(|child| is_coalesce_partitions(&child.plan))
-        && removable(0);
+    let remove_from_first_child = requirements.children.first().is_some_and(|child| {
+        is_coalesce_partitions(&child.plan) && child.plan.fetch().is_none()
+    }) && removable(0);
     let children = &mut requirements.children;
     if remove_from_first_child {
         // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
@@ -782,7 +775,7 @@ fn remove_corresponding_sort_from_sub_plan(
                 repartition.properties().output_partitioning().clone(),
             )?) as _;
         }
-    };
+    }
     // Deleting a merging sort may invalidate distribution requirements.
     // Ensure that we stay compliant with such requirements:
     if requires_single_partition && node.plan.output_partitioning().partition_count() > 1

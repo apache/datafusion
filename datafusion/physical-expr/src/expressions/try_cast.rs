@@ -22,40 +22,94 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::CastOptions;
-use arrow::datatypes::{DataType, FieldRef, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use compute::can_cast_types;
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
-#[derive(Debug, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub struct TryCastExpr {
     /// The expression to cast
     expr: Arc<dyn PhysicalExpr>,
-    /// The data type to cast to
-    cast_type: DataType,
+    /// The target field.
+    ///
+    /// For a type-only cast (see [`TryCastExpr::new`]) this is a field
+    /// synthesized from the target data type alone and only its data type is
+    /// meaningful. For a cast built from an explicit field (see
+    /// [`TryCastExpr::new_with_target_field`]) its metadata is applied to the
+    /// output field as-is.
+    target_field: FieldRef,
+    /// Whether `target_field` was supplied by the caller (as opposed to being
+    /// synthesized from a `DataType`), and therefore whether its metadata
+    /// describes the output field exactly.
+    explicit_target: bool,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
 impl PartialEq for TryCastExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.expr.eq(&other.expr) && self.cast_type == other.cast_type
+        // Compare the semantically meaningful parts of the target field only:
+        // the field name never affects the output of this expression.
+        self.expr.eq(&other.expr)
+            && self.cast_type() == other.cast_type()
+            && self.target_metadata() == other.target_metadata()
     }
 }
 
 impl Hash for TryCastExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
-        self.cast_type.hash(state);
+        self.cast_type().hash(state);
+        // Hash the metadata by iterating over sorted keys for deterministic ordering
+        if let Some(metadata) = self.target_metadata() {
+            let mut entries: Vec<_> = metadata.iter().collect();
+            entries.sort_by_key(|(k, _)| *k);
+            for (k, v) in entries {
+                k.hash(state);
+                v.hash(state);
+            }
+        }
     }
 }
 
 impl TryCastExpr {
-    /// Create a new CastExpr
+    /// Create a new `TryCastExpr` using only a `DataType`.
+    ///
+    /// This constructor creates a type-only cast where metadata is passed through
+    /// from the source expression (with extension type keys stripped).
+    /// TRY_CAST results are always nullable since failed casts return NULL.
     pub fn new(expr: Arc<dyn PhysicalExpr>, cast_type: DataType) -> Self {
-        Self { expr, cast_type }
+        Self {
+            expr,
+            target_field: cast_type.into_nullable_field_ref(),
+            explicit_target: false,
+        }
+    }
+
+    /// Create a new `TryCastExpr` with an explicit target `FieldRef`.
+    ///
+    /// The provided `target_field` determines the output characteristics:
+    /// - The field's data type becomes the cast target type
+    /// - The field's metadata is used exactly as provided
+    ///
+    /// TRY_CAST results are always nullable since failed casts return NULL.
+    ///
+    /// See [`TryCastExpr::new`] for type-only casts where source metadata should
+    /// pass through.
+    pub fn new_with_target_field(
+        expr: Arc<dyn PhysicalExpr>,
+        target_field: FieldRef,
+    ) -> Self {
+        Self {
+            expr,
+            target_field,
+            explicit_target: true,
+        }
     }
 
     /// The expression to cast
@@ -65,19 +119,33 @@ impl TryCastExpr {
 
     /// The data type to cast to
     pub fn cast_type(&self) -> &DataType {
-        &self.cast_type
+        self.target_field.data_type()
+    }
+
+    /// Explicit metadata for the output field, or `None` to pass through source metadata.
+    pub fn target_metadata(&self) -> Option<&Metadata> {
+        self.explicit_target.then(|| self.target_field.metadata())
+    }
+
+    /// The target field this cast was constructed with.
+    ///
+    /// For a type-only cast this is a field synthesized from the target data
+    /// type alone; only its data type is meaningful. TRY_CAST results are
+    /// always nullable regardless of the target field's nullability.
+    pub fn target_field(&self) -> &FieldRef {
+        &self.target_field
     }
 }
 
 impl fmt::Display for TryCastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "TRY_CAST({} AS {})", self.expr, self.cast_type)
+        write!(f, "TRY_CAST({} AS {})", self.expr, self.cast_type())
     }
 }
 
 impl PhysicalExpr for TryCastExpr {
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(self.cast_type.clone())
+        Ok(self.cast_type().clone())
     }
 
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
@@ -90,14 +158,41 @@ impl PhysicalExpr for TryCastExpr {
             safe: true,
             format_options: DEFAULT_FORMAT_OPTIONS,
         };
-        value.cast_to(&self.cast_type, Some(&options))
+        value.cast_to(self.cast_type(), Some(&options))
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        self.expr
-            .return_field(input_schema)
-            .map(|f| f.as_ref().clone().with_data_type(self.cast_type.clone()))
-            .map(Arc::new)
+        // If metadata is explicit, we can build the field without source
+        // (though we still try to get source for the name)
+        let source_result = self.expr.return_field(input_schema);
+
+        if let Some(metadata) = self.target_metadata() {
+            // Explicit metadata: use it exactly, TRY_CAST is always nullable
+            let name = source_result
+                .as_ref()
+                .map(|f| f.name().to_string())
+                .unwrap_or_default();
+            return Ok(Arc::new(
+                Field::new(name, self.cast_type().clone(), true)
+                    .with_metadata(metadata.clone()),
+            ));
+        }
+
+        // Pass-through metadata from source (stripping extension keys)
+        source_result.map(|source_field| {
+            let mut metadata = source_field.metadata().clone();
+            metadata.remove(EXTENSION_TYPE_NAME_KEY);
+            metadata.remove(EXTENSION_TYPE_METADATA_KEY);
+
+            Arc::new(
+                source_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(self.cast_type().clone())
+                    .with_nullable(true) // TRY_CAST is always nullable
+                    .with_metadata(metadata),
+            )
+        })
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -108,16 +203,17 @@ impl PhysicalExpr for TryCastExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(TryCastExpr::new(
-            Arc::clone(&children[0]),
-            self.cast_type.clone(),
-        )))
+        Ok(Arc::new(TryCastExpr {
+            expr: Arc::clone(&children[0]),
+            target_field: Arc::clone(&self.target_field),
+            explicit_target: self.explicit_target,
+        }))
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TRY_CAST(")?;
         self.expr.fmt_sql(f)?;
-        write!(f, " AS {:?})", self.cast_type)
+        write!(f, " AS {:?})", self.cast_type())
     }
 
     #[cfg(feature = "proto")]
@@ -127,12 +223,25 @@ impl PhysicalExpr for TryCastExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self {
+            expr,
+            target_field,
+            explicit_target,
+        } = self;
+        // Presence carries `explicit_target`, even for a default-shaped field.
+        let target_field_proto = if *explicit_target {
+            Some(target_field.as_ref().try_into()?)
+        } else {
+            None
+        };
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(Box::new(
                 protobuf::PhysicalTryCastNode {
-                    expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
-                    arrow_type: Some(self.cast_type().try_into()?),
+                    expr: Some(Box::new(ctx.encode_child(expr)?)),
+                    arrow_type: Some(target_field.data_type().try_into()?),
+                    target_field: target_field_proto,
                 },
             ))),
         }))
@@ -146,6 +255,7 @@ impl TryCastExpr {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_common::internal_err;
         use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_physical_expr_common::physical_expr::proto_decode::require_proto_field;
         use datafusion_proto_models::protobuf;
@@ -155,19 +265,33 @@ impl TryCastExpr {
             protobuf::physical_expr_node::ExprType::TryCast,
             "TryCastExpr",
         );
-        let expr = ctx.decode_required_expression(
-            try_cast.expr.as_deref(),
-            "TryCastExpr",
-            "expr",
-        )?;
-        let arrow_type = require_proto_field(
-            try_cast.arrow_type.as_ref(),
-            "TryCastExpr",
-            "arrow_type",
-        )?;
+        let protobuf::PhysicalTryCastNode {
+            expr,
+            arrow_type,
+            target_field,
+        } = &**try_cast;
+        let expr =
+            ctx.decode_required_expression(expr.as_deref(), "TryCastExpr", "expr")?;
+        let arrow_type =
+            require_proto_field(arrow_type.as_ref(), "TryCastExpr", "arrow_type")?;
         let cast_type: DataType = arrow_type.try_into()?;
+        let target_field = target_field
+            .as_ref()
+            .map(|field| {
+                let field: Field = field.try_into()?;
+                if field.data_type() != &cast_type {
+                    return internal_err!(
+                        "TryCastExpr target_field type does not match arrow_type"
+                    );
+                }
+                Ok(Arc::new(field))
+            })
+            .transpose()?;
 
-        Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
+        Ok(Arc::new(match target_field {
+            Some(target_field) => TryCastExpr::new_with_target_field(expr, target_field),
+            None => TryCastExpr::new(expr, cast_type),
+        }))
     }
 }
 
@@ -190,8 +314,64 @@ pub fn try_cast(
     }
 }
 
+/// Return a PhysicalExpression representing `expr` casted to `target_field`,
+/// preserving any explicit field semantics such as metadata.
+///
+/// TRY_CAST results are always nullable since failed casts return NULL.
+///
+/// If the input expression already has the same data type, the target field
+/// has no explicit metadata constraints, and the source has no extension
+/// metadata to strip, the original expression is returned unchanged.
+pub fn try_cast_with_target_field(
+    expr: Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+    target_field: &FieldRef,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let expr_type = expr.data_type(input_schema)?;
+    let cast_type = target_field.data_type();
+
+    // Check if this is a "default" target field (type-only cast with no explicit
+    // metadata constraints). This is the field created by `into_nullable_field_ref()`
+    // when only a DataType is known.
+    let is_type_only = target_field.name().is_empty()
+        && target_field.is_nullable()
+        && target_field.metadata().is_empty();
+
+    // For same-type casts, we can skip creating a TryCastExpr only if:
+    // 1. The target is type-only (no explicit metadata)
+    // 2. The source has no extension metadata that needs to be stripped
+    // Otherwise we need the TryCastExpr to strip extension metadata from the source.
+    if expr_type == *cast_type && is_type_only {
+        let source_field = expr.return_field(input_schema)?;
+        let has_extension_metadata = source_field
+            .metadata()
+            .contains_key(EXTENSION_TYPE_NAME_KEY);
+        if !has_extension_metadata {
+            return Ok(Arc::clone(&expr));
+        }
+    }
+
+    if !can_cast_types(&expr_type, cast_type) {
+        return not_impl_err!("Unsupported TRY_CAST from {expr_type} to {cast_type}");
+    }
+
+    // For type-only casts, use TryCastExpr::new which preserves source metadata.
+    // For explicit target fields, use new_with_target_field which applies the target's
+    // metadata exactly.
+    if is_type_only {
+        Ok(Arc::new(TryCastExpr::new(expr, cast_type.clone())))
+    } else {
+        Ok(Arc::new(TryCastExpr::new_with_target_field(
+            expr,
+            Arc::clone(target_field),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::expressions::col;
     use arrow::array::{
@@ -642,6 +822,167 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn field_aware_try_cast_uses_exact_target_metadata() -> Result<()> {
+        // When using field-aware cast, target's metadata should be used exactly
+        let source_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "source.type".to_string(),
+            ),
+            ("source_key".to_string(), "source_value".to_string()),
+        ]);
+        let target_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "target.type".to_string(),
+            ),
+            (
+                EXTENSION_TYPE_METADATA_KEY.to_string(),
+                "target_ext_meta".to_string(),
+            ),
+            ("target_key".to_string(), "target_value".to_string()),
+        ]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::FixedSizeBinary(16), false)
+                .with_metadata(source_meta),
+        ]);
+
+        let target_field =
+            Arc::new(Field::new("b", DataType::Utf8, true).with_metadata(target_meta));
+        let expr = TryCastExpr::new_with_target_field(
+            col("a", &schema)?,
+            Arc::clone(&target_field),
+        );
+
+        let field = expr.return_field(&schema)?;
+        assert_eq!(
+            field.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"target.type".to_string()),
+            "Field-aware try_cast should use target's extension type name"
+        );
+        assert_eq!(
+            field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
+            Some(&"target_ext_meta".to_string()),
+            "Field-aware try_cast should use target's extension type metadata"
+        );
+        assert!(
+            field.metadata().get("source_key").is_none(),
+            "Field-aware try_cast should NOT preserve source metadata"
+        );
+        assert_eq!(
+            field.metadata().get("target_key"),
+            Some(&"target_value".to_string()),
+            "Field-aware try_cast should preserve target's non-extension metadata"
+        );
+        // TRY_CAST is always nullable
+        assert!(field.is_nullable());
+
+        Ok(())
+    }
+
+    #[test]
+    fn field_aware_try_cast_preserves_target_field_semantics() -> Result<()> {
+        // Target field metadata should be preserved exactly (no merging with source).
+        // TRY_CAST is always nullable regardless of target field's nullability.
+        let metadata = HashMap::from([("target_meta".to_string(), "1".to_string())]);
+
+        for child_nullable in [true, false] {
+            let schema =
+                Schema::new(vec![Field::new("a", DataType::Int32, child_nullable)]);
+            let target_field = Arc::new(
+                Field::new("cast_target", DataType::Int64, false) // target says non-nullable
+                    .with_metadata(metadata.clone()),
+            );
+            let expr = TryCastExpr::new_with_target_field(
+                col("a", &schema)?,
+                Arc::clone(&target_field),
+            );
+
+            let field = expr.return_field(&schema)?;
+            // Field name comes from source
+            assert_eq!(field.name(), "a");
+            assert_eq!(field.data_type(), &DataType::Int64);
+            // TRY_CAST is ALWAYS nullable (ignores target field's nullability)
+            assert!(field.is_nullable(), "TRY_CAST should always be nullable");
+            // Target metadata should be preserved exactly
+            assert_eq!(
+                field.metadata().get("target_meta"),
+                Some(&"1".to_string()),
+                "Target metadata should be preserved exactly"
+            );
+            assert!(
+                expr.nullable(&schema)?,
+                "TRY_CAST should always be nullable"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn type_only_try_cast_strips_extension_keys() -> Result<()> {
+        // Type-only cast should strip extension keys but preserve other source metadata
+        let source_meta = HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "source.extension".to_string(),
+            ),
+            (
+                EXTENSION_TYPE_METADATA_KEY.to_string(),
+                "ext_meta".to_string(),
+            ),
+            ("custom_key".to_string(), "custom_value".to_string()),
+        ]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false).with_metadata(source_meta),
+        ]);
+
+        let expr = TryCastExpr::new(col("a", &schema)?, DataType::Int64);
+        let field = expr.return_field(&schema)?;
+
+        // Extension keys should be stripped
+        assert!(
+            field.metadata().get(EXTENSION_TYPE_NAME_KEY).is_none(),
+            "Type-only try_cast should strip extension type name"
+        );
+        assert!(
+            field.metadata().get(EXTENSION_TYPE_METADATA_KEY).is_none(),
+            "Type-only try_cast should strip extension type metadata"
+        );
+        // Non-extension metadata should pass through
+        assert_eq!(
+            field.metadata().get("custom_key"),
+            Some(&"custom_value".to_string()),
+            "Type-only try_cast should preserve non-extension metadata"
+        );
+        // Field name preserved, type changed, always nullable
+        assert_eq!(field.name(), "a");
+        assert_eq!(field.data_type(), &DataType::Int64);
+        assert!(field.is_nullable());
+
+        Ok(())
+    }
+
+    #[test]
+    fn type_only_try_cast_is_always_nullable() -> Result<()> {
+        // TRY_CAST is always nullable even when source is non-nullable
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let expr = TryCastExpr::new(col("a", &schema)?, DataType::Int64);
+
+        let field = expr.return_field(&schema)?;
+
+        assert_eq!(field.name(), "a");
+        assert_eq!(field.data_type(), &DataType::Int64);
+        assert!(field.is_nullable(), "TRY_CAST should always be nullable");
+        assert!(
+            expr.nullable(&schema)?,
+            "TRY_CAST should always be nullable"
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(all(test, feature = "proto"))]
@@ -676,9 +1017,39 @@ mod proto_tests {
         PhysicalExprNode {
             expr_id: None,
             expr_type: Some(physical_expr_node::ExprType::TryCast(Box::new(
-                PhysicalTryCastNode { expr, arrow_type },
+                PhysicalTryCastNode {
+                    expr,
+                    arrow_type,
+                    target_field: None,
+                },
             ))),
         }
+    }
+
+    fn encode_try_cast(try_cast: &TryCastExpr) -> PhysicalTryCastNode {
+        let encoder = StubEncoder::ok();
+        let node = try_cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap()
+            .expect("TryCastExpr should encode to Some(node)");
+        match node.expr_type {
+            Some(physical_expr_node::ExprType::TryCast(try_cast)) => *try_cast,
+            other => panic!("expected a TryCastExpr node, got {other:?}"),
+        }
+    }
+
+    fn round_trip_try_cast(try_cast: &TryCastExpr, schema: &Schema) -> TryCastExpr {
+        let encoder = StubEncoder::ok();
+        let node = try_cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap()
+            .expect("TryCastExpr should encode to Some(node)");
+        let decoder = StubDecoder::ok();
+        TryCastExpr::try_from_proto(&node, &PhysicalExprDecodeCtx::new(schema, &decoder))
+            .unwrap()
+            .downcast_ref::<TryCastExpr>()
+            .expect("decoded expr should be a TryCastExpr")
+            .clone()
     }
 
     #[test]
@@ -705,6 +1076,60 @@ mod proto_tests {
             .expect("try cast type should be encoded");
         let data_type: DataType = arrow_type.try_into().unwrap();
         assert_eq!(data_type, DataType::Int32);
+        assert!(try_cast_node.target_field.is_none());
+    }
+
+    #[test]
+    fn try_cast_target_field_survives_proto_round_trip() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let target =
+            Arc::new(Field::new("target", DataType::Int32, false).with_metadata(
+                Metadata::from([("extension".to_string(), "value".to_string())]),
+            ));
+        let try_cast = TryCastExpr::new_with_target_field(
+            col("a", &schema).unwrap(),
+            Arc::clone(&target),
+        );
+
+        assert!(encode_try_cast(&try_cast).target_field.is_some());
+        let decoded = round_trip_try_cast(&try_cast, &schema);
+
+        assert_eq!(decoded.target_field(), &target);
+        assert_eq!(decoded.target_metadata(), Some(target.metadata()));
+    }
+
+    #[test]
+    fn explicit_default_shaped_try_cast_target_is_encoded() {
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::Utf8, false).with_metadata(
+                Metadata::from([("source".to_string(), "value".to_string())]),
+            )]);
+        let try_cast = TryCastExpr::new_with_target_field(
+            col("a", &schema).unwrap(),
+            DataType::Int32.into_nullable_field_ref(),
+        );
+
+        assert!(encode_try_cast(&try_cast).target_field.is_some());
+        let decoded = round_trip_try_cast(&try_cast, &schema);
+        assert_eq!(decoded.target_metadata(), Some(&Metadata::default()));
+        assert!(decoded.return_field(&schema).unwrap().metadata().is_empty());
+    }
+
+    #[test]
+    fn type_only_try_cast_target_is_omitted_and_remains_type_only() {
+        let metadata = Metadata::from([("source".to_string(), "value".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, false).with_metadata(metadata.clone()),
+        ]);
+        let try_cast = TryCastExpr::new(col("a", &schema).unwrap(), DataType::Int32);
+
+        assert!(encode_try_cast(&try_cast).target_field.is_none());
+        let decoded = round_trip_try_cast(&try_cast, &schema);
+
+        assert_eq!(decoded.target_metadata(), None);
+        let output = decoded.return_field(&schema).unwrap();
+        assert_eq!(output.metadata(), &metadata);
+        assert!(output.is_nullable());
     }
 
     #[test]
@@ -717,7 +1142,7 @@ mod proto_tests {
     }
 
     #[test]
-    fn try_from_proto_decodes_try_cast_expr() {
+    fn try_from_proto_decodes_legacy_try_cast_expr() {
         let node =
             try_cast_node(Some(Box::new(column_node("a"))), Some(int32_arrow_type()));
         let schema = Schema::empty();
@@ -731,6 +1156,32 @@ mod proto_tests {
 
         assert_eq!(try_cast.cast_type(), &DataType::Int32);
         assert!(try_cast.expr().downcast_ref::<Column>().is_some());
+        assert_eq!(try_cast.target_metadata(), None);
+    }
+
+    #[test]
+    fn try_from_proto_rejects_mismatched_target_field_type() {
+        let mut node =
+            try_cast_node(Some(Box::new(column_node("a"))), Some(int32_arrow_type()));
+        let Some(physical_expr_node::ExprType::TryCast(try_cast)) =
+            node.expr_type.as_mut()
+        else {
+            unreachable!()
+        };
+        try_cast.target_field = Some(
+            (&Field::new("target", DataType::Int64, true))
+                .try_into()
+                .unwrap(),
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+
+        let err = TryCastExpr::try_from_proto(
+            &node,
+            &PhysicalExprDecodeCtx::new(&schema, &decoder),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("target_field type"));
     }
 
     #[test]

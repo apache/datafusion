@@ -30,7 +30,7 @@ use datafusion_expr::{
         self, HigherOrderFunction, Lambda, NullTreatment, ScalarFunction, Unnest,
         WildcardOptions, WindowFunction,
     },
-    planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
+    planner::{PlannerResult, RawAggregateExpr, RawScalarExpr, RawWindowExpr},
     type_coercion::functions::value_fields_with_higher_order_udf,
 };
 use sqlparser::ast::{
@@ -164,6 +164,11 @@ impl FunctionArgs {
                 FunctionArgumentClause::Limit(limit) => {
                     return not_impl_err!(
                         "Calling {name}: LIMIT not supported in function arguments: {limit}"
+                    );
+                }
+                FunctionArgumentClause::Where(predicate) => {
+                    return not_impl_err!(
+                        "Calling {name}: WHERE not supported in function arguments: {predicate}"
                     );
                 }
                 FunctionArgumentClause::OnOverflow(overflow) => {
@@ -341,7 +346,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             // After resolution, all arguments are positional
-            let inner = ScalarFunction::new_udf(fm, resolved_args);
+            let mut scalar_expr = RawScalarExpr {
+                func: fm,
+                args: resolved_args,
+            };
+
+            for planner in self.context_provider.get_expr_planners().iter() {
+                match planner.plan_scalar(scalar_expr, schema)? {
+                    PlannerResult::Planned(expr) => return Ok(expr),
+                    PlannerResult::Original(expr) => scalar_expr = expr,
+                }
+            }
+
+            let RawScalarExpr { func, args } = scalar_expr;
+            let inner = ScalarFunction::new_udf(func, args);
 
             if name.eq_ignore_ascii_case(inner.name()) {
                 return Ok(Expr::ScalarFunction(inner));
@@ -585,12 +603,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             )?;
 
             let func_deps = schema.functional_dependencies();
-            // Find whether ties are possible in the given ordering
+            // Find whether ties are possible in the given ordering. NULLs sort
+            // together and are peers, so a nullable UNIQUE column, which
+            // permits multiple NULL rows, does not rule out ties.
             let is_ordering_strict = order_by.iter().find_map(|orderby_expr| {
                 if let Expr::Column(col) = &orderby_expr.expr {
                     let idx = schema.index_of_column(col).ok()?;
                     return if func_deps.iter().any(|dep| {
-                        dep.source_indices == vec![idx] && dep.mode == Dependency::Single
+                        dep.source_indices == [idx]
+                            && dep.mode == Dependency::Single
+                            && dep.is_valid_across_nulls(schema)
                     }) {
                         Some(true)
                     } else {

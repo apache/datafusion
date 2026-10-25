@@ -237,7 +237,7 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
             self.values.extend(arr.iter().flatten().map(Hashable));
         } else {
             self.values
-                .extend(arr.values().iter().cloned().map(Hashable));
+                .extend(arr.values().iter().copied().map(Hashable));
         }
 
         Ok(())

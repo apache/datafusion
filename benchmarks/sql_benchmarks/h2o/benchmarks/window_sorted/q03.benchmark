@@ -1,0 +1,11 @@
+# ROW_NUMBER top-2, ~10K partitions.
+
+subgroup window_sorted
+
+template sql_benchmarks/h2o/window_sorted.benchmark.template
+QPAD=03
+FN=ROW_NUMBER
+PK_MOD=10000
+OB_EXPR=v2
+OB_BOUND=count(DISTINCT ob) > 1000
+NAME=window_sorted_q03_row_number_10k_partitions

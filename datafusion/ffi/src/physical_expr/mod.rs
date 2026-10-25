@@ -412,7 +412,7 @@ unsafe extern "C" fn release_fn_wrapper(expr: &mut FFI_PhysicalExpr) {
     unsafe {
         debug_assert!(!expr.private_data.is_null());
         let private_data =
-            Box::from_raw(expr.private_data as *mut PhysicalExprPrivateData);
+            Box::from_raw(expr.private_data.cast::<PhysicalExprPrivateData>());
         drop(private_data);
         expr.private_data = std::ptr::null_mut();
     }
@@ -424,7 +424,8 @@ unsafe extern "C" fn clone_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFI_PhysicalEx
 
         let private_data = Box::into_raw(Box::new(PhysicalExprPrivateData {
             expr: Arc::clone(&(*old_private_data).expr),
-        })) as *mut c_void;
+        }))
+        .cast::<c_void>();
 
         FFI_PhysicalExpr {
             data_type: data_type_fn_wrapper,
@@ -493,7 +494,7 @@ impl From<Arc<dyn PhysicalExpr>> for FFI_PhysicalExpr {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }

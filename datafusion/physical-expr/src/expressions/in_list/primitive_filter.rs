@@ -19,17 +19,18 @@
 //!
 //! This module provides membership tests for Arrow primitive types.
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
-use arrow::datatypes::*;
-use arrow::util::bit_iterator::BitIndexIterator;
-use datafusion_common::{HashSet, Result, exec_datafusion_err};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
+use arrow::datatypes::*;
+use arrow::util::bit_iterator::BitIndexIterator;
+use datafusion_common::{HashSet, Result, exec_datafusion_err};
+
 use super::branchless_filter::{BranchlessFilter, BranchlessFilterType};
 use super::result::build_in_list_result;
-use super::static_filter::{StaticFilter, StaticFilterRef, handle_dictionary};
+use super::static_filter::{StaticFilter, StaticFilterRef};
 
 /// Selects an optimized filter for a primitive representation.
 ///
@@ -311,7 +312,6 @@ where
     }
 
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-        handle_dictionary!(self, v, negated);
         let v = v.as_primitive_opt::<T>().ok_or_else(|| {
             exec_datafusion_err!("BitmapFilter: expected {} array", T::DATA_TYPE)
         })?;
@@ -432,8 +432,6 @@ where
     }
 
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-        handle_dictionary!(self, v, negated);
-
         let v = v.as_primitive_opt::<T>().ok_or_else(|| {
             exec_datafusion_err!(
                 "PrimitiveHashSetFilter: expected {} array",
@@ -464,6 +462,8 @@ mod tests {
         UInt8Array, UInt16Array, UInt32Array,
     };
     use half::f16;
+
+    use super::super::dictionary_filter::DictionaryFilter;
 
     fn uint32_array(values: Vec<Option<u32>>) -> ArrayRef {
         Arc::new(UInt32Array::from(values))
@@ -553,13 +553,19 @@ mod tests {
     #[test]
     fn bitmap_filter_u8_handles_dictionary_needles() -> Result<()> {
         let haystack: ArrayRef = Arc::new(UInt8Array::from(vec![Some(1), None, Some(3)]));
-        let filter = BitmapFilter::<UInt8Type>::try_new(&haystack)?;
+        let inner: StaticFilterRef =
+            Arc::new(BitmapFilter::<UInt8Type>::try_new(&haystack)?);
+        let filter = DictionaryFilter::new(inner);
 
         let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
         let values = Arc::new(UInt8Array::from(vec![Some(1), Some(2), Some(3)]));
         let needles = DictionaryArray::try_new(keys, values)?;
 
-        assert_contains(&filter, &needles, vec![Some(true), None, None, Some(true)])
+        assert_eq!(
+            filter.contains(&needles, false)?,
+            BooleanArray::from(vec![Some(true), None, None, Some(true)])
+        );
+        Ok(())
     }
 
     #[test]

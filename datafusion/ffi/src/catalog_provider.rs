@@ -186,7 +186,7 @@ unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_CatalogProvider) {
     unsafe {
         debug_assert!(!provider.private_data.is_null());
         let private_data =
-            Box::from_raw(provider.private_data as *mut ProviderPrivateData);
+            Box::from_raw(provider.private_data.cast::<ProviderPrivateData>());
         drop(private_data);
         provider.private_data = std::ptr::null_mut();
     }
@@ -202,7 +202,8 @@ unsafe extern "C" fn clone_fn_wrapper(
         let private_data = Box::into_raw(Box::new(ProviderPrivateData {
             provider: Arc::clone(&(*old_private_data).provider),
             runtime,
-        })) as *mut c_void;
+        }))
+        .cast::<c_void>();
 
         FFI_CatalogProvider {
             schema_names: schema_names_fn_wrapper,
@@ -264,7 +265,7 @@ impl FFI_CatalogProvider {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }

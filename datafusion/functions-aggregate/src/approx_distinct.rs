@@ -38,8 +38,9 @@ use datafusion_common::{
     DataFusionError, Result, downcast_value, internal_datafusion_err, internal_err,
     not_impl_err,
 };
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::format_state_name;
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator, Signature,
     Volatility,
@@ -125,6 +126,65 @@ impl<A: Accumulator> Accumulator for ApproxDistinctBitmapWrapper<A> {
     }
 }
 
+/// A validated, zero-copy view of a serialized `approx_distinct` partial state,
+/// as produced by [`GroupHll::serialize`] or by the per-group [`Accumulator`]s.
+enum SerializedHll<'a> {
+    /// The raw [`NUM_REGISTERS`] registers of a dense sketch.
+    Dense(&'a [u8; NUM_REGISTERS]),
+    /// Little-endian hashes of at most [`SPARSE_LIMIT`] distinct values. An
+    /// empty state decodes as an empty sparse state.
+    Sparse(&'a [[u8; size_of::<u64>()]]),
+}
+
+impl<'a> SerializedHll<'a> {
+    fn decode(bytes: &'a [u8]) -> Result<Self> {
+        if let Ok(registers) = <&[u8; NUM_REGISTERS]>::try_from(bytes) {
+            return Ok(Self::Dense(registers));
+        }
+        let (chunks, rest) = bytes.as_chunks::<{ size_of::<u64>() }>();
+        if !rest.is_empty() {
+            return internal_err!(
+                "approx_distinct: malformed sparse state: length {} is not a multiple of {}",
+                bytes.len(),
+                size_of::<u64>()
+            );
+        }
+        if chunks.len() > SPARSE_LIMIT {
+            return internal_err!(
+                "approx_distinct: malformed sparse state: length {} exceeds sparse limit {}",
+                bytes.len(),
+                SPARSE_LIMIT * size_of::<u64>()
+            );
+        }
+        Ok(Self::Sparse(chunks))
+    }
+}
+
+/// Merge the serialized partial states in `states` into `hll`.
+fn merge_states<T: Hash + ?Sized>(
+    hll: &mut HyperLogLog<T>,
+    states: &[ArrayRef],
+) -> Result<()> {
+    assert_eq!(1, states.len(), "expect only 1 element in the states");
+    let binary_array = downcast_value!(states[0], BinaryArray);
+    for v in binary_array.iter() {
+        let v = v.ok_or_else(|| {
+            internal_datafusion_err!("Impossibly got empty binary array from states")
+        })?;
+        match SerializedHll::decode(v)? {
+            SerializedHll::Dense(registers) => {
+                hll.merge(&HyperLogLog::new_with_registers(*registers));
+            }
+            SerializedHll::Sparse(chunks) => {
+                for chunk in chunks {
+                    hll.add_hashed(u64::from_le_bytes(*chunk));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct HLLAccumulator {
     hll: HyperLogLog<u8>,
@@ -165,16 +225,7 @@ impl Accumulator for HLLAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        assert_eq!(1, states.len(), "expect only 1 element in the states");
-        let binary_array = downcast_value!(states[0], BinaryArray);
-        for v in binary_array.iter() {
-            let v = v.ok_or_else(|| {
-                internal_datafusion_err!("Impossibly got empty binary array from states")
-            })?;
-            let other = v.try_into()?;
-            self.hll.merge(&other);
-        }
-        Ok(())
+        merge_states(&mut self.hll, states)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -225,16 +276,7 @@ where
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        assert_eq!(1, states.len(), "expect only 1 element in the states");
-        let binary_array = downcast_value!(states[0], BinaryArray);
-        for v in binary_array.iter() {
-            let v = v.ok_or_else(|| {
-                internal_datafusion_err!("Impossibly got empty binary array from states")
-            })?;
-            let other = v.try_into()?;
-            self.hll.merge(&other);
-        }
-        Ok(())
+        merge_states(&mut self.hll, states)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -334,37 +376,17 @@ impl GroupHll {
         }
     }
 
-    /// Merge a serialized state (produced by [`Self::serialize`] or by the
-    /// per-group [`Accumulator`]) into this sketch.
+    /// Merge a serialized state (see [`SerializedHll`]) into this sketch.
     fn merge_serialized(&mut self, bytes: &[u8]) -> Result<isize> {
-        if bytes.is_empty() {
-            return Ok(0);
-        }
-        if bytes.len() == NUM_REGISTERS {
-            let other: HyperLogLog<u8> = bytes.try_into()?;
-            Ok(self.merge_dense(&other))
-        } else {
-            if !bytes.len().is_multiple_of(size_of::<u64>()) {
-                return internal_err!(
-                    "approx_distinct: malformed sparse state: length {} is not a multiple of {}",
-                    bytes.len(),
-                    size_of::<u64>()
-                );
+        Ok(match SerializedHll::decode(bytes)? {
+            SerializedHll::Dense(registers) => {
+                self.merge_dense(&HyperLogLog::new_with_registers(*registers))
             }
-            if bytes.len() > SPARSE_LIMIT * size_of::<u64>() {
-                return internal_err!(
-                    "approx_distinct: malformed sparse state: length {} exceeds sparse limit {}",
-                    bytes.len(),
-                    SPARSE_LIMIT * size_of::<u64>()
-                );
-            }
-            let mut delta = 0;
-            for chunk in bytes.chunks_exact(size_of::<u64>()) {
-                let h = u64::from_le_bytes(chunk.try_into().unwrap());
-                delta += self.add_hash(h);
-            }
-            Ok(delta)
-        }
+            SerializedHll::Sparse(chunks) => chunks
+                .iter()
+                .map(|chunk| self.add_hash(u64::from_le_bytes(*chunk)))
+                .sum(),
+        })
     }
 
     /// Merge a dense sketch into this one, promoting to dense if necessary.
@@ -735,11 +757,9 @@ impl AggregateUDFImpl for ApproxDistinct {
                 )
                 .into(),
             ]),
-            DataType::Boolean
-            | DataType::UInt8
-            | DataType::Int8
-            | DataType::UInt16
-            | DataType::Int16 => get_fixed_domain_state_field(args.name, data_type),
+            _ if is_fixed_domain_type(data_type) => {
+                get_fixed_domain_state_field(args.name, data_type)
+            }
             _ => Ok(vec![
                 Field::new(
                     format_state_name(args.name, "hll_registers"),
@@ -756,11 +776,7 @@ impl AggregateUDFImpl for ApproxDistinct {
 
         // For primitive types, use specialized accumulators for better performance.
         let accumulator: Box<dyn Accumulator> = match data_type {
-            DataType::Boolean
-            | DataType::UInt8
-            | DataType::Int8
-            | DataType::UInt16
-            | DataType::Int16 => {
+            _ if is_fixed_domain_type(data_type) => {
                 return get_fixed_domain_approx_accumulator(data_type);
             }
             DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),
@@ -841,6 +857,11 @@ impl AggregateUDFImpl for ApproxDistinct {
             | DataType::Struct(_)
             | DataType::Union(_, _)
             | DataType::LargeBinary => Box::new(HLLAccumulator::new()),
+            DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _)
+                if is_supported_type(data_type) =>
+            {
+                Box::new(HLLAccumulator::new())
+            }
             DataType::Null => {
                 Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
             }
@@ -871,8 +892,46 @@ impl AggregateUDFImpl for ApproxDistinct {
         }
     }
 
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Updating an HLL register with a value already seen is a no-op.
+        DistinctHandling::Insensitive
+    }
+}
+
+fn is_fixed_domain_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Boolean
+            | DataType::UInt8
+            | DataType::Int8
+            | DataType::UInt16
+            | DataType::Int16
+    )
+}
+
+fn is_supported_type(data_type: &DataType) -> bool {
+    let value_type = encoded_value_type(data_type);
+    matches!(value_type, DataType::Null)
+        || is_fixed_domain_type(value_type)
+        || is_hll_groups_type(value_type)
+}
+
+fn encoded_value_type(data_type: &DataType) -> &DataType {
+    let mut value_type = data_type;
+    loop {
+        match value_type {
+            DataType::Dictionary(_, inner) => value_type = inner,
+            DataType::RunEndEncoded(_, values) => value_type = values.data_type(),
+            _ => return value_type,
+        }
     }
 }
 
@@ -880,6 +939,13 @@ impl AggregateUDFImpl for ApproxDistinct {
 /// [`HllGroupsAccumulator`]. The fixed-domain types (booleans / small ints) and
 /// `Null` fall back to the per-group [`Accumulator`] path.
 fn is_hll_groups_type(data_type: &DataType) -> bool {
+    if matches!(
+        data_type,
+        DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _)
+    ) {
+        return is_supported_type(data_type);
+    }
+
     matches!(
         data_type,
         DataType::UInt32
@@ -926,6 +992,52 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
 mod tests {
     use super::*;
     use std::hash::BuildHasher;
+
+    #[test]
+    fn dictionary_support() {
+        for value_type in [
+            DataType::Boolean,
+            DataType::UInt8,
+            DataType::Int8,
+            DataType::UInt16,
+            DataType::Int16,
+            DataType::Int64,
+            DataType::Null,
+            DataType::Utf8,
+            DataType::Binary,
+        ] {
+            let dict_type = DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(value_type.clone()),
+            );
+            assert!(is_hll_groups_type(&dict_type));
+        }
+
+        // Nested dictionaries resolve to the innermost value
+        assert!(is_hll_groups_type(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Utf8)
+            ))
+        )));
+
+        // Unsupported value types are rejected
+        for value_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let dict_type = DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(value_type.clone()),
+            );
+            let nested_dict_type = DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(dict_type.clone()),
+            );
+            assert!(!is_hll_groups_type(&value_type));
+            assert!(!is_supported_type(&dict_type));
+            assert!(!is_hll_groups_type(&dict_type));
+            assert!(!is_hll_groups_type(&nested_dict_type));
+        }
+    }
 
     #[cfg(not(feature = "force_hash_collisions"))]
     mod real_hash_test {

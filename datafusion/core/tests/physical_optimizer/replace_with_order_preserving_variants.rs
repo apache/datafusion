@@ -31,7 +31,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use insta::{allow_duplicates, assert_snapshot};
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
-use datafusion_common::{assert_contains, NullEquality, Result};
+use datafusion_common::{NullEquality, Result};
 use datafusion_common::config::ConfigOptions;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
@@ -1199,43 +1199,22 @@ fn test_plan_with_order_preserving_variants_preserves_fetch() -> Result<()> {
         .with_fetch(Some(10))
         .unwrap();
 
-    // Test sort's fetch is greater than coalesce fetch, return error because it's not reasonable
-    let requirements = OrderPreservationContext::new(
-        coalesced.clone(),
-        false,
-        vec![OrderPreservationContext::new(
-            parquet_exec.clone(),
+    // Keep the coalesce's row selection independently of an ancestor's fetch.
+    for sort_fetch in [Some(15), None, Some(5)] {
+        let requirements = OrderPreservationContext::new(
+            Arc::clone(&coalesced),
             false,
-            vec![],
-        )],
-    );
-    let res = plan_with_order_preserving_variants(requirements, false, true, Some(15));
-    assert_contains!(
-        res.unwrap_err().to_string(),
-        "CoalescePartitionsExec fetch [10] should be greater than or equal to SortExec fetch [15]"
-    );
-
-    // Test sort is without fetch, expected to get the fetch value from the coalesced
-    let requirements = OrderPreservationContext::new(
-        coalesced.clone(),
-        false,
-        vec![OrderPreservationContext::new(
-            parquet_exec.clone(),
-            false,
-            vec![],
-        )],
-    );
-    let res = plan_with_order_preserving_variants(requirements, false, true, None)?;
-    assert_eq!(res.plan.fetch(), Some(10),);
-
-    // Test sort's fetch is less than coalesces fetch, expected to get the fetch value from the sort
-    let requirements = OrderPreservationContext::new(
-        coalesced,
-        false,
-        vec![OrderPreservationContext::new(parquet_exec, false, vec![])],
-    );
-    let res = plan_with_order_preserving_variants(requirements, false, true, Some(5))?;
-    assert_eq!(res.plan.fetch(), Some(5),);
+            vec![OrderPreservationContext::new(
+                parquet_exec.clone(),
+                false,
+                vec![],
+            )],
+        );
+        let res =
+            plan_with_order_preserving_variants(requirements, false, true, sort_fetch)?;
+        assert!(Arc::ptr_eq(&res.plan, &coalesced));
+        assert_eq!(res.plan.fetch(), Some(10));
+    }
     Ok(())
 }
 

@@ -49,7 +49,7 @@ use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 
 /// The `all` option cannot run all examples end-to-end because the
 /// `server` example must run in a separate process before the `client`
-/// example can connect.  
+/// example can connect.
 /// Therefore, `all` only iterates over individually runnable examples.
 #[derive(EnumIter, EnumString, Display, VariantNames)]
 #[strum(serialize_all = "snake_case")]

@@ -51,6 +51,23 @@ query error array_has does not support type 'Null'
 select array_has_all([], null),
        array_has_all([1, 2, 3], null);
 
+# Preserve NULL rows when all needles are NULL or empty
+query BB
+WITH t(id, haystack, needle) AS (
+  VALUES
+    (1, [1, 2], arrow_cast(NULL, 'List(Int64)')),
+    (2, arrow_cast(NULL, 'List(Int64)'), arrow_cast([], 'List(Int64)')),
+    (3, [3, 4], arrow_cast([], 'List(Int64)'))
+)
+SELECT array_has_any(haystack, needle),
+       array_has_all(haystack, needle)
+FROM t
+ORDER BY id;
+----
+NULL NULL
+NULL NULL
+false true
+
 query BBBBBBBBBBBB
 select array_has(make_array(1,2), 1),
        array_has(make_array(1,2,NULL), 1),
@@ -617,8 +634,7 @@ select count(*) from test WHERE array_has([needle], needle);
 ----
 100000
 
-# The optimizer does not currently eliminate the filter;
-# Instead, it's rewritten as `IS NULL OR NOT NULL` due to SQL null semantics
+# The filter retains the necessary null check for a nullable needle.
 query TT
 explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
 select count(*) from test WHERE array_has([needle], needle);
@@ -629,14 +645,14 @@ logical_plan
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
 05)--------Projection:
-06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IS NOT NULL OR Boolean(NULL)
+06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IS NOT NULL
 07)------------TableScan: generate_series() projection=[value]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IS NOT NULL OR NULL, projection=[]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IS NOT NULL, projection=[]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 

@@ -179,10 +179,10 @@ pub mod test {
                     }
                     if let Some(expr) = r.filter.as_ref() {
                         self.collect_schemas_from_expr(expr)?
-                    };
+                    }
                     if let Some(expr) = r.best_effort_filter.as_ref() {
                         self.collect_schemas_from_expr(expr)?
-                    };
+                    }
                 }
                 RelType::Filter(f) => {
                     self.apply(f.input.as_ref().map(|b| b.as_ref()))?;
@@ -376,14 +376,14 @@ pub mod test {
                     for if_clause in it.ifs.iter() {
                         if let Some(expr) = if_clause.r#if.as_ref() {
                             self.collect_schemas_from_expr(expr)?;
-                        };
+                        }
                         if let Some(expr) = if_clause.then.as_ref() {
                             self.collect_schemas_from_expr(expr)?;
-                        };
+                        }
                     }
                     if let Some(expr) = it.r#else.as_ref() {
                         self.collect_schemas_from_expr(expr)?;
-                    };
+                    }
                 }
                 RexType::SwitchExpression(se) => {
                     if let Some(expr) = se.r#match.as_ref() {

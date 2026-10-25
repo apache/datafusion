@@ -37,7 +37,7 @@ pub use sort_rel::*;
 
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::not_impl_err;
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{LogicalPlan, MaterializedCtePlan};
 use substrait::proto::Rel;
 
 pub fn to_substrait_rel(
@@ -51,6 +51,9 @@ pub fn to_substrait_rel(
         LogicalPlan::Aggregate(plan) => producer.handle_aggregate(plan),
         LogicalPlan::Sort(plan) => producer.handle_sort(plan),
         LogicalPlan::Join(plan) => producer.handle_join(plan),
+        LogicalPlan::AsOfJoin(plan) => {
+            not_impl_err!("Substrait ASOF join is not supported: {plan:?}")?
+        }
         LogicalPlan::Repartition(plan) => producer.handle_repartition(plan),
         LogicalPlan::Union(plan) => producer.handle_union(plan),
         LogicalPlan::TableScan(plan) => producer.handle_table_scan(plan),
@@ -73,6 +76,12 @@ pub fn to_substrait_rel(
         LogicalPlan::Unnest(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::RecursiveQuery(plan) => {
             not_impl_err!("Unsupported plan type: {plan:?}")?
+        }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(plan)) => {
+            not_impl_err!("Substrait MATERIALIZED CTE is not supported: {plan:?}")?
+        }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(plan)) => {
+            not_impl_err!("Substrait MATERIALIZED CTE is not supported: {plan:?}")?
         }
     }
 }

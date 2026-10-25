@@ -302,7 +302,6 @@ mod test {
     use crate::{async_stream, async_try_stream};
     use futures::stream::FusedStream;
     use futures::{Stream, StreamExt, pin_mut};
-    use std::assert_matches;
     use std::pin::Pin;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -464,7 +463,7 @@ mod test {
         pin_mut!(s);
 
         for i in 0..3 {
-            assert_matches!(tx.send(i).await, Ok(_));
+            assert!(tx.send(i).await.is_ok());
             assert_eq!(Some(i), s.next().await);
         }
 

@@ -32,7 +32,7 @@ use std::fmt::Debug;
 /// This is a wrapper for handling different kinds of literal maps
 #[derive(Clone, Debug)]
 pub(super) struct BytesLikeIndexMap {
-    /// Map from non-null literal value the first occurrence index in the literals
+    /// Map from non-null literal value to the first occurrence index in the literals
     map: HashMap<Vec<u8>, u32>,
 }
 
@@ -106,7 +106,7 @@ fn try_get_bytes_iterator(
 
         DataType::LargeBinary => Box::new(array.as_binary::<i64>().into_iter()),
 
-        DataType::FixedSizeBinary(_) => Box::new(array.as_binary::<i64>().into_iter()),
+        DataType::FixedSizeBinary(_) => Box::new(array.as_fixed_size_binary().iter()),
 
         DataType::Utf8View => Box::new(
             array

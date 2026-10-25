@@ -16,11 +16,23 @@
 // under the License.
 
 //! [`OptimizeProjections`] identifies and eliminates unused columns
+//!
+//! # Precedence over `PushDownLeafProjections`
+//!
+//! `OptimizeProjections` merges adjacent projections, including a recovery
+//! projection over an extraction projection that
+//! [`PushDownLeafProjections`] creates. To keep the two rules from undoing each
+//! other, `PushDownLeafProjections` only creates that pair when the extraction
+//! projection moves below the input. See the module documentation of
+//! [`extract_leaf_expressions`](crate::extract_leaf_expressions).
+//!
+//! [`PushDownLeafProjections`]: crate::extract_leaf_expressions::PushDownLeafProjections
 
 mod required_indices;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_expr::logical_plan::MaterializedCtePlan;
 use std::sync::Arc;
 
 use datafusion_common::{
@@ -28,6 +40,7 @@ use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{
     Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScanBuilder, Unnest,
     Window, logical_plan::LogicalPlan,
@@ -87,10 +100,6 @@ impl OptimizerRule for OptimizeProjections {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
     }
 
     fn rewrite(
@@ -158,16 +167,18 @@ fn optimize_projections(
             {
                 aggregate.group_expr
             } else {
-                let group_by_expr_existing = aggregate
+                let group_by_input_indices = aggregate
                     .group_expr
                     .iter()
-                    .map(|group_by_expr| group_by_expr.schema_name().to_string())
+                    .map(|group_by_expr| {
+                        passthrough_field_index(group_by_expr, aggregate.input.schema())
+                    })
                     .collect::<Vec<_>>();
 
                 if let Some(simplest_groupby_indices) =
                     get_required_group_by_exprs_indices(
                         aggregate.input.schema(),
-                        &group_by_expr_existing,
+                        &group_by_input_indices,
                     )
                 {
                     // Some of the fields in the GROUP BY may be required by
@@ -282,7 +293,7 @@ fn optimize_projections(
         }
         // Other node types are handled below
         _ => {}
-    };
+    }
 
     // For other plan node types, calculate indices for columns they use and
     // try to rewrite their children
@@ -365,8 +376,18 @@ fn optimize_projections(
                     .collect()
             }
         }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+            // The scans are leaves whose schema is the schema of the body, so
+            // the body keeps every column. The output is the output of the
+            // continuation, so the continuation needs what the parent needs.
+            vec![
+                RequiredIndices::new_for_all_exprs(&cte.cte),
+                RequiredIndices::new_from_indices(indices.into_inner()),
+            ]
+        }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
+        | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
@@ -407,6 +428,26 @@ fn optimize_projections(
                 right_indices.with_projection_beneficial(),
             ]
         }
+        LogicalPlan::AsOfJoin(join) => {
+            let left_len = join.left.schema().fields().len();
+            let mut left_required = Vec::new();
+            let mut right_required = Vec::new();
+            for index in indices.indices() {
+                if *index < left_len {
+                    left_required.push(*index);
+                } else {
+                    right_required.push(*index - left_len);
+                }
+            }
+            let left_indices = RequiredIndices::new_from_indices(left_required)
+                .with_plan_exprs(&plan, join.left.schema())?;
+            let right_indices = RequiredIndices::new_from_indices(right_required)
+                .with_plan_exprs(&plan, join.right.schema())?;
+            vec![
+                left_indices.with_projection_beneficial(),
+                right_indices.with_projection_beneficial(),
+            ]
+        }
         // these nodes are explicitly rewritten in the match statement above
         LogicalPlan::Projection(_)
         | LogicalPlan::Aggregate(_)
@@ -426,7 +467,8 @@ fn optimize_projections(
                 RequiredIndices::new().with_plan_exprs(&plan, input.schema())?;
 
             // Add additional required indices from the parent
-            let mut additional_necessary_child_indices = Vec::new();
+            let mut additional_necessary_child_indices =
+                Vec::with_capacity(indices.indices().len());
             indices.indices().iter().for_each(|idx| {
                 if let Some(index) = dependency_indices.get(*idx) {
                     additional_necessary_child_indices.push(*index);
@@ -556,17 +598,6 @@ fn merge_consecutive_projections_one_level(
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
 
-    // A fast path: if the previous projection is same as the current projection
-    // we can directly remove the current projection and return child projection.
-    if prev_projection.expr == expr {
-        return Projection::try_new_with_schema(
-            expr,
-            Arc::clone(&prev_projection.input),
-            schema,
-        )
-        .map(Transformed::yes);
-    }
-
     // Count usages (referrals) of each projection expression in its input fields:
     let mut column_referral_map = HashMap::<&Column, usize>::new();
     for expr in &expr {
@@ -594,7 +625,7 @@ fn merge_consecutive_projections_one_level(
     // Try to rewrite the expressions in the current projection using the
     // previous projection as input:
     let name_preserver = NamePreserver::new_for_projection();
-    let mut original_names = vec![];
+    let mut original_names = Vec::with_capacity(expr.len());
     let new_exprs = expr.map_elements(|expr| {
         original_names.push(name_preserver.save(&expr));
 
@@ -1208,6 +1239,69 @@ mod tests {
           TableScan: test projection=[a]
         "
         )
+    }
+
+    #[test]
+    fn merge_structurally_equal_non_idempotent_projections() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("i", DataType::Int32, false)]);
+        let projection = || col("i").add(lit(1)).alias("i");
+        let plan = table_scan(TableReference::none(), &schema, None)?
+            .project(vec![projection()])?
+            .project(vec![projection()])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: ?table?.i + Int32(1) + Int32(1) AS i
+          TableScan: ?table? projection=[i]
+        "
+        )
+    }
+
+    #[test]
+    fn merge_deep_projection_chain_in_one_pass() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("i", DataType::Int32, false)]);
+        let mut plan = table_scan(TableReference::none(), &schema, None)?
+            .project(vec![col("i").add(lit(1)).alias("i")])?
+            .build()?;
+        for _ in 1..12 {
+            plan = LogicalPlanBuilder::from(plan)
+                .project(vec![col("i").add(lit(1)).alias("i")])?
+                .build()?;
+        }
+
+        let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeProjections::new())]);
+        let optimized = optimizer.optimize(
+            plan,
+            &OptimizerContext::new().with_max_passes(1),
+            observe,
+        )?;
+        let plan_string = format!("{optimized}");
+        assert_eq!(12, plan_string.matches("Int32(1)").count());
+        assert_eq!(1, plan_string.matches("Projection:").count());
+        Ok(())
+    }
+
+    #[test]
+    fn merge_columns_and_metadata_alias() -> Result<()> {
+        let metadata =
+            datafusion_common::metadata::FieldMetadata::from(HashMap::from([(
+                "key".to_string(),
+                "value".to_string(),
+            )]));
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a")])?
+            .project(vec![col("a").alias_with_metadata("a", Some(metadata))])?
+            .build()?;
+
+        let optimized = optimize(plan)?;
+        assert_eq!(
+            "value",
+            optimized.schema().field(0).metadata().get("key").unwrap()
+        );
+        assert_eq!(1, format!("{optimized}").matches("Projection:").count());
+        Ok(())
     }
 
     #[test]

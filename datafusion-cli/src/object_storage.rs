@@ -58,6 +58,7 @@ use object_store::aws::resolve_bucket_region;
 #[cfg(test)]
 #[expect(
     clippy::unused_async,
+    clippy::result_large_err,
     reason = "matches object_store::aws::resolve_bucket_region"
 )]
 async fn resolve_bucket_region(

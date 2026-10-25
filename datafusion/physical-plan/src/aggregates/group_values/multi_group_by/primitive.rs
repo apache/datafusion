@@ -31,7 +31,9 @@ use arrow::util::bit_util::apply_bitwise_binary_op;
 use datafusion_common::Result;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_expr::GroupSelection;
 use std::iter;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// An implementation of [`GroupColumn`] for primitive values
@@ -96,9 +98,9 @@ where
             } else {
                 unsafe { *array_values.get_unchecked(rhs_row) }
             };
-            // `left` was already canonicalized on append; canonicalize the
+            // `left` was already normalized on append; normalize the
             // input so ±0 (and any future equivalence class) compares equal.
-            if left.is_eq(right.canonicalize()) {
+            if left.is_eq(right.normalize_key()) {
                 cmp_buf[i / 8] |= 1 << (i % 8);
             }
         }
@@ -139,7 +141,7 @@ where
                 continue;
             }
 
-            if !self.group_values[lhs_row].is_eq(array.value(rhs_row).canonicalize()) {
+            if !self.group_values[lhs_row].is_eq(array.value(rhs_row).normalize_key()) {
                 equal_to_results.set_bit(idx, false);
             }
         }
@@ -163,7 +165,7 @@ where
         }
 
         self.group_values[lhs_row]
-            .is_eq(array.as_primitive::<T>().value(rhs_row).canonicalize())
+            .is_eq(array.as_primitive::<T>().value(rhs_row).normalize_key())
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
@@ -175,18 +177,18 @@ where
             } else {
                 self.nulls.append_non_null();
                 self.group_values
-                    .push(array.as_primitive::<T>().value(row).canonicalize());
+                    .push(array.as_primitive::<T>().value(row).normalize_key());
             }
         } else {
             self.group_values
-                .push(array.as_primitive::<T>().value(row).canonicalize());
+                .push(array.as_primitive::<T>().value(row).normalize_key());
         }
 
         Ok(())
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -225,7 +227,7 @@ where
                         self.group_values.push(T::default_value());
                     } else {
                         self.nulls.append_non_null();
-                        self.group_values.push(arr.value(row).canonicalize());
+                        self.group_values.push(arr.value(row).normalize_key());
                     }
                 }
             }
@@ -233,7 +235,7 @@ where
             (true, Nulls::None) => {
                 self.nulls.append_n_non_nulls(rows.len());
                 for &row in rows {
-                    self.group_values.push(arr.value(row).canonicalize());
+                    self.group_values.push(arr.value(row).normalize_key());
                 }
             }
 
@@ -245,7 +247,7 @@ where
 
             (false, _) => {
                 for &row in rows {
-                    self.group_values.push(arr.value(row).canonicalize());
+                    self.group_values.push(arr.value(row).normalize_key());
                 }
             }
         }
@@ -258,7 +260,9 @@ where
     }
 
     fn size(&self) -> usize {
-        self.group_values.allocated_size() + self.nulls.allocated_size()
+        size_of::<Self>()
+            + self.group_values.allocated_size()
+            + self.nulls.allocated_size()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
@@ -276,6 +280,23 @@ where
         let arr = PrimitiveArray::<T>::new(ScalarBuffer::from(group_values), nulls);
         // Set timezone information for timestamp
         Arc::new(arr.with_data_type(data_type))
+    }
+
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.group_values.len())?;
+        let values: Vec<T::Native> = selection
+            .iter()
+            .map(|index| self.group_values[index])
+            .collect();
+        let nulls = if NULLABLE {
+            self.nulls.build_preserving(selection)?
+        } else {
+            None
+        };
+        Ok(Arc::new(
+            PrimitiveArray::<T>::new(ScalarBuffer::from(values), nulls)
+                .with_data_type(self.data_type.clone()),
+        ))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
@@ -323,7 +344,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
+            |builder: &mut PrimitiveGroupValueBuilder<Float32Type, true>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -349,7 +370,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
+            |builder: &mut PrimitiveGroupValueBuilder<Float32Type, true>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -369,7 +390,7 @@ mod tests {
     where
         A: FnMut(&mut PrimitiveGroupValueBuilder<Float32Type, true>, &ArrayRef, &[usize]),
         E: FnMut(
-            &PrimitiveGroupValueBuilder<Float32Type, true>,
+            &mut PrimitiveGroupValueBuilder<Float32Type, true>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -424,7 +445,7 @@ mod tests {
         // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1, 2, 3, 4, 5, 6],
             &input_array,
             &[0, 1, 2, 3, 4, 5, 6],
@@ -452,7 +473,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+            |builder: &mut PrimitiveGroupValueBuilder<Int64Type, false>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -478,7 +499,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+            |builder: &mut PrimitiveGroupValueBuilder<Int64Type, false>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -498,7 +519,7 @@ mod tests {
     where
         A: FnMut(&mut PrimitiveGroupValueBuilder<Int64Type, false>, &ArrayRef, &[usize]),
         E: FnMut(
-            &PrimitiveGroupValueBuilder<Int64Type, false>,
+            &mut PrimitiveGroupValueBuilder<Int64Type, false>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -522,7 +543,7 @@ mod tests {
         // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1],
             &input_array,
             &[0, 1],

@@ -63,6 +63,12 @@ mod tracing;
 /// Run all tests that are found in the `extension_types` directory
 mod extension_types;
 
+/// Run all tests that are found in the `function_docs` directory
+mod function_docs;
+
+/// Run metrics integration tests in this shared test binary.
+mod metrics;
+
 /// Helper functions for tests.
 mod helper;
 

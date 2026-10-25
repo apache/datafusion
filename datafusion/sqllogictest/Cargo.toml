@@ -54,6 +54,7 @@ half = { workspace = true, default-features = true }
 indicatif = "0.18"
 itertools = { workspace = true }
 log = { workspace = true }
+num-traits = { workspace = true }
 object_store = { workspace = true }
 postgres-types = { version = "0.2.13", features = ["derive", "with-chrono-0_4"], optional = true }
 # When updating the following dependency verify that sqlite test file regeneration works correctly

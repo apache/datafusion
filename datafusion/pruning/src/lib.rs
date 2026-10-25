@@ -18,7 +18,11 @@
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 mod file_pruner;
+mod in_list;
+mod key_range_bitmap_expr;
+mod primitive_in_list;
 mod pruning_predicate;
+mod string_in_list;
 
 pub use file_pruner::FilePruner;
 pub use pruning_predicate::{
