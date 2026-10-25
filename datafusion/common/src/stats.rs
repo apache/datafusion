@@ -752,7 +752,16 @@ impl Statistics {
         let mut column_statistics = first.column_statistics.clone();
         for col_stats in &mut column_statistics {
             cast_sum_value_to_sum_type_in_place(&mut col_stats.sum_value);
+            if is_known_all_null(&first.num_rows, &col_stats.null_count) {
+                col_stats.min_value = Precision::Absent;
+                col_stats.max_value = Precision::Absent;
+            }
         }
+        let mut has_non_null_rows = first
+            .column_statistics
+            .iter()
+            .map(|col_stats| !is_known_all_null(&first.num_rows, &col_stats.null_count))
+            .collect::<Vec<_>>();
 
         // Merge the remaining items in a single pass.
         for (i, stat) in std::iter::once(second).chain(items).enumerate() {
@@ -770,8 +779,10 @@ impl Statistics {
             // Uses precision_add for sum (reuses the lhs accumulator for
             // direct numeric addition), while preserving the NDV update
             // ordering required by estimate_ndv_with_overlap.
-            for (col_stats, item_cs) in
-                column_statistics.iter_mut().zip(&stat.column_statistics)
+            for (column_index, (col_stats, item_cs)) in column_statistics
+                .iter_mut()
+                .zip(&stat.column_statistics)
+                .enumerate()
             {
                 col_stats.null_count = col_stats.null_count.add(&item_cs.null_count);
 
@@ -786,8 +797,16 @@ impl Statistics {
                     ),
                     _ => Precision::Absent,
                 };
-                precision_min(&mut col_stats.min_value, &item_cs.min_value);
-                precision_max(&mut col_stats.max_value, &item_cs.max_value);
+                if !is_known_all_null(&stat.num_rows, &item_cs.null_count) {
+                    if has_non_null_rows[column_index] {
+                        precision_min(&mut col_stats.min_value, &item_cs.min_value);
+                        precision_max(&mut col_stats.max_value, &item_cs.max_value);
+                    } else {
+                        col_stats.min_value = item_cs.min_value.clone();
+                        col_stats.max_value = item_cs.max_value.clone();
+                        has_non_null_rows[column_index] = true;
+                    }
+                }
                 precision_add_for_sum_in_place(
                     &mut col_stats.sum_value,
                     &item_cs.sum_value,
@@ -802,6 +821,15 @@ impl Statistics {
             column_statistics,
         })
     }
+}
+
+/// Returns whether the row count and null count prove that a column has no
+/// non-null values in this input.
+fn is_known_all_null(num_rows: &Precision<usize>, null_count: &Precision<usize>) -> bool {
+    matches!(
+        (num_rows, null_count),
+        (Precision::Exact(rows), Precision::Exact(nulls)) if rows == nulls
+    )
 }
 
 /// Estimates the combined number of distinct values (NDV) when merging two
@@ -2775,6 +2803,47 @@ mod tests {
             result.column_statistics[0].distinct_count,
             Precision::Inexact(5)
         );
+    }
+
+    #[test]
+    fn test_try_merge_iter_ignores_all_null_inputs_for_min_max() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let all_null = Statistics::default()
+            .with_num_rows(Precision::Exact(3))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown().with_null_count(Precision::Exact(3)),
+            );
+        let non_null = Statistics::default()
+            .with_num_rows(Precision::Exact(4))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(20)))),
+            );
+
+        for items in [[&all_null, &non_null], [&non_null, &all_null]] {
+            let merged = Statistics::try_merge_iter(items, &schema).unwrap();
+            let column = &merged.column_statistics[0];
+            assert_eq!(
+                column.min_value,
+                Precision::Exact(ScalarValue::Int32(Some(10)))
+            );
+            assert_eq!(
+                column.max_value,
+                Precision::Exact(ScalarValue::Int32(Some(20)))
+            );
+        }
+
+        // An unknown null count is not enough evidence to ignore an input.
+        let unknown_null_count = Statistics::default()
+            .with_num_rows(Precision::Exact(3))
+            .add_column_statistics(ColumnStatistics::new_unknown());
+        let merged =
+            Statistics::try_merge_iter([&non_null, &unknown_null_count], &schema)
+                .unwrap();
+        assert_eq!(merged.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(merged.column_statistics[0].max_value, Precision::Absent);
     }
 
     #[test]
