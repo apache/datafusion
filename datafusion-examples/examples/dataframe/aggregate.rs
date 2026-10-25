@@ -97,7 +97,7 @@ async fn expressions_over_aggregates(ctx: &SessionContext) -> Result<()> {
         .show()
         .await?;
 
-    // One step: select `accepts` scalar expressions over aggregates directly,
+    // One step: `select` accepts scalar expressions over aggregates directly,
     // so no intermediate aliases and no second call are needed
     println!("expressions over aggregates via select(...)");
     df.select(vec![

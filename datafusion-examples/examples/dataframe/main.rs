@@ -73,7 +73,9 @@ impl ExampleKind {
                     Box::pin(example.run()).await?;
                 }
             }
-            ExampleKind::Aggregate => aggregate::aggregate_example().await?,
+            ExampleKind::Aggregate => {
+                aggregate::aggregate_example().await?;
+            }
             ExampleKind::Dataframe => {
                 dataframe::dataframe_example().await?;
             }
