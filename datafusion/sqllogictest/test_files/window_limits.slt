@@ -874,5 +874,21 @@ FROM t_huge_following ORDER BY a LIMIT 2;
 1 15
 2 14
 
+# A `lead` offset on top of a huge frame saturates the lookahead
+query II
+SELECT a, lead(x, 9223372036854775807) OVER (ORDER BY a ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING) s
+FROM t_huge_following ORDER BY a LIMIT 2;
+----
+1 NULL
+2 NULL
+
+# A huge FOLLOWING start bound must not overflow the ROWS frame range
+query II
+SELECT a, sum(x) OVER (ORDER BY a ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING) s
+FROM t_huge_following ORDER BY a LIMIT 2;
+----
+1 NULL
+2 NULL
+
 statement ok
 DROP TABLE t_huge_following;

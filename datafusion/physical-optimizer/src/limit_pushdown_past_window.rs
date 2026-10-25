@@ -194,11 +194,16 @@ fn apply_limit(
         ctx.lookahead = 0;
         return Some(Transformed::no(Arc::clone(node)));
     };
-    // Saturate like EnsureRequirements sort pushdown: a huge window
-    // FOLLOWING bound must not wrap the TopK fetch in release builds.
+    // A huge window FOLLOWING bound can make `fetch + lookahead` overflow.
+    // Such a fetch could not drop any rows, and a `TopK` with a huge fetch
+    // keeps every row in memory without spilling, so skip the pushdown.
+    let Some(fetch) = fetch.checked_add(ctx.lookahead) else {
+        ctx.lookahead = 0;
+        return Some(Transformed::no(Arc::clone(node)));
+    };
     let fetch = match node.fetch() {
-        None => fetch.saturating_add(ctx.lookahead),
-        Some(existing) => cmp::min(existing, fetch.saturating_add(ctx.lookahead)),
+        None => fetch,
+        Some(existing) => cmp::min(existing, fetch),
     };
     Some(Transformed::complete(node.with_fetch(Some(fetch)).unwrap()))
 }
