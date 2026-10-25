@@ -609,8 +609,19 @@ benchmark, and then a PR with the code change that improves the benchmark.</p>
 </section>
 <section id="stale-prs">
 <h2>Stale PRs<a class="headerlink" href="#stale-prs" title="Link to this heading">#</a></h2>
+<p>Open, non-draft PRs with no activity for 14 days are automatically marked as
+draft if they have merge conflicts, failing CI checks, or an outstanding
+changes-requested review on the latest push. PRs awaiting review with none of
+these conditions remain ready for review. Cancelled, pending, skipped, or missing
+CI checks do not trigger drafting. PRs in the merge queue are excluded.</p>
+<p>The automation leaves a comment explaining why the PR was drafted. After
+addressing the listed items, mark the PR <strong>Ready for review</strong>. If you need help
+or a CI failure is unrelated to your changes, leave a comment on the PR.</p>
+<p>Maintainers can preview eligible PRs by running the <strong>Draft inactive PRs</strong>
+workflow manually with its default <code class="docutils literal notranslate"><span class="pre">dry_run</span></code> input enabled.</p>
 <p>Pull requests will be marked with a <code class="docutils literal notranslate"><span class="pre">stale</span></code> label after 60 days of inactivity and then closed 7 days after that.
-Commenting on the PR will remove the <code class="docutils literal notranslate"><span class="pre">stale</span></code> label.</p>
+Commenting on the PR will remove the <code class="docutils literal notranslate"><span class="pre">stale</span></code> label.
+The automatic draft notification also counts as activity and restarts this timer.</p>
 </section>
 <section id="ci-runners">
 <h2>CI Runners<a class="headerlink" href="#ci-runners" title="Link to this heading">#</a></h2>
