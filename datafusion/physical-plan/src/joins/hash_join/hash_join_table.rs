@@ -262,10 +262,10 @@ impl HashJoinTable {
     ) -> Self {
         // An empty map may still have build rows with NULL keys. Left/full
         // joins must retain those rows for final null extension.
+        let join_type = context.kind.join_type();
         let can_skip_probe = (build.data.batch.num_rows() == 0
-            && !context.kind.preserves_probe())
-            || (build.data.map.is_empty()
-                && matches!(context.kind, RegularJoinKind::Inner));
+            && join_type.empty_build_side_produces_empty_result())
+            || (build.data.map.is_empty() && join_type.empty_map_produces_empty_result());
         let phase = if can_skip_probe {
             Phase::DrainingOutput
         } else {
