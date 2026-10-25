@@ -179,6 +179,15 @@ select column1, column2, d from null_part where d = '2024-01-01';
 ----
 1 alice 2024-01-01
 
+# ... nor an inequality filter.
+query ITD
+select column1, column2, d from null_part where d <> '2024-01-01';
+----
+
+query ITD
+select column1, column2, d from null_part where d not in ('2024-01-01');
+----
+
 # Statistics for the null partition count its rows as nulls.
 query I
 select count(d) from null_part;
