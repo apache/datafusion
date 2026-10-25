@@ -34,7 +34,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
-use datafusion_common::utils::offset_span_len;
+use datafusion_common::utils::{map_dictionary_values, offset_span_len};
 use datafusion_common::{Result, cast::as_generic_string_array, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::function::Hint;
@@ -188,18 +188,21 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
         {
             if preserve_dictionary {
                 let compacted;
-                let mut dict = array.as_any_dictionary();
-                if dict.values().len() > dict.keys().len() {
+                let mut dict = array;
+                if array.as_any_dictionary().values().len() > array.len() {
                     // Filtered batches and shared Parquet dictionaries can have more
                     // values than rows, so drop unreferenced values first.
-                    compacted = garbage_collect_any_dictionary(dict)?;
-                    dict = compacted.as_any_dictionary();
+                    compacted =
+                        garbage_collect_any_dictionary(array.as_any_dictionary())?;
+                    dict = &compacted;
                 }
-                let mut inner: Vec<ColumnarValue> = Vec::with_capacity(args.len());
-                inner.push(ColumnarValue::Array(Arc::clone(dict.values())));
-                inner.extend_from_slice(&args[1..]);
-                let values_out = regexp_replace_func(&inner)?;
-                return Ok(ColumnarValue::Array(dict.with_values(values_out)));
+                let result = map_dictionary_values(dict, |values| {
+                    let mut inner: Vec<ColumnarValue> = Vec::with_capacity(args.len());
+                    inner.push(ColumnarValue::Array(Arc::clone(values)));
+                    inner.extend_from_slice(&args[1..]);
+                    regexp_replace_func(&inner)
+                })?;
+                return Ok(ColumnarValue::Array(result));
             }
             args[0] = ColumnarValue::Array(arrow::compute::cast(array, &value_type)?);
         }
