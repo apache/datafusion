@@ -1286,8 +1286,8 @@ async fn join_right_different_columns_count_with_filter() -> Result<()> {
     );
 
     let right = build_table_two_cols(
-        ("a2", &vec![Some(10), Some(20), Some(30)]),
-        ("b1", &vec![Some(4), Some(5), Some(6)]), // 6 does not exist on the left
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]), // 6 does not exist on the left
     );
 
     let on = vec![(
@@ -1338,8 +1338,8 @@ async fn join_left_different_columns_count_with_filter() -> Result<()> {
     // left join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
 
     let left = build_table_two_cols(
-        ("a2", &vec![Some(10), Some(20), Some(30)]),
-        ("b1", &vec![Some(4), Some(5), Some(6)]), // 6 does not exist on the right
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]), // 6 does not exist on the right
     );
 
     let right = build_table(
@@ -1398,8 +1398,8 @@ async fn join_left_with_filter_columns_right_before_left() -> Result<()> {
     // left join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
 
     let left = build_table_two_cols(
-        ("a2", &vec![Some(10), Some(20), Some(30)]),
-        ("b1", &vec![Some(4), Some(5), Some(6)]), // 6 does not exist on the right
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]), // 6 does not exist on the right
     );
 
     let right = build_table(
@@ -1459,8 +1459,8 @@ async fn join_right_with_filter_columns_right_before_left() -> Result<()> {
     // right join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
 
     let left = build_table_two_cols(
-        ("a2", &vec![Some(10), Some(20), Some(30)]),
-        ("b1", &vec![Some(4), Some(5), Some(6)]),
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]),
     );
 
     let right = build_table(
@@ -1593,8 +1593,8 @@ async fn join_left_mark_different_columns_count_with_filter() -> Result<()> {
     // left mark join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
 
     let left = build_table_two_cols(
-        ("a2", &vec![Some(10), Some(20), Some(30)]),
-        ("b1", &vec![Some(4), Some(5), Some(6)]), // 6 does not exist on the right
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]), // 6 does not exist on the right
     );
 
     let right = build_table(
@@ -1695,8 +1695,8 @@ async fn join_right_mark_different_columns_count_with_filter() -> Result<()> {
     );
 
     let right = build_table_two_cols(
-        ("a2", &vec![Some(10), Some(20), Some(30)]),
-        ("b1", &vec![Some(4), Some(5), Some(6)]), // 6 does not exist on the left
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]), // 6 does not exist on the left
     );
 
     let on = vec![(
@@ -2119,8 +2119,8 @@ async fn join_right_anti_one_one() -> Result<()> {
         ("c1", &vec![7, 8, 8]),
     );
     let right = build_table_two_cols(
-        ("a2", &vec![Some(10), Some(20), Some(30)]),
-        ("b1", &vec![Some(4), Some(5), Some(6)]),
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]),
     );
     let on = vec![(
         Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
@@ -2174,8 +2174,8 @@ async fn join_right_anti_two_two() -> Result<()> {
         ("c1", &vec![7, 8, 8]),
     );
     let right = build_table_two_cols(
-        ("a2", &vec![Some(10), Some(20), Some(30)]),
-        ("b1", &vec![Some(4), Some(5), Some(6)]),
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]),
     );
     let on = vec![
         (
@@ -2288,8 +2288,8 @@ async fn join_right_anti_two_with_filter() -> Result<()> {
 #[tokio::test]
 async fn join_right_anti_filtered_with_mismatched_columns() -> Result<()> {
     let left = build_table_two_cols(
-        ("a1", &vec![Some(31), Some(31)]),
-        ("b1", &vec![Some(32), Some(33)]),
+        ("a1", &[Some(31), Some(31)]),
+        ("b1", &[Some(32), Some(33)]),
     );
     let right = build_table(
         ("a2", &vec![31, 31]),
@@ -3228,11 +3228,11 @@ async fn join_full_null_filter_result() -> Result<()> {
     let left = build_table_two_cols(
         (
             "a1",
-            &vec![Some(1), Some(1), Some(2), Some(2), Some(3), Some(3)],
+            &[Some(1), Some(1), Some(2), Some(2), Some(3), Some(3)],
         ),
         (
             "b1",
-            &vec![Some(1), Some(2), Some(1), Some(2), Some(1), Some(2)],
+            &[Some(1), Some(2), Some(1), Some(2), Some(1), Some(2)],
         ),
     );
 
