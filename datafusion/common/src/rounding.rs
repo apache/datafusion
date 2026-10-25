@@ -271,11 +271,18 @@ where
         not(target_os = "windows")
     ))]
     unsafe {
-        let current = fegetround();
+        struct RoundingModeGuard(i32);
+
+        impl Drop for RoundingModeGuard {
+            fn drop(&mut self) {
+                unsafe { fesetround(self.0) };
+            }
+        }
+
+        // Restore the previous mode even if the operation panics.
+        let _guard = RoundingModeGuard(fegetround());
         fesetround(if UPPER { FE_UPWARD } else { FE_DOWNWARD });
-        let result = operation(lhs, rhs);
-        fesetround(current);
-        result
+        operation(lhs, rhs)
     }
     #[cfg(any(
         not(any(target_arch = "x86_64", target_arch = "aarch64")),
@@ -287,6 +294,35 @@ where
 #[cfg(test)]
 mod tests {
     use super::{next_down, next_up};
+
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        not(target_os = "windows")
+    ))]
+    #[test]
+    fn test_alter_fp_rounding_mode_restores_after_panic() {
+        use super::{FE_DOWNWARD, alter_fp_rounding_mode, fegetround, fesetround};
+        use crate::ScalarValue;
+
+        unsafe {
+            let original = fegetround();
+            fesetround(FE_DOWNWARD);
+
+            let result = std::panic::catch_unwind(|| {
+                alter_fp_rounding_mode::<true, _>(
+                    &ScalarValue::Null,
+                    &ScalarValue::Null,
+                    |_, _| panic!("operation panicked"),
+                )
+            });
+
+            let restored = fegetround();
+            fesetround(original);
+
+            assert!(result.is_err());
+            assert_eq!(restored, FE_DOWNWARD);
+        }
+    }
 
     #[test]
     fn test_next_down() {

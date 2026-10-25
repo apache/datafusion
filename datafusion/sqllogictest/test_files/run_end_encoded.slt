@@ -147,3 +147,56 @@ SELECT
     ) AS windowed_sum
 FROM sensor_readings
 ORDER BY temperature;
+
+# MIN / MAX over REE columns go through the same planning path as SQL users hit,
+# so the coerced argument type comes from get_min_max_result_type.
+statement ok
+CREATE TABLE ree_readings AS
+SELECT
+  sensor_id,
+  arrow_cast(arrow_cast(temperature, 'UInt32'), 'RunEndEncoded("run_ends": non-null Int32, "values": UInt32)') AS temp_u32
+FROM sensor_readings;
+
+# Ungrouped MIN / MAX over a REE integer column
+query II
+SELECT MIN(temp_u32), MAX(temp_u32) FROM ree_readings;
+----
+20 24
+
+# MIN / MAX return the REE column's value type, as they do for Dictionary
+query TT
+SELECT arrow_typeof(MIN(temp_u32)), arrow_typeof(MAX(temp_u32)) FROM ree_readings;
+----
+UInt32 UInt32
+
+# Grouped MIN / MAX over a REE integer column
+query ?II rowsort
+SELECT sensor_id, MIN(temp_u32), MAX(temp_u32)
+FROM ree_readings
+GROUP BY sensor_id;
+----
+sensor_A 22 24
+sensor_B 20 20
+
+# MAX as a window function over a REE column
+query ?I rowsort
+SELECT sensor_id, MAX(temp_u32) OVER (PARTITION BY sensor_id)
+FROM ree_readings;
+----
+sensor_A 24
+sensor_A 24
+sensor_A 24
+sensor_B 20
+
+# MIN / MAX over a REE column whose values are Dictionary-encoded
+query TT
+SELECT MAX(arrow_cast(arrow_cast(sensor_id, 'Dictionary(UInt32, Utf8)'),
+         'RunEndEncoded("run_ends": non-null Int32, "values": Dictionary(UInt32, Utf8))')),
+       arrow_typeof(MAX(arrow_cast(arrow_cast(sensor_id, 'Dictionary(UInt32, Utf8)'),
+         'RunEndEncoded("run_ends": non-null Int32, "values": Dictionary(UInt32, Utf8))')))
+FROM sensor_readings;
+----
+sensor_B Utf8
+
+statement ok
+DROP TABLE ree_readings;

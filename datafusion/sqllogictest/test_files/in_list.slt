@@ -20,9 +20,11 @@
 #
 # This file focuses on the IN operator and its various specializations
 #
-# Note that "short" IN LISTS do not go through the InList implementation at all,
-# instead they are rewritten into a series of OR expressions. See:
-# https://github.com/apache/datafusion/blob/ed37b6c9555bc278130dc774ed833b8c0bd29bfa/datafusion/optimizer/src/simplify_expressions/inlist_simplifier.rs#L39-L88
+# One-item IN lists are rewritten to a comparison. Two- and three-item literal
+# lists on Int32, Int64, UInt64, Float32, Float64, or FixedSizeBinary columns
+# with widths 1, 2, 4, 8, or 16 retain their static InList filters. Other short
+# lists on columns are rewritten to OR/AND expressions. See:
+# https://github.com/apache/datafusion/blob/main/datafusion/optimizer/src/simplify_expressions/inlist_simplifier.rs
 ##########
 
 
@@ -211,6 +213,69 @@ CREATE TABLE in_list_ints_nullable (
   ('no_match', 7, 7, 7, 7, 7, 7, 7, 7),
   ('nulls', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
+# Measured integer representations retain two- and three-item literal lists.
+query TBBBBBB
+SELECT label,
+       i32 IN (arrow_cast(3, 'Int32'), arrow_cast(11, 'Int32')),
+       i32 NOT IN (arrow_cast(3, 'Int32'), arrow_cast(4, 'Int32'), arrow_cast(11, 'Int32')),
+       i64 IN (arrow_cast(3, 'Int64'), arrow_cast(4, 'Int64'), arrow_cast(11, 'Int64')),
+       i64 NOT IN (arrow_cast(3, 'Int64'), arrow_cast(11, 'Int64')),
+       u64 IN (arrow_cast(3, 'UInt64'), arrow_cast(11, 'UInt64')),
+       u64 NOT IN (arrow_cast(3, 'UInt64'), arrow_cast(4, 'UInt64'), arrow_cast(11, 'UInt64'))
+FROM in_list_ints_nullable
+ORDER BY label
+----
+match true false true false true false
+no_match false true false true false true
+nulls NULL NULL NULL NULL NULL NULL
+
+query TBBBBBB
+SELECT label,
+       i32 IN (arrow_cast(NULL, 'Int32'), arrow_cast(11, 'Int32')),
+       i32 NOT IN (arrow_cast(NULL, 'Int32'), arrow_cast(3, 'Int32'), arrow_cast(11, 'Int32')),
+       i64 IN (arrow_cast(NULL, 'Int64'), arrow_cast(3, 'Int64'), arrow_cast(11, 'Int64')),
+       i64 NOT IN (arrow_cast(NULL, 'Int64'), arrow_cast(11, 'Int64')),
+       u64 IN (arrow_cast(NULL, 'UInt64'), arrow_cast(11, 'UInt64')),
+       u64 NOT IN (arrow_cast(NULL, 'UInt64'), arrow_cast(3, 'UInt64'), arrow_cast(11, 'UInt64'))
+FROM in_list_ints_nullable
+ORDER BY label
+----
+match true false true false true false
+no_match NULL NULL NULL NULL NULL NULL
+nulls NULL NULL NULL NULL NULL NULL
+
+# A column-valued list keeps the comparison path for these representations.
+query TBBBBBB
+SELECT label,
+       i32 IN (arrow_cast(3, 'Int32'), i16),
+       i32 NOT IN (arrow_cast(3, 'Int32'), i16),
+       i64 IN (arrow_cast(3, 'Int64'), arrow_cast(4, 'Int64'), i32),
+       i64 NOT IN (arrow_cast(3, 'Int64'), arrow_cast(4, 'Int64'), i32),
+       u64 IN (arrow_cast(3, 'UInt64'), u32),
+       u64 NOT IN (arrow_cast(3, 'UInt64'), u32)
+FROM in_list_ints_nullable
+ORDER BY label
+----
+match true false true false true false
+no_match true false true false true false
+nulls NULL NULL NULL NULL NULL NULL
+
+query TT
+EXPLAIN SELECT i32 IN (arrow_cast(3, 'Int32'), arrow_cast(11, 'Int32')) AS i32_in_two,
+               i64 NOT IN (arrow_cast(3, 'Int64'), arrow_cast(4, 'Int64'), arrow_cast(11, 'Int64')) AS i64_not_in_three,
+               u64 IN (arrow_cast(3, 'UInt64'), arrow_cast(4, 'UInt64'), arrow_cast(11, 'UInt64')) AS u64_in_three,
+               i64 IN (arrow_cast(1, 'Int64')) AS i64_in_one,
+               i64 IN (arrow_cast(3, 'Int64'), i32) AS i64_in_column,
+               i64 NOT IN (arrow_cast(3, 'Int64'), i32) AS i64_not_in_column
+FROM in_list_ints_nullable;
+----
+logical_plan
+01)Projection: in_list_ints_nullable.i32 IN ([Int32(3), Int32(11)]) AS i32_in_two, in_list_ints_nullable.i64 NOT IN ([Int64(3), Int64(4), Int64(11)]) AS i64_not_in_three, in_list_ints_nullable.u64 IN ([UInt64(3), UInt64(4), UInt64(11)]) AS u64_in_three, in_list_ints_nullable.i64 = Int64(1) AS i64_in_one, in_list_ints_nullable.i64 = Int64(3) OR in_list_ints_nullable.i64 = CAST(in_list_ints_nullable.i32 AS Int64) AS i64_in_column, in_list_ints_nullable.i64 != Int64(3) AND in_list_ints_nullable.i64 != CAST(in_list_ints_nullable.i32 AS Int64) AS i64_not_in_column
+02)--TableScan: in_list_ints_nullable projection=[i32, i64, u64]
+physical_plan
+01)ProjectionExec: expr=[i32@0 IN (SET) ([3, 11]) as i32_in_two, i64@1 NOT IN (SET) ([3, 4, 11]) as i64_not_in_three, u64@2 IN (SET) ([3, 4, 11]) as u64_in_three, i64@1 = 1 as i64_in_one, i64@1 = 3 OR i64@1 = CAST(i32@0 AS Int64) as i64_in_column, i64@1 != 3 AND i64@1 != CAST(i32@0 AS Int64) as i64_not_in_column]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Null input values return NULL when the IN list has no nulls.
 query TBBBBBBBB
 SELECT
@@ -307,6 +372,79 @@ FROM (VALUES
   ('no_match', 7.0),
   ('nulls', NULL)
 ) AS t(label, value);
+
+# Short Float32 and Float64 lists retain membership filters for IN and NOT IN.
+query TBBBBBBBB
+SELECT
+  label,
+  f32 IN (arrow_cast(3.0, 'Float32'), arrow_cast(11.0, 'Float32')),
+  f32 NOT IN (arrow_cast(3.0, 'Float32'), arrow_cast(11.0, 'Float32')),
+  f32 IN (arrow_cast(3.0, 'Float32'), arrow_cast(4.0, 'Float32'), arrow_cast(11.0, 'Float32')),
+  f32 NOT IN (arrow_cast(3.0, 'Float32'), arrow_cast(4.0, 'Float32'), arrow_cast(11.0, 'Float32')),
+  f32 IN (NULL, arrow_cast(11.0, 'Float32')),
+  f32 NOT IN (NULL, arrow_cast(11.0, 'Float32')),
+  f32 IN (NULL, arrow_cast(3.0, 'Float32'), arrow_cast(11.0, 'Float32')),
+  f32 NOT IN (NULL, arrow_cast(3.0, 'Float32'), arrow_cast(11.0, 'Float32'))
+FROM in_list_floats
+ORDER BY label
+----
+match true false true false true false true false
+no_match false true false true NULL NULL NULL NULL
+nulls NULL NULL NULL NULL NULL NULL NULL NULL
+
+query TBBBBBBBB
+SELECT
+  label,
+  f64 IN (3.0, 11.0),
+  f64 NOT IN (3.0, 11.0),
+  f64 IN (3.0, 4.0, 11.0),
+  f64 NOT IN (3.0, 4.0, 11.0),
+  f64 IN (NULL, 11.0),
+  f64 NOT IN (NULL, 11.0),
+  f64 IN (NULL, 3.0, 11.0),
+  f64 NOT IN (NULL, 3.0, 11.0)
+FROM in_list_floats
+ORDER BY label
+----
+match true false true false true false true false
+no_match false true false true NULL NULL NULL NULL
+nulls NULL NULL NULL NULL NULL NULL NULL NULL
+
+# A list containing a column is evaluated through comparisons.
+query TBBBB
+SELECT label,
+       f32 IN (arrow_cast(3.0, 'Float32'), f16),
+       f32 NOT IN (arrow_cast(3.0, 'Float32'), f16),
+       f64 IN (3.0, f32), f64 NOT IN (3.0, f32)
+FROM in_list_floats
+ORDER BY label
+----
+match true false true false
+no_match true false true false
+nulls NULL NULL NULL NULL
+
+query TT
+EXPLAIN SELECT f32 IN (arrow_cast(3.0, 'Float32'), arrow_cast(11.0, 'Float32')) AS in_two,
+               f32 NOT IN (arrow_cast(3.0, 'Float32'), arrow_cast(4.0, 'Float32'), arrow_cast(11.0, 'Float32')) AS not_in_three
+FROM in_list_floats;
+----
+logical_plan
+01)Projection: in_list_floats.f32 IN ([Float32(3), Float32(11)]) AS in_two, in_list_floats.f32 NOT IN ([Float32(3), Float32(4), Float32(11)]) AS not_in_three
+02)--TableScan: in_list_floats projection=[f32]
+physical_plan
+01)ProjectionExec: expr=[f32@0 IN (SET) ([3, 11]) as in_two, f32@0 NOT IN (SET) ([3, 4, 11]) as not_in_three]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT f64 IN (3.0, 11.0) AS in_two, f64 NOT IN (3.0, 4.0, 11.0) AS not_in_three
+FROM in_list_floats;
+----
+logical_plan
+01)Projection: in_list_floats.f64 IN ([Float64(3), Float64(11)]) AS in_two, in_list_floats.f64 NOT IN ([Float64(3), Float64(4), Float64(11)]) AS not_in_three
+02)--TableScan: in_list_floats projection=[f64]
+physical_plan
+01)ProjectionExec: expr=[f64@0 IN (SET) ([3, 11]) as in_two, f64@0 NOT IN (SET) ([3, 4, 11]) as not_in_three]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Five element IN lists cover the specialized Float16/32/64 paths.
 query TTBBB
@@ -615,6 +753,82 @@ FROM in_list_fsb
 LIMIT 1
 ----
 FixedSizeBinary(1) FixedSizeBinary(2) FixedSizeBinary(3) FixedSizeBinary(4) FixedSizeBinary(8) FixedSizeBinary(16)
+
+# Short lists at the width endpoints cover both list lengths and typed nulls.
+query TBBBBBB
+SELECT
+  label,
+  fsb1 IN (arrow_cast(X'03', 'FixedSizeBinary(1)'), arrow_cast(X'0B', 'FixedSizeBinary(1)')),
+  fsb1 NOT IN (arrow_cast(X'03', 'FixedSizeBinary(1)'), arrow_cast(X'04', 'FixedSizeBinary(1)'), arrow_cast(X'0B', 'FixedSizeBinary(1)')),
+  fsb1 IN (arrow_cast(NULL, 'FixedSizeBinary(1)'), arrow_cast(X'0B', 'FixedSizeBinary(1)')),
+  fsb16 IN (arrow_cast(X'00000000000000000000000000000003', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000004', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000B', 'FixedSizeBinary(16)')),
+  fsb16 NOT IN (arrow_cast(X'00000000000000000000000000000003', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000B', 'FixedSizeBinary(16)')),
+  fsb16 NOT IN (arrow_cast(NULL, 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000003', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000B', 'FixedSizeBinary(16)'))
+FROM in_list_fsb
+ORDER BY label
+----
+match true false true true false false
+no_match false true NULL false true NULL
+nulls NULL NULL NULL NULL NULL NULL
+
+# A column-valued list retains the comparison path.
+query TBBBB
+SELECT l.label,
+       l.fsb1 IN (arrow_cast(X'03', 'FixedSizeBinary(1)'), r.fsb1),
+       l.fsb1 NOT IN (arrow_cast(X'03', 'FixedSizeBinary(1)'), r.fsb1),
+       l.fsb16 IN (arrow_cast(X'00000000000000000000000000000003', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000004', 'FixedSizeBinary(16)'), r.fsb16),
+       l.fsb16 NOT IN (arrow_cast(X'00000000000000000000000000000003', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000004', 'FixedSizeBinary(16)'), r.fsb16)
+FROM in_list_fsb l CROSS JOIN in_list_fsb r
+WHERE r.label = 'match'
+ORDER BY l.label
+----
+match true false true false
+no_match false true false true
+nulls NULL NULL NULL NULL
+
+query TT
+EXPLAIN SELECT fsb1 IN (arrow_cast(X'03', 'FixedSizeBinary(1)'), arrow_cast(X'0B', 'FixedSizeBinary(1)')) AS in_two,
+               fsb16 NOT IN (arrow_cast(X'00000000000000000000000000000003', 'FixedSizeBinary(16)'), arrow_cast(X'00000000000000000000000000000004', 'FixedSizeBinary(16)'), arrow_cast(X'0000000000000000000000000000000B', 'FixedSizeBinary(16)')) AS not_in_three
+FROM in_list_fsb;
+----
+logical_plan
+01)Projection: in_list_fsb.fsb1 IN ([FixedSizeBinary(1, "3"), FixedSizeBinary(1, "11")]) AS in_two, in_list_fsb.fsb16 NOT IN ([FixedSizeBinary(16, "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3"), FixedSizeBinary(16, "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4"), FixedSizeBinary(16, "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11")]) AS not_in_three
+02)--TableScan: in_list_fsb projection=[fsb1, fsb16]
+physical_plan
+01)ProjectionExec: expr=[fsb1@0 IN (SET) ([03, 0B]) as in_two, fsb16@1 NOT IN (SET) ([00000000000000000000..., 00000000000000000000..., 00000000000000000000...]) as not_in_three]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Short eight-byte lists retain membership filters, including list nulls.
+query TBBBBBBBB
+SELECT
+  label,
+  fsb8 IN (arrow_cast(X'0000000000000003', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)')),
+  fsb8 NOT IN (arrow_cast(X'0000000000000003', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)')),
+  fsb8 IN (arrow_cast(X'0000000000000003', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000004', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)')),
+  fsb8 NOT IN (arrow_cast(X'0000000000000003', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000004', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)')),
+  fsb8 IN (arrow_cast(NULL, 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)')),
+  fsb8 NOT IN (arrow_cast(NULL, 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)')),
+  fsb8 IN (arrow_cast(NULL, 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000003', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)')),
+  fsb8 NOT IN (arrow_cast(NULL, 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000003', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)'))
+FROM in_list_fsb
+ORDER BY label
+----
+match true false true false true false true false
+no_match false true false true NULL NULL NULL NULL
+nulls NULL NULL NULL NULL NULL NULL NULL NULL
+
+query TT
+EXPLAIN SELECT
+  fsb8 IN (arrow_cast(X'0000000000000003', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)')) AS in_two,
+  fsb8 NOT IN (arrow_cast(X'0000000000000003', 'FixedSizeBinary(8)'), arrow_cast(X'0000000000000004', 'FixedSizeBinary(8)'), arrow_cast(X'000000000000000B', 'FixedSizeBinary(8)')) AS not_in_three
+FROM in_list_fsb;
+----
+logical_plan
+01)Projection: in_list_fsb.fsb8 IN ([FixedSizeBinary(8, "0,0,0,0,0,0,0,3"), FixedSizeBinary(8, "0,0,0,0,0,0,0,11")]) AS in_two, in_list_fsb.fsb8 NOT IN ([FixedSizeBinary(8, "0,0,0,0,0,0,0,3"), FixedSizeBinary(8, "0,0,0,0,0,0,0,4"), FixedSizeBinary(8, "0,0,0,0,0,0,0,11")]) AS not_in_three
+02)--TableScan: in_list_fsb projection=[fsb8]
+physical_plan
+01)ProjectionExec: expr=[fsb8@0 IN (SET) ([0000000000000003, 000000000000000B]) as in_two, fsb8@0 NOT IN (SET) ([0000000000000003, 0000000000000004, 000000000000000B]) as not_in_three]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Eight element lists, all matching or none matching
 query TBBBBBB

@@ -19,8 +19,12 @@
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 
-use arrow::buffer::NullBuffer;
+use arrow::array::{Array, UInt64Array};
+use arrow::buffer::BooleanBuffer;
+use arrow::compute::kernels::zip::zip;
+use arrow::compute::{is_not_null, take};
 use arrow::datatypes::FieldRef;
+use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
@@ -282,6 +286,8 @@ impl WindowUDFImpl for NthValue {
                 state,
                 ignore_nulls: partition_evaluator_args.ignore_nulls(),
                 n: 0,
+                last_frame: None,
+                last_valid: None,
             }));
         }
 
@@ -315,6 +321,8 @@ impl WindowUDFImpl for NthValue {
             state,
             ignore_nulls: partition_evaluator_args.ignore_nulls(),
             n,
+            last_frame: None,
+            last_valid: None,
         }))
     }
 
@@ -377,6 +385,13 @@ pub(crate) struct NthValueEvaluator {
     state: NthValueState,
     ignore_nulls: bool,
     n: i64,
+    /// With `IGNORE NULLS`, whether FIRST_VALUE or NTH_VALUE selected a row in the
+    /// last frame passed to `evaluate_ranges`, and the first row of that frame that
+    /// later frames with the same start can still need. `memoize` consumes it.
+    last_frame: Option<(bool, usize)>,
+    /// With `IGNORE NULLS`, the last non-NULL result of LAST_VALUE that `memoize`
+    /// saw, which is also the result of later frames without valid rows
+    last_valid: Option<ScalarValue>,
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
@@ -389,31 +404,28 @@ impl PartitionEvaluator for NthValueEvaluator {
         let out = &state.out_col;
         let size = out.len();
         if self.ignore_nulls {
-            match self.state.kind {
-                // Prune on first non-null output in case of FIRST_VALUE
-                NthValueKind::First => {
-                    if let Some(nulls) = out.nulls() {
-                        if self.state.finalized_result.is_none() {
-                            if let Some(valid_index) = nulls.valid_indices().next() {
-                                let result =
-                                    ScalarValue::try_from_array(out, valid_index)?;
-                                self.state.finalized_result = Some(result);
-                            } else {
-                                // The output is empty or all nulls, ignore
-                            }
-                        }
-                        if state.window_frame_range.start < state.window_frame_range.end {
-                            state.window_frame_range.start =
-                                state.window_frame_range.end - 1;
-                        }
-                        return Ok(());
-                    } else {
-                        // Fall through to the main case because there are no nulls
-                    }
+            if self.state.kind == NthValueKind::Last {
+                // LAST_VALUE returns its last valid value for a later frame without
+                // valid rows, so none of the frame is needed
+                if size > 0 && out.is_valid(size - 1) {
+                    self.last_valid = Some(ScalarValue::try_from_array(out, size - 1)?);
                 }
-                // Do not memoize for other kinds when nulls are ignored
-                NthValueKind::Last | NthValueKind::Nth => return Ok(()),
+                state.window_frame_range.start = state.window_frame_range.end;
+            } else if let Some((selected, needed_from)) = self.last_frame.take() {
+                if selected && (self.state.kind == NthValueKind::First || self.n > 0) {
+                    // FIRST_VALUE and NTH_VALUE(expr, n) select the same row in
+                    // every later frame
+                    let result = ScalarValue::try_from_array(out, size - 1)?;
+                    self.state.finalized_result = Some(result);
+                } else {
+                    state.window_frame_range.start = needed_from;
+                }
             }
+            if self.state.finalized_result.is_some() {
+                state.window_frame_range.start =
+                    state.window_frame_range.end.saturating_sub(1);
+            }
+            return Ok(());
         }
         let mut buffer_size = 1;
         // Decide if we arrived at a final result yet:
@@ -463,15 +475,52 @@ impl PartitionEvaluator for NthValueEvaluator {
         } else {
             // FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions take a single column, values will have size 1.
             let arr = &values[0];
-            let n_range = range.end - range.start;
-            if n_range == 0 {
-                // We produce None if the window is empty.
-                return ScalarValue::try_from(arr.data_type());
+            match (self.valid_index(arr, range), &self.last_valid) {
+                (Some(index), _) => ScalarValue::try_from_array(arr, index),
+                (None, Some(last_valid)) => Ok(last_valid.clone()),
+                (None, None) => ScalarValue::try_from(arr.data_type()),
             }
-            match self.valid_index(arr, range) {
-                Some(index) => ScalarValue::try_from_array(arr, index),
-                None => ScalarValue::try_from(arr.data_type()),
-            }
+        }
+    }
+
+    fn evaluate_ranges(
+        &mut self,
+        values: &[ArrayRef],
+        ranges: &[Range<usize>],
+    ) -> Result<ArrayRef> {
+        if let Some(result) = &self.state.finalized_result {
+            return result.to_array_of_size(ranges.len());
+        }
+        let arr = &values[0];
+        if self.ignore_nulls
+            && self.state.kind != NthValueKind::Last
+            && let Some(range) = ranges.last()
+        {
+            // NTH_VALUE(expr, -n) selects the same row or a later one in later frames
+            // with the same start. Without a selected row, the frame has too few
+            // valid rows, all of which later frames can need.
+            let selected = self.valid_index(arr, range);
+            let needed_from = selected
+                .or_else(|| range.clone().find(|&idx| arr.is_valid(idx)))
+                .unwrap_or(range.end);
+            self.last_frame = Some((selected.is_some(), needed_from));
+        }
+        if let [range] = ranges {
+            // A scalar is cheaper than a gather for a single row, as in one-row partitions
+            return self.evaluate(values, range)?.to_array();
+        }
+        let indices = ranges
+            .iter()
+            .map(|range| self.valid_index(arr, range).map(|index| index as u64))
+            .collect::<UInt64Array>();
+        let result = take(arr, &indices, None)?;
+        match &self.last_valid {
+            Some(last_valid) if indices.null_count() > 0 => Ok(zip(
+                &is_not_null(&indices)?,
+                &result,
+                &last_valid.to_scalar()?,
+            )?),
+            _ => Ok(result),
         }
     }
 
@@ -487,14 +536,19 @@ impl PartitionEvaluator for NthValueEvaluator {
 impl NthValueEvaluator {
     fn valid_index(&self, array: &ArrayRef, range: &Range<usize>) -> Option<usize> {
         let n_range = range.end - range.start;
-        if self.ignore_nulls {
-            // Calculate valid indices, inside the window frame boundaries.
-            let slice = array.slice(range.start, n_range);
-            if let Some(nulls) = slice.nulls()
-                && nulls.null_count() > 0
-            {
-                return self.valid_index_with_nulls(nulls, range.start);
-            }
+        if n_range == 0 {
+            // We produce None if the window is empty.
+            return None;
+        }
+        if self.ignore_nulls
+            && let Some(nulls) = array.nulls()
+        {
+            // Read the validity bits inside the window frame boundaries in place. Slicing
+            // `array` instead would allocate and count the frame's nulls for every row.
+            let valid = nulls.inner().slice(range.start, n_range);
+            return self
+                .valid_index_with_nulls(&valid)
+                .map(|idx| idx + range.start);
         }
         // Either no nulls, or nulls are regarded as valid rows
         match self.state.kind {
@@ -525,33 +579,53 @@ impl NthValueEvaluator {
         }
     }
 
-    fn valid_index_with_nulls(&self, nulls: &NullBuffer, offset: usize) -> Option<usize> {
+    /// Returns the index within the frame of the value to return, given the frame's validity
+    /// bits.
+    fn valid_index_with_nulls(&self, valid: &BooleanBuffer) -> Option<usize> {
         match self.state.kind {
-            NthValueKind::First => nulls.valid_indices().next().map(|idx| idx + offset),
-            NthValueKind::Last => nulls.valid_indices().last().map(|idx| idx + offset),
+            NthValueKind::First => valid.set_indices().next(),
+            NthValueKind::Last => nth_set_bit_from_end(valid, 1),
             NthValueKind::Nth => {
                 match self.n.cmp(&0) {
                     Ordering::Greater => {
                         // SQL indices are not 0-based.
                         let index = (self.n as usize) - 1;
-                        nulls.valid_indices().nth(index).map(|idx| idx + offset)
+                        valid.set_indices().nth(index)
                     }
-                    Ordering::Less => {
-                        let reverse_index = (-self.n) as usize;
-                        let valid_indices_len = nulls.len() - nulls.null_count();
-                        if reverse_index > valid_indices_len {
-                            return None;
-                        }
-                        nulls
-                            .valid_indices()
-                            .nth(valid_indices_len - reverse_index)
-                            .map(|idx| idx + offset)
-                    }
+                    Ordering::Less => nth_set_bit_from_end(valid, (-self.n) as usize),
                     Ordering::Equal => None,
                 }
             }
         }
     }
+}
+
+/// Returns the index of the `n`th set bit from the end of `bits`, where `n = 1` is the last
+/// set bit, or `None` if fewer than `n` bits are set.
+///
+/// The bits are read a 64-bit word at a time from the end, so the cost grows with the distance
+/// from the end to that bit rather than with the length of `bits`. Enumerating the set bits
+/// from the start instead is quadratic for a frame that grows with every row.
+fn nth_set_bit_from_end(bits: &BooleanBuffer, n: usize) -> Option<usize> {
+    debug_assert!(n > 0, "n is 1-based");
+    let chunk = UnalignedBitChunk::new(bits.values(), bits.offset(), bits.len());
+    // The words hold `lead_padding` unset bits before `bits` and `trailing_padding` after it.
+    let mut word_start = chunk.lead_padding() + bits.len() + chunk.trailing_padding();
+    let mut remaining = n;
+    for mut word in chunk.iter().rev() {
+        word_start -= 64;
+        let ones = word.count_ones() as usize;
+        if ones < remaining {
+            remaining -= ones;
+            continue;
+        }
+        // Clear the `remaining - 1` highest set bits, leaving the one we want on top
+        for _ in 1..remaining {
+            word ^= 1 << word.ilog2();
+        }
+        return Some(word_start + word.ilog2() as usize - chunk.lead_padding());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -708,5 +782,91 @@ mod tests {
                 "Execution error: first_value requires at least one argument"
             )
         );
+    }
+
+    #[test]
+    fn memoize_ignore_nulls_moves_frame_start() -> Result<()> {
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![
+            None,
+            Some(1),
+            None,
+            Some(2),
+            None,
+            Some(3),
+            None,
+        ]));
+        let all_nulls: ArrayRef = Arc::new(Int32Array::new_null(7));
+        let ranges = (1..=7).map(|end| 0..end).collect::<Vec<_>>();
+        // The frame start moves to the row NTH_VALUE(v, -n) selects, to the first valid
+        // row if there are fewer than `n`, to the last row once FIRST_VALUE or
+        // NTH_VALUE(v, n) is final, and past the frame without valid rows or for
+        // LAST_VALUE, which keeps its last valid value
+        let cases = [
+            (NthValue::last(), None, &values, 7),
+            (NthValue::nth(), Some(-2), &values, 3),
+            (NthValue::nth(), Some(4), &values, 1),
+            (NthValue::nth(), Some(2), &values, 6),
+            (NthValue::first(), None, &values, 6),
+            (NthValue::nth(), Some(-2), &all_nulls, 7),
+        ];
+        for (func, n, arr, expected_start) in cases {
+            let mut exprs = vec![Arc::new(Column::new("c", 0)) as Arc<dyn PhysicalExpr>];
+            if let Some(n) = n {
+                exprs.push(Arc::new(Literal::new(ScalarValue::Int64(Some(n)))));
+            }
+            let mut evaluator = func.partition_evaluator(PartitionEvaluatorArgs::new(
+                &exprs,
+                &[Field::new("f", DataType::Int32, true).into()],
+                false,
+                true,
+            ))?;
+            let mut state = WindowAggState::new(&DataType::Int32)?;
+            state.out_col = evaluator.evaluate_ranges(&[Arc::clone(arr)], &ranges)?;
+            state.window_frame_range = 0..7;
+            evaluator.memoize(&mut state)?;
+            assert_eq!(
+                state.window_frame_range.start,
+                expected_start,
+                "{} {n:?}",
+                func.name()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nth_set_bit_from_end_matches_a_scan_from_the_end() {
+        // The slices cover every bit offset within a word, byte-aligned and unaligned starts,
+        // and lengths from empty to several words, which are the cases `UnalignedBitChunk`
+        // splits into a prefix, aligned words and a suffix.
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let random = BooleanBuffer::collect_bool(640, |_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state.is_multiple_of(5)
+        });
+        let patterns = [
+            random,
+            BooleanBuffer::collect_bool(640, |i| i.is_multiple_of(97)),
+            BooleanBuffer::new_set(640),
+            BooleanBuffer::new_unset(640),
+        ];
+        for bits in &patterns {
+            for offset in 0..70 {
+                for len in 0..=200 {
+                    let slice = bits.slice(offset, len);
+                    for n in [1, 2, 3, 63, 64, 65, 130] {
+                        let expected =
+                            (0..len).rev().filter(|&i| slice.value(i)).nth(n - 1);
+                        assert_eq!(
+                            nth_set_bit_from_end(&slice, n),
+                            expected,
+                            "offset {offset}, len {len}, n {n}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
