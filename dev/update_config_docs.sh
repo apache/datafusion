@@ -198,6 +198,38 @@ SET datafusion.execution.target_partitions = '1';
 
 [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 
+## Point Queries (Single Row Lookups)
+
+Point queries look up a small number of rows by key (for example,
+`SELECT * FROM t WHERE id = 42`). For these queries the fixed costs of planning,
+opening files, and coordinating partitions often dominate the actual work, so
+the goal is to read as little data as possible and to avoid unnecessary
+parallelism.
+
+For Parquet data, the most effective techniques are:
+
+- Sort the data by the lookup key so min/max statistics prune most row groups
+  and pages, and use relatively small row groups and pages (for example, ~128k
+  rows per row group and ~1k rows per page) so that pruning is fine grained.
+- Set `datafusion.execution.target_partitions` to `1` to avoid the overhead of
+  parallelism, as described in [Short Queries](#short-queries).
+- Enable `datafusion.execution.parquet.pushdown_filters` so filters are
+  evaluated while decoding Parquet rather than after the whole row group is read.
+- Keep Parquet metadata caching enabled (the default) and size the cache with
+  `datafusion.runtime.metadata_cache_limit` so it holds the metadata for the
+  files you query repeatedly.
+- Reuse prepared statements to avoid re-planning each query.
+
+```sql
+SET datafusion.execution.target_partitions = '1';
+SET datafusion.execution.parquet.pushdown_filters = true;
+```
+
+See the [Best Practices for Single Row Lookups (Point Queries)] blog post for
+benchmarks and a detailed walk through of each of these settings.
+
+[Best Practices for Single Row Lookups (Point Queries)]: https://datafusion.apache.org/blog/2026/10/24/point-queries/
+
 ## Memory-limited Queries
 
 When executing a memory-consuming query under a tight memory limit, DataFusion 
