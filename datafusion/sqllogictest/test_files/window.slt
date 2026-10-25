@@ -2499,13 +2499,13 @@ select row_number() over (rows between '1' preceding and current row) from (sele
 1
 
 # RANGE interval offsets must be non-negative before execution.
-statement error Invalid window frame: RANGE frame offsets must be non-negative
+statement error Invalid window frame: RANGE frame offsets must be non-negative: .* PRECEDING
 SELECT count(*) OVER (
   ORDER BY ts RANGE BETWEEN INTERVAL '-1 month' PRECEDING AND CURRENT ROW
 ) FROM (VALUES (arrow_cast(1, 'Timestamp(Second, None)'))) t(ts);
 
 # A positive month must not mask a negative day in a mixed-sign interval.
-statement error Invalid window frame: RANGE frame offsets must be non-negative
+statement error Invalid window frame: RANGE frame offsets must be non-negative: .* FOLLOWING
 SELECT count(*) OVER (
   ORDER BY ts RANGE BETWEEN CURRENT ROW AND INTERVAL '1 month -40 days' FOLLOWING
 ) FROM (VALUES (arrow_cast(1, 'Timestamp(Second, None)'))) t(ts);

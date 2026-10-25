@@ -1332,7 +1332,9 @@ fn validate_range_frame_bound(bound: &WindowFrameBound) -> Result<()> {
     };
 
     if negative {
-        plan_err!("Invalid window frame: RANGE frame offsets must be non-negative")
+        plan_err!(
+            "Invalid window frame: RANGE frame offsets must be non-negative: {bound}"
+        )
     } else {
         Ok(())
     }
@@ -1491,8 +1493,9 @@ fn coerce_window_frame(
     };
     let original_start = window_frame.start_bound.clone();
     let original_end = window_frame.end_bound.clone();
-    window_frame.start_bound = coerce_frame_bound(&target_type, original_start.clone())?;
-    window_frame.end_bound = coerce_frame_bound(&target_type, original_end.clone())?;
+    window_frame.start_bound =
+        coerce_frame_bound(&target_type, window_frame.start_bound)?;
+    window_frame.end_bound = coerce_frame_bound(&target_type, window_frame.end_bound)?;
     if window_frame.units == WindowFrameUnits::Range {
         if target_type.is_numeric() {
             // Coercion can turn negative offsets into zero or an unbounded
@@ -1969,6 +1972,7 @@ mod test {
             ] {
                 let error = validate_range_frame_bound(&bound).unwrap_err();
                 assert!(error.to_string().contains("must be non-negative"));
+                assert!(error.to_string().contains(&bound.to_string()));
             }
         }
 
@@ -1993,6 +1997,7 @@ mod test {
             ] {
                 let error = validate_range_frame_bound(&bound).unwrap_err();
                 assert!(error.to_string().contains("must be non-negative"));
+                assert!(error.to_string().contains(&bound.to_string()));
             }
         }
         for value in ["129", "0.001", "-0", "-0.0", "-0e10", "-0.0E-10"] {
