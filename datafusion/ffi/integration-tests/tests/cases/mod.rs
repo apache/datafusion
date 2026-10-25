@@ -18,6 +18,7 @@
 mod catalog;
 mod config;
 mod execution_plan;
+mod physical_extension_codec;
 mod physical_optimizer;
 mod query_planner;
 mod udaf;
