@@ -129,11 +129,6 @@ fn is_null_literal(expr: &Expr) -> bool {
 
 /// Simplifies an `IN` list under filter semantics by dropping `NULL` members.
 ///
-/// `x IN (a, NULL)` is `TRUE` exactly when `x` matches `a`: a `NULL` member can
-/// only turn `FALSE` into `NULL`, and `NULL` rejects a row just like `FALSE`.
-/// The `NULL` members can therefore be dropped, and a list of nothing but
-/// `NULL`s rejects every row.
-///
 /// `x NOT IN (a, NULL)` is `FALSE` when `x` matches `a` and `NULL` otherwise, so
 /// it is never `TRUE` and rejects every row.
 ///
