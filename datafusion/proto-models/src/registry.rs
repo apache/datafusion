@@ -56,25 +56,27 @@ struct Registered {
 /// A store of extension decoders, keyed by the trait they produce and the name
 /// the encoder wrote on the wire.
 ///
-/// Build one, let every library that ships extension types register into it,
-/// and attach it to the decoding session with `SessionConfig::with_extension`.
-/// A session carries at most one, and attaching another replaces it, so the
-/// application that owns the session is the one that builds it. A library
-/// exposes a function that fills a registry it is handed:
+/// A session carries one registry, as a `SessionConfig` extension. Every
+/// library that ships extension types adds its decoders to that registry with
+/// `SessionConfig::update_extension`, which creates the registry if there is
+/// none:
 ///
 /// ```rust,ignore
 /// // in each library
-/// pub fn register(registry: &mut ProtoDecoderRegistry) -> Result<()> {
-///     register_execution_plan::<MyExec>(registry)?;
-///     register_physical_expr::<MyExpr>(registry)
+/// pub fn register(config: &mut SessionConfig) -> Result<()> {
+///     config.update_extension(|registry: &mut ProtoDecoderRegistry| {
+///         register_execution_plan::<MyExec>(registry)
+///     })
 /// }
 ///
 /// // in the application that owns the session
-/// let mut registry = ProtoDecoderRegistry::new();
-/// lib_one::register(&mut registry)?;
-/// lib_two::register(&mut registry)?;
-/// let config = SessionConfig::new().with_extension(Arc::new(registry));
+/// let mut config = SessionConfig::new();
+/// lib_one::register(&mut config)?;
+/// lib_two::register(&mut config)?;
 /// ```
+///
+/// Do not attach a registry with `SessionConfig::with_extension`: it replaces
+/// the registry, so it discards the decoders that other libraries added.
 ///
 /// The libraries need to know nothing about each other, and the order they are
 /// called in does not matter: lookup is by name, and a real collision is an

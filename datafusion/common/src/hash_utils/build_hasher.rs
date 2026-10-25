@@ -31,6 +31,8 @@ use crate::cast::{
 };
 use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
+#[cfg(not(feature = "force_hash_collisions"))]
+use crate::float_semantics::hash_input;
 #[cfg(feature = "force_hash_collisions")]
 use arrow::array::Array;
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -168,18 +170,16 @@ build_hasher_hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64, u128)
 build_hasher_hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 
 macro_rules! build_hasher_hash_float_value {
-    ($(($t:ty, $i:ty)),+) => {
+    ($($t:ty),+) => {
         $(#[cfg(not(feature = "force_hash_collisions"))]
         impl BuildHasherHashValue for $t {
             fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
-                let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
-                let bits = if bits << 1 == 0 { 0 } else { bits };
-                state.hash_one(bits)
+                state.hash_one(hash_input(*self).to_bits())
             }
         })+
     };
 }
-build_hasher_hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
+build_hasher_hash_float_value!(half::f16, f32, f64);
 
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_null_with_hasher<S: BuildHasher>(
