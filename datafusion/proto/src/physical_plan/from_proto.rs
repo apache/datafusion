@@ -242,6 +242,7 @@ pub fn parse_physical_expr(
 ///   any scoped state needed during recursive deserialization.
 /// * `proto_converter` - Converter hooks used for recursive physical plan and
 ///   expression deserialization.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub fn parse_physical_expr_with_converter(
     proto: &protobuf::PhysicalExprNode,
     input_schema: &Schema,

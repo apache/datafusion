@@ -266,6 +266,7 @@ impl datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprE
 /// serialization of udfs requiring specialized serialization (see [`PhysicalExtensionCodec::try_encode_udf`]).
 /// A [`PhysicalProtoConverterExtension`] can be provided to handle the
 /// conversion process (see [`PhysicalProtoConverterExtension::physical_expr_to_proto`]).
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub fn serialize_physical_expr_with_converter(
     value: &Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,

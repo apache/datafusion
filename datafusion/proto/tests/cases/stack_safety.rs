@@ -59,9 +59,13 @@ fn serialize_on_two_mib_stack(alias_depth: usize) {
 }
 
 fn run_in_child(test_name: &str, alias_depth: usize) {
+    run_in_child_with(test_name, alias_depth, serialize_on_two_mib_stack);
+}
+
+fn run_in_child_with(test_name: &str, depth: usize, run: fn(usize)) {
     if std::env::var_os(CHILD_ENV).is_some() {
-        let alias_depth = std::env::var(ALIAS_DEPTH_ENV).unwrap().parse().unwrap();
-        serialize_on_two_mib_stack(alias_depth);
+        let depth = std::env::var(ALIAS_DEPTH_ENV).unwrap().parse().unwrap();
+        run(depth);
         return;
     }
 
@@ -70,7 +74,7 @@ fn run_in_child(test_name: &str, alias_depth: usize) {
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test_name, "--nocapture"])
         .env(CHILD_ENV, "1")
-        .env(ALIAS_DEPTH_ENV, alias_depth.to_string())
+        .env(ALIAS_DEPTH_ENV, depth.to_string())
         .output()
         .unwrap();
 
@@ -96,4 +100,91 @@ fn deeply_nested_logical_plan_serialization_uses_a_growable_stack() {
     // This depth exceeds the 2 MiB thread stack without recursive protection,
     // exercising the `recursive` stack-growth checkpoint.
     run_in_child(GROWABLE_STACK_TEST_NAME, 2_000);
+}
+
+// Physical plan serde (#26738): nested plans go through
+// `try_from_physical_plan_with_converter` / `try_into_physical_plan_with_context`
+// recursively, so a deep plan needs the same stack-growth checkpoint.
+#[cfg(feature = "recursive_protection")]
+mod physical {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::Schema;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::expressions::{NotExpr, lit};
+    use datafusion::physical_plan::limit::GlobalLimitExec;
+    use datafusion::physical_plan::{ExecutionPlan, PhysicalExpr};
+    use datafusion::prelude::SessionContext;
+    use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
+    use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
+    use datafusion_proto::physical_plan::{
+        AsExecutionPlan, DefaultPhysicalExtensionCodec,
+    };
+    use datafusion_proto::protobuf::PhysicalPlanNode;
+
+    use super::run_in_child_with;
+
+    const TEST_NAME: &str = "cases::stack_safety::physical::deeply_nested_physical_plan_roundtrip_uses_a_growable_stack";
+
+    fn deeply_nested_plan(depth: usize) -> Arc<dyn ExecutionPlan> {
+        let mut plan: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        for _ in 0..depth {
+            plan = Arc::new(GlobalLimitExec::new(plan, 0, Some(1)));
+        }
+        plan
+    }
+
+    fn roundtrip_on_two_mib_stack(depth: usize) {
+        std::thread::Builder::new()
+            .name("two-megabyte-stack".into())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let codec = DefaultPhysicalExtensionCodec {};
+                let proto = PhysicalPlanNode::try_from_physical_plan(
+                    deeply_nested_plan(depth),
+                    &codec,
+                )
+                .unwrap();
+                let ctx = SessionContext::new();
+                proto
+                    .try_into_physical_plan(&ctx.task_ctx(), &codec)
+                    .unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn deeply_nested_physical_plan_roundtrip_uses_a_growable_stack() {
+        run_in_child_with(TEST_NAME, 2_000, roundtrip_on_two_mib_stack);
+    }
+
+    const EXPR_TEST_NAME: &str = "cases::stack_safety::physical::deeply_nested_physical_expr_roundtrip_uses_a_growable_stack";
+
+    fn expr_roundtrip_on_two_mib_stack(depth: usize) {
+        std::thread::Builder::new()
+            .name("two-megabyte-stack".into())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let mut expr: Arc<dyn PhysicalExpr> = lit(true);
+                for _ in 0..depth {
+                    expr = Arc::new(NotExpr::new(expr));
+                }
+                let codec = DefaultPhysicalExtensionCodec {};
+                let proto = serialize_physical_expr(&expr, &codec).unwrap();
+                let ctx = SessionContext::new();
+                parse_physical_expr(&proto, &ctx.task_ctx(), &Schema::empty(), &codec)
+                    .unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn deeply_nested_physical_expr_roundtrip_uses_a_growable_stack() {
+        run_in_child_with(EXPR_TEST_NAME, 2_000, expr_roundtrip_on_two_mib_stack);
+    }
 }

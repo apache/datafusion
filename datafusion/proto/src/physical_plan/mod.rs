@@ -1203,6 +1203,7 @@ pub trait PhysicalPlanNodeExt: Sized {
         self.try_into_physical_plan_with_context(&decode_ctx, proto_converter)
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn try_into_physical_plan_with_context(
         &self,
         ctx: &PhysicalPlanDecodeContext<'_>,
@@ -1369,6 +1370,7 @@ pub trait PhysicalPlanNodeExt: Sized {
         }
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn try_from_physical_plan_with_converter(
         plan: Arc<dyn ExecutionPlan>,
         codec: &dyn PhysicalExtensionCodec,
