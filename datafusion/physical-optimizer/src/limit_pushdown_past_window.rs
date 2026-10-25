@@ -178,8 +178,8 @@ fn grow_limit(window: &BoundedWindowAggExec, ctx: &mut TraverseState) -> bool {
 
     // finish grow
     // Frame bounds come straight from the query and can be as large as
-    // `u64::MAX`, so saturate instead of overflowing. A saturated limit is
-    // still correct: it only means the sort below keeps every row.
+    // `u64::MAX`, so saturate instead of overflowing. A saturated lookahead
+    // makes the `checked_add` in `apply_limit` fail, which skips the pushdown.
     ctx.max_lookahead(ctx.lookahead.saturating_add(max_rel));
     true
 }
@@ -197,7 +197,12 @@ fn apply_limit(
         ctx.lookahead = 0;
         return Some(Transformed::no(Arc::clone(node)));
     };
-    let fetch = fetch.saturating_add(ctx.lookahead);
+    // A fetch that overflows can't drop any rows, so skip the pushdown rather
+    // than turning the sort into a TopK that holds every row and can't spill.
+    let Some(fetch) = fetch.checked_add(ctx.lookahead) else {
+        ctx.lookahead = 0;
+        return Some(Transformed::no(Arc::clone(node)));
+    };
     let fetch = match node.fetch() {
         None => fetch,
         Some(existing) => cmp::min(existing, fetch),
