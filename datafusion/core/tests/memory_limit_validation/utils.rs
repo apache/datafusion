@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion_common_runtime::SpawnedTask;
+use futures::StreamExt;
 use std::process::Command;
 use std::str;
 use std::sync::Arc;
@@ -23,22 +24,30 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::time::{Duration, interval};
 
-use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
+use datafusion::execution::TaskContext;
+use datafusion::physical_plan::{ExecutionPlan, displayable, execute_stream};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::human_readable_size;
-use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder};
+use datafusion_execution::memory_pool::{
+    FairSpillPool, MemoryDriftTracker, MemoryPool, PeakRecordingPool, UnboundedMemoryPool,
+};
+use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+use test_utils::counting_allocator::allocated_bytes;
 
 /// Measures the maximum RSS (in bytes) during the execution of an async task. RSS
-/// will be sampled every 7ms.
+/// will be sampled every 7ms, and so will `drift`, in addition to the samples it
+/// takes on every reservation change.
 ///
 /// # Arguments
 ///
+/// * `drift` - The tracker of the memory pool the task uses.
 /// * `f` - A closure that returns the async task to be measured.
 ///
 /// # Returns
 ///
 /// A tuple containing the result of the async task and the maximum RSS observed.
-async fn measure_max_rss<F, Fut, T>(f: F) -> (T, usize)
+async fn measure_max_rss<F, Fut, T>(drift: &Arc<MemoryDriftTracker>, f: F) -> (T, usize)
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = T>,
@@ -55,6 +64,7 @@ where
 
     // Clone for the monitoring task
     let max_rss_clone = Arc::clone(&max_rss);
+    let drift = Arc::clone(drift);
 
     // Spawn a monitoring task
     let monitor_handle = SpawnedTask::spawn(async move {
@@ -63,6 +73,7 @@ where
 
         loop {
             interval.tick().await;
+            drift.sample("sampler");
             sys.refresh_processes_specifics(
                 ProcessesToUpdate::Some(&[pid]),
                 true,
@@ -182,6 +193,38 @@ pub async fn validate_query_with_memory_limits(
     .await;
 }
 
+/// Validates `sql` with no memory limit, over [`rows_with_strings`] of 10M rows
+/// and 1M rows for the baseline. `operator` must be in the plan.
+///
+/// Callers run under a multi-threaded runtime: some operators only buffer
+/// unreserved batches when their inputs run ahead on other threads.
+pub async fn validate_query_over_rows_with_strings(
+    expected_mem_bytes: i64,
+    session_config: SessionConfig,
+    operator: &str,
+    sql: impl Fn(&str) -> String,
+) {
+    validate_query_with_memory_limits_and_config(
+        expected_mem_bytes,
+        None,
+        &sql(&rows_with_strings(10_000_000)),
+        &sql(&rows_with_strings(1_000_000)),
+        session_config,
+        Some(operator),
+        None,
+    )
+    .await;
+}
+
+/// A table of `rows` rows: `v` is an Int64 from 1 to `rows`, in order, and `s`
+/// is a string of about 25 bytes.
+fn rows_with_strings(rows: usize) -> String {
+    format!(
+        "(SELECT v, concat('payload-', v, '-xxxxxxxx') AS s \
+         FROM generate_series(1, {rows}) AS g(v))"
+    )
+}
+
 /// Validate memory usage with a custom session configuration and optional
 /// operator and spill assertions.
 pub async fn validate_query_with_memory_limits_and_config(
@@ -201,18 +244,7 @@ pub async fn validate_query_with_memory_limits_and_config(
 
     println!("Current process ID: {}", std::process::id());
 
-    let runtime_builder = RuntimeEnvBuilder::new();
-
-    let runtime = match mem_limit_bytes {
-        Some(mem_limit_bytes) => runtime_builder
-            .with_memory_pool(Arc::new(FairSpillPool::new(mem_limit_bytes as usize)))
-            .build_arc()
-            .unwrap(),
-        None => runtime_builder.build_arc().unwrap(),
-    };
-
-    let ctx = SessionContext::new_with_config_rt(session_config, runtime);
-
+    let (ctx, drift) = session(mem_limit_bytes, session_config.clone());
     let df = ctx.sql(query).await.unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
 
@@ -225,23 +257,24 @@ pub async fn validate_query_with_memory_limits_and_config(
     }
 
     // Run a query with 10% data to estimate the constant overhead
-    let baseline_plan = ctx
+    let (baseline_ctx, baseline_drift) = session(mem_limit_bytes, session_config);
+    let baseline_plan = baseline_ctx
         .sql(baseline_query)
         .await
         .unwrap()
         .create_physical_plan()
         .await
         .unwrap();
-    let baseline_task_ctx = ctx.task_ctx();
-    let (_, baseline_max_rss) = measure_max_rss(|| async move {
-        collect(baseline_plan, baseline_task_ctx).await.unwrap()
+    let baseline_task_ctx = baseline_ctx.task_ctx();
+    let (_, baseline_max_rss) = measure_max_rss(&baseline_drift, || {
+        run_to_completion(baseline_plan, baseline_task_ctx)
     })
     .await;
 
     let execution_plan = Arc::clone(&physical_plan);
     let execution_task_ctx = ctx.task_ctx();
-    let (_, max_rss) = measure_max_rss(|| async move {
-        collect(execution_plan, execution_task_ctx).await.unwrap()
+    let (_, max_rss) = measure_max_rss(&drift, || {
+        run_to_completion(execution_plan, execution_task_ctx)
     })
     .await;
 
@@ -271,10 +304,73 @@ pub async fn validate_query_with_memory_limits_and_config(
         human_readable_size(expected_mem_bytes as usize)
     );
 
+    let baseline_peak = baseline_drift
+        .peak_drift()
+        .expect("the sampler samples drift");
+    let peak = drift.peak_drift().expect("the sampler samples drift");
+    let unreserved_growth = peak.drift - baseline_peak.drift;
+    println!(
+        "Unreserved memory at its peak: before: {baseline_peak}, after: {peak}, growth: {}",
+        signed_size(unreserved_growth),
+    );
+
     assert!(
         actual_mem_usage < expected_mem_bytes as f64,
         "Memory usage exceeded the theoretical limit. Actual: {}, Expected limit: {}",
         human_readable_size(actual_mem_usage as usize),
         human_readable_size(expected_mem_bytes as usize)
     );
+    assert!(
+        unreserved_growth < MAX_UNRESERVED_GROWTH,
+        "Unreserved memory grew with the input by {}, more than {}. Memory proportional \
+         to the input must be reserved, see the `MemoryPool` docs",
+        signed_size(unreserved_growth),
+        human_readable_size(MAX_UNRESERVED_GROWTH as usize),
+    );
+}
+
+/// Largest growth of unreserved memory (allocated minus reserved, at its peak)
+/// allowed from the baseline query to the main query.
+///
+/// Batches in flight between operators need not be reserved, but they are the
+/// same size whatever the input size, so they cancel out. Memory that grows
+/// with the input must be reserved. The allocated byte count is off by at most
+/// 256 KB per thread, far below this.
+const MAX_UNRESERVED_GROWTH: isize = 16 * 1024 * 1024;
+
+/// A session whose memory pool reports every reservation change to the
+/// returned tracker, which compares the bytes reserved with the bytes allocated.
+fn session(
+    mem_limit_bytes: Option<i64>,
+    session_config: SessionConfig,
+) -> (SessionContext, Arc<MemoryDriftTracker>) {
+    let pool: Arc<dyn MemoryPool> = match mem_limit_bytes {
+        Some(mem_limit_bytes) => Arc::new(FairSpillPool::new(mem_limit_bytes as usize)),
+        None => Arc::new(UnboundedMemoryPool::default()),
+    };
+    let drift = Arc::new(MemoryDriftTracker::new(Arc::new(allocated_bytes)));
+    let pool =
+        PeakRecordingPool::new(pool).with_drift_tracker(Arc::clone(&drift), "query");
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(pool))
+        .build_arc()
+        .unwrap();
+    (
+        SessionContext::new_with_config_rt(session_config, runtime),
+        drift,
+    )
+}
+
+/// Runs `plan` and drops each output batch as it arrives, so the output does not
+/// count as memory the query holds.
+async fn run_to_completion(plan: Arc<dyn ExecutionPlan>, task_ctx: Arc<TaskContext>) {
+    let mut stream = execute_stream(plan, task_ctx).unwrap();
+    while let Some(batch) = stream.next().await {
+        batch.unwrap();
+    }
+}
+
+fn signed_size(bytes: isize) -> String {
+    let size = human_readable_size(bytes.unsigned_abs());
+    if bytes < 0 { format!("-{size}") } else { size }
 }

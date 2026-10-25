@@ -22,6 +22,8 @@
 //! - Test runners that spawn individual test processes
 //! - Test cases that contain the actual validation logic
 
+use datafusion::prelude::SessionConfig;
+
 use crate::utils;
 
 // ===========================================================================
@@ -65,6 +67,16 @@ fn sort_with_mem_limit_2_cols_1_runner() {
 #[test]
 fn sort_with_mem_limit_2_cols_2_runner() {
     utils::spawn_test_process("sort_mem_validation", "sort_with_mem_limit_2_cols_2");
+}
+
+#[test]
+fn sort_strings_no_mem_limit_runner() {
+    utils::spawn_test_process("sort_mem_validation", "sort_strings_no_mem_limit");
+}
+
+#[test]
+fn topk_no_mem_limit_runner() {
+    utils::spawn_test_process("sort_mem_validation", "topk_no_mem_limit");
 }
 
 // ===========================================================================
@@ -175,6 +187,31 @@ async fn sort_with_mem_limit_2_cols_2() {
         Some(mem_limit as i64),
         "select c1, c1 as c2 from generate_series(1,10000000) as t1(c1) order by c2 DESC, c1 ASC NULLS LAST",
         "select c1, c1 as c2 from generate_series(1,1000000) as t1(c1) order by c2 DESC, c1 ASC NULLS LAST", // Baseline query with ~10% of data
+    )
+    .await;
+}
+
+/// Sorts on a column the input is not ordered by, so the sort is not removed.
+#[ignore = "sorted runs wait in the merge unreserved, see https://github.com/apache/datafusion/issues/26411"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sort_strings_no_mem_limit() {
+    utils::validate_query_over_rows_with_strings(
+        700_000_000,
+        SessionConfig::new().with_target_partitions(4),
+        "SortExec",
+        |t| format!("SELECT v, s FROM {t} ORDER BY s DESC"),
+    )
+    .await;
+}
+
+/// TopK holds 10 rows, whatever the input size.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn topk_no_mem_limit() {
+    utils::validate_query_over_rows_with_strings(
+        40_000_000,
+        SessionConfig::new().with_target_partitions(4),
+        "SortExec: TopK",
+        |t| format!("SELECT v, s FROM {t} ORDER BY s DESC LIMIT 10"),
     )
     .await;
 }

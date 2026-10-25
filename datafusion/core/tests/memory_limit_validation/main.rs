@@ -20,10 +20,17 @@
 //!
 //! Run with: cargo test -p datafusion --test memory_limit_validation --features extended_tests
 
+mod aggregate_mem_validation;
+mod hash_join_mem_validation;
 mod nlj_mem_validation;
 mod smj_mem_validation;
 mod sort_mem_validation;
 mod utils;
+mod window_mem_validation;
+
+#[global_allocator]
+static ALLOC: test_utils::counting_allocator::CountingAllocator =
+    test_utils::counting_allocator::CountingAllocator;
 
 #[cfg(test)]
 #[ctor::ctor(unsafe)]
