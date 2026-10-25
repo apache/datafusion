@@ -1152,6 +1152,64 @@ statement ok
 DROP TABLE decoy;
 
 ###########################################################
+# Section 9: Nested aliases and sibling derived tables
+#
+# https://github.com/apache/datafusion/issues/25837
+# A correlated filter under two nested derived tables is requalified at
+# each alias. Two sibling derived tables correlate on different outer
+# columns; remapping one filter with the other alias's output would
+# pair the wrong key.
+###########################################################
+
+statement ok
+CREATE TABLE o(k INT, k2 INT) AS VALUES (1, 2), (2, 1);
+
+statement ok
+CREATE TABLE a(id INT, v INT) AS VALUES (1, 10), (2, 20);
+
+statement ok
+CREATE TABLE b(id INT, v INT) AS VALUES (1, 100), (2, 200);
+
+# `a.id = o.k` is under inner_dt and outer_dt. o.k = 1 reads a.v = 10,
+# o.k = 2 reads a.v = 20.
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT outer_dt.v
+  FROM (
+    SELECT inner_dt.v
+    FROM (SELECT a.id, a.v FROM a WHERE a.id = o.k) AS inner_dt
+  ) AS outer_dt
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# left_side follows o.k (10, then 20). right_side follows o.k2
+# (200, then 100). Swapping the keys would return 20/100 and 10/200.
+query III
+SELECT o.k, s.av, s.bv
+FROM o, LATERAL (
+  SELECT left_side.v AS av, right_side.v AS bv
+  FROM (SELECT a.id, a.v FROM a WHERE a.id = o.k) AS left_side,
+       (SELECT b.id, b.v FROM b WHERE b.id = o.k2) AS right_side
+) AS s
+ORDER BY o.k;
+----
+1 10 200
+2 20 100
+
+statement ok
+DROP TABLE o;
+
+statement ok
+DROP TABLE a;
+
+statement ok
+DROP TABLE b;
+
+###########################################################
 # Cleanup
 ###########################################################
 
