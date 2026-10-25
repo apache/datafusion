@@ -24,14 +24,11 @@ use datafusion::execution::memory_pool::DEFAULT_DRIFT_LOG_THRESHOLD;
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
-    CountingAllocator, enable_memory_drift_logging, flush_thread_allocations,
-    memory_drift_tracker,
-};
-use datafusion_sqllogictest::{
     CurrentlyExecutingSqlTracker, DFColumnType, DataFusion, Filter, TestContext,
     df_value_validator, read_dir_recursive, run_each_configuration, setup_scratch_dir,
     should_skip_file, should_skip_record, test_configurations, value_normalizer,
 };
+use datafusion_sqllogictest::{enable_memory_drift_logging, memory_drift_tracker};
 use futures::stream::StreamExt;
 use indicatif::{
     HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
@@ -42,6 +39,9 @@ use log::{info, log_enabled};
 use sqllogictest::{
     AsyncDB, Condition, MakeConnection, Normalizer, Record, Validator, parse_file,
     strict_column_validator,
+};
+use test_utils::counting_allocator::{
+    CountingAllocator, allocated_bytes, flush_thread_allocations,
 };
 
 #[cfg(feature = "postgres")]
@@ -149,7 +149,10 @@ async fn run_tests() -> Result<()> {
     options.warn_on_ignored();
 
     if options.memory_drift {
-        enable_memory_drift_logging(options.memory_drift_log_threshold);
+        enable_memory_drift_logging(
+            options.memory_drift_log_threshold,
+            Arc::new(allocated_bytes),
+        );
     }
 
     // Print parallelism info for debugging CI performance
