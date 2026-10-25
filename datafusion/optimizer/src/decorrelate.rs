@@ -31,7 +31,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::utils::has_float_leaf;
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err,
-    plan_err,
+    internal_err, plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
@@ -55,10 +55,12 @@ pub struct PullUpCorrelatedExpr {
     /// Correlated inner columns collected across the subquery, including their
     /// re-qualified names after passing through [`LogicalPlan::SubqueryAlias`].
     pub correlated_subquery_cols: BTreeSet<Column>,
-    /// Deprecated: use [`Self::correlated_subquery_cols`] instead.
-    ///
     /// Kept for SemVer compatibility; populated with the root plan's
     /// correlated columns when the rewrite finishes.
+    #[deprecated(
+        since = "56.0.0",
+        note = "use `PullUpCorrelatedExpr::correlated_subquery_cols` instead"
+    )]
     pub correlated_subquery_cols_map: HashMap<LogicalPlan, BTreeSet<Column>>,
     pub in_predicate_opt: Option<Expr>,
     /// Is this an Exists(Not Exists) SubQuery. Defaults to **FALSE**
@@ -83,7 +85,12 @@ pub struct PullUpCorrelatedExpr {
     ///
     /// [the count bug]: https://github.com/apache/datafusion/issues/10553
     pub need_handle_count_bug: bool,
-    /// mapping from the plan to its expressions' evaluation result on empty batch
+    /// Kept for SemVer compatibility; holds only the root plan's expressions'
+    /// evaluation result on an empty batch when the rewrite finishes.
+    #[deprecated(
+        since = "56.0.0",
+        note = "use `PullUpCorrelatedExpr::root_count_expr_map` instead"
+    )]
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
     /// The root plan's expressions' evaluation result on an empty batch.
     pub root_count_expr_map: Option<ExprResultMap>,
@@ -139,6 +146,7 @@ impl Default for PullUpCorrelatedExpr {
 }
 
 impl PullUpCorrelatedExpr {
+    #[expect(deprecated)]
     pub fn new() -> Self {
         Self {
             join_filters: vec![],
@@ -412,10 +420,15 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
         // `column_refs_above` holds only the nodes strictly above `plan` and
         // `frame` holds the state pulled up from `plan`'s children.
         self.column_refs_above.pop();
-        let PullUpFrame {
+        let Some(PullUpFrame {
             correlated_cols: local_correlated_cols,
             count_expr_map: input_count_expr_map,
-        } = self.pulled_up_frames.pop().unwrap_or_default();
+        }) = self.pulled_up_frames.pop()
+        else {
+            return internal_err!(
+                "PullUpCorrelatedExpr: f_up without a matching f_down frame"
+            );
+        };
 
         // A node that null-extends or regroups rows can put a NULL back into
         // a column that a correlated filter below it rejected, so the filters
@@ -753,6 +766,12 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     .pass_through_pulled_up_cols(plan, input_count_expr_map.is_some())?;
                 (transformed, local_correlated_cols, None)
             }
+            LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_)
+                if self.pulled_up_scalar_agg =>
+            {
+                self.can_pull_up = false;
+                return Ok(Transformed::new(plan, false, TreeNodeRecursion::Stop));
+            }
             // `f_down` checked that the pulled up filters do not read an
             // unnested column.
             LogicalPlan::Unnest(_)
@@ -773,11 +792,13 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 parent.count_expr_map = out_count_expr_map;
             }
         } else {
+            #[expect(deprecated)]
             self.correlated_subquery_cols_map.insert(
                 transformed.data.clone(),
                 self.correlated_subquery_cols.clone(),
             );
             if let Some(ref map) = out_count_expr_map {
+                #[expect(deprecated)]
                 self.collected_count_expr_map
                     .insert(transformed.data.clone(), map.clone());
             }
