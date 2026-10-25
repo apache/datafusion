@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::{normalize_float_zero, normalize_float_zero_scalar};
+use datafusion_common::float_semantics::{normalize_float_scalar, normalize_floats};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::interval_arithmetic::Interval;
@@ -84,15 +84,13 @@ impl PhysicalExpr for NormalizeFloatZeroExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         Ok(match self.arg.evaluate(batch)? {
-            ColumnarValue::Array(array) => {
-                ColumnarValue::Array(normalize_float_zero(&array))
-            }
+            ColumnarValue::Array(array) => ColumnarValue::Array(normalize_floats(&array)),
             ColumnarValue::Scalar(scalar) if scalar.data_type().is_floating() => {
-                ColumnarValue::Scalar(normalize_float_zero_scalar(scalar))
+                ColumnarValue::Scalar(normalize_float_scalar(scalar))
             }
             ColumnarValue::Scalar(scalar) => {
                 // Nested scalar values need the recursive array normalization too.
-                let array = normalize_float_zero(&scalar.to_array()?);
+                let array = normalize_floats(&scalar.to_array()?);
                 ColumnarValue::Scalar(ScalarValue::try_from_array(&array, 0)?)
             }
         })
@@ -115,8 +113,8 @@ impl PhysicalExpr for NormalizeFloatZeroExpr {
             Ok(ExprProperties {
                 sort_properties: child.sort_properties,
                 range: Interval::try_new(
-                    normalize_float_zero_scalar(child.range.lower().clone()),
-                    normalize_float_zero_scalar(child.range.upper().clone()),
+                    normalize_float_scalar(child.range.lower().clone()),
+                    normalize_float_scalar(child.range.upper().clone()),
                 )?,
                 preserves_lex_ordering: true,
                 // Merging signed-zero groups can invalidate suffix sort keys.
@@ -194,10 +192,8 @@ mod tests {
             ScalarValue::Float64(Some(-0.0)),
             ScalarValue::try_from_array(&nested, 0)?,
         ] {
-            let expected = ScalarValue::try_from_array(
-                &normalize_float_zero(&scalar.to_array()?),
-                0,
-            )?;
+            let expected =
+                ScalarValue::try_from_array(&normalize_floats(&scalar.to_array()?), 0)?;
             let expr = NormalizeFloatZeroExpr::new(Arc::new(Literal::new(scalar)));
             let ColumnarValue::Scalar(actual) = expr.evaluate(&batch)? else {
                 panic!("scalar input must remain scalar");

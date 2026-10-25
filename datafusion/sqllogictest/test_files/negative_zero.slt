@@ -278,3 +278,64 @@ FROM (VALUES ([-0.0], 1), ([-0.0], 2), ([0.0], 1), ([0.0], 2)) t(a, b);
 1 2
 2 2
 2 2
+
+# Ordering reuse. Only the physical plan matters below.
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# A plain float key pre-sorted by the input keeps its ordering: the window
+# must not add a second SortExec, and both zeros share one partition.
+statement ok
+CREATE TABLE sorted_zeros(a DOUBLE, b INT) AS VALUES (-0.0, 2), (0.0, 1), (1.0, 3);
+
+query II
+SELECT b, count(*) OVER (PARTITION BY a) AS c
+FROM (SELECT * FROM sorted_zeros ORDER BY a LIMIT 10)
+ORDER BY b;
+----
+1 2
+2 2
+3 1
+
+query TT
+EXPLAIN SELECT count(*) OVER (PARTITION BY a) FROM (SELECT * FROM sorted_zeros ORDER BY a LIMIT 10);
+----
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1)) PARTITION BY [sorted_zeros.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as count(*) PARTITION BY [sorted_zeros.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
+02)--WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [sorted_zeros.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [sorted_zeros.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+03)----SortExec: TopK(fetch=10), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A list key is not ordered after normalization: [-0.0, 2.0] sorts before
+# [0.0, 1.0] raw but after it normalized, so the raw ordering must not be
+# reused and a SortExec on the normalized key is required.
+statement ok
+CREATE TABLE sorted_list_zeros(a DOUBLE[], id INT) AS VALUES ([-0.0, 2.0], 1), ([0.0, 1.0], 2), ([0.0, 2.0], 3);
+
+query II
+SELECT id, count(*) OVER (PARTITION BY a) AS c
+FROM (SELECT * FROM sorted_list_zeros ORDER BY a LIMIT 10)
+ORDER BY id;
+----
+1 2
+2 1
+3 2
+
+query TT
+EXPLAIN SELECT count(*) OVER (PARTITION BY a) FROM (SELECT * FROM sorted_list_zeros ORDER BY a LIMIT 10);
+----
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1)) PARTITION BY [sorted_list_zeros.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as count(*) PARTITION BY [sorted_list_zeros.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
+02)--WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [sorted_list_zeros.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [sorted_list_zeros.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+03)----SortExec: expr=[normalize_float_zero(a@0) ASC NULLS LAST], preserve_partitioning=[false]
+04)------SortExec: TopK(fetch=10), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE sorted_zeros;
+
+statement ok
+DROP TABLE sorted_list_zeros;
+
+statement ok
+reset datafusion.explain.physical_plan_only;
