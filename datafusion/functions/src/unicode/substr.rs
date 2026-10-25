@@ -155,9 +155,12 @@ impl ScalarUDFImpl for SubstrFunc {
             let mut inner = Vec::with_capacity(args.args.len());
             inner.push(ColumnarValue::Array(values));
             inner.extend_from_slice(&args.args[1..]);
-            let new_values = make_scalar_function(substr, vec![])(&inner)?
-                .into_array(dict.values().len())?;
-            return Ok(ColumnarValue::Array(dict.with_values(new_values)));
+            // Values that no valid row references can still fail (e.g. a
+            // negative length), so fall back to the row-wise path on error.
+            if let Ok(new_values) = make_scalar_function(substr, vec![])(&inner) {
+                let new_values = new_values.into_array(dict.values().len())?;
+                return Ok(ColumnarValue::Array(dict.with_values(new_values)));
+            }
         }
 
         make_scalar_function(substr, vec![])(&args.args)

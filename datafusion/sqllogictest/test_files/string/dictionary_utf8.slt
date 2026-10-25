@@ -127,6 +127,22 @@ select count(*), count(distinct substr(c, s)) from t8;
 ----
 200 12
 
+# Invalid arguments only error on rows that are actually referenced, like the
+# non-dictionary path.
+statement ok
+create table test_substr_null_rows as
+select arrow_cast(c, 'Dictionary(Int32, Utf8)') c
+from (values ('a'), (NULL), (NULL)) t(c);
+
+query T
+select substr(c, 1, -1) from test_substr_null_rows where c is null;
+----
+NULL
+NULL
+
+query error Execution error: negative count not allowed: -1
+select substr(c, 1, -1) from test_substr_null_rows;
+
 #
 # Clean up
 #
@@ -144,3 +160,6 @@ drop table test_substr_arguments;
 
 statement ok
 drop table t8;
+
+statement ok
+drop table test_substr_null_rows;
