@@ -20,6 +20,182 @@
 ##########
 
 statement ok
+PREPARE page AS SELECT value FROM (VALUES (10), (20), (30)) AS t(value) ORDER BY value LIMIT $1 OFFSET $2;
+
+query I
+EXECUTE page(1, 1);
+----
+20
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT 20 AS value LIMIT $1;
+
+query I
+EXECUTE page(1);
+----
+20
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT value FROM (VALUES (10), (20)) AS t(value) ORDER BY value OFFSET $1;
+
+query I
+EXECUTE page(1);
+----
+20
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value LIMIT $1;
+
+query I
+EXECUTE page(1);
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value FROM (VALUES (0), (0)) AS t(dummy) OFFSET $1;
+
+query I
+EXECUTE page(1);
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT value FROM (SELECT 20 AS value LIMIT $1) AS t;
+
+query I
+EXECUTE page(1);
+----
+20
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT (SELECT value FROM (VALUES (10), (20)) AS t(value) ORDER BY value LIMIT $1) AS value;
+
+query I
+EXECUTE page(1);
+----
+10
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT 20 AS value WHERE EXISTS (SELECT value FROM (VALUES (10), (20)) AS t(value) OFFSET $1);
+
+query I
+EXECUTE page(1);
+----
+20
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value LIMIT CAST($1 AS INT);
+
+query T
+EXECUTE page('1');
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value LIMIT CAST($1 AS BIGINT);
+
+query T
+EXECUTE page('1');
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value FROM (VALUES (1), (2)) AS t(v) OFFSET CAST($1 AS BIGINT);
+
+query T
+EXECUTE page('1');
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value FROM (SELECT 1 LIMIT CAST($1 AS BIGINT)) AS t;
+
+query T
+EXECUTE page('1');
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 + CAST(1 AS INT) AS value FROM (SELECT $1) AS t LIMIT $1;
+
+query I
+EXECUTE page(1);
+----
+2
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 + CAST(1 AS INT) AS value LIMIT $1;
+
+query I
+EXECUTE page(1);
+----
+2
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value LIMIT $2;
+
+query T
+EXECUTE page('row', 1);
+----
+row
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value FROM (VALUES (0), (0)) AS t(dummy) OFFSET $2;
+
+query T
+EXECUTE page('row', 1);
+----
+row
+
+statement ok
+DEALLOCATE page;
+
+statement ok
 create table person (id int, first_name varchar, last_name varchar, age int, state varchar, salary double, birthday timestamp, "😀" int) as values (1, 'jane', 'smith', 20, 'MA', 100000.45, '2000-11-12T00:00:00'::timestamp, 99);
 
 query ITTITRPI rowsort
@@ -378,6 +554,28 @@ EXECUTE get_N_rand_ints_from_last_run(2);
 
 statement ok
 DEALLOCATE get_N_rand_ints_from_last_run;
+
+statement ok
+PREPARE limit_after_typed_filter AS SELECT id FROM test WHERE id = $1 LIMIT $2;
+
+query I
+EXECUTE limit_after_typed_filter(1, 1);
+----
+1
+
+statement ok
+DEALLOCATE limit_after_typed_filter;
+
+statement ok
+PREPARE limit_after_inferred_int32 AS SELECT $1 + CAST(1 AS INT) AS value LIMIT $1;
+
+query I
+EXECUTE limit_after_inferred_int32(1);
+----
+2
+
+statement ok
+DEALLOCATE limit_after_inferred_int32;
 
 statement ok
 DROP TABLE test;

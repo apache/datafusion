@@ -21,6 +21,7 @@ use std::{collections::VecDeque, ops::Range, sync::Arc};
 
 use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
+use arrow::compute::kernels::sort::{LexicographicalComparator, SortColumn};
 use arrow::{
     array::ArrayRef,
     compute::{SortOptions, concat, concat_batches},
@@ -70,7 +71,11 @@ impl WindowAggState {
         match self.window_frame_ctx.as_mut() {
             // Rows have no state do nothing
             Some(WindowFrameContext::Rows(_)) => {}
-            Some(WindowFrameContext::Range { .. }) => {}
+            Some(WindowFrameContext::Range { state, .. }) => {
+                // Release the old ORDER BY arrays early. Replacement arrays would
+                // also invalidate the cache by identity when it is next used.
+                state.peer_comparator = None;
+            }
             Some(WindowFrameContext::Groups { state, .. }) => {
                 let mut n_group_to_del = 0;
                 for (_, end_idx) in &state.group_end_indices {
@@ -340,15 +345,95 @@ impl PartitionBatchState {
 /// ranges of data while processing RANGE frames.
 /// Attribute `sort_options` stores the column ordering specified by the ORDER
 /// BY clause. This information is used to calculate the range.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct WindowFrameStateRange {
     sort_options: Vec<SortOptions>,
+    peer_comparator: Option<RangePeerComparator>,
+}
+
+/// Reuse comparators to avoid per-row setup work, including logical-null masks
+/// that can take O(n) to build for dictionary arrays.
+struct RangePeerComparator {
+    columns: Vec<ArrayRef>,
+    comparator: LexicographicalComparator,
+}
+
+impl RangePeerComparator {
+    fn matches_columns(&self, columns: &[ArrayRef]) -> bool {
+        // Sliced arrays have different row indices even when they share buffers.
+        self.columns.len() == columns.len()
+            && self
+                .columns
+                .iter()
+                .zip(columns)
+                .all(|(old, new)| Arc::ptr_eq(old, new))
+    }
+}
+
+impl Clone for WindowFrameStateRange {
+    fn clone(&self) -> Self {
+        // A clone builds its own comparator when it first sees nested keys.
+        Self::new(self.sort_options.clone())
+    }
+}
+
+// Preserve the public WindowFrameStateRange type's existing unwind-safety traits.
+// The cached Arrow arrays and comparison closures are immutable, so a comparison
+// that unwinds cannot leave this cache partially updated.
+impl std::panic::UnwindSafe for RangePeerComparator {}
+impl std::panic::RefUnwindSafe for RangePeerComparator {}
+
+impl std::fmt::Debug for RangePeerComparator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RangePeerComparator")
+            .field("num_columns", &self.columns.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl WindowFrameStateRange {
     /// Create a new object to store the search state.
     fn new(sort_options: Vec<SortOptions>) -> Self {
-        Self { sort_options }
+        Self {
+            sort_options,
+            peer_comparator: None,
+        }
+    }
+
+    fn peer_boundary<const START: bool>(
+        &mut self,
+        range_columns: &[ArrayRef],
+        idx: usize,
+        mut boundary: usize,
+        length: usize,
+    ) -> Result<usize> {
+        let cached = match &self.peer_comparator {
+            Some(cached) if cached.matches_columns(range_columns) => cached,
+            _ => {
+                let sort_columns = range_columns
+                    .iter()
+                    .zip(&self.sort_options)
+                    .map(|(values, options)| SortColumn {
+                        values: Arc::clone(values),
+                        options: Some(*options),
+                    })
+                    .collect::<Vec<_>>();
+                self.peer_comparator.insert(RangePeerComparator {
+                    columns: range_columns.to_vec(),
+                    comparator: LexicographicalComparator::try_new(&sort_columns)?,
+                })
+            }
+        };
+        // ScalarValue equality can distinguish encodings of the same nested value:
+        // a list with a null dictionary key and one with a key referencing null.
+        while boundary < length {
+            let is_peer = cached.comparator.compare(boundary, idx).is_eq();
+            if is_peer == START {
+                break;
+            }
+            boundary += 1;
+        }
+        Ok(boundary)
     }
 
     /// This function calculates beginning/ending indices for the frame of the current row.
@@ -364,6 +449,12 @@ impl WindowFrameStateRange {
         length: usize,
         idx: usize,
     ) -> Result<Range<usize>> {
+        let has_current_row = window_frame.start_bound == WindowFrameBound::CurrentRow
+            || window_frame.end_bound == WindowFrameBound::CurrentRow;
+        let nested_current_row = has_current_row
+            && range_columns
+                .iter()
+                .any(|column| column.data_type().is_nested());
         let start = match window_frame.start_bound {
             WindowFrameBound::Preceding(ref n) => {
                 if n.is_null() {
@@ -378,6 +469,9 @@ impl WindowFrameStateRange {
                         length,
                     )?
                 }
+            }
+            WindowFrameBound::CurrentRow if nested_current_row => {
+                self.peer_boundary::<true>(range_columns, idx, last_range.start, length)?
             }
             WindowFrameBound::CurrentRow => self.calculate_index_of_row::<true, true>(
                 range_columns,
@@ -404,6 +498,16 @@ impl WindowFrameStateRange {
                     Some(n),
                     length,
                 )?,
+            WindowFrameBound::CurrentRow if nested_current_row => {
+                // An equality scan cannot skip preceding non-peers if evaluation
+                // starts partway through a partition.
+                self.peer_boundary::<false>(
+                    range_columns,
+                    idx,
+                    last_range.end.max(idx),
+                    length,
+                )?
+            }
             WindowFrameBound::CurrentRow => self.calculate_index_of_row::<false, false>(
                 range_columns,
                 last_range,
@@ -433,20 +537,20 @@ impl WindowFrameStateRange {
     /// called twice, in succession, to get window frame start and end indices (with `SIDE`
     /// supplied as true and false, respectively).
     fn calculate_index_of_row<const SIDE: bool, const SEARCH_SIDE: bool>(
-        &mut self,
+        &self,
         range_columns: &[ArrayRef],
         last_range: &Range<usize>,
         idx: usize,
         delta: Option<&ScalarValue>,
         length: usize,
     ) -> Result<usize> {
-        let current_row_values = get_row_at_idx(range_columns, idx)?;
+        let mut end_range = get_row_at_idx(range_columns, idx)?;
         let search_start = if SIDE {
             last_range.start
         } else {
             last_range.end
         };
-        let end_range = if let Some(delta) = delta {
+        if let Some(delta) = delta {
             let is_descending: bool = self
                 .sort_options
                 .first()
@@ -463,10 +567,9 @@ impl WindowFrameStateRange {
             // wrapped-around target: PRECEDING searches reach `search_start`,
             // FOLLOWING searches reach `length`.
             let unbounded_edge = if SEARCH_SIDE { search_start } else { length };
-            let mut targets = Vec::with_capacity(current_row_values.len());
-            for value in &current_row_values {
+            // Turn the current row values into search targets in place
+            for value in &mut end_range {
                 if value.is_null() {
-                    targets.push(value.clone());
                     continue;
                 }
                 let target = if SEARCH_SIDE == is_descending {
@@ -474,23 +577,20 @@ impl WindowFrameStateRange {
                         Ok(v) => v,
                         Err(_) => return Ok(unbounded_edge),
                     }
-                } else if value.is_unsigned() && value < delta {
+                } else if value.is_unsigned() && *value < *delta {
                     // NOTE: This gets a polymorphic zero without having long coercion code for ScalarValue.
                     //       If we decide to implement a "default" construction mechanism for ScalarValue,
                     //       change the following statement to use that.
-                    value.sub(value)?
+                    value.sub(&*value)?
                 } else {
                     match value.sub_checked(delta) {
                         Ok(v) => v,
                         Err(_) => return Ok(unbounded_edge),
                     }
                 };
-                targets.push(target);
+                *value = target;
             }
-            targets
-        } else {
-            current_row_values
-        };
+        }
         let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
             let cmp = compare_rows(current, target, &self.sort_options)?;
             Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })
@@ -732,6 +832,99 @@ mod tests {
 
     use arrow::array::{Float64Array, UInt64Array};
     use arrow::datatypes::{Field, Schema};
+
+    #[test]
+    fn nested_range_peers_across_cloning_and_pruning() -> Result<()> {
+        use arrow::array::ListArray;
+        use arrow::datatypes::Int64Type;
+
+        fn assert_unwind_safe<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
+        assert_unwind_safe::<WindowFrameStateRange>();
+
+        let frame = Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Range,
+            WindowFrameBound::CurrentRow,
+            WindowFrameBound::CurrentRow,
+        ));
+        let columns: [ArrayRef; 1] =
+            [Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+                [1, 1, 2, 2].into_iter().map(|v| Some(vec![Some(v)])),
+            ))];
+        let mut range = WindowFrameStateRange::new(vec![SortOptions::default()]);
+        assert_eq!(
+            range.calculate_range(&frame, &(0..0), &columns, 4, 0)?,
+            0..2
+        );
+        assert_eq!(
+            range
+                .clone()
+                .calculate_range(&frame, &(0..2), &columns, 4, 1)?,
+            0..2
+        );
+
+        let columns = [columns[0].slice(1, 3)];
+        assert_eq!(
+            range.calculate_range(&frame, &(0..0), &columns, 3, 0)?,
+            0..1
+        );
+        let retained = Arc::downgrade(&columns[0]);
+        let mut state = WindowAggState::new(&DataType::Int64)?;
+        state.window_frame_range =
+            range.calculate_range(&frame, &(0..1), &columns, 3, 1)?;
+        assert_eq!(state.window_frame_range, 1..3);
+        state.last_calculated_index = 1;
+        state.window_frame_ctx = Some(WindowFrameContext::Range {
+            window_frame: frame,
+            state: range,
+        });
+        let pruned = [columns[0].slice(1, 2)];
+        drop(columns);
+        assert!(retained.upgrade().is_some());
+        state.prune_state(1);
+        assert!(retained.upgrade().is_none());
+        assert_eq!(
+            state.window_frame_ctx.as_mut().unwrap().calculate_range(
+                &pruned,
+                &state.window_frame_range,
+                2,
+                0,
+            )?,
+            0..2
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn range_peers_compare_nested_dictionary_nulls_logically() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int8Array, Int32Array, ListArray};
+        use arrow::buffer::OffsetBuffer;
+        use arrow::datatypes::Int8Type;
+
+        // Both lists contain NULL: one dictionary key is null, the other
+        // references a null value. ScalarValue equality distinguishes them.
+        let values: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![None, Some(0)]),
+            Arc::new(Int32Array::from(vec![None])),
+        )?);
+        let columns: [ArrayRef; 1] = [Arc::new(ListArray::new(
+            Arc::new(Field::new("item", values.data_type().clone(), true)),
+            OffsetBuffer::from_lengths([1, 1]),
+            values,
+            None,
+        ))];
+        let frame = Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Range,
+            WindowFrameBound::CurrentRow,
+            WindowFrameBound::CurrentRow,
+        ));
+        let mut state = WindowFrameContext::new(frame, vec![SortOptions::default()]);
+        let mut range = 0..0;
+        for idx in 0..2 {
+            range = state.calculate_range(&columns, &range, 2, idx)?;
+            assert_eq!(range, 0..2);
+        }
+        Ok(())
+    }
 
     fn get_test_data() -> (Vec<ArrayRef>, Vec<SortOptions>) {
         let range_columns: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![

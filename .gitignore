@@ -72,6 +72,7 @@ datafusion/core/benches/data/*
 # Generated Nix environment hooks
 
 .direnv/
+.envrc.local
 
 # rat
 filtered_rat.txt

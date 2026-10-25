@@ -27,8 +27,10 @@ use crate::type_coercion::binary::{BinaryTypeCoercer, comparison_coercion};
 use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::{
     DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit,
+    MAX_DECIMAL32_FOR_EACH_PRECISION, MAX_DECIMAL64_FOR_EACH_PRECISION,
     MAX_DECIMAL128_FOR_EACH_PRECISION, MAX_DECIMAL256_FOR_EACH_PRECISION,
-    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION, TimeUnit,
+    MIN_DECIMAL32_FOR_EACH_PRECISION, MIN_DECIMAL64_FOR_EACH_PRECISION,
+    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION, TimeUnit, i256,
 };
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
 use datafusion_common::{
@@ -37,7 +39,14 @@ use datafusion_common::{
 };
 
 macro_rules! get_extreme_value {
-    ($extreme:ident, $DECIMAL128_ARRAY:ident, $DECIMAL256_ARRAY:ident, $value:expr) => {
+    (
+        $extreme:ident,
+        $DECIMAL32_ARRAY:ident,
+        $DECIMAL64_ARRAY:ident,
+        $DECIMAL128_ARRAY:ident,
+        $DECIMAL256_ARRAY:ident,
+        $value:expr
+    ) => {
         match $value {
             DataType::UInt8 => ScalarValue::UInt8(Some(u8::$extreme)),
             DataType::UInt16 => ScalarValue::UInt16(Some(u16::$extreme)),
@@ -84,6 +93,16 @@ macro_rules! get_extreme_value {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::$extreme))
             }
+            DataType::Decimal32(precision, scale) => ScalarValue::Decimal32(
+                Some($DECIMAL32_ARRAY[*precision as usize]),
+                *precision,
+                *scale,
+            ),
+            DataType::Decimal64(precision, scale) => ScalarValue::Decimal64(
+                Some($DECIMAL64_ARRAY[*precision as usize]),
+                *precision,
+                *scale,
+            ),
             DataType::Decimal128(precision, scale) => ScalarValue::Decimal128(
                 Some($DECIMAL128_ARRAY[*precision as usize]),
                 *precision,
@@ -100,7 +119,15 @@ macro_rules! get_extreme_value {
 }
 
 macro_rules! value_transition {
-    ($bound:ident, $direction:expr, $value:expr) => {
+    (
+        $bound:ident,
+        $direction:expr,
+        $DECIMAL32_ARRAY:ident,
+        $DECIMAL64_ARRAY:ident,
+        $DECIMAL128_ARRAY:ident,
+        $DECIMAL256_ARRAY:ident,
+        $value:expr
+    ) => {
         match $value {
             UInt8(Some(value)) if value == u8::$bound => UInt8(None),
             UInt16(Some(value)) if value == u16::$bound => UInt16(None),
@@ -146,6 +173,28 @@ macro_rules! value_transition {
                 if value == arrow::datatypes::IntervalMonthDayNano::$bound =>
             {
                 IntervalMonthDayNano(None)
+            }
+            // Decimals saturate at the extreme value of their precision, not of
+            // the underlying integer type:
+            Decimal32(Some(value), precision, scale)
+                if value == $DECIMAL32_ARRAY[precision as usize] =>
+            {
+                Decimal32(None, precision, scale)
+            }
+            Decimal64(Some(value), precision, scale)
+                if value == $DECIMAL64_ARRAY[precision as usize] =>
+            {
+                Decimal64(None, precision, scale)
+            }
+            Decimal128(Some(value), precision, scale)
+                if value == $DECIMAL128_ARRAY[precision as usize] =>
+            {
+                Decimal128(None, precision, scale)
+            }
+            Decimal256(Some(value), precision, scale)
+                if value == $DECIMAL256_ARRAY[precision as usize] =>
+            {
+                Decimal256(None, precision, scale)
             }
             _ => next_value_helper::<$direction>($value),
         }
@@ -859,10 +908,13 @@ impl Interval {
         let zero = ScalarValue::new_zero(&dt)?;
         // We want 0 to be approachable from both negative and positive sides.
         let zero_point = match &dt {
-            DataType::Float32 | DataType::Float64 => Self::new(zero.clone(), zero),
-            _ => Self::new(prev_value(zero.clone()), next_value(zero)),
+            DataType::Float32 | DataType::Float64 => {
+                Self::new(zero.clone(), zero.clone())
+            }
+            _ => Self::new(prev_value(zero.clone()), next_value(zero.clone())),
         };
 
+        // The helpers treat intervals with a finite upper bound <= 0 as non-positive.
         // Exit early with an unbounded interval if zero is strictly inside the
         // right hand side:
         if rhs_ref.contains(&zero_point)? == Self::TRUE && !dt.is_unsigned_integer() {
@@ -873,19 +925,9 @@ impl Interval {
         else if lhs_ref.contains(&zero_point)? == Self::TRUE
             && !dt.is_unsigned_integer()
         {
-            Ok(div_helper_lhs_zero_inclusive(
-                &dt,
-                lhs_ref,
-                rhs_ref,
-                &zero_point,
-            ))
+            Ok(div_helper_lhs_zero_inclusive(&dt, lhs_ref, rhs_ref, &zero))
         } else {
-            Ok(div_helper_zero_exclusive(
-                &dt,
-                lhs_ref,
-                rhs_ref,
-                &zero_point,
-            ))
+            Ok(div_helper_zero_exclusive(&dt, lhs_ref, rhs_ref, &zero))
         }
     }
 
@@ -1215,6 +1257,8 @@ fn handle_overflow<const UPPER: bool>(
         (true, false) => {
             get_extreme_value!(
                 MIN,
+                MIN_DECIMAL32_FOR_EACH_PRECISION,
+                MIN_DECIMAL64_FOR_EACH_PRECISION,
                 MIN_DECIMAL128_FOR_EACH_PRECISION,
                 MIN_DECIMAL256_FOR_EACH_PRECISION,
                 dt
@@ -1223,6 +1267,8 @@ fn handle_overflow<const UPPER: bool>(
         (false, true) => {
             get_extreme_value!(
                 MAX,
+                MAX_DECIMAL32_FOR_EACH_PRECISION,
+                MAX_DECIMAL64_FOR_EACH_PRECISION,
                 MAX_DECIMAL128_FOR_EACH_PRECISION,
                 MAX_DECIMAL256_FOR_EACH_PRECISION,
                 dt
@@ -1235,14 +1281,30 @@ fn handle_overflow<const UPPER: bool>(
 // used without caution.
 fn next_value(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
-    value_transition!(MAX, true, value)
+    value_transition!(
+        MAX,
+        true,
+        MAX_DECIMAL32_FOR_EACH_PRECISION,
+        MAX_DECIMAL64_FOR_EACH_PRECISION,
+        MAX_DECIMAL128_FOR_EACH_PRECISION,
+        MAX_DECIMAL256_FOR_EACH_PRECISION,
+        value
+    )
 }
 
 // This function should remain private since it may corrupt the an interval if
 // used without caution.
 fn prev_value(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
-    value_transition!(MIN, false, value)
+    value_transition!(
+        MIN,
+        false,
+        MIN_DECIMAL32_FOR_EACH_PRECISION,
+        MIN_DECIMAL64_FOR_EACH_PRECISION,
+        MIN_DECIMAL128_FOR_EACH_PRECISION,
+        MIN_DECIMAL256_FOR_EACH_PRECISION,
+        value
+    )
 }
 
 trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
@@ -1252,6 +1314,12 @@ macro_rules! impl_OneTrait{
     ($($m:ty),*) => {$( impl OneTrait for $m  { fn one() -> Self { 1 as $m } })*}
 }
 impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, i128}
+
+impl OneTrait for i256 {
+    fn one() -> Self {
+        i256::ONE
+    }
+}
 
 impl OneTrait for IntervalDayTime {
     fn one() -> Self {
@@ -1307,6 +1375,23 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
         UInt16(Some(val)) => UInt16(Some(increment_decrement::<INC, u16>(val))),
         UInt32(Some(val)) => UInt32(Some(increment_decrement::<INC, u32>(val))),
         UInt64(Some(val)) => UInt64(Some(increment_decrement::<INC, u64>(val))),
+        // Decimals step by one unit in the last place, keeping precision and scale:
+        Decimal32(Some(val), precision, scale) => {
+            Decimal32(Some(increment_decrement::<INC, i32>(val)), precision, scale)
+        }
+        Decimal64(Some(val), precision, scale) => {
+            Decimal64(Some(increment_decrement::<INC, i64>(val)), precision, scale)
+        }
+        Decimal128(Some(val), precision, scale) => Decimal128(
+            Some(increment_decrement::<INC, i128>(val)),
+            precision,
+            scale,
+        ),
+        Decimal256(Some(val), precision, scale) => Decimal256(
+            Some(increment_decrement::<INC, i256>(val)),
+            precision,
+            scale,
+        ),
         DurationSecond(Some(val)) => {
             DurationSecond(Some(increment_decrement::<INC, i64>(val)))
         }
@@ -1652,10 +1737,10 @@ fn div_helper_lhs_zero_inclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero_point: &Interval,
+    zero: &ScalarValue,
 ) -> Interval {
     // With the following interval bounds, there is no possibility to create an invalid interval.
-    if rhs.upper <= zero_point.lower && !rhs.upper.is_null() {
+    if rhs.upper <= *zero && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
         let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.upper);
@@ -1671,12 +1756,12 @@ fn div_helper_lhs_zero_inclusive(
 }
 
 /// Divides the left-hand side interval by the right-hand side interval when
-/// neither interval contains zero.
+/// neither interval straddles zero (zero endpoints are allowed).
 ///
 /// This function takes in two intervals (`lhs` and `rhs`) as arguments and
 /// returns their quotient (whose data type is known to be `dt`). It is
-/// specifically designed to handle intervals that do not contain zero within
-/// their ranges. Returns an error if the division of bounds fails.
+/// specifically designed to handle intervals that do not straddle zero.
+/// Returns an error if the division of bounds fails.
 ///
 /// ``` text
 /// Left-hand side:  <--======----0------------>
@@ -1705,11 +1790,11 @@ fn div_helper_zero_exclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero_point: &Interval,
+    zero: &ScalarValue,
 ) -> Interval {
     let (lower, upper) = match (
-        lhs.upper <= zero_point.lower && !lhs.upper.is_null(),
-        rhs.upper <= zero_point.lower && !rhs.upper.is_null(),
+        lhs.upper <= *zero && !lhs.upper.is_null(),
+        rhs.upper <= *zero && !rhs.upper.is_null(),
     ) {
         // With the following interval bounds, there is no possibility to create an invalid interval.
         (true, true) => (
@@ -2288,7 +2373,10 @@ mod tests {
 
     use crate::interval_arithmetic::NullableInterval;
     use arrow::compute::CastOptions;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{
+        DataType, MAX_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION,
+        i256,
+    };
     use datafusion_common::rounding::{next_down, next_up};
     use datafusion_common::{Result, ScalarValue};
 
@@ -2597,6 +2685,124 @@ mod tests {
             assert_eq!(next_value(inf.clone()), inf);
             assert_eq!(prev_value(inf.clone()), inf);
         });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_next_prev_value_decimal() {
+        use ScalarValue::*;
+
+        // Decimals step by one unit in the last place, keeping precision and scale:
+        let cases = vec![
+            (Decimal32(Some(2400), 9, 2), Decimal32(Some(2401), 9, 2)),
+            (Decimal64(Some(2400), 18, 2), Decimal64(Some(2401), 18, 2)),
+            (Decimal128(Some(2400), 15, 2), Decimal128(Some(2401), 15, 2)),
+            (
+                Decimal256(Some(i256::from(2400)), 40, 2),
+                Decimal256(Some(i256::from(2401)), 40, 2),
+            ),
+            (Decimal128(Some(-1), 3, 2), Decimal128(Some(0), 3, 2)),
+        ];
+        for (value, next) in cases {
+            assert_eq!(next_value(value.clone()), next);
+            assert_eq!(prev_value(next), value);
+        }
+
+        // Values at the extremes of their precision (e.g. -9.99 and 9.99 for
+        // precision 3, scale 2) become unbounded:
+        let d128_max = MAX_DECIMAL128_FOR_EACH_PRECISION[38];
+        let d128_min = MIN_DECIMAL128_FOR_EACH_PRECISION[38];
+        let cases = vec![
+            (
+                Decimal32(Some(-999), 3, 2),
+                Decimal32(Some(999), 3, 2),
+                Decimal32(Some(-998), 3, 2),
+                Decimal32(Some(998), 3, 2),
+                Decimal32(None, 3, 2),
+            ),
+            (
+                Decimal64(Some(-999), 3, 2),
+                Decimal64(Some(999), 3, 2),
+                Decimal64(Some(-998), 3, 2),
+                Decimal64(Some(998), 3, 2),
+                Decimal64(None, 3, 2),
+            ),
+            (
+                Decimal128(Some(-999), 3, 2),
+                Decimal128(Some(999), 3, 2),
+                Decimal128(Some(-998), 3, 2),
+                Decimal128(Some(998), 3, 2),
+                Decimal128(None, 3, 2),
+            ),
+            (
+                Decimal256(Some(i256::from(-999)), 3, 2),
+                Decimal256(Some(i256::from(999)), 3, 2),
+                Decimal256(Some(i256::from(-998)), 3, 2),
+                Decimal256(Some(i256::from(998)), 3, 2),
+                Decimal256(None, 3, 2),
+            ),
+            (
+                Decimal128(Some(d128_min), 38, 0),
+                Decimal128(Some(d128_max), 38, 0),
+                Decimal128(Some(d128_min + 1), 38, 0),
+                Decimal128(Some(d128_max - 1), 38, 0),
+                Decimal128(None, 38, 0),
+            ),
+        ];
+        for (min, max, after_min, before_max, inf) in cases {
+            assert_eq!(next_value(max.clone()), inf);
+            assert_eq!(prev_value(max), before_max);
+
+            assert_eq!(prev_value(min.clone()), inf);
+            assert_eq!(next_value(min), after_min);
+
+            assert_eq!(next_value(inf.clone()), inf);
+            assert_eq!(prev_value(inf.clone()), inf);
+        }
+    }
+
+    #[test]
+    fn test_satisfy_strict_comparison_decimal() -> Result<()> {
+        use ScalarValue::*;
+
+        // x in [0.00, 50.00], constraint 24.00 > x tightens x to [0.00, 23.99]:
+        let x =
+            Interval::try_new(Decimal128(Some(0), 15, 2), Decimal128(Some(5000), 15, 2))?;
+        let literal = Interval::try_new(
+            Decimal128(Some(2400), 15, 2),
+            Decimal128(Some(2400), 15, 2),
+        )?;
+        let (_, x_lt) = satisfy_greater(&literal, &x, true)?.unwrap();
+        assert_eq!(
+            x_lt,
+            Interval::try_new(Decimal128(Some(0), 15, 2), Decimal128(Some(2399), 15, 2))?
+        );
+
+        // Constraint x > 24.00 tightens x to [24.01, 50.00]:
+        let (x_gt, _) = satisfy_greater(&x, &literal, true)?.unwrap();
+        assert_eq!(
+            x_gt,
+            Interval::try_new(
+                Decimal128(Some(2401), 15, 2),
+                Decimal128(Some(5000), 15, 2),
+            )?
+        );
+
+        // Non-strict comparisons keep the closed bound:
+        let (_, x_le) = satisfy_greater(&literal, &x, false)?.unwrap();
+        assert_eq!(
+            x_le,
+            Interval::try_new(Decimal128(Some(0), 15, 2), Decimal128(Some(2400), 15, 2))?
+        );
+
+        // A strict bound at the precision's extreme conservatively becomes
+        // unbounded instead of stepping past it (x > 9.99 for Decimal128(3, 2)):
+        let x = Interval::make_unbounded(&DataType::Decimal128(3, 2))?;
+        let max =
+            Interval::try_new(Decimal128(Some(999), 3, 2), Decimal128(Some(999), 3, 2))?;
+        let (x_gt, _) = satisfy_greater(&x, &max, true)?.unwrap();
+        assert_eq!(x_gt, Interval::make_unbounded(&DataType::Decimal128(3, 2))?);
 
         Ok(())
     }
@@ -3911,8 +4117,122 @@ mod tests {
     }
 
     #[test]
+    fn test_div_small_integer_intervals_contain_runtime_results() -> Result<()> {
+        // Include zero at either endpoint, inside the range, and as a singleton.
+        for lo in -3_i64..=3 {
+            for hi in lo..=3 {
+                for rlo in -3_i64..=3 {
+                    for rhi in rlo..=3 {
+                        let lhs = Interval::make(Some(lo), Some(hi))?;
+                        let rhs = Interval::make(Some(rlo), Some(rhi))?;
+                        let result = lhs.div(&rhs)?;
+                        for a in lo..=hi {
+                            for b in rlo..=rhi {
+                                if b != 0 {
+                                    assert!(
+                                        result.contains_value(ScalarValue::Int64(
+                                            Some(a / b)
+                                        ))?,
+                                        "{lhs:?} / {rhs:?} = {result:?} excludes {a} / {b}",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_div() -> Result<()> {
         let cases = vec![
+            (
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(Some(-2_i64), Some(-1_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+            ),
+            (
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(Some(-2_i64), Some(-1_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+            ),
+            (
+                Interval::make(Some(-3_i64), Some(-1_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(Some(0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(1_i64), Some(3_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(None, Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(-3_i64), Some(-1_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(None, Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(1_i64), Some(3_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(Some(0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(-6_i64), Some(6_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(-6_i64), Some(6_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(0_u32), Some(0_u32))?,
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), Some(0_u32))?,
+            ),
+            (
+                Interval::make(Some(0_u32), Some(0_u32))?,
+                Interval::make(Some(0_u32), Some(0_u32))?,
+                Interval::make::<u32>(None, None)?,
+            ),
+            (
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), None)?,
+            ),
+            (
+                Interval::make(Some(1_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), None)?,
+            ),
+            (
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make(Some(0_u64), Some(5_u64))?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
+            ),
+            (
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make::<u64>(None, None)?,
+            ),
             (
                 Interval::make(Some(100_i64), Some(200_i64))?,
                 Interval::make(Some(1_i64), Some(2_i64))?,
@@ -4090,7 +4410,7 @@ mod tests {
             ),
         ];
         for case in cases {
-            let result = case.0.div(case.1)?;
+            let result = case.0.div(&case.1)?;
             if case.0.data_type().is_floating() {
                 assert!(
                     result.lower().is_null() && case.2.lower().is_null()
@@ -4101,7 +4421,7 @@ mod tests {
                         || result.upper().ge(case.2.upper())
                 );
             } else {
-                assert_eq!(result, case.2);
+                assert_eq!(result, case.2, "{:?} / {:?}", case.0, case.1);
             }
         }
 
@@ -4299,6 +4619,24 @@ mod tests {
             result,
             ScalarValue::Decimal128(Some(99999999999999999999999999999999999999), 38, 35)
         );
+
+        // Test Decimal32/Decimal64 underflow handling:
+        let op = Operator::Minus;
+        let dt = DataType::Decimal32(3, 2);
+        let lhs = ScalarValue::Decimal32(Some(-999), 3, 2);
+        let rhs = ScalarValue::Decimal32(Some(1), 3, 2);
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal32(Some(-999), 3, 2));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal32(None, 3, 2));
+
+        let dt = DataType::Decimal64(3, 2);
+        let lhs = ScalarValue::Decimal64(Some(-999), 3, 2);
+        let rhs = ScalarValue::Decimal64(Some(1), 3, 2);
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal64(Some(-999), 3, 2));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal64(None, 3, 2));
 
         Ok(())
     }

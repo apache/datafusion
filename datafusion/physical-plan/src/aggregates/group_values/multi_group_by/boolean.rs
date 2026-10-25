@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::aggregates::group_values::multi_group_by::Nulls;
@@ -164,7 +165,7 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
     }
 
     fn size(&self) -> usize {
-        self.buffer.capacity() / 8 + self.nulls.allocated_size()
+        size_of::<Self>() + self.buffer.capacity() / 8 + self.nulls.allocated_size()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
