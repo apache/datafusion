@@ -121,6 +121,43 @@ fn test_window_frame_provenance_does_not_change_expression_equality() {
 }
 
 #[tokio::test]
+async fn test_chaining_implicit_window_frame_includes_peers()
+-> datafusion::error::Result<()> {
+    let ctx = SessionContext::new();
+    let batch = RecordBatch::try_from_iter(vec![
+        ("k", Arc::new(Int64Array::from(vec![1, 1, 2])) as ArrayRef),
+        (
+            "v",
+            Arc::new(Int64Array::from(vec![10, 20, 30])) as ArrayRef,
+        ),
+    ])?;
+    let window = Expr::from(WindowFunction::new(sum_udaf(), vec![col("v")]))
+        .order_by(vec![col("k").sort(true, false)])
+        .build()?
+        .partition_by(vec![])
+        .build()?;
+    let result = ctx
+        .read_batch(batch)?
+        .select(vec![col("k"), window.alias("total")])?
+        .sort(vec![col("k").sort(true, false)])?
+        .collect()
+        .await?;
+    datafusion_common::assert_batches_eq!(
+        [
+            "+---+-------+",
+            "| k | total |",
+            "+---+-------+",
+            "| 1 | 30    |",
+            "| 1 | 30    |",
+            "| 2 | 60    |",
+            "+---+-------+",
+        ],
+        &result
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_sql_window_frame_provenance() -> datafusion::error::Result<()> {
     fn frame_is_explicit(plan: &datafusion_expr::LogicalPlan) -> Option<bool> {
         match plan {
