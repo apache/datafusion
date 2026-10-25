@@ -48,6 +48,7 @@ use arrow::datatypes::{
     Metadata, SchemaRef,
 };
 use arrow::downcast_dictionary_array;
+use arrow_select::dictionary::garbage_collect_any_dictionary;
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
@@ -426,17 +427,35 @@ pub fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
 /// more than the batch has rows. `f` never runs on more than
 /// [`MAX_DICTIONARY_VALUES_PER_ROW`] values per row: past that, it runs on the
 /// values the rows reference instead.
-pub fn map_dictionary_values<F>(array: &ArrayRef, f: F) -> Result<ArrayRef>
+///
+/// `f` can also see values that no row references. If it fails, it runs once
+/// more on only the referenced values, so it fails only when running it on
+/// each row would.
+pub fn map_dictionary_values<F>(array: &ArrayRef, mut f: F) -> Result<ArrayRef>
 where
-    F: FnOnce(&ArrayRef) -> Result<ArrayRef>,
+    F: FnMut(&ArrayRef) -> Result<ArrayRef>,
 {
     let compacted = downcast_dictionary_array! {
         array => compact_oversized_dictionary(array)?.map(|d| Arc::new(d) as ArrayRef),
         dt => return _internal_err!("expected a dictionary array, got {dt}"),
     };
-    let dictionary = compacted.as_ref().unwrap_or(array).as_any_dictionary();
+    let mut dictionary = compacted.unwrap_or_else(|| Arc::clone(array));
+    let values = match f(dictionary.as_any_dictionary().values()) {
+        Ok(values) => values,
+        Err(e) => {
+            let referenced =
+                garbage_collect_any_dictionary(dictionary.as_any_dictionary())?;
+            if referenced.as_any_dictionary().values().len()
+                == dictionary.as_any_dictionary().values().len()
+            {
+                return Err(e);
+            }
+            dictionary = referenced;
+            f(dictionary.as_any_dictionary().values())?
+        }
+    };
     #[expect(clippy::disallowed_methods)] // the values are bounded above
-    Ok(dictionary.with_values(f(dictionary.values())?))
+    Ok(dictionary.as_any_dictionary().with_values(values))
 }
 
 /// The most dictionary values per row that code processing every value of a
@@ -1550,14 +1569,15 @@ pub fn apply_parent_nulls(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::{
-        array::{Float64Array, Int32Array, NullArray},
-        datatypes::Int32Type,
+        array::{Float64Array, Int32Array, NullArray, StringArray},
+        datatypes::{Int8Type, Int32Type},
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
@@ -2178,6 +2198,48 @@ mod tests {
             let expected = length(&arrow::compute::cast(&slice, &DataType::Utf8)?)?;
             assert_eq!(&arrow::compute::cast(&mapped, &DataType::Int32)?, &expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn map_dictionary_values_fails_only_on_referenced_values() -> Result<()> {
+        let calls = Cell::new(0);
+        let fail_on_bad = |values: &ArrayRef| {
+            calls.set(calls.get() + 1);
+            if values.as_string::<i32>().iter().any(|v| v == Some("bad")) {
+                return _exec_err!("bad value");
+            }
+            Ok(length(values)?)
+        };
+        let values: ArrayRef =
+            Arc::new(StringArray::from(vec!["ok", "bad", "fine", "bad"]));
+
+        // "bad" at 1 is behind null keys only, and at 3 has no key. There are
+        // more rows than Int8 keys can index, so the retry can't give each row
+        // its own key.
+        let keys = (0..200)
+            .map(|i| [1, 0, 2][i % 3])
+            .collect::<ScalarBuffer<i8>>();
+        let nulls = NullBuffer::from_iter((0..200).map(|i| i % 3 != 0));
+        let keys = PrimitiveArray::<Int8Type>::new(keys, Some(nulls));
+        let dict: ArrayRef =
+            Arc::new(DictionaryArray::try_new(keys, Arc::clone(&values))?);
+        let mapped = map_dictionary_values(&dict, fail_on_bad)?;
+        assert_eq!(
+            mapped.data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32))
+        );
+        let expected = length(&arrow::compute::cast(&dict, &DataType::Utf8)?)?;
+        assert_eq!(&arrow::compute::cast(&mapped, &DataType::Int32)?, &expected);
+        assert_eq!(calls.get(), 2);
+
+        // A row references "bad", so `f` must still fail, without a retry when
+        // every value is referenced
+        calls.set(0);
+        let keys = PrimitiveArray::<Int8Type>::from(vec![0, 1, 2, 3]);
+        let dict: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values)?);
+        map_dictionary_values(&dict, fail_on_bad).unwrap_err();
+        assert_eq!(calls.get(), 1);
         Ok(())
     }
 }
