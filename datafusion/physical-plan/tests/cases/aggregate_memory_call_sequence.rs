@@ -802,11 +802,13 @@ async fn clustered_spills_then_replays() -> Result<()> {
     Ok(())
 }
 
-/// Full clustering: a limit too small for even one group returns the refusal
-/// in every clustered stream, because none of them spills under full
-/// clustering and the one group never completes. ClusteredPartial emits the
-/// completed groups on a refusal when there are any (#26576); ClusteredFinal
-/// and ClusteredSingle return the refusal even then, which #26628 reports.
+/// Full clustering: a limit too small for even one group. None of the
+/// clustered streams spills under full clustering, and the one group never
+/// completes. ClusteredPartial emits every state on a refusal, including that
+/// group, and resets its table, so it finishes (#26725). ClusteredFinal and
+/// ClusteredSingle cannot emit an incomplete group, so they return the
+/// refusal; they return it even when some groups are complete, which #26628
+/// reports.
 #[tokio::test]
 async fn full_clustering_refusal_is_an_error() -> Result<()> {
     let _bound = hide_byte_counts().bind_to_scope();
@@ -822,8 +824,10 @@ async fn full_clustering_refusal_is_an_error() -> Result<()> {
     ClusteredPartialAggregateStream[0] try_grow [bytes]
     ClusteredPartialAggregateStream[0] try_grow [bytes] -> refused
     ClusteredPartialAggregateStream[0] shrink [bytes]
+    ClusteredPartialAggregateStream[0] shrink [bytes]
+    ClusteredPartialAggregateStream[0] shrink [bytes]
     ClusteredPartialAggregateStream[0] unregister
-    => Err(Resources exhausted: Failed to allocate additional [bytes] for ClusteredPartialAggregateStream[0] with [bytes] already allocated for this reservation - [bytes] remain available for the total memory pool: greedy(used: [bytes], pool_size: [bytes]))
+    => Ok(1 rows in 1 batches)
     ");
 
     let run = one_group(AggregateMode::Final).run().await?;
