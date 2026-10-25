@@ -23,7 +23,9 @@ use arrow::datatypes::{
 use datafusion_common::{Result, ScalarValue, downcast_value, exec_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, DistinctHandling, Signature, Volatility,
+};
 use std::fmt::{Debug, Formatter};
 use std::mem::size_of_val;
 
@@ -330,6 +332,10 @@ impl AggregateUDFImpl for SparkTrySum {
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
         Ok(ScalarValue::Null)
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        DistinctHandling::Unsupported
+    }
 }
 
 #[cfg(test)]
@@ -340,6 +346,14 @@ mod tests {
 
     use super::*;
     // -------- Helpers --------
+
+    #[test]
+    fn try_sum_reports_distinct_as_unsupported() {
+        assert_eq!(
+            SparkTrySum::new().distinct_handling(),
+            DistinctHandling::Unsupported
+        );
+    }
 
     fn int64(values: Vec<Option<i64>>) -> ArrayRef {
         Arc::new(Int64Array::from(values)) as ArrayRef
