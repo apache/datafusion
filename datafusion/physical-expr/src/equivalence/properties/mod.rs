@@ -1417,7 +1417,7 @@ impl EquivalenceProperties {
         if properties.sort_properties != SortProperties::Unordered {
             return properties;
         }
-         if let Some(class) = class {
+        if let Some(class) = class {
             for equivalent in class.iter() {
                 let equivalent_properties =
                     self.get_expr_properties_from_tree(Arc::clone(equivalent));
