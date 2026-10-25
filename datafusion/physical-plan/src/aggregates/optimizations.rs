@@ -95,8 +95,9 @@ impl AggregateExec {
     ///
     /// # Public Only for Internal Use:
     ///
-    /// This is made public for the physical optimizer to use, this is not part of
-    /// the public API.
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn matches_partial(&self, partial: &Self) -> bool {
         matches!(
@@ -112,7 +113,7 @@ impl AggregateExec {
     /// no filtering and no aggregate expressions
     /// This method qualifies the use of the LimitedDistinctAggregation rewrite rule
     /// on an AggregateExec.
-    pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
+    fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
         if self
             .limit_options()
             .and_then(|config| config.descending)
@@ -157,6 +158,13 @@ impl AggregateExec {
     /// local. A final stage can inherit that guarantee from a partial stage
     /// even when projecting the grouping expressions loses range metadata.
     /// This check does not require the two stages to be combined.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn input_keeps_groups_local(
         &self,
         input: &dyn ExecutionPlan,
@@ -220,8 +228,7 @@ impl AggregateExec {
     ///
     /// # Public Only for Internal Use:
     ///
-    /// This is not a public API and is for internal use only in physical optimizer;
-    /// see [API policy] for details.
+    /// This is not a public API and is for internal use only; see [API policy] for details.
     ///
     /// [`CombinePartialFinalAggregate`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/combine_partial_final_agg/struct.CombinePartialFinalAggregate.html
     /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
@@ -570,7 +577,7 @@ impl AggregateExec {
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
-    pub fn get_minmax_desc(&self) -> Option<(FieldRef, bool)> {
+    pub(super) fn get_minmax_desc(&self) -> Option<(FieldRef, bool)> {
         let agg_expr = self.aggr_expr().iter().exactly_one().ok()?;
         agg_expr.get_minmax_desc()
     }
@@ -583,6 +590,6 @@ impl AggregateExec {
 /// Supported types include Arrow primitives (integers, floats, decimals, intervals) and
 /// UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`).
 /// ```text
-pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
+fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
     is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
 }
