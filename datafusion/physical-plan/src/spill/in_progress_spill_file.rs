@@ -113,6 +113,15 @@ impl InProgressSpillFile {
 
     /// Appends a `RecordBatch` using the asynchronous spill writer.
     pub async fn append_batch_async(&mut self, batch: &RecordBatch) -> Result<usize> {
+        Ok(self.append_batch_async_with_stats(batch).await?.0)
+    }
+
+    /// Like [`Self::append_batch_async`], but returns both the memory size and the row
+    /// count of the batch written.
+    pub(crate) async fn append_batch_async_with_stats(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<(usize, usize)> {
         if self.in_progress_file.is_none() {
             return Err(exec_datafusion_err!(
                 "Append operation failed: No active in-progress file. The file may have already been finalized."
@@ -159,7 +168,7 @@ impl InProgressSpillFile {
                 ));
             }
         }
-        gc_batch.get_sliced_size()
+        Ok((gc_batch.get_sliced_size()?, gc_batch.num_rows()))
     }
 
     pub fn flush(&mut self) -> Result<()> {

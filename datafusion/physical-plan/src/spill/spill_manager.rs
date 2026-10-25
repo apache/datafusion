@@ -157,10 +157,12 @@ impl SpillManager {
 
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
-                let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
+                let (gc_sliced_size, rows) = in_progress_file
+                    .append_batch_async_with_stats(&batch)
+                    .await?;
 
                 max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
-                max_batch_rows = max_batch_rows.max(batch.num_rows());
+                max_batch_rows = max_batch_rows.max(rows);
             }
 
             let file = in_progress_file.finish_async().await?;
