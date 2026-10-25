@@ -1167,18 +1167,8 @@ fn requalify_join_filter_columns(
         return Ok(());
     }
     for filter in filters {
-        *filter = filter
-            .clone()
-            .transform(|expr| {
-                if let Expr::Column(col) = &expr
-                    && cols.contains(col)
-                {
-                    let new_col = alias_output_column(col, input_schema, output_schema)?;
-                    return Ok(Transformed::yes(Expr::Column(new_col)));
-                }
-                Ok(Transformed::no(expr))
-            })
-            .data()?;
+        *filter =
+            replace_qualified_name(filter.clone(), cols, input_schema, output_schema)?;
     }
     Ok(())
 }
