@@ -28,12 +28,12 @@ use crate::joins::Map;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::not_in::NotInProbe;
-use crate::joins::hash_join::probe_completion::ProbeSideSummary;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::join_hash_map::ProbeOffset;
 use crate::joins::join_hash_map::ProbeOffset::AtRow;
+use crate::joins::probe_completion::{Completion, ProbeSideSummary};
 use crate::joins::utils::{
     JoinKeyComparator, OnceFut, equal_rows_arr_with_normalized_left, matchable_join_keys,
 };
@@ -1077,7 +1077,9 @@ impl HashJoinStream {
         // and only it receives the shared probe-side summary (see
         // `JoinLeftData::report_probe_completed` for why the flags are not
         // readable any other way here).
-        let Some(probe_summary) = build_side.left_data.report_probe_completed() else {
+        let Completion::Emit(probe_summary) =
+            build_side.left_data.report_probe_completed()
+        else {
             timer.done();
             self.state = HashJoinStreamState::Completed;
             return Ok(StatefulStreamResult::Continue);

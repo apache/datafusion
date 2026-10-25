@@ -3668,8 +3668,8 @@ ORDER BY r.sn
 query IRR
 SELECT l.sn, l.amount, SUM(l.amount)
   FROM (SELECT *
-    FROM sales_global_with_unique as l
-    LEFT SEMI JOIN sales_global_with_unique as r
+    FROM sales_global_with_pk as l
+    LEFT SEMI JOIN sales_global_with_pk as r
     ON l.amount >= r.amount + 10)
   GROUP BY l.sn
 ORDER BY l.sn
@@ -3678,19 +3678,47 @@ ORDER BY l.sn
 2 75 75
 3 200 200
 4 100 100
-NULL 100 100
 
 # Similarly, left anti join should propagate constraint of left side as is.
 query IRR
 SELECT l.sn, l.amount, SUM(l.amount)
   FROM (SELECT *
-    FROM sales_global_with_unique as l
-    LEFT ANTI JOIN sales_global_with_unique as r
+    FROM sales_global_with_pk as l
+    LEFT ANTI JOIN sales_global_with_pk as r
     ON l.amount >= r.amount + 10)
   GROUP BY l.sn
 ORDER BY l.sn
 ----
 0 30 30
+
+# The propagated unique key of the left side can contain NULL, so it does not
+# determine `l.amount` for the `l.sn = NULL` group and the query is rejected,
+# just as it would be without the join.
+statement error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "l\.amount" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "l\.sn, sum\(l\.amount\)" appears in the SELECT clause satisfies this requirement
+SELECT l.sn, l.amount, SUM(l.amount)
+  FROM (SELECT *
+    FROM sales_global_with_unique as l
+    LEFT SEMI JOIN sales_global_with_unique as r
+    ON l.amount >= r.amount + 10)
+  GROUP BY l.sn
+ORDER BY l.sn
+
+# Grouping by `l.amount` explicitly is accepted, and the `l.sn = NULL` row
+# comes back as its own group.
+query IRR
+SELECT l.sn, l.amount, SUM(l.amount)
+  FROM (SELECT *
+    FROM sales_global_with_unique as l
+    LEFT SEMI JOIN sales_global_with_unique as r
+    ON l.amount >= r.amount + 10)
+  GROUP BY l.sn, l.amount
+ORDER BY l.sn
+----
+1 50 50
+2 75 75
+3 200 200
+4 100 100
+NULL 100 100
 
 # Should support grouping by list column
 query ?I

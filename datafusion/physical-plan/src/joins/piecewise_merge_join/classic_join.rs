@@ -26,7 +26,7 @@ use arrow::{
 };
 use arrow_schema::{DataType, Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
-use datafusion_common::utils::normalize_float_zero;
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{ColumnarValue, JoinType, Operator};
@@ -608,7 +608,7 @@ fn buffered_extreme(
     let last = values.slice(end - 1, 1);
     // `apply_cmp` normalizes `-0.0` only in flat float scalars, not inside a
     // `ScalarValue::Dictionary`, so normalize the key before taking it.
-    let extreme = normalize_float_zero(&last);
+    let extreme = normalize_floats(&last);
     Ok(Some(ColumnarValue::Scalar(ScalarValue::try_from_array(
         &extreme, 0,
     )?)))

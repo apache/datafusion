@@ -20,10 +20,10 @@ mod tests {
 
     use arrow::array::{Float64Array, record_batch};
     use datafusion::error::Result;
-    use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl};
+    use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, DistinctHandling};
     use datafusion::prelude::{SessionContext, col};
     use datafusion_catalog::MemTable;
-    use datafusion_expr::{ScalarUDF, ScalarUDFImpl};
+    use datafusion_expr::{ExprFunctionExt, ScalarUDF, ScalarUDFImpl};
     use datafusion_ffi::tests::utils::get_module;
 
     #[tokio::test]
@@ -75,6 +75,71 @@ mod tests {
         let ffi_sum_func = (module.create_sum_udaf)();
         let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).into();
         assert!(!foreign_sum_func.supports_null_handling_clause());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_distinct_handling() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_stddev_func = (module.create_stddev_udaf)();
+        let foreign_stddev_func: Arc<dyn AggregateUDFImpl> = (&ffi_stddev_func).into();
+        assert_eq!(
+            foreign_stddev_func.distinct_handling(),
+            DistinctHandling::Unsupported
+        );
+
+        let ffi_sum_func = (module.create_sum_udaf)();
+        let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).into();
+        assert_eq!(
+            foreign_sum_func.distinct_handling(),
+            DistinctHandling::Sensitive
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_foreign_min_distinct_drops_distinct() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_min_func = (module.create_min_udaf)();
+        let foreign_min_func: Arc<dyn AggregateUDFImpl> = (&ffi_min_func).into();
+
+        let udaf = AggregateUDF::new_from_shared_impl(foreign_min_func);
+
+        let ctx = SessionContext::default();
+        let record_batch = record_batch!(
+            ("a", Int32, vec![1, 2, 2, 4, 4, 4, 4]),
+            ("b", Float64, vec![3.0, 2.0, 2.0, 4.0, 1.0, 1.0, 4.0])
+        )
+        .unwrap();
+
+        let df = ctx
+            .read_batch(record_batch)?
+            .aggregate(
+                vec![col("a")],
+                vec![udaf.call(vec![col("b")]).distinct().build()?.alias("min_b")],
+            )?
+            .sort_by(vec![col("a")])?;
+
+        let plan = df.clone().into_optimized_plan()?;
+        assert_eq!(
+            plan.display_indent().to_string(),
+            "Sort: ?table?.a ASC NULLS LAST\
+            \n  Aggregate: groupBy=[[?table?.a]], aggr=[[min(?table?.b) AS min_b]]\
+            \n    TableScan: ?table? projection=[a, b]"
+        );
+
+        let result = df.collect().await?;
+
+        let expected = record_batch!(
+            ("a", Int32, vec![1, 2, 4]),
+            ("min_b", Float64, vec![3.0, 2.0, 1.0])
+        )?;
+
+        assert_eq!(result[0], expected);
 
         Ok(())
     }
