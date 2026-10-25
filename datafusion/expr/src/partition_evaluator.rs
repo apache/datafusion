@@ -200,6 +200,33 @@ pub trait PartitionEvaluator: Debug + Send + std::any::Any {
         not_impl_err!("evaluate is not implemented by default")
     }
 
+    /// Evaluate window function on the window frames of consecutive rows
+    /// in an input partition, returning one result per range.
+    ///
+    /// This is called instead of [`Self::evaluate`] for window functions
+    /// that [use the window frame](Self::uses_window_frame), with the same
+    /// `values`.
+    ///
+    /// The default implementation calls [`Self::evaluate`] for each range.
+    /// Implementing this function is an optimization: a function such as
+    /// `FIRST_VALUE`, whose result is one of the input rows, can gather
+    /// all results with a single `take` instead of creating a
+    /// [`ScalarValue`] for every row.
+    fn evaluate_ranges(
+        &mut self,
+        values: &[ArrayRef],
+        ranges: &[Range<usize>],
+    ) -> Result<ArrayRef> {
+        if let [range] = ranges {
+            return self.evaluate(values, range)?.to_array();
+        }
+        let mut results = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            results.push(self.evaluate(values, range)?);
+        }
+        ScalarValue::iter_to_array(results)
+    }
+
     /// [`PartitionEvaluator::evaluate_all_with_rank`] is called for window
     /// functions that only need the rank of a row within its window
     /// frame.

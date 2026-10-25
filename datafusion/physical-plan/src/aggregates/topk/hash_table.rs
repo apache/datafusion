@@ -236,7 +236,7 @@ where
     /// Computes the id and its hash for the given row, for hash table lookups
     #[inline]
     fn id_and_hash(&self, row_idx: usize) -> (Option<VAL::Native>, u64) {
-        let id = some_value(&self.owned, row_idx).map(HashValue::canonicalize);
+        let id = some_value(&self.owned, row_idx).map(HashValue::normalize_key);
         let hash: u64 = id.hash(&self.rnd);
         (id, hash)
     }
