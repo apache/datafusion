@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::logical_date;
 use datafusion_common::{
     Result, ScalarValue, internal_err, types::logical_string, utils::take_function_args,
@@ -23,9 +23,10 @@ use datafusion_common::{
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
+use std::sync::Arc;
 
 /// Wrapper around datafusion date_part function to handle
 /// Spark behavior returning day of the week 1-indexed instead of 0-indexed and different part aliases.
@@ -76,11 +77,14 @@ impl ScalarUDFImpl for SparkDatePart {
         &self.signature
     }
 
-    // The default `return_field_from_args` makes the result nullable, like the
-    // integer parts of `date_part`, which this simplifies to, because they can
-    // be NULL for a non-null input
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32)
+        internal_err!("Use return_field_from_args in this case instead.")
+    }
+
+    // Nullable, like the integer parts of `date_part`, which this simplifies to,
+    // because they can be NULL for a non-null input
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int32, true)))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
