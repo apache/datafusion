@@ -18,3 +18,7 @@
 -->
 
 See the [Contributor Guide](https://datafusion.apache.org/contributor-guide/index.html)
+
+## Quick links
+
+- [Set up your development environment](https://datafusion.apache.org/contributor-guide/development_environment.html#quick-start)
