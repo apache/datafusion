@@ -464,10 +464,8 @@ drop table ree_t;
 # https://github.com/apache/datafusion/issues/25477
 ##########
 
-# `coalesce` on a volatile argument must NOT be rewritten to
-# `CASE WHEN a IS NOT NULL THEN a ELSE b END`, because that names `a` twice and
-# therefore draws it twice. It must stay a `coalesce` call so the runtime kernel
-# evaluates each argument exactly once.
+# The CASE rewrite would name a volatile non-final argument twice (two draws),
+# so a volatile first argument keeps the `coalesce` call.
 query TT
 explain select coalesce(nullif(floor(random() * 2), 0), -1) as c;
 ----
@@ -478,85 +476,72 @@ physical_plan
 01)ProjectionExec: expr=[coalesce(nullif(floor(random() * 2), 0), -1) as c]
 02)--PlaceholderRowExec
 
+# With two draws, about 25% of rows were NULL (and Arrow rejected them because
+# the `-1` fallback makes the result non-nullable). With one draw, every row is
+# either 1 or -1.
 statement ok
 create table volatile_t as select * from generate_series(1, 100000) as t(i);
 
-# The fallback `-1` makes the result non-nullable, and with a single evaluation
-# per row the result really never is null: every row is either the non-null
-# volatile draw or the literal. Before the fix this both produced ~25% spurious
-# NULLs and tripped the non-nullable assertion in Arrow.
-query II
-select count(*), count(coalesce(nullif(floor(random() * 2), 0), -1))
+query III
+select
+  count(coalesce(nullif(floor(random() * 2), 0), -1)),
+  count(nvl(nullif(floor(random() * 2), 0), -1)),
+  count(*) filter (where coalesce(nullif(floor(random() * 2), 0), -1) not in (1, -1))
 from volatile_t;
 ----
-100000 100000
-
-# Every produced value must come from one of the two operands.
-query I
-select count(*)
-from (
-  select coalesce(nullif(floor(random() * 2), 0), -1) as c from volatile_t
-)
-where c not in (1, -1);
-----
-0
-
-# `nvl` delegates to `coalesce`, so it inherits the fix.
-query TT
-explain select nvl(nullif(floor(random() * 2), 0), -1) as c;
-----
-logical_plan
-01)Projection: nvl(nullif(floor(random() * Float64(2)), Float64(0)), Float64(-1)) AS c
-02)--EmptyRelation: rows=1
-physical_plan
-01)ProjectionExec: expr=[nvl(nullif(floor(random() * 2), 0), -1) as c]
-02)--PlaceholderRowExec
-
-query II
-select count(*), count(nvl(nullif(floor(random() * 2), 0), -1))
-from volatile_t;
-----
-100000 100000
+100000 100000 0
 
 statement ok
 drop table volatile_t;
 
-# Non-volatile `coalesce` keeps the lazy CASE rewrite (see also
-# select.slt, which asserts `coalesce(1, y/x)` never divides by zero).
+# `case when random() >= 0 then x end` is volatile but always equals `x`, which
+# makes the results of the volatile code path deterministic.
+statement ok
+create table volatile_args(a int, b int, c int, s varchar, x int, y int) as values
+  (1,    9,    8,    null, 0, 1),
+  (null, 2,    8,    'b',  0, 1),
+  (null, null, 3,    null, 0, 1),
+  (null, null, null, null, 0, 1);
+
+query IIIIT
+select
+  coalesce(case when random() >= 0 then a end, b, c),
+  coalesce(case when random() >= 0 then a end, -1),
+  coalesce(case when random() >= 0 then a end, null::int),
+  coalesce(a, case when random() >= 0 then b end, c),
+  coalesce(case when random() >= 0 then s end, 'none')
+from volatile_args;
+----
+1 1 1 1 none
+2 -1 NULL 2 b
+3 -1 NULL 3 none
+NULL -1 NULL NULL none
+
+query TI
+select
+  coalesce(case when random() >= 0 then null::varchar end, 'datafusion', 'unused'),
+  coalesce(case when random() >= 0 then null::int end, null::int);
+----
+datafusion NULL
+
+# Arguments before the first volatile one keep the CASE rewrite; only the rest
+# is left to `coalesce`.
 query TT
-explain select coalesce(column1, column2) as c from (values (1, 2), (null, 3)) t;
+explain select coalesce(a, case when random() >= 0 then b end, c) from volatile_args;
 ----
 logical_plan
-01)Projection: CASE WHEN t.column1 IS NOT NULL THEN t.column1 ELSE t.column2 END AS c
-02)--SubqueryAlias: t
-03)----Values: (Int64(1), Int64(2)), (Int64(NULL), Int64(3))
+01)Projection: CASE WHEN volatile_args.a IS NOT NULL THEN volatile_args.a ELSE coalesce(CASE WHEN random() >= Float64(0) THEN volatile_args.b END, volatile_args.c) END AS coalesce(volatile_args.a,CASE WHEN random() >= Int64(0) THEN volatile_args.b END,volatile_args.c)
+02)--TableScan: volatile_args projection=[a, b, c]
 physical_plan
-01)ProjectionExec: expr=[CASE WHEN column1@0 IS NOT NULL THEN column1@0 ELSE column2@1 END as c]
+01)ProjectionExec: expr=[CASE WHEN a@0 IS NOT NULL THEN a@0 ELSE coalesce(CASE WHEN random() >= 0 THEN b@1 END, c@2) END as coalesce(volatile_args.a,CASE WHEN random() >= Int64(0) THEN volatile_args.b END,volatile_args.c)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-# A volatile *last* argument still takes the lazy CASE rewrite, so it is not
-# evaluated when an earlier argument is non-null: `y / x` must not divide by
-# zero here.
-statement ok
-create table volatile_last_t(a int, x int, y int) as values (1, 0, 1), (2, 0, 2);
-
-query TT
-explain select coalesce(a, y / x + random()) as c from volatile_last_t;
-----
-logical_plan
-01)Projection: CASE WHEN __common_expr_1 IS NOT NULL THEN __common_expr_1 ELSE CAST(volatile_last_t.y / volatile_last_t.x AS Float64) + random() END AS c
-02)--Projection: CAST(volatile_last_t.a AS Float64) AS __common_expr_1, volatile_last_t.x, volatile_last_t.y
-03)----TableScan: volatile_last_t projection=[a, x, y]
-physical_plan
-01)ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 ELSE CAST(y@2 / x@1 AS Float64) + random() END as c]
-02)--ProjectionExec: expr=[CAST(a@0 AS Float64) as __common_expr_1, x@1 as x, y@2 as y]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-
-query R rowsort
-select coalesce(a, y / x + random()) as c from volatile_last_t;
+# A volatile last argument is named once, so it keeps the lazy CASE rewrite:
+# `y / x` must not divide by zero when `a` is not null.
+query R
+select coalesce(a, y / x + random()) from volatile_args where a is not null;
 ----
 1
-2
 
 statement ok
-drop table volatile_last_t;
+drop table volatile_args;

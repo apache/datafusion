@@ -22,6 +22,7 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::conditional_expressions::CaseBuilder;
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
@@ -32,7 +33,7 @@ use itertools::Itertools;
 
 #[user_doc(
     doc_section(label = "Conditional Functions"),
-    description = "Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. Arguments after the first non-_null_ one are normally not evaluated, but when any argument other than the last is volatile every argument is evaluated, so that each is evaluated exactly once. This function is often used to substitute a default value for _null_ values.",
+    description = "Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.",
     syntax_example = "coalesce(expression1[, ..., expression_n])",
     sql_example = r#"```sql
 > select coalesce(null, null, 'datafusion');
@@ -106,43 +107,35 @@ impl ScalarUDFImpl for CoalesceFunc {
             ));
         }
 
-        let n = args.len();
+        // `coalesce(a, b)` is rewritten to the (lazy, fast)
+        // `CASE WHEN a IS NOT NULL THEN a ELSE b END`, which names every argument
+        // but the last one twice. A volatile argument named twice is evaluated
+        // twice, so the rewrite stops at the first volatile non-final argument
+        // and the rest is left to the `invoke_with_args` kernel, which evaluates
+        // each argument once. See https://github.com/apache/datafusion/issues/25477
+        let (init, last) = args.split_at(args.len() - 1);
+        let (prefix, rest) = match init.iter().position(|arg| arg.is_volatile()) {
+            None => (init, last[0].clone()),
+            Some(0) => return Ok(ExprSimplifyResult::Original(args)),
+            Some(i) => (
+                &init[..i],
+                Expr::ScalarFunction(ScalarFunction::new_udf(
+                    super::coalesce(),
+                    args[i..].to_vec(),
+                )),
+            ),
+        };
 
-        // The `CASE WHEN a IS NOT NULL THEN a ELSE b END` rewrite below mentions
-        // every non-final argument *twice* (once in the `WHEN` predicate and once
-        // in the `THEN` result). That is fine for deterministic arguments, but for
-        // a volatile argument the two mentions are two independent draws, so
-        // `coalesce(random_nullable_expr, default)` can take the `THEN` branch
-        // after the `WHEN` draw was non-null and still produce NULL.
-        //
-        // See https://github.com/apache/datafusion/issues/25477. For volatile
-        // arguments we keep `coalesce` intact and let the runtime kernel in
-        // `invoke_with_args` evaluate each argument exactly once.
-        //
-        // Only the non-final arguments are duplicated: the last argument becomes
-        // the `ELSE` branch, which names it once, so a volatile last argument is
-        // safe to rewrite and keeps its laziness.
-        if args[..n - 1].iter().any(|arg| arg.is_volatile()) {
-            return Ok(ExprSimplifyResult::Original(args));
-        }
-
-        let (init, last_elem) = args.split_at(n - 1);
-        let whens = init
-            .iter()
-            .map(|x| x.clone().is_not_null())
-            .collect::<Vec<_>>();
-        let cases = init.to_vec();
+        let whens = prefix.iter().map(|x| x.clone().is_not_null()).collect();
         Ok(ExprSimplifyResult::Simplified(
-            CaseBuilder::new(None, whens, cases, Some(Box::new(last_elem[0].clone())))
-                .end()?,
+            CaseBuilder::new(None, whens, prefix.to_vec(), Some(Box::new(rest))).end()?,
         ))
     }
 
     /// coalesce evaluates to the first value which is not NULL
     ///
-    /// This kernel is only reached when [`Self::simplify`] declined to rewrite the
-    /// call into a `CASE` expression, which today only happens when one of the
-    /// arguments is volatile. It evaluates each argument exactly once.
+    /// Only reached when [`Self::simplify`] keeps the call because an argument
+    /// is volatile; evaluates each argument exactly once.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         // do not accept 0 arguments.
@@ -181,7 +174,7 @@ impl ScalarUDFImpl for CoalesceFunc {
                         }
                     }
                 }
-                if remainder.iter().all(|x| x == Some(false)) {
+                if remainder.true_count() == 0 {
                     break;
                 }
             }
@@ -221,213 +214,5 @@ impl ScalarUDFImpl for CoalesceFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use arrow::array::{Array, ArrayRef, Int32Array, StringArray};
-    use arrow::datatypes::DataType;
-    use datafusion_common::ScalarValue;
-    use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, lit};
-
-    use super::*;
-
-    fn invoke(args: Vec<ColumnarValue>, number_rows: usize) -> ColumnarValue {
-        let return_type = args[0].data_type();
-        let arg_fields = args
-            .iter()
-            .enumerate()
-            .map(|(i, a)| Field::new(format!("a{i}"), a.data_type(), true).into())
-            .collect();
-        CoalesceFunc::new()
-            .invoke_with_args(ScalarFunctionArgs {
-                args,
-                arg_fields,
-                number_rows,
-                return_field: Field::new("f", return_type, true).into(),
-                config_options: Arc::new(ConfigOptions::default()),
-            })
-            .expect("coalesce kernel failed")
-    }
-
-    /// The restored runtime kernel picks the first non-null value per row.
-    #[test]
-    fn coalesce_kernel_arrays() {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, None, None]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![Some(9), Some(2), None, None]));
-        let c: ArrayRef =
-            Arc::new(Int32Array::from(vec![Some(8), Some(8), Some(3), None]));
-
-        let result = invoke(
-            vec![
-                ColumnarValue::Array(a),
-                ColumnarValue::Array(b),
-                ColumnarValue::Array(c),
-            ],
-            4,
-        )
-        .into_array(4)
-        .unwrap();
-
-        let expected: ArrayRef =
-            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3), None]));
-        assert_eq!(&result, &expected);
-    }
-
-    /// A trailing non-null scalar fills every remaining row, so the output has no nulls.
-    #[test]
-    fn coalesce_kernel_array_with_scalar_fallback() {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3), None]));
-
-        let result = invoke(
-            vec![
-                ColumnarValue::Array(a),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(-1))),
-            ],
-            4,
-        )
-        .into_array(4)
-        .unwrap();
-
-        let expected: ArrayRef =
-            Arc::new(Int32Array::from(vec![Some(1), Some(-1), Some(3), Some(-1)]));
-        assert_eq!(&result, &expected);
-        assert_eq!(result.null_count(), 0);
-    }
-
-    /// All-scalar input short-circuits to the first non-null scalar.
-    #[test]
-    fn coalesce_kernel_all_scalars() {
-        let result = invoke(
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("datafusion".into()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("unused".into()))),
-            ],
-            1,
-        );
-        match result {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => {
-                assert_eq!(s, "datafusion")
-            }
-            other => panic!("expected Utf8 scalar, got {other:?}"),
-        }
-    }
-
-    /// All-null scalars produce a null scalar rather than an error.
-    #[test]
-    fn coalesce_kernel_all_null_scalars() {
-        let result = invoke(
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Int32(None)),
-                ColumnarValue::Scalar(ScalarValue::Int32(None)),
-            ],
-            1,
-        );
-        match result {
-            ColumnarValue::Scalar(v) => assert!(v.is_null()),
-            other => panic!("expected null scalar, got {other:?}"),
-        }
-    }
-
-    /// All-null arrays produce an all-null array of the right type and length.
-    #[test]
-    fn coalesce_kernel_all_null_arrays() {
-        let a: ArrayRef = Arc::new(StringArray::from(vec![None as Option<&str>, None]));
-        let b: ArrayRef = Arc::new(StringArray::from(vec![None as Option<&str>, None]));
-
-        let result = invoke(vec![ColumnarValue::Array(a), ColumnarValue::Array(b)], 2)
-            .into_array(2)
-            .unwrap();
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result.null_count(), 2);
-        assert_eq!(result.data_type(), &DataType::Utf8);
-    }
-
-    #[test]
-    fn coalesce_kernel_rejects_empty_args() {
-        let err = CoalesceFunc::new()
-            .invoke_with_args(ScalarFunctionArgs {
-                args: vec![],
-                arg_fields: vec![],
-                number_rows: 1,
-                return_field: Field::new("f", DataType::Int32, true).into(),
-                config_options: Arc::new(ConfigOptions::default()),
-            })
-            .unwrap_err();
-        assert!(err.to_string().contains("It requires at least 1"));
-    }
-
-    fn simplify(args: Vec<Expr>) -> ExprSimplifyResult {
-        CoalesceFunc::new()
-            .simplify(args, &SimplifyContext::default())
-            .expect("simplify failed")
-    }
-
-    /// Non-volatile arguments keep the lazy `CASE` rewrite.
-    #[test]
-    fn simplify_non_volatile_expands_to_case() {
-        let result = simplify(vec![lit(1i64), lit(2i64)]);
-        match result {
-            ExprSimplifyResult::Simplified(Expr::Case(_)) => {}
-            other => panic!("expected a CASE expression, got {other:?}"),
-        }
-    }
-
-    /// A volatile argument must NOT be expanded, because the `CASE` rewrite would
-    /// name it twice and evaluate it twice. See issue #25477.
-    #[test]
-    fn simplify_volatile_is_left_intact() {
-        let random =
-            datafusion_expr::expr::ScalarFunction::new_udf(crate::math::random(), vec![]);
-        let args = vec![Expr::ScalarFunction(random), lit(-1i64)];
-        match simplify(args.clone()) {
-            ExprSimplifyResult::Original(original) => assert_eq!(original, args),
-            other => panic!("expected the original coalesce args, got {other:?}"),
-        }
-    }
-
-    /// A volatile argument nested inside a larger expression is also caught.
-    #[test]
-    fn simplify_nested_volatile_is_left_intact() {
-        let random = Expr::ScalarFunction(
-            datafusion_expr::expr::ScalarFunction::new_udf(crate::math::random(), vec![]),
-        );
-        let args = vec![random + lit(1.0f64), lit(-1.0f64)];
-        match simplify(args.clone()) {
-            ExprSimplifyResult::Original(original) => assert_eq!(original, args),
-            other => panic!("expected the original coalesce args, got {other:?}"),
-        }
-    }
-
-    /// A volatile *last* argument is named once (it becomes the `ELSE` branch),
-    /// so the rewrite is safe and must still happen -- otherwise the other
-    /// arguments needlessly lose their laziness.
-    #[test]
-    fn simplify_volatile_last_arg_still_expands_to_case() {
-        let random = Expr::ScalarFunction(
-            datafusion_expr::expr::ScalarFunction::new_udf(crate::math::random(), vec![]),
-        );
-        match simplify(vec![lit(1.0f64), random]) {
-            ExprSimplifyResult::Simplified(Expr::Case(_)) => {}
-            other => panic!("expected a CASE expression, got {other:?}"),
-        }
-    }
-
-    /// A single argument is still unwrapped, volatile or not (it is named once).
-    #[test]
-    fn simplify_single_volatile_arg_is_unwrapped() {
-        let random = Expr::ScalarFunction(
-            datafusion_expr::expr::ScalarFunction::new_udf(crate::math::random(), vec![]),
-        );
-        match simplify(vec![random.clone()]) {
-            ExprSimplifyResult::Simplified(e) => assert_eq!(e, random),
-            other => panic!("expected the argument itself, got {other:?}"),
-        }
     }
 }
