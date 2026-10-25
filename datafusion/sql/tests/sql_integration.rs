@@ -3998,6 +3998,40 @@ fn plan_merge_into_preserves_target_qualifier_and_quoted_columns() {
     };
     assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
     assert_eq!(values[0].to_string(), "s.j2_id");
+
+    let display = plan.display_indent().to_string();
+    assert_contains!(
+        &display,
+        r#"Dml: op=[MergeInto] table=[person_quoted_cols] on=[t.id = s.j2_id] clauses=[WHEN MATCHED THEN UPDATE SET "First Name" = s.j2_string, WHEN NOT MATCHED THEN INSERT (id, "Age") VALUES (s.j2_id, Int64(42))]"#
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.display_pg_json().to_string()).unwrap();
+    let root = &json[0]["Plan"];
+    assert_eq!(root["Node Type"], "Dml");
+    assert_eq!(root["Operation"], "MergeInto");
+    assert_eq!(root["Table Name"], "person_quoted_cols");
+    assert_eq!(root["On"], "t.id = s.j2_id");
+    assert_eq!(
+        root["Clauses"],
+        serde_json::json!([
+            r#"WHEN MATCHED THEN UPDATE SET "First Name" = s.j2_string"#,
+            r#"WHEN NOT MATCHED THEN INSERT (id, "Age") VALUES (s.j2_id, Int64(42))"#,
+        ])
+    );
+}
+
+#[test]
+fn plan_update_json_has_dml_node_without_merge_fields() {
+    let plan = logical_plan("UPDATE person SET age = 42").unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.display_pg_json().to_string()).unwrap();
+    let root = json[0]["Plan"].as_object().unwrap();
+    assert_eq!(root["Node Type"], "Dml");
+    assert_eq!(root["Operation"], "Update");
+    assert_eq!(root["Table Name"], "person");
+    assert!(!root.contains_key("On"));
+    assert!(!root.contains_key("Clauses"));
 }
 
 #[rstest]

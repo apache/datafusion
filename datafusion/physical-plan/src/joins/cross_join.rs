@@ -149,13 +149,15 @@ impl CrossJoinExec {
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> Result<PlanProperties> {
-        // Calculate equivalence properties
+        // Calculate equivalence properties. A cross join is an inner join
+        // without keys: no side is padded with NULLs, so the constants of
+        // both sides still hold.
         // TODO: Check equivalence properties of cross join, it may preserve
         //       ordering in some cases.
         let eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
-            &JoinType::Full,
+            &JoinType::Inner,
             schema,
             &[false, false],
             None,
