@@ -120,7 +120,7 @@ pub fn merge_ordered_arrays(
     sort_options: &[SortOptions],
 ) -> datafusion_common::Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
     // Keep track of the most recent data of each branch, in a binary heap data structure.
-    let mut heap = BinaryHeap::<CustomElement>::new();
+    let mut heap = BinaryHeap::<CustomElement>::with_capacity(values.len());
 
     if values.len() != ordering_values.len() {
         return exec_err!(
@@ -143,8 +143,9 @@ pub fn merge_ordered_arrays(
         );
     }
     let n_branch = values.len();
-    let mut merged_values = vec![];
-    let mut merged_orderings = vec![];
+    let total_len: usize = values.iter().map(VecDeque::len).sum();
+    let mut merged_values = Vec::with_capacity(total_len);
+    let mut merged_orderings = Vec::with_capacity(total_len);
     // Continue iterating the loop until consuming data of all branches.
     loop {
         let minimum = if let Some(minimum) = heap.pop() {

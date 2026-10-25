@@ -247,3 +247,32 @@ RESET datafusion.execution.parquet.enable_page_index;
 
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
+
+# Inferred nested fields absent from a file must allow NULL, including predicates.
+statement ok
+COPY (SELECT 1 AS id, named_struct('x', 1, 'y', 10) AS s)
+TO 'test_files/scratch/schema_evolution_nested/inferred_child/a.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (SELECT 2 AS id, named_struct('x', 2) AS s)
+TO 'test_files/scratch/schema_evolution_nested/inferred_child/b.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE inferred_child STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution_nested/inferred_child/';
+
+query II rowsort
+SELECT id, s.y FROM inferred_child;
+----
+1 10
+2 NULL
+
+query I
+SELECT id FROM inferred_child WHERE s.y IS NULL;
+----
+2
+
+statement ok
+DROP TABLE inferred_child;

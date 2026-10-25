@@ -1,0 +1,11 @@
+# INNER JOIN, no_match: every streamed key is below every buffered key, so no row matches.
+
+subgroup no_match
+
+template sql_benchmarks/pwmj/pwmj.benchmark.template
+QPAD=01
+JOIN=INNER
+JOIN_KIND=Inner
+RIGHT_ROWS=2000000
+RIGHT_KEY=-(h % 1000)
+EXPECTED_ROWS=0

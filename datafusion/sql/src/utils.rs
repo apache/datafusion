@@ -441,10 +441,7 @@ impl RecursiveUnnestRewriter<'_> {
             .iter()
             .rev()
             .skip_while(|item| item.is_none())
-            .take_while(|item| item.is_some())
-            .to_owned()
-            .cloned()
-            .map(|item| item.unwrap())
+            .map_while(|item| item.clone())
             .collect()
     }
 

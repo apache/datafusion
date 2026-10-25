@@ -37,17 +37,12 @@
 //! - [`StatisticsRegistry`]: Chains providers, lives in SessionState
 //! - [`ExtendedStatistics`]: Statistics with type-safe custom extensions
 //!
-//! # Built-in Providers
+//! # Bundled Providers
 //!
-//! The following providers are included and can be registered in this order:
-//!
-//! 1. [`FilterStatisticsProvider`] - selectivity-based filter estimation
-//! 2. [`ProjectionStatisticsProvider`] - column mapping through projections
-//! 3. [`PassthroughStatisticsProvider`] - passthrough for cardinality-preserving operators
-//! 4. [`AggregateStatisticsProvider`] - NDV-based GROUP BY cardinality estimation
-//! 5. [`JoinStatisticsProvider`] - NDV-based join output estimation (hash, sort-merge, cross)
-//! 6. [`LimitStatisticsProvider`] - caps output at the fetch limit (local and global)
-//! 7. [`UnionStatisticsProvider`] - sums input row counts
+//! The providers bundled in this module are deprecated: the default statistics
+//! estimation is each operator's [`ExecutionPlan::statistics_from_inputs`], and
+//! estimation improvements belong there. Register user-defined providers to
+//! plug in other estimation.
 //!
 //! # Statistics walk
 //!
@@ -62,19 +57,51 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use datafusion_physical_plan::operator_statistics::*;
-//!
-//! // Create an empty registry
-//! let mut registry = StatisticsRegistry::new();
-//!
-//! // Register custom provider (higher priority)
-//! registry.register(Arc::new(MyHistogramProvider));
-//!
-//! // Compute statistics through the chain
-//! let stats = StatisticsContext::new_with_registry(registry)
-//!     .compute_extended(plan.as_ref(), &StatisticsArgs::new())?;
 //! ```
+//! # use std::sync::Arc;
+//! # use arrow::datatypes::Schema;
+//! # use datafusion_common::stats::Precision;
+//! # use datafusion_common::{Result, Statistics};
+//! # use datafusion_physical_plan::ExecutionPlan;
+//! # use datafusion_physical_plan::operator_statistics::{
+//! #     ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
+//! # };
+//! # use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+//! # use datafusion_physical_plan::test::exec::StatisticsExec;
+//!
+//! #[derive(Debug)]
+//! struct MyProvider;
+//!
+//! impl StatisticsProvider for MyProvider {
+//!     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+//!         plan.downcast_ref::<StatisticsExec>().is_some()
+//!     }
+//!
+//!     fn compute_statistics(
+//!         &self,
+//!         plan: &dyn ExecutionPlan,
+//!         _child_stats: &[ExtendedStatistics],
+//!     ) -> Result<StatisticsResult> {
+//!         let base = plan.statistics_from_inputs(&[], &StatisticsArgs::new())?;
+//!         Ok(StatisticsResult::Computed(ExtendedStatistics::new_arc(base)))
+//!     }
+//! }
+//!
+//! let plan = StatisticsExec::new(Statistics::new_unknown(&Schema::empty()), Schema::empty());
+//!
+//! let mut registry = StatisticsRegistry::new();
+//! registry.register(Arc::new(MyProvider));
+//!
+//! let stats = StatisticsContext::new_with_registry(registry)
+//!     .compute_extended(&plan, &StatisticsArgs::new())?;
+//! assert_eq!(stats.base().num_rows, Precision::Absent);
+//! # Ok::<(), datafusion_common::DataFusionError>(())
+//! ```
+//!
+//! See [`StatisticsContext::compute_extended`] for an example that also
+//! attaches a custom extension to the computed statistics.
+//!
+//! [`StatisticsContext::compute_extended`]: crate::statistics::StatisticsContext::compute_extended
 
 use std::fmt::{self, Debug};
 use std::sync::Arc;
@@ -104,21 +131,26 @@ use crate::union::UnionExec;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // Define a custom statistics extension
+/// ```
+/// # use arrow::datatypes::Schema;
+/// # use datafusion_common::Statistics;
+/// # use datafusion_physical_plan::operator_statistics::ExtendedStatistics;
+///
+/// // Pearson correlation between two columns, identified by schema index.
 /// #[derive(Debug, Clone)]
-/// struct HistogramStats {
-///     buckets: Vec<(i64, i64, usize)>, // (min, max, count)
+/// struct ColumnCorrelation {
+///     columns: (usize, usize),
+///     coefficient: f64,
 /// }
 ///
-/// // Set extension in a planner
-/// let mut stats = ExtendedStatistics::from(base_stats);
-/// stats.set_extension(HistogramStats { buckets: vec![] });
+/// let mut stats = ExtendedStatistics::from(Statistics::new_unknown(&Schema::empty()));
+/// stats.set_extension(ColumnCorrelation {
+///     columns: (0, 1),
+///     coefficient: 0.92,
+/// });
 ///
-/// // Retrieve in a consumer
-/// if let Some(hist) = stats.get_extension::<HistogramStats>() {
-///     // Use histogram for better estimation
-/// }
+/// let correlation = stats.get_extension::<ColumnCorrelation>().unwrap();
+/// assert_eq!(correlation.coefficient, 0.92);
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct ExtendedStatistics {
@@ -225,6 +257,11 @@ pub enum StatisticsResult {
 /// Implementations can handle specific operator types or override default
 /// estimation logic. The chain of providers is traversed until one returns
 /// [`StatisticsResult::Computed`].
+///
+/// As for operators, `Exact` statistics must be guaranteed values, because
+/// optimizer rules use them for correctness, not just cost: they answer
+/// `COUNT(*)`, `MIN` and `MAX` without scanning and remove limits. Return
+/// `Inexact` for anything that is an estimate.
 ///
 /// # Implementing a Custom Provider
 ///
@@ -392,7 +429,7 @@ impl StatisticsRegistry {
         Self { providers }
     }
 
-    /// Create a registry pre-loaded with the standard built-in providers.
+    /// Create a registry with the deprecated bundled providers.
     ///
     /// Provider order (first match wins):
     /// 1. [`FilterStatisticsProvider`]
@@ -402,6 +439,11 @@ impl StatisticsRegistry {
     /// 5. [`JoinStatisticsProvider`]
     /// 6. [`LimitStatisticsProvider`]
     /// 7. [`UnionStatisticsProvider`]
+    #[deprecated(
+        since = "56.0.0",
+        note = "the bundled providers are deprecated; the statistics walk uses each operator's `statistics_from_inputs` when no provider matches"
+    )]
+    #[expect(deprecated)]
     pub fn default_with_builtin_providers() -> Self {
         Self::with_providers(vec![
             Arc::new(FilterStatisticsProvider),
@@ -562,9 +604,34 @@ fn rescale_byte_size(stats: &mut Statistics, new_num_rows: Precision<usize>) {
     };
 }
 
+/// Rescale column null counts to `new_num_rows`, keeping each null fraction
+/// from the original estimate. A count stays exact only when the row count
+/// does not change, or when it is zero, and never exceeds the new row count.
+fn rescale_null_counts(stats: &mut Statistics, new_num_rows: Precision<usize>) {
+    let old_rows = stats.num_rows;
+    if old_rows == new_num_rows {
+        return;
+    }
+    for column_stats in &mut stats.column_statistics {
+        column_stats.null_count = match (
+            column_stats.null_count,
+            old_rows.get_value(),
+            new_num_rows.get_value(),
+        ) {
+            (Precision::Exact(0), _, _) => Precision::Exact(0),
+            (null_count, Some(&old), Some(&new)) if old > 0 => null_count
+                .map(|nulls| (nulls as f64 * new as f64 / old as f64).round() as usize)
+                .to_inexact()
+                .min(&new_num_rows),
+            (null_count, _, _) => null_count.to_inexact(),
+        };
+    }
+}
+
 /// Overrides the operator's built-in output statistics (computed from the
 /// pre-resolved `child_stats`) with `num_rows`, rescaling `total_byte_size`
-/// proportionally. Used by providers that refine only the row count.
+/// and null counts proportionally. Used by providers that refine only the row
+/// count.
 fn computed_with_row_count(
     plan: &dyn ExecutionPlan,
     num_rows: Precision<usize>,
@@ -577,6 +644,7 @@ fn computed_with_row_count(
     let mut base = Arc::unwrap_or_clone(
         plan.statistics_from_inputs(&child_base, &StatisticsArgs::new())?,
     );
+    rescale_null_counts(&mut base, num_rows);
     rescale_byte_size(&mut base, num_rows);
     Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
 }
@@ -590,9 +658,14 @@ fn computed_with_row_count(
 /// estimation logic as `FilterExec::statistics_helper`, then additionally
 /// adjusts each column's `distinct_count` using [`ndv_after_selectivity`] based
 /// on the computed selectivity ratio.
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates `FilterExec::statistics_from_inputs` and adds a distinct count adjustment that belongs in the operator, see https://github.com/apache/datafusion/issues/26052; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct FilterStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for FilterStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<FilterExec>().is_some()
@@ -649,9 +722,14 @@ impl StatisticsProvider for FilterStatisticsProvider {
 /// Maps enhanced child column statistics to output columns based on the
 /// projection expressions, preserving NDV and other statistics through
 /// column references.
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates the `statistics_from_inputs` of `ProjectionExec`; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct ProjectionStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for ProjectionStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<ProjectionExec>().is_some()
@@ -691,9 +769,14 @@ impl StatisticsProvider for ProjectionStatisticsProvider {
 /// transform statistics, so we pass through the enhanced child stats directly.
 /// This avoids the fallback calling `statistics_from_inputs` (overall) which would
 /// trigger a redundant internal recursion with raw (non-enhanced) stats.
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates the `statistics_from_inputs` of the cardinality-preserving operators; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct PassthroughStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for PassthroughStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.children().len() == 1
@@ -742,9 +825,14 @@ impl StatisticsProvider for PassthroughStatisticsProvider {
 /// - GROUP BY is empty (scalar aggregate)
 /// - Any GROUP BY expression is not a simple column reference
 /// - Any GROUP BY column lacks NDV information
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates the `statistics_from_inputs` of `AggregateExec`; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct AggregateStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for AggregateStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<AggregateExec>().is_some()
@@ -835,9 +923,14 @@ impl StatisticsProvider for AggregateStatisticsProvider {
 /// Delegates when:
 /// - The plan is not a supported join type
 /// - Either input lacks row count information
+#[deprecated(
+    since = "56.0.0",
+    note = "replaces the estimates of `HashJoinExec`, `SortMergeJoinExec` and `CrossJoinExec` with separate estimation logic; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct JoinStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for JoinStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<HashJoinExec>().is_some()
@@ -960,9 +1053,14 @@ impl StatisticsProvider for JoinStatisticsProvider {
 ///
 /// Caps output row count at the limit value, accounting for any leading skip offset
 /// in `GlobalLimitExec`.
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates the `statistics_from_inputs` of the limit operators; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct LimitStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for LimitStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<LocalLimitExec>().is_some()
@@ -1011,9 +1109,14 @@ impl StatisticsProvider for LimitStatisticsProvider {
 /// Statistics provider for [`UnionExec`].
 ///
 /// Sums row counts across all inputs.
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates the `statistics_from_inputs` of `UnionExec`; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct UnionStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for UnionStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<UnionExec>().is_some()
@@ -1134,6 +1237,7 @@ impl StatisticsProvider for ClosureStatisticsProvider {
 }
 
 #[cfg(test)]
+#[expect(deprecated)]
 mod tests {
     use super::*;
     use crate::filter::FilterExec;
@@ -1914,6 +2018,22 @@ mod tests {
     }
 
     #[test]
+    fn test_passthrough_skips_coalesce_partitions_with_fetch() -> Result<()> {
+        use crate::coalesce_partitions::CoalescePartitionsExec;
+
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(
+            PassthroughStatisticsProvider,
+        )]);
+        let source = make_source(1000);
+        let coalesce: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(source).with_fetch(Some(10)));
+
+        let stats = compute(&registry, coalesce.as_ref())?;
+        assert_eq!(stats.base.num_rows, Precision::Exact(10));
+        Ok(())
+    }
+
+    #[test]
     fn test_chain_priority() -> Result<()> {
         let mut registry = StatisticsRegistry::new();
         registry.register(Arc::new(OverrideFilterProvider {
@@ -2320,6 +2440,137 @@ mod tests {
         let stats = compute(&registry, join.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(10_000));
         Ok(())
+    }
+
+    #[test]
+    fn test_join_null_counts_follow_projection_and_swap() -> Result<()> {
+        // Left: 1000 rows, NDV 100, NULLs: 20 in `a`, 50 in `b`.
+        // Right: 10 rows, NDV 10, NULLs: 1 in `a`, 2 in `b`.
+        // The inner join estimates 100 pairs. The semi join estimates 98
+        // matching left rows, so the left join pads 902 right-side rows.
+        let schema = make_schema();
+        let source = |num_rows: usize, ndv: usize, null_counts: [usize; 2]| {
+            let col_stats = null_counts
+                .iter()
+                .map(|&null_count| ColumnStatistics {
+                    null_count: Precision::Exact(null_count),
+                    distinct_count: Precision::Exact(ndv),
+                    ..ColumnStatistics::new_unknown()
+                })
+                .collect();
+            Arc::new(MockSourceExec::with_column_stats(
+                Arc::clone(&schema),
+                Precision::Exact(num_rows),
+                col_stats,
+            )) as Arc<dyn ExecutionPlan>
+        };
+        let on: JoinOn = vec![(
+            Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+        // The projection outputs right `b`, left `a`, then right `a`.
+        let join = HashJoinExec::try_new(
+            source(1000, 100, [20, 50]),
+            source(10, 10, [1, 2]),
+            on,
+            None,
+            &JoinType::Left,
+            Some(vec![3, 0, 2]),
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        // Swapping the inputs turns the join into a right join with the same
+        // output columns.
+        let swapped = join.swap_inputs(PartitionMode::CollectLeft)?;
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
+        // The preserved key keeps its 20 NULLs only as an estimate, since
+        // per-partition statistics cannot place the unmatched rows.
+        let expected = vec![
+            Precision::Inexact(922),
+            Precision::Inexact(20),
+            Precision::Inexact(902),
+        ];
+        for plan in [Arc::new(join) as Arc<dyn ExecutionPlan>, swapped] {
+            let built_in = StatisticsContext::new()
+                .compute(plan.as_ref(), &StatisticsArgs::new())?;
+            let per_partition = StatisticsContext::new().compute(
+                plan.as_ref(),
+                &StatisticsArgs::new().with_partition(Some(0)),
+            )?;
+            let provided = compute(&registry, plan.as_ref())?;
+            for stats in [built_in.as_ref(), per_partition.as_ref()] {
+                let null_counts: Vec<_> = stats
+                    .column_statistics
+                    .iter()
+                    .map(|column_stats| column_stats.null_count)
+                    .collect();
+                assert_eq!(null_counts, expected, "{}", plan.name());
+            }
+            // The provider uses 1000 output rows instead of 1002 and rescales
+            // the counts to that estimate after applying the same projection.
+            let null_counts: Vec<_> = provided
+                .base
+                .column_statistics
+                .iter()
+                .map(|column| column.null_count)
+                .collect();
+            assert_eq!(
+                null_counts,
+                vec![
+                    Precision::Inexact(920),
+                    Precision::Inexact(20),
+                    Precision::Inexact(900)
+                ]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_rescale_null_counts() {
+        let null_counts = |stats: &Statistics| -> Vec<_> {
+            stats
+                .column_statistics
+                .iter()
+                .map(|column_stats| column_stats.null_count)
+                .collect()
+        };
+        let mut stats = Statistics {
+            num_rows: Precision::Inexact(5000),
+            total_byte_size: Precision::Absent,
+            column_statistics: [
+                Precision::Exact(0),
+                Precision::Exact(100),
+                Precision::Inexact(4000),
+                Precision::Inexact(6000),
+                Precision::Absent,
+            ]
+            .into_iter()
+            .map(|null_count| ColumnStatistics {
+                null_count,
+                ..ColumnStatistics::new_unknown()
+            })
+            .collect(),
+        };
+        let unchanged = null_counts(&stats);
+        rescale_null_counts(&mut stats, Precision::Inexact(5000));
+        assert_eq!(null_counts(&stats), unchanged);
+
+        // A provider that lowers the row count keeps each null fraction, and
+        // an inconsistent count cannot exceed the new row count.
+        rescale_null_counts(&mut stats, Precision::Inexact(1000));
+        assert_eq!(
+            null_counts(&stats),
+            vec![
+                Precision::Exact(0),
+                Precision::Inexact(20),
+                Precision::Inexact(800),
+                Precision::Inexact(1000),
+                Precision::Absent,
+            ]
+        );
     }
 
     #[test]

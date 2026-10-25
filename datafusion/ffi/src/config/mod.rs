@@ -17,6 +17,8 @@
 
 pub mod extension_options;
 
+use std::fmt::Write;
+
 use datafusion_common::config::{
     ConfigExtension, ConfigOptions, ExtensionOptions, TableOptions,
 };
@@ -44,16 +46,18 @@ impl From<&ConfigOptions> for FFI_ConfigOptions {
         let base_options: SVec<(SString, SString)> = options
             .entries()
             .into_iter()
-            .filter_map(|entry| entry.value.map(|value| (entry.key, value)))
-            .map(|(key, value)| (key.into(), value.into()))
+            .filter_map(|entry| entry.value.map(|value| (entry.key.into(), value.into())))
             .collect();
 
         let mut extensions = FFI_ExtensionOptions::default();
+        let mut key = String::new();
         for (extension_name, extension) in options.extensions.iter() {
             for entry in extension.entries().iter() {
                 if let Some(value) = entry.value.as_ref() {
+                    key.clear();
+                    write!(key, "{extension_name}.{}", entry.key).unwrap();
                     extensions
-                        .set(format!("{extension_name}.{}", entry.key).as_str(), value)
+                        .set(key.as_str(), value)
                         .expect("FFI_ExtensionOptions set should always return Ok");
                 }
             }
@@ -132,16 +136,18 @@ impl From<&TableOptions> for FFI_TableOptions {
         let base_options: SVec<(SString, SString)> = options
             .entries()
             .into_iter()
-            .filter_map(|entry| entry.value.map(|value| (entry.key, value)))
-            .map(|(key, value)| (key.into(), value.into()))
+            .filter_map(|entry| entry.value.map(|value| (entry.key.into(), value.into())))
             .collect();
 
         let mut extensions = FFI_ExtensionOptions::default();
+        let mut key = String::new();
         for (extension_name, extension) in options.extensions.iter() {
             for entry in extension.entries().iter() {
                 if let Some(value) = entry.value.as_ref() {
+                    key.clear();
+                    write!(key, "{extension_name}.{}", entry.key).unwrap();
                     extensions
-                        .set(format!("{extension_name}.{}", entry.key).as_str(), value)
+                        .set(key.as_str(), value)
                         .expect("FFI_ExtensionOptions set should always return Ok");
                 }
             }

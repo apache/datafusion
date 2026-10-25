@@ -1,0 +1,28 @@
+name Q20
+group nlj
+
+expect_plan NestedLoopJoinExec
+expect_plan join_type=RightSemi
+
+run
+-- Q20: RIGHT SEMI 2K x 2K | staged matches with 260-byte filter strings
+-- With batch_size=8192, candidates shrink 2048 -> 1024 -> 512 -> ... -> 16.
+-- Under that setting, the multi-left-row path starts at 512 candidates.
+SELECT r.value
+FROM (
+    SELECT repeat('x', 256) || lpad(CAST(
+        CASE WHEN value < 128 THEN 1024
+             WHEN value < 256 THEN 1536
+             WHEN value < 384 THEN 1792
+             WHEN value < 512 THEN 1920
+             WHEN value < 640 THEN 1984
+             WHEN value < 768 THEN 2016
+             ELSE 2032 END AS VARCHAR), 4, '0') AS threshold
+    FROM range(2048)
+) AS l
+RIGHT SEMI JOIN (
+    SELECT value,
+           repeat('x', 256) || lpad(CAST(value AS VARCHAR), 4, '0') AS key
+    FROM range(2048)
+) AS r
+ON l.threshold > r.key;

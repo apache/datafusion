@@ -660,6 +660,9 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PruneWithStatistics(prepared) => {
                 let mut prepared_row_groups = (*prepared).prune_row_groups()?;
+                if prepared_row_groups.row_groups.is_fully_pruned() {
+                    return Ok(ParquetOpenState::Done);
+                }
                 if prepared_row_groups.should_load_page_index()? {
                     Ok(ParquetOpenState::LoadPageIndex(
                         prepared_row_groups.load_page_index().boxed(),
@@ -690,9 +693,13 @@ impl ParquetOpenState {
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(ParquetOpenState::LoadBloomFilters(future))
             }
-            ParquetOpenState::PruneWithBloomFilters(loaded) => Ok(
-                ParquetOpenState::BuildStream(Box::new(loaded.prune_bloom_filters())),
-            ),
+            ParquetOpenState::PruneWithBloomFilters(loaded) => {
+                let pruned = loaded.prune_bloom_filters();
+                if pruned.row_groups.is_fully_pruned() {
+                    return Ok(ParquetOpenState::Done);
+                }
+                Ok(ParquetOpenState::BuildStream(Box::new(pruned)))
+            }
             ParquetOpenState::BuildStream(prepared) => {
                 Ok(ParquetOpenState::Ready(prepared.build_stream()?))
             }
@@ -1336,25 +1343,13 @@ impl FiltersPreparedParquetOpen {
                     .row_groups_pruned_statistics
                     .add_matched(row_groups.remaining_row_group_count());
             }
-
-            if !prepared.enable_bloom_filter || row_groups.is_empty() {
-                // Update metrics: bloom filter unavailable, so all row groups are
-                // matched (not pruned)
-                prepared
-                    .file_metrics
-                    .row_groups_pruned_bloom_filter
-                    .add_matched(row_groups.remaining_row_group_count());
-            }
         } else {
             // Update metrics: no predicate, so all row groups are matched (not pruned)
+            // by statistics. Bloom pruning did not run, so its metrics are unchanged.
             let remaining = row_groups.remaining_row_group_count();
             prepared
                 .file_metrics
                 .row_groups_pruned_statistics
-                .add_matched(remaining);
-            prepared
-                .file_metrics
-                .row_groups_pruned_bloom_filter
                 .add_matched(remaining);
         }
 
@@ -2702,6 +2697,26 @@ mod test {
         }
     }
 
+    /// Drives a [`ParquetMorselizer`] to completion and returns how many
+    /// morsels it produced.
+    async fn count_morsels(
+        morselizer: &dyn Morselizer,
+        file: PartitionedFile,
+    ) -> Result<usize> {
+        let mut planners = VecDeque::from([morselizer.plan_file(file)?]);
+        let mut morsels = 0;
+        while let Some(planner) = planners.pop_front() {
+            if let Some(mut plan) = planner.plan()? {
+                morsels += plan.take_morsels().len();
+                planners.extend(plan.take_ready_planners());
+                if let Some(pending_planner) = plan.take_pending_planner() {
+                    planners.push_front(pending_planner.await?);
+                }
+            }
+        }
+        Ok(morsels)
+    }
+
     fn constant_int_stats() -> (Statistics, SchemaRef) {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -3247,6 +3262,47 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_no_morsel_when_every_row_group_is_pruned() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batches = vec![
+            record_batch!(("a", Int32, vec![0, 2, 4])).unwrap(),
+            record_batch!(("a", Int32, vec![0, 2, 4])).unwrap(),
+        ];
+        let schema = batches[0].schema();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .set_bloom_filter_enabled(true)
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .build();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            batches,
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new("test.parquet".to_string(), data_size as u64);
+
+        let morsels = |expr: Expr| {
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(logical2physical(&expr, &schema))
+                .with_row_group_stats_pruning(true)
+                .with_enable_bloom_filter(true)
+                .build();
+            let file = file.clone();
+            async move { count_morsels(&morselizer, file).await.unwrap() }
+        };
+
+        // Statistics prune both row groups.
+        assert_eq!(morsels(col("a").gt(lit(10))).await, 0);
+        // Statistics keep both row groups; their Bloom filters prune both.
+        assert_eq!(morsels(col("a").eq(lit(1))).await, 0);
+        assert_eq!(morsels(col("a").eq(lit(2))).await, 1);
+    }
+
+    #[tokio::test]
     async fn test_prune_on_partition_statistics_with_dynamic_expression() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
@@ -3411,6 +3467,32 @@ mod test {
                 _ => None,
             })
             .expect("row_groups_pruned_statistics metric is emitted")
+    }
+
+    /// Bloom pruning counters after a scan, as `(pruned, matched)`.
+    ///
+    /// Direct `MetricsSet` lookup, not plan display: idle Bloom metrics are
+    /// omitted from displayed plans even when the counters remain registered.
+    ///
+    /// Opening one file still registers this name more than once:
+    /// `prepare_open_file` creates `ParquetFileMetrics`, and each
+    /// `ParquetFileReaderFactory::create_reader` call (initial reader plus
+    /// Bloom replacement reader) creates another independent set. Sum the
+    /// counters the same way `MetricsSet::sum_by_name` aggregates pruning
+    /// metrics. Only the opener's set is incremented by Bloom pruning; the
+    /// reader copies stay at zero.
+    fn bloom_filter_pruning_metrics(metrics: &ExecutionPlanMetricsSet) -> (usize, usize) {
+        use datafusion_physical_plan::metrics::MetricValue;
+        match metrics
+            .clone_inner()
+            .sum_by_name("row_groups_pruned_bloom_filter")
+        {
+            Some(MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            }) => (pruning_metrics.pruned(), pruning_metrics.matched()),
+            Some(_) => panic!("row_groups_pruned_bloom_filter is not a pruning metric"),
+            None => panic!("row_groups_pruned_bloom_filter metric is registered"),
+        }
     }
 
     #[tokio::test]
@@ -4743,6 +4825,16 @@ mod test {
             // contribute to this metric.
             bloom_bytes.push(counter_metric_value(&metrics, "bytes_scanned"));
             assert_eq!(collect_int32_values(stream).await, vec![1, 1, 1, 1]);
+            let (pruned, matched) = bloom_filter_pruning_metrics(&metrics);
+            assert_eq!(pruned, 0);
+            if stats_pruning {
+                // [1,1,1] is fully matched by statistics and skips Bloom.
+                // [0,1,2] still evaluates Bloom for `a = 1` and cannot prune.
+                assert_eq!(matched, 1);
+            } else {
+                // Statistics pruning is off, so both row groups evaluate Bloom.
+                assert_eq!(matched, 2);
+            }
         }
         assert!(bloom_bytes[1] > 0, "partial row group needs Bloom I/O");
         assert!(
@@ -4781,6 +4873,10 @@ mod test {
         .unwrap();
         assert_eq!(counter_metric_value(&metrics, "bytes_scanned"), 0);
         assert_eq!(collect_int32_values(stream).await, vec![1, 1, 1]);
+        let (pruned, matched) = bloom_filter_pruning_metrics(&metrics);
+        // Bloom reads and evaluation are skipped for an entirely fully matched file.
+        assert_eq!(pruned, 0);
+        assert_eq!(matched, 0);
     }
 
     #[test]

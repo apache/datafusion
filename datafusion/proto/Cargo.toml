@@ -68,7 +68,7 @@ datafusion-datasource-json = { workspace = true, features = ["proto"] }
 datafusion-datasource-parquet = { workspace = true, optional = true, features = ["proto"] }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true, features = ["proto"] }
-datafusion-functions-table = { workspace = true }
+datafusion-functions-table = { workspace = true, features = ["proto"] }
 datafusion-physical-expr = { workspace = true, features = ["proto"] }
 datafusion-physical-expr-common = { workspace = true, features = ["proto"] }
 datafusion-physical-plan = { workspace = true, features = ["proto"] }
@@ -93,6 +93,7 @@ datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 doc-comment = { workspace = true }
 flate2 = { workspace = true }
+parking_lot = { workspace = true }
 pretty_assertions = "1.4"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
