@@ -112,7 +112,7 @@ cargo run --example dataframe -- dataframe
 
 | Subcommand            | File Path                                                                           | Description                                                  |
 | --------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| aggregate             | [`dataframe/aggregate.rs`](examples/dataframe/aggregate.rs)                         | Global and grouped aggregation with `select` and `aggregate` |
+| aggregate_in_select   | [`dataframe/aggregate.rs`](examples/dataframe/aggregate_in_select.rs)               | Aggregate functions in `select`, compared with `aggregate`   |
 | cache_factory         | [`dataframe/cache_factory.rs`](examples/dataframe/cache_factory.rs)                 | Custom lazy caching for DataFrames using `CacheFactory`      |
 | dataframe             | [`dataframe/dataframe.rs`](examples/dataframe/dataframe.rs)                         | Query DataFrames from various sources and write output       |
 | deserialize_to_struct | [`dataframe/deserialize_to_struct.rs`](examples/dataframe/deserialize_to_struct.rs) | Convert Arrow arrays into Rust structs                       |
