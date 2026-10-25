@@ -24,6 +24,7 @@ use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 
 pub mod array_gen;
+pub mod counting_allocator;
 mod data_gen;
 mod string_gen;
 pub mod tpcds;

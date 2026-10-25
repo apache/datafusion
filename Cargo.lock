@@ -2768,6 +2768,7 @@ dependencies = [
  "sqllogictest",
  "sqlparser",
  "tempfile",
+ "test-utils",
  "testcontainers-modules",
  "thiserror",
  "tokio",
