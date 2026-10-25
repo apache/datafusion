@@ -15,6 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# configMatrix: datafusion.execution.enable_migration_hash_join=true,false
+
 # Test IS NOT DISTINCT FROM join functionality
 # This tests the optimizer's ability to convert IS NOT DISTINCT FROM joins
 # to equijoins with proper null equality handling
