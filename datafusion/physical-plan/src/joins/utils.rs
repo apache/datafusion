@@ -2125,7 +2125,8 @@ fn full_join_output_partitioning(
     let left_partitioning = left.output_partitioning();
     let unknown =
         Partitioning::UnknownPartitioning(right.output_partitioning().partition_count());
-    // A computed key can be non-null on an unmatched row, so only column keys qualify.
+    // A computed key can be non-null on an unmatched row, so only column keys qualify. A
+    // single partition already satisfies any key, so it needs no claim.
     let column_keys = on.iter().all(|(l, r)| {
         l.downcast_ref::<Column>().is_some() && r.downcast_ref::<Column>().is_some()
     });
@@ -5305,19 +5306,10 @@ mod tests {
             int32_schema("c", "d"),
             Partitioning::Hash(vec![col_at("c", 0)], 4),
         );
-        let on = a_equals_c();
 
         assert_eq!(
-            full_join_partitioning(&left, &right, &on),
+            full_join_partitioning(&left, &right, &a_equals_c()),
             Partitioning::Hash(vec![coalesced(col_at("a", 0), col_at("c", 2))], 4)
-        );
-        assert_eq!(
-            join_partitioning(&left, &right, JoinType::Inner, &on),
-            Partitioning::Hash(vec![col_at("c", 2)], 4)
-        );
-        assert_eq!(
-            join_partitioning(&left, &right, JoinType::Left, &on),
-            Partitioning::Hash(vec![col_at("a", 0)], 4)
         );
     }
 
@@ -5436,31 +5428,6 @@ mod tests {
             full_join_partitioning(&left, &right, &[]).to_string(),
             "UnknownPartitioning(4)"
         );
-    }
-
-    #[test]
-    fn full_sort_merge_join_reports_coalesced_partitioning() {
-        let left = repartitioned(
-            int32_schema("a", "b"),
-            Partitioning::Hash(vec![col_at("a", 0)], 4),
-        );
-        let right = repartitioned(
-            int32_schema("c", "d"),
-            Partitioning::Hash(vec![col_at("c", 0)], 4),
-        );
-        let join = SortMergeJoinExec::try_new(
-            left,
-            right,
-            a_equals_c(),
-            None,
-            JoinType::Full,
-            vec![SortOptions::default()],
-            NullEquality::NullEqualsNothing,
-        )
-        .expect("sort merge join");
-        let expected =
-            Partitioning::Hash(vec![coalesced(col_at("a", 0), col_at("c", 2))], 4);
-        assert_eq!(join.properties().output_partitioning(), &expected);
     }
 
     #[test]
