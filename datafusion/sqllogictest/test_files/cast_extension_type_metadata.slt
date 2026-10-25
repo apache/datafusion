@@ -97,3 +97,32 @@ FROM (
 );
 ----
 00010203040506070809000102030506 NULL
+
+# Aggregates compare the logical and physical schemas of the cast, so both
+# layers need the same nullability for a nullable explicit target over a
+# required source.
+statement ok
+CREATE TABLE uuid_src AS VALUES
+    (arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')),
+    (arrow_cast(X'0f0e0d0c0b0a09080706050403020100', 'FixedSizeBinary(16)'));
+
+query I
+SELECT count(u) FROM (SELECT CAST(column1 AS UUID) AS u FROM uuid_src);
+----
+2
+
+query I
+SELECT count(DISTINCT u) FROM (SELECT CAST(column1 AS UUID) AS u FROM uuid_src);
+----
+2
+
+query ?I
+SELECT u, count(*) FROM (SELECT CAST(column1 AS UUID) AS u FROM uuid_src)
+GROUP BY u
+ORDER BY u;
+----
+00010203040506070809000102030506 1
+0f0e0d0c0b0a09080706050403020100 1
+
+statement ok
+DROP TABLE uuid_src;
