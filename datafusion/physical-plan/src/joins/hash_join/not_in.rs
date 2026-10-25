@@ -54,10 +54,10 @@ use datafusion_physical_expr_common::datum::apply_cmp;
 use crate::joins::PartitionMode;
 use crate::joins::SharedBitmapBuilder;
 use crate::joins::hash_join::exec::{JoinLeftData, new_join_hashmap};
-use crate::joins::hash_join::probe_completion::ProbeSideSummary;
 use crate::joins::hash_join::stream::lookup_join_hashmap;
 use crate::joins::join_hash_map::JoinHashMapType;
 use crate::joins::join_hash_map::ProbeOffset::AtRow;
+use crate::joins::probe_completion::ProbeSideSummary;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, JoinFilter, apply_join_filter_to_indices, update_hash,
 };
