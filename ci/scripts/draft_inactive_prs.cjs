@@ -27,16 +27,12 @@ const QUERY = `query(
     pullRequest(number: $number) {
       id number state isDraft updatedAt headRefOid mergeable
       mergeQueueEntry { id }
-      timelineItems(last: 1, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) {
-        nodes { ... on HeadRefForcePushedEvent { createdAt } }
-      }
       latestOpinionatedReviews(first: 100, after: $reviewsCursor) @include(if: $loadReviews) {
-        nodes { state submittedAt commit { oid } }
+        nodes { state commit { oid } }
         pageInfo { hasNextPage endCursor }
       }
       commits(last: 1) @include(if: $loadChecks) {
         nodes { commit {
-          pushedDate
           statusCheckRollup {
             contexts(first: 100, after: $checksCursor) {
               nodes {
@@ -105,17 +101,11 @@ function reasonsToDraft(pr, cutoff) {
   )
     reasons.push("failing CI checks");
 
-  const forcePush = pr.timelineItems.nodes[0]?.createdAt;
-  const pushedDate = pr.commits.nodes[0]?.commit.pushedDate;
-  // pushedDate can be null; also check the reviewed commit and last force push.
   if (
     pr.reviews.some(
       (review) =>
         review.state === "CHANGES_REQUESTED" &&
-        review.commit?.oid === pr.headRefOid &&
-        (!forcePush ||
-          Date.parse(review.submittedAt) > Date.parse(forcePush)) &&
-        (!pushedDate || Date.parse(review.submittedAt) > Date.parse(pushedDate))
+        review.commit?.oid === pr.headRefOid
     )
   )
     reasons.push("changes requested on the latest push");
@@ -133,10 +123,23 @@ async function run({ github, context, core, dryRun = true }) {
     direction: "asc",
     per_page: 100,
   });
+  const candidates = prs.filter(
+    (listed) => !listed.draft && Date.parse(listed.updated_at) <= cutoff
+  );
+  if (!candidates.length) return [];
+
+  // GitHub computes mergeability lazily; warm every candidate before deciding.
+  for (const listed of candidates) {
+    await loadPullRequest(github, repo, listed.number);
+  }
+  await setTimeout(30_000);
+
   const results = [];
-  for (const listed of prs) {
-    if (listed.draft || !(Date.parse(listed.updated_at) <= cutoff)) continue;
+  for (const listed of candidates) {
     let pr = await loadPullRequest(github, repo, listed.number);
+    if (pr?.mergeable === "UNKNOWN") {
+      core.warning(`Mergeability is still unknown for #${listed.number}.`);
+    }
     let reasons = reasonsToDraft(pr, cutoff);
     if (!reasons.length) continue;
     if (!dryRun) {
