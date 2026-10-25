@@ -467,8 +467,14 @@ impl HashJoinExecBuilder {
     /// Reset task-local runtime state while retaining the immutable prepared build.
     pub fn reset_state(mut self) -> Self {
         self.exec.left_fut = Default::default();
-        self.exec.dynamic_filter = None;
+
+        if let Some(dynamic_filter) = &mut self.exec.dynamic_filter {
+            dynamic_filter.filter.reset();
+            dynamic_filter.build_accumulator = OnceLock::new();
+        }
+
         self.exec.metrics = ExecutionPlanMetricsSet::new();
+
         self
     }
 
