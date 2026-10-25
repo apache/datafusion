@@ -43,6 +43,27 @@ physical_plan
 01)SortExec: TopK(fetch=3), expr=[b@0 + 1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk_dynamic_filter_remap.parquet]]}, projection=[b], output_ordering=[b@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
+# A CASE sort key that also references b must still plan TopK dynamic filtering
+# at the Parquet scan; the result assertion below alone would pass if filtering
+# were disabled.
+query TT
+EXPLAIN WITH s AS (SELECT b, 31999 - b AS p FROM t)
+SELECT p FROM s
+ORDER BY CASE WHEN b % 2 = 0 THEN p ELSE p + 1 END, b
+LIMIT 3;
+----
+logical_plan
+01)Projection: s.p
+02)--Sort: CASE WHEN s.b % Int64(2) = Int64(0) THEN s.p ELSE s.p + Int64(1) END ASC NULLS LAST, s.b ASC NULLS LAST, fetch=3
+03)----Projection: s.p, s.b
+04)------SubqueryAlias: s
+05)--------Projection: t.b, Int64(31999) - t.b AS p
+06)----------TableScan: t projection=[b]
+physical_plan
+01)ProjectionExec: expr=[p@0 as p]
+02)--SortExec: TopK(fetch=3), expr=[CASE WHEN b@1 % 2 = 0 THEN p@0 ELSE p@0 + 1 END ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk_dynamic_filter_remap.parquet]]}, projection=[31999 - b@0 as p, b], output_ordering=[b@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
 # The CASE sort key contains `b`, which is also the second sort key. Child-first
 # remapping can change the CASE expression before the parent match. Equal `p`
 # and `q` values keep the expected rows simple, and multiple row groups provide
