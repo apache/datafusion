@@ -1556,19 +1556,21 @@ SET datafusion.optimizer.enable_window_topn = true;
 statement ok
 SET datafusion.explain.physical_plan_only = true;
 
-# Filter on rank(): both tied rows per partition are kept.
-query IIII
-SELECT pk, id, rn, rk FROM (
-  SELECT pk, v, id,
-         row_number() OVER (PARTITION BY pk ORDER BY v) AS rn,
-         rank() OVER (PARTITION BY pk ORDER BY v) AS rk
-  FROM window_topn_shift
-) WHERE rk <= 1 ORDER BY pk, id;
+# Filter on rank(): both tied rows per partition are kept. `ORDER BY v` leaves
+# the row numbers of tied rows unspecified, so ids and row numbers are checked
+# as sets rather than paired up.
+query I??
+SELECT pk, array_agg(id ORDER BY id), array_agg(rn ORDER BY rn) FROM (
+  SELECT pk, id, rn, rk FROM (
+    SELECT pk, v, id,
+           row_number() OVER (PARTITION BY pk ORDER BY v) AS rn,
+           rank() OVER (PARTITION BY pk ORDER BY v) AS rk
+    FROM window_topn_shift
+  ) WHERE rk <= 1
+) GROUP BY pk ORDER BY pk;
 ----
-1 1 1 1
-1 2 2 1
-2 4 1 1
-2 5 2 1
+1 [1, 2] [1, 2]
+2 [4, 5] [1, 2]
 
 query TT
 EXPLAIN SELECT pk, id, rn, rk FROM (
@@ -1586,17 +1588,18 @@ physical_plan
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Filter on row_number(), with the window computing rank() first: no row with
-# rn = 2 comes back.
-query IIII
-SELECT pk, id, rk, rn FROM (
+# rn = 2 comes back. Either tied row may be the one kept; ids 3 and 6 are the
+# only rows with v = 1.
+query IIIB
+SELECT pk, rk, rn, id NOT IN (3, 6) FROM (
   SELECT pk, v, id,
          rank() OVER (PARTITION BY pk ORDER BY v) AS rk,
          row_number() OVER (PARTITION BY pk ORDER BY v) AS rn
   FROM window_topn_shift
-) WHERE rn <= 1 ORDER BY pk, id;
+) WHERE rn <= 1 ORDER BY pk;
 ----
-1 1 1 1
-2 4 1 1
+1 1 1 true
+2 1 1 true
 
 query TT
 EXPLAIN SELECT pk, id, rk, rn FROM (
@@ -1614,18 +1617,18 @@ physical_plan
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Filter on dense_rank(), behind row_number().
-query IIII
-SELECT pk, id, rn, dr FROM (
-  SELECT pk, v, id,
-         row_number() OVER (PARTITION BY pk ORDER BY v) AS rn,
-         dense_rank() OVER (PARTITION BY pk ORDER BY v) AS dr
-  FROM window_topn_shift
-) WHERE dr <= 1 ORDER BY pk, id;
+query I??
+SELECT pk, array_agg(id ORDER BY id), array_agg(rn ORDER BY rn) FROM (
+  SELECT pk, id, rn, dr FROM (
+    SELECT pk, v, id,
+           row_number() OVER (PARTITION BY pk ORDER BY v) AS rn,
+           dense_rank() OVER (PARTITION BY pk ORDER BY v) AS dr
+    FROM window_topn_shift
+  ) WHERE dr <= 1
+) GROUP BY pk ORDER BY pk;
 ----
-1 1 1 1
-1 2 2 1
-2 4 1 1
-2 5 2 1
+1 [1, 2] [1, 2]
+2 [4, 5] [1, 2]
 
 query TT
 EXPLAIN SELECT pk, id, rn, dr FROM (

@@ -565,6 +565,18 @@ fn repartition_between_passes_the_index_through() -> Result<()> {
     Ok(())
 }
 
+/// A projection that reorders the window's columns: the filter's `pk@2` maps
+/// back to `pk@0`, an input column, so the rule leaves the plan alone. Read as
+/// an index into the window's output, it would be `rn`.
+#[test]
+fn reordered_projection_input_column_no_change() -> Result<()> {
+    let projection = project(build_rn_rk_window()?, &[2, 3, 0])?; // [rn, rk, pk]
+    let plan = filter_lteq_3(projection, 2)?;
+    let before = plan_str(plan.as_ref());
+    assert_eq!(plan_str(optimize(plan)?.as_ref()), before);
+    Ok(())
+}
+
 /// A column the projection computes has no single window column behind it,
 /// so the rule leaves the plan alone. `x` sits at index 2 so that treating it
 /// as a pass-through would land on `rn` rather than be rejected as an input
