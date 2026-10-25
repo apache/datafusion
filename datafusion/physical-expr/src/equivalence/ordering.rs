@@ -227,8 +227,8 @@ impl OrderingEquivalenceClass {
     /// constant expressions. However, some expressions may only be partially
     /// constant within a lexicographical ordering. This function helps identify
     /// such cases. If an expression is constant within a prefix ordering, it is
-    /// added as a constant during `ordering_satisfy_requirement()` iterations
-    /// after the corresponding prefix requirement is satisfied.
+    /// pinned during `ordering_satisfy_requirement()` iterations after the
+    /// corresponding prefix requirement is satisfied.
     ///
     /// ### Future Improvements
     ///
@@ -238,27 +238,36 @@ impl OrderingEquivalenceClass {
     /// 2. `EquivalenceProperties` gains `FunctionalDependency` awareness, eliminating
     ///    the need for `Constant` and `Constraints`.
     pub fn is_expr_partial_const(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        let mut constantness_defining_pairs = [
-            HashSet::from([(false, false), (true, true)]),
-            HashSet::from([(false, true), (true, false)]),
-        ];
-
-        for ordering in self.iter() {
-            let leading_ordering = ordering.first();
-            if leading_ordering.expr.eq(expr) {
-                let opt = (
-                    leading_ordering.options.descending,
-                    leading_ordering.options.nulls_first,
-                );
-                constantness_defining_pairs[0].remove(&opt);
-                constantness_defining_pairs[1].remove(&opt);
-            }
-        }
-
-        constantness_defining_pairs
-            .iter()
-            .any(|pair| pair.is_empty())
+        is_partial_const(self.iter().map(|ordering| ordering.first()), expr)
     }
+}
+
+/// Checks whether `expr` is partially constant according to the given leading
+/// sort expressions of some orderings. See
+/// [`OrderingEquivalenceClass::is_expr_partial_const`].
+pub(crate) fn is_partial_const<'a>(
+    leading: impl IntoIterator<Item = &'a PhysicalSortExpr>,
+    expr: &Arc<dyn PhysicalExpr>,
+) -> bool {
+    let mut constantness_defining_pairs = [
+        HashSet::from([(false, false), (true, true)]),
+        HashSet::from([(false, true), (true, false)]),
+    ];
+
+    for leading_ordering in leading {
+        if leading_ordering.expr.eq(expr) {
+            let opt = (
+                leading_ordering.options.descending,
+                leading_ordering.options.nulls_first,
+            );
+            constantness_defining_pairs[0].remove(&opt);
+            constantness_defining_pairs[1].remove(&opt);
+        }
+    }
+
+    constantness_defining_pairs
+        .iter()
+        .any(|pair| pair.is_empty())
 }
 
 impl Deref for OrderingEquivalenceClass {
