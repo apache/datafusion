@@ -161,31 +161,18 @@ pub(super) struct HashJoinTable {
     // Static data buffers
     // ===================
     build: Arc<JoinBuildState>,
-    /// Prepared input, unchanged while this batch is being joined.
-    probe: Option<ProbeBatch>,
 
     // =============
     // Runtime state
     // =============
-    //
-    // Track lookup progress, such as the last build/probe row examined,
-    // to produce output incrementally.
+    /// Current probe input and its progress, reset together when the batch is drained.
+    probe: Option<ProbeBatch>,
     /// Current execution phase.
     phase: Phase,
-    /// Where to resume candidate lookup; `None` means this batch is exhausted.
-    next_offset: Option<ProbeOffset>,
-    /// Last probe row passing the full ON condition. Unmatched probe rows
-    /// are considered after this row, even when its matches span chunks.
-    joined_probe_idx: Option<usize>,
-    /// Last equality match, before the ON filter, to count each probe row once
-    /// in hit-rate and fanout metrics across lookup chunks.
-    matched_probe_idx: Option<u32>,
 
     // ================
     // Lookup utilities
     // ================
-    /// Cached equality checks bound to the build and current probe key arrays.
-    key_comparator: Option<JoinKeyComparator>,
     /// Lookup allocations reused across chunks and input batches.
     hashes: Vec<u64>,
 
@@ -218,12 +205,28 @@ pub(super) struct HashJoinTable {
     output: LimitedBatchCoalescer,
 }
 
-/// Prepared input for one probe batch; all mutable join progress lives in
-/// [`HashJoinTable`].
+/// Input and lookup progress for one probe batch, dropped together when drained.
 struct ProbeBatch {
+    // ===================
+    // Static data buffers
+    // ===================
     input: RecordBatch,
     keys: Vec<ArrayRef>,
     valid_keys: Option<NullBuffer>,
+
+    // =============
+    // Runtime state
+    // =============
+    /// Where to resume candidate lookup; `None` means this batch is exhausted.
+    next_offset: Option<ProbeOffset>,
+    /// Last probe row passing the full ON condition. Unmatched probe rows
+    /// are considered after this row, even when its matches span chunks.
+    joined_probe_idx: Option<usize>,
+    /// Last equality match, before the ON filter, to count each probe row once
+    /// in hit-rate and fanout metrics across lookup chunks.
+    matched_probe_idx: Option<u32>,
+    /// Cached equality checks bound to the build and current probe key arrays.
+    key_comparator: Option<JoinKeyComparator>,
 }
 
 /// The next action for the caller of [`HashJoinTable::next_output_batch`].
@@ -276,10 +279,6 @@ impl HashJoinTable {
         Self {
             build,
             probe: None,
-            next_offset: None,
-            joined_probe_idx: None,
-            matched_probe_idx: None,
-            key_comparator: None,
             hashes: Vec::new(),
             build_indices: Vec::with_capacity(lookup_capacity),
             probe_indices: Vec::with_capacity(lookup_capacity),
@@ -324,16 +323,14 @@ impl HashJoinTable {
         self.metrics.input_rows.add(batch.num_rows());
         self.metrics.probe_hit_rate.add_total(batch.num_rows());
 
-        // Every cursor and cached comparator belongs to these input arrays.
-        // Keep the scratch allocations, but reset all progress together.
-        self.next_offset = Some(ProbeOffset::AtRow { row: 0 });
-        self.joined_probe_idx = None;
-        self.matched_probe_idx = None;
-        self.key_comparator = None;
         self.probe = Some(ProbeBatch {
             input: batch,
             keys,
             valid_keys,
+            next_offset: Some(ProbeOffset::AtRow { row: 0 }),
+            joined_probe_idx: None,
+            matched_probe_idx: None,
+            key_comparator: None,
         });
         Ok(())
     }
@@ -452,14 +449,11 @@ impl HashJoinTable {
             self.build_indices = build.into();
             self.probe_indices = probe.into();
         }
-        let Some(probe) = &self.probe else {
+        let Some(probe) = &mut self.probe else {
             return Ok(None);
         };
-        let Some(offset) = self.next_offset.take() else {
+        let Some(offset) = probe.next_offset.take() else {
             self.probe = None;
-            self.key_comparator = None;
-            self.joined_probe_idx = None;
-            self.matched_probe_idx = None;
             return Ok(None);
         };
         let context = &self.context;
@@ -491,7 +485,7 @@ impl HashJoinTable {
                 offset,
                 &mut self.probe_indices,
                 &mut self.build_indices,
-                &mut self.key_comparator,
+                &mut probe.key_comparator,
             )?,
             Map::ArrayMap(map) => {
                 let next_offset = map.get_matched_indices_with_limit_offset(
@@ -520,10 +514,10 @@ impl HashJoinTable {
         let matched_probe_rows = match (values.first(), values.last()) {
             (Some(&first), Some(&last)) => {
                 let mut count = 1 + values.windows(2).filter(|w| w[0] != w[1]).count();
-                if self.matched_probe_idx == Some(first) {
+                if probe.matched_probe_idx == Some(first) {
                     count -= 1;
                 }
-                self.matched_probe_idx = Some(last);
+                probe.matched_probe_idx = Some(last);
                 count
             }
             _ => 0,
@@ -554,7 +548,7 @@ impl HashJoinTable {
         let last_joined_probe_idx =
             probe_indices.values().last().map(|&idx| idx as usize);
         let (build_indices, probe_indices) = if context.kind.preserves_probe() {
-            let start = self.joined_probe_idx.map_or(0, |idx| idx + 1);
+            let start = probe.joined_probe_idx.map_or(0, |idx| idx + 1);
             let end = if next_offset.is_none() {
                 probe.input.num_rows()
             } else {
@@ -571,9 +565,9 @@ impl HashJoinTable {
             (build_indices, probe_indices)
         };
 
-        self.next_offset = next_offset;
+        probe.next_offset = next_offset;
         if last_joined_probe_idx.is_some() {
-            self.joined_probe_idx = last_joined_probe_idx;
+            probe.joined_probe_idx = last_joined_probe_idx;
         }
         build_batch_from_indices(
             &context.schema,
@@ -593,10 +587,6 @@ impl HashJoinTable {
     /// Output already materialized in the coalescer remains available.
     fn release_probe(&mut self) {
         self.probe = None;
-        self.next_offset = None;
-        self.joined_probe_idx = None;
-        self.matched_probe_idx = None;
-        self.key_comparator = None;
         self.hashes = Vec::new();
         self.build_indices = Vec::new();
         self.probe_indices = Vec::new();
