@@ -1469,6 +1469,8 @@ mod tests {
             let listed = table
                 .list_files_for_scan(&ctx.state(), std::slice::from_ref(&filter), Some(1))
                 .await?;
+            assert!(!listed.grouped_by_partition);
+            assert!(listed.partition_split_points.is_empty());
             assert_eq!(
                 listed
                     .file_groups

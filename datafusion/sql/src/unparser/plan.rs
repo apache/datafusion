@@ -207,6 +207,9 @@ impl Unparser<'_> {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Unnest(_) => not_impl_err!("Unsupported plan: {plan:?}"),
+            LogicalPlan::MaterializedCte(_) => {
+                not_impl_err!("Unparsing a MATERIALIZED CTE is not supported: {plan:?}")
+            }
         }
     }
 

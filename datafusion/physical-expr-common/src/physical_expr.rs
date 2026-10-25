@@ -630,6 +630,7 @@ pub mod proto_encode {
 /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
 #[cfg(feature = "proto")]
 pub mod proto_decode {
+    use std::any::Any;
     use std::sync::Arc;
 
     use arrow::datatypes::Schema;
@@ -702,6 +703,17 @@ pub mod proto_decode {
         /// data-type resolution, etc.
         pub fn schema(&self) -> &Schema {
             self.schema
+        }
+
+        /// The session this decode runs under, if the decoder supplied one
+        /// and it is a `T`.
+        ///
+        /// `datafusion-proto` supplies its `TaskContext`, so an expression that
+        /// resolves a UDF by name or reads configuration calls
+        /// `ctx.session::<TaskContext>()`. The session is type-erased because
+        /// `TaskContext` is defined in a crate that depends on this one.
+        pub fn session<T: 'static>(&self) -> Option<&T> {
+            self.decoder.session()?.downcast_ref()
         }
 
         /// Decode an expression node, recursing into child sub-expressions.
@@ -793,6 +805,12 @@ pub mod proto_decode {
             node: &PhysicalExprNode,
             schema: &Schema,
         ) -> Result<Arc<dyn PhysicalExpr>>;
+
+        /// The session the decode runs under, read through
+        /// [`PhysicalExprDecodeCtx::session`]. Defaults to `None`.
+        fn session(&self) -> Option<&dyn Any> {
+            None
+        }
     }
 }
 

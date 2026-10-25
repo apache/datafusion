@@ -36,9 +36,9 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::{ExecutionPlan, Partitioning};
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
-    create_ffi_abs_func, create_ffi_first_value_func, create_ffi_random_func,
-    create_ffi_rank_func, create_ffi_stddev_func, create_ffi_sum_func,
-    create_ffi_table_func,
+    create_ffi_abs_func, create_ffi_first_value_func, create_ffi_min_func,
+    create_ffi_random_func, create_ffi_rank_func, create_ffi_stddev_func,
+    create_ffi_sum_func, create_ffi_table_func,
 };
 
 use crate::catalog_provider::FFI_CatalogProvider;
@@ -142,6 +142,9 @@ pub struct ForeignLibraryModule {
 
     /// Create an aggregate UDAF using first_value
     pub create_first_value_udaf: extern "C" fn() -> FFI_AggregateUDF,
+
+    /// Create an aggregate UDAF using min
+    pub create_min_udaf: extern "C" fn() -> FFI_AggregateUDF,
 }
 
 pub fn create_test_schema() -> Arc<Schema> {
@@ -429,5 +432,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_query_planner: query_planner::create_query_planner,
         version: super::version,
         create_first_value_udaf: create_ffi_first_value_func,
+        create_min_udaf: create_ffi_min_func,
     }
 }
