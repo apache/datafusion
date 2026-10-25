@@ -996,10 +996,12 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
 
     /// Returns a variant of this `ExecutionPlan` that is aware of order-sensitivity.
     ///
-    /// This is used to signal to data sources that the output ordering must be
-    /// preserved, even if it might be more efficient to ignore it (e.g. by
-    /// skipping some row groups in Parquet).
-    ///
+    /// No longer called by DataFusion: a data source that advertises an output
+    /// ordering always preserves it, so no optimizer rule needs to request it.
+    #[deprecated(
+        since = "56.0.0",
+        note = "no longer called: a scan that advertises an output ordering always preserves it"
+    )]
     fn with_preserve_order(
         &self,
         _preserve_order: bool,
@@ -1996,7 +1998,9 @@ pub fn check_not_null_constraints(
 ///
 /// While this function enables plan reuse, it does not allow the same plan to be executed if it (OR):
 ///
-/// * uses dynamic filters,
+/// * uses dynamic filters and the original plan (or another reset copy) is still
+///   executing, because operators such as `HashJoinExec` and `AggregateExec`
+///   reset their shared dynamic filter in place,
 /// * represents a recursive query.
 ///
 pub fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {

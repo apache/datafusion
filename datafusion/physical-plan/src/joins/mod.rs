@@ -44,10 +44,10 @@ mod asof_join;
 mod chain;
 mod cross_join;
 mod hash_join;
-mod integer_prefilter;
 mod logical_batch;
 mod nested_loop_join;
 mod piecewise_merge_join;
+mod probe_completion;
 #[cfg(feature = "proto")]
 mod proto;
 mod sort_merge_join;

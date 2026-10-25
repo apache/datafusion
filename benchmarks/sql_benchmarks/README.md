@@ -41,6 +41,7 @@ in the community:
 | `push_down_topk`      | `ORDER BY ... LIMIT` over outer joins (TPC-H data); exercises pushing a TopK through a join |
 | `pwmj`                | Piecewise merge join: classic `INNER`/`LEFT`/`RIGHT`/`FULL` joins over `lhs.key < rhs.key`. Subgroups (`--subgroup`) are match regimes: `no_match`, `null_heavy`, `half_match`, `selective`, `all_match`. Generated with `range()`, no data needed. |
 | `smj`                 | Sort‑merge join benchmark                                          |
+| [`sort_pushdown`](sort_pushdown/README.md) | SQL counterparts of the five sort pushdown variants, using existing Parquet data and query files. |
 | `sort tpch`           | Sorting benchmarks against the TPC-H lineitem table                |
 | `taxi`                | NYC taxi dataset benchmark                                         |
 | `tpcds`               | TPC‑DS queries                                                     |

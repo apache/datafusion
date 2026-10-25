@@ -1,0 +1,65 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Draft inactive PRs
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report eligible PRs without changing them"
+        type: boolean
+        default: true
+
+permissions:
+  checks: read
+  statuses: read
+  # Required by the convertPullRequestToDraft GraphQL mutation.
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: draft-inactive-prs
+  cancel-in-progress: false
+
+jobs:
+  draft:
+    if: github.repository == 'apache/datafusion'
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        with:
+          script: |
+            const { run } = require('./ci/scripts/draft_inactive_prs.cjs');
+            const dryRun = process.env.DRY_RUN !== 'false';
+            const results = await run({ github, context, core, dryRun });
+            await core.summary
+              .addHeading(dryRun ? 'Would mark as draft' : 'Marked as draft')
+              .addTable([
+                [{ data: 'PR', header: true }, { data: 'Reason', header: true }],
+                ...results.map(({ number, reasons }) => [String(number), reasons.join('; ')]),
+              ])
+              .write();
