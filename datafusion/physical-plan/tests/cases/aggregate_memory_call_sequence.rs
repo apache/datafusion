@@ -591,11 +591,10 @@ async fn without_spilling_returns_refusal() -> Result<()> {
 
 /// The table fits, but growing the reservation to the materialized output
 /// (`try_resize(memory_size())` on the first of several output batches) is
-/// refused. The streams disagree: Final returns the error, Single hands the
-/// output off unreserved (`reserved = false`, no further calls), and Partial
-/// and PartialReduce ignore it (and retry on every batch). Final is the only
-/// one that fails the query, although the output is already materialized,
-/// which #26701 reports. This pins each behavior as it is.
+/// refused. The streams disagree: Final spills the output and reads it back
+/// (#26701), Single hands the output off unreserved (`reserved = false`, no
+/// further calls), and Partial and PartialReduce ignore it (and retry on every
+/// batch). This pins each behavior as it is.
 ///
 /// Built-in aggregates materialize at most a little more than their accounted
 /// state (`string_agg` does, see #26701), so this uses [`PaddedOutputUdaf`],
@@ -610,7 +609,8 @@ async fn output_materialization_refused() -> Result<()> {
     };
 
     let run = padded(AggregateMode::Final).run().await?;
-    assert_eq!(run.spill_count(), 0);
+    assert_eq!(run.spill_count(), 1);
+    assert_eq!(run.output_batch_rows, vec![64; 4]);
     assert_snapshot!(run.snapshot, @r"
     FinalHashAggregateStream[0] register can_spill=true
     FinalHashAggregateStream[0] try_grow [bytes]
@@ -618,7 +618,7 @@ async fn output_materialization_refused() -> Result<()> {
     FinalHashAggregateStream[0] try_grow [bytes] -> refused
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] unregister
-    => Err(Resources exhausted: Failed to allocate additional [bytes] for FinalHashAggregateStream[0] with [bytes] already allocated for this reservation - [bytes] remain available for the total memory pool: greedy(used: [bytes], pool_size: [bytes]))
+    => Ok(256 rows in 4 batches)
     ");
 
     let run = padded(AggregateMode::Single).run().await?;
