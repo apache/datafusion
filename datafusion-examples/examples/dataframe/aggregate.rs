@@ -35,7 +35,7 @@ use datafusion_examples::utils::datasets::ExampleDataset;
 /// * [expressions_over_aggregates]: compute on top of aggregates in a single `select`
 /// * [grouped_aggregate]: GROUP BY uses `aggregate`; `select` never infers a GROUP BY
 /// * [aggregate_vs_window]: aggregate (one row) vs window (one row per input row)
-pub async fn aggregate_in_select_example() -> Result<()> {
+pub async fn aggregate_example() -> Result<()> {
     let ctx = SessionContext::new();
     let dataset = ExampleDataset::Cars;
     ctx.register_csv("cars", dataset.path_str()?, CsvReadOptions::default())

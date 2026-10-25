@@ -21,14 +21,14 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example dataframe -- [all|aggregate_in_select|dataframe|deserialize_to_struct|cache_factory]
+//! cargo run --example dataframe -- [all|aggregate|dataframe|deserialize_to_struct|cache_factory]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
 //!
-//! - `aggregate_in_select`
-//!   (file: aggregate_in_select.rs, desc: Aggregate functions in `select`, compared with `aggregate`)
+//! - `aggregate`
+//!   (file: aggregate.rs, desc: Global and grouped aggregation with `select` and `aggregate`)
 //!
 //! - `cache_factory`
 //!   (file: cache_factory.rs, desc: Custom lazy caching for DataFrames using `CacheFactory`)
@@ -39,7 +39,7 @@
 //! - `deserialize_to_struct`
 //!   (file: deserialize_to_struct.rs, desc: Convert Arrow arrays into Rust structs)
 
-mod aggregate_in_select;
+mod aggregate;
 mod cache_factory;
 mod dataframe;
 mod deserialize_to_struct;
@@ -52,7 +52,7 @@ use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 #[strum(serialize_all = "snake_case")]
 enum ExampleKind {
     All,
-    AggregateInSelect,
+    Aggregate,
     Dataframe,
     DeserializeToStruct,
     CacheFactory,
@@ -73,9 +73,7 @@ impl ExampleKind {
                     Box::pin(example.run()).await?;
                 }
             }
-            ExampleKind::AggregateInSelect => {
-                aggregate_in_select::aggregate_in_select_example().await?
-            }
+            ExampleKind::Aggregate => aggregate::aggregate_example().await?,
             ExampleKind::Dataframe => {
                 dataframe::dataframe_example().await?;
             }
