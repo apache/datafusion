@@ -1110,9 +1110,10 @@ config_namespace! {
 
         /// The directory name Hive compliant writers use in place of a null partition
         /// value, e.g. `/table/date=__HIVE_DEFAULT_PARTITION__/data.parquet`. Partition
-        /// values equal to this name are read as NULL, as Hive, Spark and Impala do.
-        /// Corresponds to Hive's `hive.exec.default.partition.name`. Set this to the empty
-        /// string to read such values as the literal directory name instead.
+        /// values equal to this name are read as NULL, as Hive, Spark and Impala do, and
+        /// partitioned writes reject them. Corresponds to Hive's
+        /// `hive.exec.default.partition.name`. Set this to the empty string to read and
+        /// write such values as the literal directory name instead.
         pub listing_table_hive_default_partition_name: String, default = HIVE_DEFAULT_PARTITION_NAME.to_string()
 
         /// Should DataFusion support recursive CTEs

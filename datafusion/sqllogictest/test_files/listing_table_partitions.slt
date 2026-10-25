@@ -226,3 +226,32 @@ select column1, d from null_part_ordered order by d;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# Writing the null partition name as a real value is rejected, since it would
+# be read back as NULL.
+statement count 0
+create external table null_part_write (a int, p varchar)
+stored as parquet
+partitioned by (p)
+location 'test_files/scratch/listing_table_partitions/null_part_write/';
+
+statement error Cannot write value '__HIVE_DEFAULT_PARTITION__' for partition column 'p': it is the null partition name and would be read back as NULL
+insert into null_part_write values (1, 'x'), (2, '__HIVE_DEFAULT_PARTITION__');
+
+# With the null partition name disabled, the value round trips.
+statement ok
+set datafusion.execution.listing_table_hive_default_partition_name = '';
+
+query I
+insert into null_part_write values (1, 'x'), (2, '__HIVE_DEFAULT_PARTITION__');
+----
+2
+
+query IT
+select a, p from null_part_write order by a;
+----
+1 x
+2 __HIVE_DEFAULT_PARTITION__
+
+statement ok
+set datafusion.execution.listing_table_hive_default_partition_name = '__HIVE_DEFAULT_PARTITION__';
