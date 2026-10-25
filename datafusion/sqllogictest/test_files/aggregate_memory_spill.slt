@@ -50,7 +50,9 @@ FROM (
 ----
 100000 5000050000
 
-# Assert spill happened, the `spill_count` metric must be > 0
+# Assert spill happened: the aggregate spills all 100k rows, so
+# spilled_rows is formatted as "100.0 K". This value cannot appear
+# when spill_count=0 because spilled_rows would then be 0 (no K suffix).
 query TT
 EXPLAIN ANALYZE
 SELECT count(*), sum(total)
@@ -61,7 +63,7 @@ FROM (
 )
 ----
 <slt:ignore>
-04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>spill_count=7,<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>spill_count=<slt:ignore>, spilled_bytes=<slt:ignore>, spilled_rows=100.0 K,<slt:ignore>]
 <slt:ignore>
 
 # --- Case B: multi-column GROUP BY (is_single() = false) ---
@@ -76,7 +78,7 @@ FROM (
 ----
 100000 5000050000
 
-# Assert spill happened, the `spill_count` metric must be > 0
+# Assert spill happened (same reasoning as Case A).
 query TT
 EXPLAIN ANALYZE
 SELECT count(*), sum(total)
@@ -87,7 +89,7 @@ FROM (
 )
 ----
 <slt:ignore>
-04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000), v@0 * 13 % 100000 as t.v * Int64(13) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>spill_count=7,<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000), v@0 * 13 % 100000 as t.v * Int64(13) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>spill_count=<slt:ignore>, spilled_bytes=<slt:ignore>, spilled_rows=100.0 K,<slt:ignore>]
 <slt:ignore>
 
 # --- Case C: DISTINCT aggregate under memory limit ---
@@ -102,7 +104,7 @@ FROM (
 ----
 100000 100000
 
-# Assert spill happened, the `spill_count` metric must be > 0
+# Assert spill happened (same reasoning as Case A).
 query TT
 EXPLAIN ANALYZE
 SELECT count(*), sum(d)
@@ -113,7 +115,7 @@ FROM (
 )
 ----
 <slt:ignore>
-04)------AggregateExec: mode=Single, gby=[group_alias_0@0 as group_alias_0], aggr=[count(alias1)], metrics=[<slt:ignore>spill_count=7,<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[group_alias_0@0 as group_alias_0], aggr=[count(alias1)], metrics=[<slt:ignore>spill_count=<slt:ignore>, spilled_bytes=<slt:ignore>, spilled_rows=100.0 K,<slt:ignore>]
 <slt:ignore>
 
 # --- Case D: multiple aggregates (sum/min/max) under memory limit ---
@@ -128,7 +130,7 @@ FROM (
 ----
 100000 5000050000 1 100000
 
-# Assert spill happened, the `spill_count` metric must be > 0
+# Assert spill happened (same reasoning as Case A).
 query TT
 EXPLAIN ANALYZE
 SELECT count(*), sum(s), min(mn), max(mx)
@@ -139,7 +141,7 @@ FROM (
 )
 ----
 <slt:ignore>
-04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v), min(t.v), max(t.v)], metrics=[<slt:ignore>spill_count=7,<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v), min(t.v), max(t.v)], metrics=[<slt:ignore>spill_count=<slt:ignore>, spilled_bytes=<slt:ignore>, spilled_rows=100.0 K,<slt:ignore>]
 <slt:ignore>
 
 # --- Case E: avg() aggregate (Float64 output) under memory limit ---
@@ -154,7 +156,7 @@ FROM (
 ----
 100000 1 100000
 
-# Assert spill happened, the `spill_count` metric must be > 0
+# Assert spill happened (same reasoning as Case A).
 query TT
 EXPLAIN ANALYZE
 SELECT count(*), min(a), max(a)
@@ -165,7 +167,7 @@ FROM (
 )
 ----
 <slt:ignore>
-04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[avg(t.v)], metrics=[<slt:ignore>spill_count=7,<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[avg(t.v)], metrics=[<slt:ignore>spill_count=<slt:ignore>, spilled_bytes=<slt:ignore>, spilled_rows=100.0 K,<slt:ignore>]
 <slt:ignore>
 
 # --- Case F: array_agg() aggregate (growable state) under memory limit ---
@@ -180,7 +182,7 @@ FROM (
 ----
 100000 100000
 
-# Assert spill happened, the `spill_count` metric must be > 0
+# Assert spill happened (same reasoning as Case A).
 query TT
 EXPLAIN ANALYZE
 SELECT count(*), sum(l)
@@ -191,7 +193,7 @@ FROM (
 )
 ----
 <slt:ignore>
-04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[array_agg(t.v)], metrics=[<slt:ignore>spill_count=7,<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[array_agg(t.v)], metrics=[<slt:ignore>spill_count=<slt:ignore>, spilled_bytes=<slt:ignore>, spilled_rows=100.0 K,<slt:ignore>]
 <slt:ignore>
 
 # --- Case G: partial/final aggregation under memory limit ---
@@ -232,7 +234,7 @@ FROM (
 )
 ----
 <slt:ignore>
-06)----------AggregateExec: mode=FinalPartitioned, gby=[t.v * Int64(7) % Int64(100000)@0 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>spilled_rows=<slt:ignore>K,<slt:ignore>]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[t.v * Int64(7) % Int64(100000)@0 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>spill_count=<slt:ignore>, spilled_bytes=<slt:ignore>, spilled_rows=<slt:ignore> K,<slt:ignore>]
 <slt:ignore>
 08)--------------AggregateExec: mode=Partial, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>early_emit_count=<slt:ignore>]
 <slt:ignore>

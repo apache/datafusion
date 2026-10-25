@@ -39,6 +39,7 @@ const BATCH_SIZE: usize = 1000;
 const TS_BOUND: i64 = 2_006_463_600;
 const SEC_DAY: i64 = 86_400;
 const DAYS_SINCE_EPOCH: i64 = TS_BOUND / SEC_DAY;
+const NULL_DENSITY: f64 = 0.1;
 
 fn generate_timestamp_ns_array(rng: &mut StdRng) -> TimestampNanosecondArray {
     TimestampNanosecondArray::from(
@@ -162,6 +163,31 @@ fn generate_duration_nanosecond_array(rng: &mut StdRng) -> DurationNanosecondArr
     )
 }
 
+// Durations under `i32::MAX` nanoseconds (about 2.1 seconds)
+fn generate_duration_nanosecond_small_array(rng: &mut StdRng) -> DurationNanosecondArray {
+    DurationNanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..i32::MAX as i64))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_duration_nanosecond_array_with_nulls(
+    rng: &mut StdRng,
+) -> DurationNanosecondArray {
+    DurationNanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| {
+                if rng.random_bool(NULL_DENSITY) {
+                    None
+                } else {
+                    Some(rng.random_range(0..TS_BOUND * 1_000_000_000))
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
 fn bench_date_part(
     c: &mut Criterion,
     udf: &Arc<ScalarUDF>,
@@ -213,6 +239,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     let duration_ns = Arc::new(generate_duration_nanosecond_array(&mut rng)) as ArrayRef;
     let date32 = Arc::new(generate_date32_array(&mut rng)) as ArrayRef;
     let date64 = Arc::new(generate_date64_array(&mut rng)) as ArrayRef;
+    let duration_ns_small =
+        Arc::new(generate_duration_nanosecond_small_array(&mut rng)) as ArrayRef;
+    let duration_ns_nulls =
+        Arc::new(generate_duration_nanosecond_array_with_nulls(&mut rng)) as ArrayRef;
 
     let udf = date_part();
 
@@ -322,6 +352,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         ("interval_dt", &interval_dt),
         ("interval_mdn", &interval_mdn),
         ("duration_ns", &duration_ns),
+        ("duration_ns_small", &duration_ns_small),
+        ("duration_ns_nulls", &duration_ns_nulls),
     ] {
         bench_date_part(
             c,

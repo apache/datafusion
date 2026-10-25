@@ -363,6 +363,60 @@ fn criterion_benchmark(c: &mut Criterion) {
             },
         );
 
+        // Utf8 type without fill (pads with spaces)
+        let mut args = create_pad_args::<i32>(size, 5, 20, false);
+        args.truncate(2);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!("lpad utf8 no fill [size={size}, str_len=5, target=20]"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::lpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // Utf8 type with Unicode strings, without fill
+        let mut args = create_unicode_pad_args(size, 20, false);
+        args.truncate(2);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!("lpad utf8 unicode no fill [size={size}, target=20]"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::lpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
         // --- Scalar length + fill benchmarks ---
 
         // Utf8 with scalar length and fill (3-arg)
@@ -635,6 +689,60 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
                         return_field: Field::new("f", DataType::Utf8View, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // Utf8 type without fill (pads with spaces)
+        let mut args = create_pad_args::<i32>(size, 5, 20, false);
+        args.truncate(2);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!("rpad utf8 no fill [size={size}, str_len=5, target=20]"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::rpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // Utf8 type with Unicode strings, without fill
+        let mut args = create_unicode_pad_args(size, 20, false);
+        args.truncate(2);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!("rpad utf8 unicode no fill [size={size}, target=20]"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::rpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                         config_options: Arc::clone(&config_options),
                     }))
                 })

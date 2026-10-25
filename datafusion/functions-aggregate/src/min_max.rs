@@ -23,6 +23,7 @@ mod min_max_struct;
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, downcast_primitive};
 use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
+use datafusion_common::float_semantics::{float_gt, float_lt};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, exec_err, internal_err};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
@@ -124,7 +125,7 @@ macro_rules! primitive_max_accumulator {
     ($t:ty, $data_type:ident, total, $bits:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$t, _>::new($data_type, |cur, new| {
-                if new.total_cmp(cur) == Ordering::Greater {
+                if float_gt(new, *cur) {
                     *cur = new
                 }
             })
@@ -160,7 +161,7 @@ macro_rules! primitive_min_accumulator {
     ($t:ty, $data_type:ident, total, $bits:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$t, _>::new(&$data_type, |cur, new| {
-                if new.total_cmp(cur) == Ordering::Less {
+                if float_lt(new, *cur) {
                     *cur = new
                 }
             })

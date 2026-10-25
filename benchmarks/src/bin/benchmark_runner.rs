@@ -1966,6 +1966,91 @@ description = "Run query one against CSV data."
     }
 
     #[test]
+    fn sql_runner_debug_plans_include_execution_metrics() {
+        const CHILD_ENV: &str = "DATAFUSION_SQL_DEBUG_TEST_MODE";
+        if let Ok(mode) = std::env::var(CHILD_ENV) {
+            let temp = suite_root();
+            write_benchmark(
+                temp.path(),
+                "alpha/benchmarks/q01.benchmark",
+                "name Q01\n\nrun\nSELECT value FROM (VALUES (3), (1), (2)) AS t(value) ORDER BY value\n",
+            );
+            let mut args = vec!["benchmark_runner", "alpha", "--query", "1"];
+            if mode == "criterion" {
+                args.push("--criterion");
+            } else {
+                args.extend(["--iterations", "1"]);
+            }
+            if mode == "buffered" {
+                args.extend(["--result-mode", "persist"]);
+            }
+            match parse_cli_from(args, temp.path()).unwrap() {
+                CliAction::Simple(config) => {
+                    tokio::runtime::Runtime::new()
+                        .unwrap()
+                        .block_on(run_simple_benchmarks(temp.path(), config))
+                        .unwrap();
+                }
+                CliAction::Criterion { config, .. } => {
+                    let output = tempfile::tempdir().unwrap();
+                    let mut criterion = Criterion::default()
+                        .output_directory(output.path())
+                        .warm_up_time(std::time::Duration::from_millis(1))
+                        .measurement_time(std::time::Duration::from_millis(10))
+                        .without_plots();
+                    run_criterion_benchmarks_impl(temp.path(), &config, &mut criterion)
+                        .unwrap();
+                }
+                _ => panic!("expected a benchmark run"),
+            }
+            return;
+        }
+
+        for mode in ["simple", "criterion", "buffered"] {
+            for debug in [false, true] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "tests::sql_runner_debug_plans_include_execution_metrics",
+                        "--nocapture",
+                    ])
+                    // Other CLI tests mutate environment variables concurrently.
+                    .env_clear()
+                    // Keep subprocess coverage output in cargo-llvm-cov's directory.
+                    .envs(
+                        std::env::var_os("LLVM_PROFILE_FILE")
+                            .map(|value| ("LLVM_PROFILE_FILE", value)),
+                    )
+                    .env(CHILD_ENV, mode)
+                    .env("DEBUG", debug.to_string())
+                    .output()
+                    .unwrap();
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                assert!(
+                    output.status.success(),
+                    "{mode}, debug={debug}: {stdout}\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                for heading in [
+                    "=== Logical plan ===",
+                    "=== Optimized logical plan ===",
+                    "=== Physical plan ===",
+                    "=== Physical plan with metrics ===",
+                ] {
+                    assert_eq!(stdout.contains(heading), debug, "{mode}: {stdout}");
+                }
+                if debug {
+                    let metrics = stdout
+                        .split("=== Physical plan with metrics ===")
+                        .nth(1)
+                        .unwrap();
+                    assert!(metrics.contains("output_rows=3"), "{mode}: {stdout}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn criterion_runner_saves_named_baseline() {
         let temp = tempfile::tempdir().unwrap();
 
