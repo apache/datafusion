@@ -1,0 +1,68 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+name = "datafusion-property-tests"
+description = "Property tests that validate implementations of DataFusion extension points, such as ExecutionPlan, against their contracts"
+readme = "README.md"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
+[lints]
+workspace = true
+
+[lib]
+name = "datafusion_property_tests"
+
+[features]
+# Also run the built-in physical plan audit on `Profile::extended`, with its
+# own snapshots
+extended_tests = []
+
+[dependencies]
+arrow = { workspace = true }
+datafusion-common = { workspace = true, default-features = true }
+datafusion-execution = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+datafusion-physical-plan = { workspace = true }
+futures = { workspace = true }
+rand = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+# For the plans defined outside `datafusion-physical-plan`: data sources and
+# sinks, `MemTable` DML (which needs a `SessionState`) and the optimizer's
+# `OutputRequirementExec`
+datafusion = { workspace = true, features = ["parquet"] }
+datafusion-catalog = { workspace = true }
+datafusion-datasource = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-ffi = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-window = { workspace = true }
+insta = { workspace = true }
+parking_lot = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
