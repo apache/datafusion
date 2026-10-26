@@ -202,31 +202,31 @@ SET datafusion.execution.target_partitions = '1';
 
 Point queries look up a small number of rows by key (for example,
 `SELECT * FROM t WHERE id = 42`). For these queries the fixed costs of planning,
-opening files, and coordinating partitions often dominate the actual work, so
-the goal is to read as little data as possible and to avoid unnecessary
+opening files, and coordinating partitions often dominate the actual work. You can
+optimize such queries by clustering your data on the predicate, and avoiding
+unnecessary
 parallelism.
 
 For Parquet data, the most effective techniques are:
 
-- Sort the data by the lookup key so min/max statistics prune most row groups
-  and pages, and use relatively small row groups and pages (for example, ~128k
-  rows per row group and ~1k rows per page) so that pruning is fine grained.
+- Sort the data by the lookup key so min/max statistics.
 - Set `datafusion.execution.target_partitions` to `1` to avoid the overhead of
-  parallelism, as described in [Short Queries](#short-queries).
+  parallelism.
 - Enable `datafusion.execution.parquet.pushdown_filters` so filters are
-  evaluated while decoding Parquet rather than after the whole row group is read.
-- Keep Parquet metadata caching enabled (the default) and size the cache with
+  evaluated while decoding Parquet.
+- Set the Parquet metadata cache size via
   `datafusion.runtime.metadata_cache_limit` so it holds the metadata for the
   files you query repeatedly.
 - Reuse prepared statements to avoid re-planning each query.
 
+Example configuration:
 ```sql
 SET datafusion.execution.target_partitions = '1';
 SET datafusion.execution.parquet.pushdown_filters = true;
 ```
 
 See the [Best Practices for Single Row Lookups (Point Queries)] blog post for
-benchmarks and a detailed walk through of each of these settings.
+more details.
 
 [Best Practices for Single Row Lookups (Point Queries)]: https://datafusion.apache.org/blog/2026/10/24/point-queries/
 
