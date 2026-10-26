@@ -207,6 +207,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+pub use optimizations::topk_types_supported;
 pub use order::GroupClusteringMode;
 
 mod aggregate_argument;
