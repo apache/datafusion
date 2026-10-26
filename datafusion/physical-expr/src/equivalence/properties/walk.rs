@@ -269,7 +269,7 @@ impl<'a> Walk<'a> {
     }
 
     /// The head of each ordering that has one.
-    fn heads(&self) -> impl Iterator<Item = &PhysicalSortExpr> {
+    fn heads(&self) -> impl Iterator<Item = &PhysicalSortExpr> + Clone {
         let orderings = self.props.oeq_cache.normal_cls.iter().chain(&self.implied);
         orderings.enumerate().filter_map(|(idx, ordering)| {
             ordering.get(self.head_idxs.get(idx).copied().unwrap_or(0))
