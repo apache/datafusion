@@ -33,7 +33,6 @@ use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::not_in::{NotIn, NotInBuild};
-use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
 };
@@ -42,6 +41,7 @@ use crate::joins::hash_join::stream::{
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::key_range_bitmap::KeyRangeBitmap;
+use crate::joins::probe_completion::{Completion, ProbeCompletion};
 use crate::joins::utils::{
     OnceAsync, OnceFut, asymmetric_join_output_partitioning, emits_unmatched_left_rows,
     is_existence_join, reorder_output_after_swap, swap_join_projection, update_hash,
@@ -78,12 +78,12 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::memory::{
     RecordBatchMemoryCounter, estimate_memory_size, get_record_batch_memory_size,
 };
-use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
     plan_err, project_schema,
@@ -299,19 +299,21 @@ impl JoinLeftData {
     /// Whether some probe partition has already recorded a NULL join key.
     ///
     /// Only an early-exit hint for the probe phase: it may lag behind sibling
-    /// partitions. Final-stage decisions must use the [`ProbeSideSummary`]
+    /// partitions. Final-stage decisions must use the
+    /// [`ProbeSideSummary`](crate::joins::probe_completion::ProbeSideSummary)
     /// returned by [`Self::report_probe_completed`] instead.
     pub(super) fn probe_side_has_null_hint(&self) -> bool {
         self.probe_completion.saw_null_key_hint()
     }
 
-    /// Marks this probe partition as finished, returning `Some` for the last
-    /// one together with what every partition saw.
+    /// Marks this probe partition as finished, returning
+    /// [`Completion::Emit`] for the last one together with what every
+    /// partition saw.
     ///
     /// The summary is reachable only through this call, which is what stops
     /// the final stage from reading the shared flags before its own
     /// decrement. See [`ProbeCompletion`] for why that ordering matters.
-    pub(super) fn report_probe_completed(&self) -> Option<ProbeSideSummary> {
+    pub(super) fn report_probe_completed(&self) -> Completion {
         self.probe_completion.report_completed()
     }
 }
@@ -465,8 +467,14 @@ impl HashJoinExecBuilder {
     /// Reset task-local runtime state while retaining the immutable prepared build.
     pub fn reset_state(mut self) -> Self {
         self.exec.left_fut = Default::default();
-        self.exec.dynamic_filter = None;
+
+        if let Some(dynamic_filter) = &mut self.exec.dynamic_filter {
+            dynamic_filter.filter.reset();
+            dynamic_filter.build_accumulator = OnceLock::new();
+        }
+
         self.exec.metrics = ExecutionPlanMetricsSet::new();
+
         self
     }
 
@@ -3293,7 +3301,7 @@ fn build_in_memory(
     // comparison does not rescan the build side. Arrays without `-0.0`, and
     // non-float keys, are shared rather than copied.
     let normalized_values: Vec<ArrayRef> =
-        left_values.iter().map(normalize_float_zero).collect();
+        left_values.iter().map(normalize_floats).collect();
 
     // Join keys that are plain columns share the buffers of `batch`, any other
     // expression evaluates to new arrays that are kept for the whole join.
