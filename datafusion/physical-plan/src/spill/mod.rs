@@ -891,7 +891,8 @@ fn compact_view_array<T: ByteViewType>(
 /// Returns, for each entry of `buffers`, its index in a list without repeated
 /// entries of the same buffer, and that list.
 fn dedup_buffer_entries(buffers: &[Buffer]) -> (Vec<u32>, Vec<Buffer>) {
-    let mut first_index: HashMap<(*const u8, usize), u32> = HashMap::new();
+    let mut first_index: HashMap<(*const u8, usize), u32> =
+        HashMap::with_capacity(buffers.len());
     let mut unique: Vec<Buffer> = Vec::with_capacity(buffers.len());
     let remap = buffers
         .iter()

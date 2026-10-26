@@ -117,28 +117,28 @@ impl DiskManagerBuilder {
         match self.mode {
             DiskManagerMode::OsTmpDirectory => Ok(DiskManager {
                 local_dirs: Mutex::new(Some(vec![])),
+                conf_dirs: vec![],
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
                 factory: None,
             }),
-            DiskManagerMode::Directories(conf_dirs) => {
-                let local_dirs = create_local_dirs(&conf_dirs)?;
-                debug!(
-                    "Created local dirs {local_dirs:?} as DataFusion working directory"
-                );
-                Ok(DiskManager {
-                    local_dirs: Mutex::new(Some(local_dirs)),
-                    max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
-                    max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
-                    used_disk_space: Arc::new(AtomicU64::new(0)),
-                    active_files_count: Arc::new(AtomicUsize::new(0)),
-                    factory: None,
-                })
-            }
+            DiskManagerMode::Directories(conf_dirs) => Ok(DiskManager {
+                // Created on the first `create_tmp_file`, as `OsTmpDirectory`
+                // already does, so building a `DiskManager` that never spills
+                // costs no directory syscalls.
+                local_dirs: Mutex::new(Some(vec![])),
+                conf_dirs,
+                max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
+                max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
+                used_disk_space: Arc::new(AtomicU64::new(0)),
+                active_files_count: Arc::new(AtomicUsize::new(0)),
+                factory: None,
+            }),
             DiskManagerMode::Disabled => Ok(DiskManager {
                 local_dirs: Mutex::new(None),
+                conf_dirs: vec![],
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
@@ -147,6 +147,7 @@ impl DiskManagerBuilder {
             }),
             DiskManagerMode::Custom(factory) => Ok(DiskManager {
                 local_dirs: Mutex::new(None),
+                conf_dirs: vec![],
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
@@ -195,6 +196,10 @@ pub struct DiskManager {
     /// If `Some(vec![])` a new OS specified temporary directory will be created
     /// If `None` an error will be returned (configured not to spill)
     local_dirs: Mutex<Option<Vec<Arc<TempDir>>>>,
+    /// Directories configured by [`DiskManagerMode::Directories`], whose working
+    /// directories are created on the first `create_tmp_file`. Empty in every
+    /// other mode, where an OS temporary directory is used instead.
+    conf_dirs: Vec<PathBuf>,
     /// The maximum amount of data (in bytes) stored inside the temporary directories.
     /// Default to 100GB. Stored as `AtomicU64` so it can be adjusted at runtime
     /// without requiring exclusive (`&mut`) access to the `DiskManager`.
@@ -354,17 +359,23 @@ impl DiskManager {
             )
         })?;
 
-        // Create a temporary directory if needed
+        // Create the working directories if needed
         if local_dirs.is_empty() {
-            let tempdir = tempfile::tempdir().map_err(DataFusionError::IoError)?;
+            if self.conf_dirs.is_empty() {
+                let tempdir = tempfile::tempdir().map_err(DataFusionError::IoError)?;
 
-            debug!(
-                "Created directory '{:?}' as DataFusion tempfile directory for {}",
-                tempdir.path().to_string_lossy(),
-                request_description,
-            );
+                debug!(
+                    "Created directory '{:?}' as DataFusion tempfile directory for {}",
+                    tempdir.path().to_string_lossy(),
+                    request_description,
+                );
 
-            local_dirs.push(Arc::new(tempdir));
+                local_dirs.push(Arc::new(tempdir));
+            } else {
+                let created = create_local_dirs(&self.conf_dirs)?;
+                debug!("Created local dirs {created:?} as DataFusion working directory");
+                local_dirs.extend(created);
+            }
         }
 
         let dir_index = rng().random_range(0..local_dirs.len());
@@ -373,6 +384,7 @@ impl DiskManager {
             parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
             tempfile: Arc::new(
                 Builder::new()
+                    .prefix(&escape_for_temp_file_name_prefix(request_description))
                     .tempfile_in(local_dirs[dir_index].as_ref())
                     .map_err(DataFusionError::IoError)?,
             ),
@@ -585,6 +597,37 @@ impl SpillFile for RefCountedTempFile {
         }))
     }
 }
+
+/// Escape a string to be safe to use in a temp file name prefix.
+///
+/// All non-alphanumeric characters are replaced by `_` and characters are put in lowercase.
+/// A `.tmp.` is added at the beginning and a last `.` is set at the end.
+///
+/// For example "This kind.of /input" becomes ".tmp.this_kind_of_input."
+///
+/// The output is also truncated to fit in 128 bytes.
+fn escape_for_temp_file_name_prefix(text: &str) -> String {
+    let mut output = String::with_capacity(text.len() + 6);
+    output.push_str(".tmp.");
+    let mut add_separator = false;
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            if add_separator && !output.is_empty() {
+                output.push('_');
+                add_separator = false;
+            }
+            output.extend(c.to_lowercase());
+        } else {
+            add_separator = true;
+        }
+        if output.len() >= 123 {
+            break; // We limit the output at 128 bytes and keep the space for an extra UTF-8 char and the final dot
+        }
+    }
+    output.push('.');
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn file_in_right_dir() -> Result<()> {
+    fn file_in_right_dir_and_with_description() -> Result<()> {
         let local_dir1 = TempDir::new()?;
         let local_dir2 = TempDir::new()?;
         let local_dir3 = TempDir::new()?;
@@ -636,10 +679,22 @@ mod tests {
         );
 
         assert!(dm.tmp_files_enabled());
-        let actual = dm.create_tmp_file("Testing")?;
+        let actual = dm.create_tmp_file("Testing with./spécial")?;
 
         // the file should be in one of the specified local directories
         assert_path_in_dirs(actual.path().unwrap(), local_dirs.into_iter());
+
+        let file_name = actual
+            .path()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            file_name.starts_with(".tmp.testing_with_spécial."),
+            "{file_name}"
+        );
 
         Ok(())
     }
@@ -673,6 +728,37 @@ mod tests {
             .with_mode(DiskManagerMode::Directories(vec![dir.path().to_path_buf()]))
             .build()
             .unwrap();
+    }
+
+    #[test]
+    fn test_directories_mode_creates_dirs_lazily() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+
+        let manager = Arc::new(
+            DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Directories(vec![root.clone()]))
+                .build()
+                .unwrap(),
+        );
+
+        // Nothing has spilled, so no working directory should exist yet.
+        let entries: Vec<_> = std::fs::read_dir(&root).unwrap().collect();
+        assert!(
+            entries.is_empty(),
+            "expected no directories before the first spill, found {entries:?}"
+        );
+        assert!(manager.temp_dir_paths().is_empty());
+
+        // The first temporary file creates the working directory under the
+        // configured path.
+        let spill_file = manager.create_tmp_file("lazy dir test").unwrap();
+        let spill_path = spill_file.path().expect("spill file should have a path");
+        assert_path_in_dirs(spill_path, std::iter::once(root.as_path()));
+
+        let temp_dir_paths = manager.temp_dir_paths();
+        assert_eq!(temp_dir_paths.len(), 1);
+        assert!(temp_dir_paths[0].starts_with(&root));
     }
 
     /// Asserts that `file_path` is found anywhere in any of `dir` directories
@@ -1174,5 +1260,15 @@ mod tests {
         assert_eq!(dm.used_disk_space(), 0);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_escape_for_temp_file_name_prefix() {
+        assert_eq!(escape_for_temp_file_name_prefix("foo"), ".tmp.foo.");
+        assert_eq!(escape_for_temp_file_name_prefix("fooé \nt"), ".tmp.fooé_t.");
+        assert_eq!(
+            escape_for_temp_file_name_prefix(&"a".repeat(200)),
+            format!(".tmp.{}.", "a".repeat(118))
+        );
     }
 }

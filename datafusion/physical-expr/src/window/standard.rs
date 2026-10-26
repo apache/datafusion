@@ -18,7 +18,6 @@
 //! Physical exec for standard window function expressions.
 
 use std::any::Any;
-use std::ops::Range;
 use std::sync::Arc;
 
 use super::{StandardWindowFunctionExpr, WindowExpr};
@@ -117,7 +116,7 @@ impl WindowExpr for StandardWindowExpr {
         let num_rows = batch.num_rows();
         if evaluator.uses_window_frame() {
             let sort_options = self.order_by.iter().map(|o| o.options).collect();
-            let mut row_wise_results = vec![];
+            let mut ranges = Vec::with_capacity(num_rows);
 
             let mut values = self.evaluate_args(batch)?;
             let order_bys = get_orderby_values(self.order_by_columns(batch)?);
@@ -127,20 +126,17 @@ impl WindowExpr for StandardWindowExpr {
 
             let mut window_frame_ctx =
                 WindowFrameContext::new(Arc::clone(&self.window_frame), sort_options);
-            let mut last_range = Range { start: 0, end: 0 };
-            // We iterate on each row to calculate window frame range and window function result
+            // We iterate on each row to calculate its window frame range
             for idx in 0..num_rows {
                 let range = window_frame_ctx.calculate_range(
                     order_bys_ref,
-                    &last_range,
+                    ranges.last().unwrap_or(&(0..0)),
                     num_rows,
                     idx,
                 )?;
-                let value = evaluator.evaluate(&values, &range)?;
-                row_wise_results.push(value);
-                last_range = range;
+                ranges.push(range);
             }
-            ScalarValue::iter_to_array(row_wise_results)
+            evaluator.evaluate_ranges(&values, &ranges)
         } else if evaluator.include_rank() {
             let columns = self.order_by_columns(batch)?;
             let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
@@ -191,7 +187,8 @@ impl WindowExpr for StandardWindowExpr {
 
             let batch_ref = &partition_batch_state.record_batch;
             let mut values = self.evaluate_args(batch_ref)?;
-            let order_bys = if evaluator.uses_window_frame() || evaluator.include_rank() {
+            let uses_window_frame = evaluator.uses_window_frame();
+            let order_bys = if uses_window_frame || evaluator.include_rank() {
                 get_orderby_values(self.order_by_columns(batch_ref)?)
             } else {
                 vec![]
@@ -203,14 +200,22 @@ impl WindowExpr for StandardWindowExpr {
             // We iterate on each row to perform a running calculation.
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
-            let mut row_wise_results: Vec<ScalarValue> = vec![];
-            let is_causal = if evaluator.uses_window_frame() {
+            let n_new_rows = num_rows.saturating_sub(state.last_calculated_index);
+            // Functions that use the window frame are evaluated on all frames after
+            // the loop. Other functions are evaluated row by row, because their
+            // `get_range` can depend on state that `evaluate` updates.
+            let (mut frame_ranges, mut row_wise_results) = if uses_window_frame {
+                (Vec::with_capacity(n_new_rows), Vec::new())
+            } else {
+                (Vec::new(), Vec::with_capacity(n_new_rows))
+            };
+            let is_causal = if uses_window_frame {
                 self.window_frame.is_causal()
             } else {
                 evaluator.is_causal()
             };
             for idx in state.last_calculated_index..num_rows {
-                let frame_range = if evaluator.uses_window_frame() {
+                let frame_range = if uses_window_frame {
                     state
                         .window_frame_ctx
                         .get_or_insert_with(|| {
@@ -239,10 +244,16 @@ impl WindowExpr for StandardWindowExpr {
                 }
                 // Update last range
                 state.window_frame_range = frame_range;
-                row_wise_results
-                    .push(evaluator.evaluate(&values, &state.window_frame_range)?);
+                if uses_window_frame {
+                    frame_ranges.push(state.window_frame_range.clone());
+                } else {
+                    row_wise_results
+                        .push(evaluator.evaluate(&values, &state.window_frame_range)?);
+                }
             }
-            let out_col = if row_wise_results.is_empty() {
+            let out_col = if !frame_ranges.is_empty() {
+                evaluator.evaluate_ranges(&values, &frame_ranges)?
+            } else if row_wise_results.is_empty() {
                 new_empty_array(out_type)
             } else if row_wise_results.len() == 1 {
                 // fast path when the result only has a single row

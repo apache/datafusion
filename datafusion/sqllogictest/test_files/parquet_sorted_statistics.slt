@@ -340,6 +340,221 @@ WHERE partition_col = 'D'
 GROUP BY int_col;
 ----
 
+# Min/max statistics ignore NULLs. Files read one after another in a single
+# partition keep the declared ordering only if their NULLs end up at the start
+# (NULLS FIRST) or at the end (NULLS LAST) of the combined stream.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+# NULLS LAST with NULLs in the first file: needs a sort
+query I
+COPY (SELECT * FROM (VALUES (1), (NULL)) AS t(a))
+TO 'test_files/scratch/parquet_sorted_statistics/nulls_last_bad/1.parquet'
+STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM (VALUES (2), (3)) AS t(a))
+TO 'test_files/scratch/parquet_sorted_statistics/nulls_last_bad/2.parquet'
+STORED AS PARQUET;
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE nulls_last_bad (a BIGINT)
+STORED AS PARQUET
+WITH ORDER (a ASC NULLS LAST)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/nulls_last_bad';
+
+query TT
+EXPLAIN SELECT a FROM nulls_last_bad ORDER BY a ASC NULLS LAST;
+----
+logical_plan
+01)Sort: nulls_last_bad.a ASC NULLS LAST
+02)--TableScan: nulls_last_bad projection=[a]
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/nulls_last_bad/1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/nulls_last_bad/2.parquet]]}, projection=[a], file_type=parquet, sort_order_for_reorder=[a@0 ASC NULLS LAST]
+
+query I
+SELECT a FROM nulls_last_bad ORDER BY a ASC NULLS LAST;
+----
+1
+2
+3
+NULL
+
+# NULLS LAST with NULLs only in the last file: the ordering is kept
+query I
+COPY (SELECT * FROM (VALUES (1), (2)) AS t(a))
+TO 'test_files/scratch/parquet_sorted_statistics/nulls_last_ok/1.parquet'
+STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM (VALUES (3), (NULL)) AS t(a))
+TO 'test_files/scratch/parquet_sorted_statistics/nulls_last_ok/2.parquet'
+STORED AS PARQUET;
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE nulls_last_ok (a BIGINT)
+STORED AS PARQUET
+WITH ORDER (a ASC NULLS LAST)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/nulls_last_ok';
+
+query TT
+EXPLAIN SELECT a FROM nulls_last_ok ORDER BY a ASC NULLS LAST;
+----
+logical_plan
+01)Sort: nulls_last_ok.a ASC NULLS LAST
+02)--TableScan: nulls_last_ok projection=[a]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/nulls_last_ok/1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/nulls_last_ok/2.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet
+
+query I
+SELECT a FROM nulls_last_ok ORDER BY a ASC NULLS LAST;
+----
+1
+2
+3
+NULL
+
+# NULLS FIRST with NULLs in the last file: needs a sort
+query I
+COPY (SELECT * FROM (VALUES (1), (2)) AS t(a))
+TO 'test_files/scratch/parquet_sorted_statistics/nulls_first_bad/1.parquet'
+STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM (VALUES (NULL), (3)) AS t(a))
+TO 'test_files/scratch/parquet_sorted_statistics/nulls_first_bad/2.parquet'
+STORED AS PARQUET;
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE nulls_first_bad (a BIGINT)
+STORED AS PARQUET
+WITH ORDER (a ASC NULLS FIRST)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/nulls_first_bad';
+
+query TT
+EXPLAIN SELECT a FROM nulls_first_bad ORDER BY a ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: nulls_first_bad.a ASC NULLS FIRST
+02)--TableScan: nulls_first_bad projection=[a]
+physical_plan
+01)SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/nulls_first_bad/2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/nulls_first_bad/1.parquet]]}, projection=[a], file_type=parquet, sort_order_for_reorder=[a@0 ASC]
+
+query I
+SELECT a FROM nulls_first_bad ORDER BY a ASC NULLS FIRST;
+----
+NULL
+1
+2
+3
+
+# NULLS FIRST with NULLs only in the first file: the ordering is kept
+query I
+COPY (SELECT * FROM (VALUES (NULL), (1)) AS t(a))
+TO 'test_files/scratch/parquet_sorted_statistics/nulls_first_ok/1.parquet'
+STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM (VALUES (2), (3)) AS t(a))
+TO 'test_files/scratch/parquet_sorted_statistics/nulls_first_ok/2.parquet'
+STORED AS PARQUET;
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE nulls_first_ok (a BIGINT)
+STORED AS PARQUET
+WITH ORDER (a ASC NULLS FIRST)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/nulls_first_ok';
+
+query TT
+EXPLAIN SELECT a FROM nulls_first_ok ORDER BY a ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: nulls_first_ok.a ASC NULLS FIRST
+02)--TableScan: nulls_first_ok projection=[a]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/nulls_first_ok/1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/nulls_first_ok/2.parquet]]}, projection=[a], output_ordering=[a@0 ASC], file_type=parquet
+
+query I
+SELECT a FROM nulls_first_ok ORDER BY a ASC NULLS FIRST;
+----
+NULL
+1
+2
+3
+
+# Declaring INT over files that store BIGINT leaves the file statistics
+# without usable min/max values or null counts. The files cannot be proven
+# sorted.
+query I
+COPY (SELECT * FROM (VALUES (100), (200)) AS t(a))
+TO 'test_files/scratch/parquet_sorted_statistics/cast_bounds/1.parquet'
+STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM (VALUES (1), (2), (3)) AS t(a))
+TO 'test_files/scratch/parquet_sorted_statistics/cast_bounds/2.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE cast_bounds (a INT)
+STORED AS PARQUET
+WITH ORDER (a ASC)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/cast_bounds';
+
+query TT
+EXPLAIN SELECT a FROM cast_bounds ORDER BY a ASC;
+----
+logical_plan
+01)Sort: cast_bounds.a ASC NULLS LAST
+02)--TableScan: cast_bounds projection=[a]
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/cast_bounds/1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/cast_bounds/2.parquet]]}, projection=[a], file_type=parquet, sort_order_for_reorder=[a@0 ASC NULLS LAST]
+
+query I
+SELECT a FROM cast_bounds ORDER BY a ASC;
+----
+1
+2
+3
+100
+200
+
+statement ok
+DROP TABLE cast_bounds;
+
+statement ok
+DROP TABLE nulls_last_bad;
+
+statement ok
+DROP TABLE nulls_last_ok;
+
+statement ok
+DROP TABLE nulls_first_bad;
+
+statement ok
+DROP TABLE nulls_first_ok;
+
 # Config reset
 
 # The SLT runner sets `target_partitions` to 4 instead of using the default, so

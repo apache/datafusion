@@ -43,7 +43,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
 };
 use datafusion_physical_expr::{Distribution, Partitioning, PhysicalExpr};
-use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
+use datafusion_physical_expr::expressions::{col, is_not_null, BinaryExpr, Column, NotExpr};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -356,6 +356,150 @@ async fn test_do_not_remove_sort_with_limit() -> Result<()> {
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
     ");
     // We should keep the bottom `SortExec`.
+    Ok(())
+}
+
+#[test]
+fn test_do_not_remove_sort_with_limit_after_projection() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec(Arc::clone(&schema));
+    let sort = sort_exec([sort_expr("non_nullable_col", &schema)].into(), source);
+    // Dropping the sort key hides the output ordering, but preserves the row
+    // sequence that determines which rows a limit skips or returns.
+    let projection = projection_exec(
+        vec![(col("nullable_col", &schema)?, "nullable_col".to_string())],
+        sort,
+    )?;
+    assert!(projection.output_ordering().is_none());
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 1;
+    let filter = filter_exec(
+        is_not_null(col("nullable_col", &projection.schema())?)?,
+        Arc::clone(&projection),
+    );
+    for input in [projection, filter] {
+        for plan in [
+            global_limit_exec(Arc::clone(&input), 1, None),
+            global_limit_exec(Arc::clone(&input), 1, Some(1)),
+            global_limit_exec(Arc::clone(&input), 0, Some(1)),
+            local_limit_exec(input, 1),
+        ] {
+            let optimized =
+                EnsureRequirements::new().optimize(Arc::clone(&plan), &config)?;
+            let optimized = SanityCheckPlan::new().optimize(optimized, &config)?;
+            assert_eq!(get_plan_string(&optimized), get_plan_string(&plan));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn test_required_sort_after_projection() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec(Arc::clone(&schema));
+    let sort = sort_exec([sort_expr("non_nullable_col", &schema)].into(), source);
+    let projection = projection_exec(
+        vec![(col("nullable_col", &schema)?, "nullable_col".to_string())],
+        sort,
+    )?;
+    let filter = filter_exec(
+        is_not_null(col("nullable_col", &projection.schema())?)?,
+        projection,
+    );
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 1;
+
+    for with_limit in [false, true] {
+        let input = if with_limit {
+            global_limit_exec(Arc::clone(&filter), 1, None)
+        } else {
+            Arc::clone(&filter)
+        };
+        let window = bounded_window_exec(
+            "nullable_col",
+            [sort_expr("nullable_col", &input.schema())],
+            input,
+        );
+        let optimized = EnsureRequirements::new().optimize(window, &config)?;
+        let optimized = SanityCheckPlan::new().optimize(optimized, &config)?;
+        let twice =
+            EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
+        assert_eq!(get_plan_string(&twice), get_plan_string(&optimized));
+
+        if with_limit {
+            // The window needs its own sort, but OFFSET still depends on the
+            // hidden sort to select rows.
+            assert_snapshot!(displayable(optimized.as_ref()).indent(true), @r#"
+            BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+                GlobalLimitExec: skip=1, fetch=None
+                  FilterExec: nullable_col@0 IS NOT NULL
+                    ProjectionExec: expr=[nullable_col@0 as nullable_col]
+                      SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]
+                        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+            "#);
+        } else {
+            // Without a limit, the window's ordering supersedes the hidden sort.
+            assert_snapshot!(displayable(optimized.as_ref()).indent(true), @r#"
+            BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+                FilterExec: nullable_col@0 IS NOT NULL
+                  ProjectionExec: expr=[nullable_col@0 as nullable_col]
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+            "#);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_do_not_remove_sort_below_fetch_after_projection() -> Result<()> {
+    let batch =
+        record_batch!(("a", Int32, [30, 10, 20, 40]), ("b", Int32, [2, 4, 1, 3]))?;
+    let schema = batch.schema();
+    let source = Arc::new(DataSourceExec::new(Arc::new(
+        datafusion::datasource::memory::MemorySourceConfig::try_new(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?,
+    ))) as Arc<dyn ExecutionPlan>;
+    let sort = sort_exec([sort_expr("b", &schema)].into(), source);
+    let filter = filter_exec(is_not_null(col("a", &schema)?)?, sort)
+        .with_fetch(Some(2))
+        .unwrap();
+    let projection =
+        projection_exec(vec![(col("a", &schema)?, "a".to_string())], filter)?;
+    assert!(projection.output_ordering().is_none());
+
+    // The window needs a new ordering, but the filter's embedded limit still
+    // depends on the hidden sort to select a=20 and a=30.
+    let window =
+        bounded_window_exec("a", [sort_expr("a", &projection.schema())], projection);
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 1;
+    let optimized = EnsureRequirements::new().optimize(window, &config)?;
+    let optimized = SanityCheckPlan::new().optimize(optimized, &config)?;
+    let twice = EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
+    assert_eq!(get_plan_string(&twice), get_plan_string(&optimized));
+
+    for plan in [optimized, twice] {
+        let results =
+            datafusion_physical_plan::collect(plan, Arc::new(TaskContext::default()))
+                .await?;
+        datafusion_common::assert_batches_eq!(
+            [
+                "+----+-------+",
+                "| a  | count |",
+                "+----+-------+",
+                "| 20 | 1     |",
+                "| 30 | 2     |",
+                "+----+-------+",
+            ],
+            &results
+        );
+    }
     Ok(())
 }
 
@@ -2360,14 +2504,12 @@ fn test_spm_fetch_preserves_ordering_through_child_rewrite() -> Result<()> {
         .downcast_ref::<LocalLimitExec>()
         .expect("SPM fetch should become a local limit");
     assert_eq!(limit.fetch(), 100);
-    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
 
     let config = ConfigOptions::new();
     let optimized = ProjectionPushdown::new().optimize(optimized, &config)?;
     let limit = optimized
         .downcast_ref::<LocalLimitExec>()
         .expect("projection rewrite should retain the local limit");
-    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
     assert!(limit.input().is::<DataSourceExec>());
 
     let optimized = LimitPushdown::new().optimize(optimized, &config)?;
@@ -2379,7 +2521,7 @@ fn test_spm_fetch_preserves_ordering_through_child_rewrite() -> Result<()> {
         .downcast_ref::<FileScanConfig>()
         .expect("parquet scan should use FileScanConfig");
     assert_eq!(config.limit, Some(100));
-    assert!(config.preserve_order);
+    assert!(config.preserves_file_order());
 
     Ok(())
 }

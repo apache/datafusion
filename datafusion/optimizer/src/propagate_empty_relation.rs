@@ -210,11 +210,21 @@ impl OptimizerRule for PropagateEmptyRelation {
                     if child.schema().eq(plan.schema()) {
                         Ok(Transformed::yes(child))
                     } else {
+                        // The union takes its field names from its first
+                        // input, which may be gone. Map the remaining
+                        // input's columns by position.
+                        let exprs = child
+                            .schema()
+                            .columns()
+                            .into_iter()
+                            .zip(plan.schema().iter())
+                            .map(|(col, (qualifier, field))| {
+                                Expr::Column(col)
+                                    .alias_qualified(qualifier.cloned(), field.name())
+                            })
+                            .collect::<Vec<_>>();
                         Ok(Transformed::yes(LogicalPlan::Projection(
-                            Projection::new_from_schema(
-                                Arc::new(child),
-                                Arc::clone(plan.schema()),
-                            ),
+                            Projection::try_new(exprs, Arc::new(child))?,
                         )))
                     }
                 } else {
@@ -439,7 +449,8 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "Projection: a, b, c\n  TableScan: test";
+        let expected =
+            "Projection: test.a AS a, test.b AS b, test.c AS c\n  TableScan: test";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -529,7 +540,34 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "Projection: a, b, c\n  TableScan: test";
+        let expected =
+            "Projection: test.a AS a, test.b AS b, test.c AS c\n  TableScan: test";
+        assert_together_optimized_plan(plan, expected, true)
+    }
+
+    #[test]
+    fn propagate_union_remaining_input_with_other_names() -> Result<()> {
+        // Union
+        //  Filter: false
+        //    TableScan: test
+        //  Projection: test2.a AS x, test2.b AS y, test2.c AS z
+        //    TableScan: test2
+        let left = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(lit(false))?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
+            .project(vec![
+                col("a").alias("x"),
+                col("b").alias("y"),
+                col("c").alias("z"),
+            ])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
+
+        let expected = "Projection: x AS a, y AS b, z AS c\
+        \n  Projection: test2.a AS x, test2.b AS y, test2.c AS z\
+        \n    TableScan: test2";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -813,7 +851,7 @@ mod tests {
             .union(three)?
             .build()?;
 
-        let expected = "Projection: a, b, c\
+        let expected = "Projection: test.a AS a, test.b AS b, test.c AS c\
         \n  TableScan: test";
 
         assert_together_optimized_plan(plan, expected, true)

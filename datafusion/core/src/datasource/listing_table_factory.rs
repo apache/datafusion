@@ -205,7 +205,7 @@ impl ListingTableFactory {
             // exclude partition columns to support creating partitioned external table
             // with a specified column definition like
             // `create external table a(c0 int, c1 int) stored as csv partitioned by (c1)...`
-            let mut project_idx = Vec::new();
+            let mut project_idx = Vec::with_capacity(schema.fields().len());
             for i in 0..schema.fields().len() {
                 if !cmd.table_partition_cols.contains(schema.field(i).name()) {
                     project_idx.push(i);

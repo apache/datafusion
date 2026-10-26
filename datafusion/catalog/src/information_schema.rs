@@ -44,6 +44,7 @@ use datafusion_expr::{TableType, Volatility};
 use datafusion_physical_plan::SendableRecordBatchStream;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::streaming::PartitionStream;
+use datafusion_session::CatalogProvider;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
@@ -81,10 +82,58 @@ pub struct InformationSchemaProvider {
 }
 
 impl InformationSchemaProvider {
+    /// Creates a new [`InformationSchemaProvider`] for the provided `catalog`
+    pub fn new_from_catalog(
+        catalog_name: String,
+        catalog: Arc<dyn CatalogProvider>,
+    ) -> Self {
+        #[derive(Debug)]
+        struct SingleCatalogList {
+            catalog_name: String,
+            catalog: Arc<dyn CatalogProvider>,
+        }
+
+        impl CatalogProviderList for SingleCatalogList {
+            fn register_catalog(
+                &self,
+                _: String,
+                _: Arc<dyn CatalogProvider>,
+            ) -> Option<Arc<dyn CatalogProvider>> {
+                None
+            }
+
+            fn catalog_names(&self) -> Vec<String> {
+                vec![self.catalog_name.clone()]
+            }
+
+            fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+                if name == self.catalog_name {
+                    Some(Arc::clone(&self.catalog))
+                } else {
+                    None
+                }
+            }
+        }
+
+        let catalog_list = Arc::new(SingleCatalogList {
+            catalog_name,
+            catalog,
+        });
+
+        Self {
+            config: InformationSchemaConfig {
+                system_catalog_name: None,
+                catalog_list,
+                table_functions: HashMap::new(),
+            },
+        }
+    }
+
     /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
     pub fn new(catalog_list: Arc<dyn CatalogProviderList>) -> Self {
         Self {
             config: InformationSchemaConfig {
+                system_catalog_name: None,
                 catalog_list,
                 table_functions: HashMap::new(),
             },
@@ -100,10 +149,16 @@ impl InformationSchemaProvider {
         self.config.table_functions = table_functions;
         self
     }
+
+    pub fn with_system_catalog(mut self, catalog_name: String) -> Self {
+        self.config.system_catalog_name = Some(catalog_name);
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
 struct InformationSchemaConfig {
+    system_catalog_name: Option<String>,
     catalog_list: Arc<dyn CatalogProviderList>,
     table_functions: HashMap<String, Arc<TableFunction>>,
 }
@@ -115,9 +170,10 @@ impl InformationSchemaConfig {
         builder: &mut InformationSchemaTablesBuilder,
     ) -> Result<(), DataFusionError> {
         // create a mem table with the names of tables
+        let catalog_names = self.catalog_list.catalog_names();
 
-        for catalog_name in self.catalog_list.catalog_names() {
-            let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
+        for catalog_name in &catalog_names {
+            let catalog = self.catalog_list.catalog(catalog_name).unwrap();
 
             for schema_name in catalog.schema_names() {
                 if schema_name != INFORMATION_SCHEMA {
@@ -128,7 +184,7 @@ impl InformationSchemaConfig {
                                 schema.table_type(&table_name).await?
                             {
                                 builder.add_table(
-                                    &catalog_name,
+                                    catalog_name,
                                     &schema_name,
                                     &table_name,
                                     table_type,
@@ -142,7 +198,20 @@ impl InformationSchemaConfig {
             // Add a final list for the information schema tables themselves
             for table_name in INFORMATION_SCHEMA_TABLES {
                 builder.add_table(
-                    &catalog_name,
+                    catalog_name,
+                    INFORMATION_SCHEMA,
+                    table_name,
+                    TableType::View,
+                );
+            }
+        }
+
+        if let Some(system_catalog_name) = &self.system_catalog_name
+            && !catalog_names.contains(system_catalog_name)
+        {
+            for table_name in INFORMATION_SCHEMA_TABLES {
+                builder.add_table(
+                    system_catalog_name,
                     INFORMATION_SCHEMA,
                     table_name,
                     TableType::View,
@@ -179,21 +248,37 @@ impl InformationSchemaConfig {
                 if schema_name != INFORMATION_SCHEMA {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
-                        for table_name in schema.table_names() {
-                            if let Some(table) = schema.table(&table_name).await? {
-                                builder.add_view(
-                                    &catalog_name,
-                                    &schema_name,
-                                    &table_name,
-                                    table.get_table_definition(),
-                                )
-                            }
-                        }
+                        Self::add_views(
+                            builder,
+                            &catalog_name,
+                            &schema_name,
+                            schema.as_ref(),
+                        )
+                        .await?;
                     }
                 }
             }
         }
 
+        Ok(())
+    }
+
+    async fn add_views(
+        builder: &mut InformationSchemaViewBuilder,
+        catalog_name: &str,
+        schema_name: &str,
+        schema: &dyn SchemaProvider,
+    ) -> Result<(), DataFusionError> {
+        for table_name in schema.table_names() {
+            if let Some(table) = schema.table(&table_name).await? {
+                builder.add_view(
+                    catalog_name,
+                    schema_name,
+                    &table_name,
+                    table.get_table_definition(),
+                )
+            }
+        }
         Ok(())
     }
 
@@ -209,26 +294,41 @@ impl InformationSchemaConfig {
                 if schema_name != INFORMATION_SCHEMA {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
-                        for table_name in schema.table_names() {
-                            if let Some(table) = schema.table(&table_name).await? {
-                                for (field_position, field) in
-                                    table.schema().fields().iter().enumerate()
-                                {
-                                    builder.add_column(
-                                        &catalog_name,
-                                        &schema_name,
-                                        &table_name,
-                                        field_position,
-                                        field,
-                                    )
-                                }
-                            }
-                        }
+                        Self::add_columns(
+                            builder,
+                            &catalog_name,
+                            &schema_name,
+                            schema.as_ref(),
+                        )
+                        .await?;
                     }
                 }
             }
         }
 
+        Ok(())
+    }
+
+    async fn add_columns(
+        builder: &mut InformationSchemaColumnsBuilder,
+        catalog_name: &str,
+        schema_name: &str,
+        schema: &dyn SchemaProvider,
+    ) -> Result<(), DataFusionError> {
+        for table_name in schema.table_names() {
+            if let Some(table) = schema.table(&table_name).await? {
+                for (field_position, field) in table.schema().fields().iter().enumerate()
+                {
+                    builder.add_column(
+                        catalog_name,
+                        schema_name,
+                        &table_name,
+                        field_position,
+                        field,
+                    )
+                }
+            }
+        }
         Ok(())
     }
 
@@ -273,8 +373,8 @@ impl InformationSchemaConfig {
                     Self::is_deterministic(udf.signature()),
                     return_type.as_ref(),
                     "SCALAR",
-                    udf.documentation().map(|d| d.description.to_string()),
-                    udf.documentation().map(|d| d.syntax_example.to_string()),
+                    udf.documentation().map(|d| d.description.as_str()),
+                    udf.documentation().map(|d| d.syntax_example.as_str()),
                 )
             }
         }
@@ -293,8 +393,8 @@ impl InformationSchemaConfig {
                     Self::is_deterministic(udaf.signature()),
                     return_type.as_ref(),
                     "AGGREGATE",
-                    udaf.documentation().map(|d| d.description.to_string()),
-                    udaf.documentation().map(|d| d.syntax_example.to_string()),
+                    udaf.documentation().map(|d| d.description.as_str()),
+                    udaf.documentation().map(|d| d.syntax_example.as_str()),
                 )
             }
         }
@@ -313,8 +413,8 @@ impl InformationSchemaConfig {
                     Self::is_deterministic(udwf.signature()),
                     return_type.as_ref(),
                     "WINDOW",
-                    udwf.documentation().map(|d| d.description.to_string()),
-                    udwf.documentation().map(|d| d.syntax_example.to_string()),
+                    udwf.documentation().map(|d| d.description.as_str()),
+                    udwf.documentation().map(|d| d.syntax_example.as_str()),
                 )
             }
         }
@@ -393,12 +493,12 @@ impl InformationSchemaConfig {
         };
 
         for (func_name, udf) in udfs {
-            let args = udf.documentation().and_then(|d| d.arguments.clone());
+            let args = udf.documentation().and_then(|d| d.arguments.as_ref());
             let combinations = get_udf_args_and_return_types(udf)?;
             for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
                 add_parameters(
                     func_name,
-                    args.as_ref(),
+                    args,
                     arg_types,
                     return_type,
                     Self::is_variadic(udf.signature()),
@@ -408,12 +508,12 @@ impl InformationSchemaConfig {
         }
 
         for (func_name, udaf) in udafs {
-            let args = udaf.documentation().and_then(|d| d.arguments.clone());
+            let args = udaf.documentation().and_then(|d| d.arguments.as_ref());
             let combinations = get_udaf_args_and_return_types(udaf)?;
             for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
                 add_parameters(
                     func_name,
-                    args.as_ref(),
+                    args,
                     arg_types,
                     return_type,
                     Self::is_variadic(udaf.signature()),
@@ -423,12 +523,12 @@ impl InformationSchemaConfig {
         }
 
         for (func_name, udwf) in udwfs {
-            let args = udwf.documentation().and_then(|d| d.arguments.clone());
+            let args = udwf.documentation().and_then(|d| d.arguments.as_ref());
             let combinations = get_udwf_args_and_return_types(udwf)?;
             for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
                 add_parameters(
                     func_name,
-                    args.as_ref(),
+                    args,
                     arg_types,
                     return_type,
                     Self::is_variadic(udwf.signature()),
@@ -498,8 +598,11 @@ fn get_args_and_return_types(
             let return_types = arg_fields
                 .into_iter()
                 .multi_cartesian_product()
-                .filter_map(|arg_fields| return_field(&arg_fields).ok())
-                .map(|f| Some(remove_native_type_prefix(&f.data_type().into())))
+                .filter_map(|arg_fields| {
+                    return_field(&arg_fields)
+                        .ok()
+                        .map(|f| Some(remove_native_type_prefix(&f.data_type().into())))
+                })
                 .collect::<BTreeSet<_>>();
             let return_types = if return_types.is_empty() {
                 // Indicate `None` if the return type cannot be represented from a signature,
@@ -559,6 +662,24 @@ fn remove_native_type_prefix(native_type: &NativeType) -> String {
 #[async_trait]
 impl SchemaProvider for InformationSchemaProvider {
     fn table_names(&self) -> Vec<String> {
+        self.config.table_names()
+    }
+
+    async fn table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+        self.config.get_table(name)
+    }
+
+    fn table_exist(&self, name: &str) -> bool {
+        self.config.table_exist(name)
+    }
+}
+
+#[async_trait]
+impl SchemaProvider for InformationSchemaConfig {
+    fn table_names(&self) -> Vec<String> {
         INFORMATION_SCHEMA_TABLES
             .iter()
             .map(|t| (*t).to_string())
@@ -569,7 +690,20 @@ impl SchemaProvider for InformationSchemaProvider {
         &self,
         name: &str,
     ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
-        let config = self.config.clone();
+        self.get_table(name)
+    }
+
+    fn table_exist(&self, name: &str) -> bool {
+        INFORMATION_SCHEMA_TABLES.contains(&name.to_ascii_lowercase().as_str())
+    }
+}
+
+impl InformationSchemaConfig {
+    fn get_table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+        let config = self.clone();
         let table: Arc<dyn PartitionStream> = match name.to_ascii_lowercase().as_str() {
             TABLES => Arc::new(InformationSchemaTables::new(config)),
             COLUMNS => Arc::new(InformationSchemaColumns::new(config)),
@@ -584,10 +718,6 @@ impl SchemaProvider for InformationSchemaProvider {
         Ok(Some(Arc::new(
             StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
         )))
-    }
-
-    fn table_exist(&self, name: &str) -> bool {
-        INFORMATION_SCHEMA_TABLES.contains(&name.to_ascii_lowercase().as_str())
     }
 }
 
@@ -1550,6 +1680,7 @@ mod tests {
     #[tokio::test]
     async fn make_tables_uses_table_type() {
         let config = InformationSchemaConfig {
+            system_catalog_name: None,
             catalog_list: Arc::new(Fixture),
             table_functions: HashMap::new(),
         };

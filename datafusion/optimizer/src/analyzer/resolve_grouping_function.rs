@@ -84,9 +84,9 @@ fn replace_grouping_exprs(
     let group_expr_to_bitmap_index = group_expr_to_bitmap_index(&group_expr)?;
     let columns = schema.columns();
     let mut new_agg_expr = Vec::new();
-    let mut projection_exprs = Vec::new();
     let grouping_id_len = usize::from(is_grouping_set);
     let group_expr_len = columns.len() - aggr_expr.len() - grouping_id_len;
+    let mut projection_exprs = Vec::with_capacity(group_expr_len + aggr_expr.len());
     projection_exprs.extend(
         columns
             .iter()
