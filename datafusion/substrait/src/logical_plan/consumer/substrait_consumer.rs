@@ -20,7 +20,7 @@ use super::{
     from_field_reference, from_filter_rel, from_if_then, from_join_rel, from_literal,
     from_nested, from_project_rel, from_read_rel, from_scalar_function, from_set_rel,
     from_singular_or_list, from_sort_rel, from_subquery, from_substrait_rel,
-    from_substrait_rex, from_window_function,
+    from_substrait_rex, from_switch, from_window_function,
 };
 use crate::extensions::Extensions;
 use crate::logical_plan::consumer::{
@@ -342,10 +342,10 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 
     async fn consume_switch(
         &self,
-        _expr: &SwitchExpression,
-        _input_schema: &DFSchema,
+        expr: &SwitchExpression,
+        input_schema: &DFSchema,
     ) -> datafusion::common::Result<Expr> {
-        not_impl_err!("Switch expression not supported")
+        from_switch(self, expr, input_schema).await
     }
 
     async fn consume_singular_or_list(

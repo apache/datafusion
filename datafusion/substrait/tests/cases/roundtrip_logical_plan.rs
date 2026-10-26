@@ -518,6 +518,30 @@ async fn aggregate_multiple_keys() -> Result<()> {
     roundtrip("SELECT a, c, avg(b) FROM data GROUP BY a, c").await
 }
 
+/// The index-to-`__grouping_id` map is a `SwitchExpression`, which matches
+/// literals without naming a function, so exporting a grouping set aggregate
+/// declares nothing of its own. Checked on the plan rather than through a round
+/// trip, because the declarations are what a different consumer has to resolve:
+/// DataFusion does not register a URN for them yet (#11545), so a plan that
+/// needed one here would be rejected by a consumer that follows the spec.
+#[tokio::test]
+async fn aggregate_grouping_sets_declare_no_functions() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT a, c FROM data GROUP BY GROUPING SETS ((a), (c))")
+        .await?
+        .into_optimized_plan()?;
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert!(
+        proto.extensions.is_empty(),
+        "expected no extension declarations, got {:?}",
+        proto.extensions
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn aggregate_grouping_sets() -> Result<()> {
     let ctx = create_context().await?;

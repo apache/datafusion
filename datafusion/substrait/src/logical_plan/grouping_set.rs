@@ -157,29 +157,33 @@ pub(crate) fn grouping_set_columns(
     grouping_set_to_exprlist(group_exprs)
 }
 
-/// `CASE WHEN <index> = 0 THEN ids[0] ... ELSE ids[last] END`, mapping the
-/// grouping set index to DataFusion's `__grouping_id`.
-pub(crate) fn grouping_id_from_index(
-    index: &Expr,
+/// The arms of `SWITCH <index> WHEN 0 THEN ids[0] ... ELSE ids[last]`, mapping
+/// the grouping set index to DataFusion's `__grouping_id`.
+///
+/// Returned as values rather than as an [`Expr`] because the producer writes
+/// them straight into Substrait's `SwitchExpression`, which matches literals
+/// without naming a comparison function. Going through a `CASE` would make the
+/// export declare an `equal` it does not otherwise need, and DataFusion does not
+/// yet register a URN for the functions it declares (#11545), so that lone
+/// declaration is enough to have the plan rejected by a strict consumer.
+pub(crate) fn grouping_id_switch_arms(
     grouping_id_type: &DataType,
     ids: &[u64],
-) -> datafusion::common::Result<Expr> {
-    let ids = ids
-        .iter()
-        .map(|id| grouping_id_literal(*id, grouping_id_type))
-        .collect::<datafusion::common::Result<Vec<_>>>()?;
+) -> datafusion::common::Result<(Vec<(i32, ScalarValue)>, ScalarValue)> {
     let Some((last, rest)) = ids.split_last() else {
         return internal_err!("Grouping set aggregate has no grouping sets");
     };
-    case_over(
-        rest.iter()
-            .enumerate()
-            .map(|(position, id)| {
-                Ok((index.clone().eq(lit(index_literal(position)?)), id.clone()))
-            })
-            .collect::<datafusion::common::Result<Vec<_>>>()?,
-        last.clone(),
-    )
+    let arms = rest
+        .iter()
+        .enumerate()
+        .map(|(position, id)| {
+            Ok((
+                index_literal(position)?,
+                grouping_id_scalar(*id, grouping_id_type)?,
+            ))
+        })
+        .collect::<datafusion::common::Result<Vec<_>>>()?;
+    Ok((arms, grouping_id_scalar(*last, grouping_id_type)?))
 }
 
 /// `CASE WHEN <grouping_id> = ids[0] THEN 0 ... ELSE last END`, mapping
@@ -203,15 +207,15 @@ pub(crate) fn index_from_grouping_id(
     case_over(when_then, lit(index_literal(rest.len())?))
 }
 
-/// The `CASE` both maps are written as. The last arm is the `ELSE`: the values
-/// are exhaustive, and an `ELSE` keeps the result non-nullable, which is what
-/// Substrait requires of the index and DataFusion of `__grouping_id`.
+/// The `CASE` the map is written as. The last arm is the `ELSE`: the values are
+/// exhaustive, and an `ELSE` keeps the result non-nullable, which is what
+/// Substrait requires of the index.
 fn case_over(
     when_then: Vec<(Expr, Expr)>,
     else_expr: Expr,
 ) -> datafusion::common::Result<Expr> {
     if when_then.is_empty() {
-        // A single grouping set carries no index column, so both callers stop
+        // A single grouping set carries no index column, so the caller stops
         // before reaching this.
         return Ok(else_expr);
     }
@@ -237,6 +241,14 @@ fn grouping_id_literal(
     id: u64,
     grouping_id_type: &DataType,
 ) -> datafusion::common::Result<Expr> {
+    Ok(lit(grouping_id_scalar(id, grouping_id_type)?))
+}
+
+/// The value behind [`grouping_id_literal`].
+fn grouping_id_scalar(
+    id: u64,
+    grouping_id_type: &DataType,
+) -> datafusion::common::Result<ScalarValue> {
     let value = match grouping_id_type {
         DataType::UInt8 => ScalarValue::UInt8(Some(id as u8)),
         DataType::UInt16 => ScalarValue::UInt16(Some(id as u16)),
@@ -249,7 +261,7 @@ fn grouping_id_literal(
             );
         }
     };
-    Ok(lit(value))
+    Ok(value)
 }
 
 /// The column DataFusion's aggregate schema holds `__grouping_id` in.

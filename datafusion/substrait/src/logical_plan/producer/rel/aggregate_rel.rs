@@ -16,19 +16,25 @@
 // under the License.
 
 use crate::logical_plan::grouping_set::{
-    grouping_id_column, grouping_id_from_index, grouping_set_columns, grouping_set_ids,
+    grouping_id_column, grouping_id_switch_arms, grouping_set_columns, grouping_set_ids,
     unique_grouping_set_index_name,
 };
 use crate::logical_plan::producer::{
     SubstraitProducer, from_aggregate_function, substrait_field_ref,
+    to_substrait_literal, to_substrait_literal_expr,
 };
 use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion::common::{Column, DFSchema, DFSchemaRef, internal_err, not_impl_err};
+use datafusion::common::{
+    Column, DFSchema, DFSchemaRef, ScalarValue, internal_err, not_impl_err,
+};
 use datafusion::logical_expr::expr::Alias;
 use datafusion::logical_expr::utils::powerset;
 use datafusion::logical_expr::{Aggregate, Distinct, Expr, GroupingSet};
 use std::sync::Arc;
 use substrait::proto::aggregate_rel::{Grouping, Measure};
+use substrait::proto::expression::{
+    RexType, SwitchExpression, switch_expression::IfValue,
+};
 use substrait::proto::rel::RelType;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::{
@@ -114,11 +120,33 @@ fn grouping_set_projection(
         .collect();
     let substrait_output =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
+    // Substrait matches a `SwitchExpression` against literals on its own, so
+    // this carries no function reference. A `CASE` would be written as `equal`
+    // comparisons instead, and that declaration alone is enough to have the
+    // plan rejected by a consumer that resolves extension URNs, which
+    // DataFusion does not yet emit (#11545).
     let index = Expr::Column(Column::from_name(index_name.as_str()));
-    let expression = producer.handle_expr(
-        &grouping_id_from_index(&index, grouping_id_type, &ids)?,
-        &Arc::new(substrait_output),
-    )?;
+    let index = producer.handle_expr(&index, &Arc::new(substrait_output))?;
+    let (arms, else_id) = grouping_id_switch_arms(grouping_id_type, &ids)?;
+    let ifs = arms
+        .into_iter()
+        .map(|(position, id)| {
+            Ok(IfValue {
+                r#if: Some(to_substrait_literal(
+                    producer,
+                    &ScalarValue::Int32(Some(position)),
+                )?),
+                then: Some(to_substrait_literal_expr(producer, &id)?),
+            })
+        })
+        .collect::<datafusion::common::Result<Vec<_>>>()?;
+    let expression = Expression {
+        rex_type: Some(RexType::SwitchExpression(Box::new(SwitchExpression {
+            r#match: Some(Box::new(index)),
+            ifs,
+            r#else: Some(Box::new(to_substrait_literal_expr(producer, &else_id)?)),
+        }))),
+    };
 
     // A Substrait project emits its input's fields followed by its
     // expressions, so the map sits one past the aggregate's own output.

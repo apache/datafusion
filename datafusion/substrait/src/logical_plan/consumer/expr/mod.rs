@@ -26,6 +26,7 @@ mod nested;
 mod scalar_function;
 mod singular_or_list;
 mod subquery;
+mod switch;
 mod window_function;
 
 pub use aggregate_function::*;
@@ -39,6 +40,7 @@ pub use nested::*;
 pub use scalar_function::*;
 pub use singular_or_list::*;
 pub use subquery::*;
+pub use switch::*;
 pub use window_function::*;
 
 use crate::extensions::Extensions;
