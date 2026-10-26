@@ -940,6 +940,163 @@ B 7 87.771428571429
 C 7 288.228571428571
 
 ##########
+# TEST 18: File-statistics pruning preserves partition-value groups
+# Both sides start with values A-D and split points [(B), (C)]. Pruning B from
+# either side must leave an empty middle group without adding a repartition.
+##########
+
+query I
+COPY (SELECT CAST(10 AS BIGINT) AS value)
+TO 'test_files/scratch/preserve_file_partitioning/pruning_fact/f_dkey=A/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT CAST(20 AS BIGINT) AS value)
+TO 'test_files/scratch/preserve_file_partitioning/pruning_fact/f_dkey=B/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT CAST(30 AS BIGINT) AS value)
+TO 'test_files/scratch/preserve_file_partitioning/pruning_fact/f_dkey=C/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT CAST(40 AS BIGINT) AS value)
+TO 'test_files/scratch/preserve_file_partitioning/pruning_fact/f_dkey=D/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT 'log' AS service)
+TO 'test_files/scratch/preserve_file_partitioning/pruning_dim/d_dkey=A/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT 'trace' AS service)
+TO 'test_files/scratch/preserve_file_partitioning/pruning_dim/d_dkey=B/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT 'log' AS service)
+TO 'test_files/scratch/preserve_file_partitioning/pruning_dim/d_dkey=C/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT 'log' AS service)
+TO 'test_files/scratch/preserve_file_partitioning/pruning_dim/d_dkey=D/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE pruning_fact (value BIGINT)
+STORED AS PARQUET
+PARTITIONED BY (f_dkey STRING)
+LOCATION 'test_files/scratch/preserve_file_partitioning/pruning_fact/';
+
+statement ok
+CREATE EXTERNAL TABLE pruning_dim (service STRING)
+STORED AS PARQUET
+PARTITIONED BY (d_dkey STRING)
+LOCATION 'test_files/scratch/preserve_file_partitioning/pruning_dim/';
+
+statement ok
+set datafusion.execution.target_partitions = 3;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 1;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+# Pruning B from the dimension side keeps [A], [], [C, D].
+query TT
+EXPLAIN SELECT f.f_dkey, f.value
+FROM pruning_fact f
+INNER JOIN pruning_dim d ON f.f_dkey = d.d_dkey
+WHERE d.service = 'log'
+ORDER BY f.f_dkey;
+----
+logical_plan
+01)Sort: f.f_dkey ASC NULLS LAST
+02)--Projection: f.f_dkey, f.value
+03)----Inner Join: f.f_dkey = d.d_dkey
+04)------SubqueryAlias: f
+05)--------TableScan: pruning_fact projection=[value, f_dkey]
+06)------SubqueryAlias: d
+07)--------Projection: pruning_dim.d_dkey
+08)----------Filter: pruning_dim.service = Utf8View("log")
+09)------------TableScan: pruning_dim projection=[service, d_dkey], partial_filters=[pruning_dim.service = Utf8View("log")]
+physical_plan
+01)SortPreservingMergeExec: [f_dkey@0 ASC NULLS LAST]
+02)--SortExec: expr=[f_dkey@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(f_dkey@1, d_dkey@0)], projection=[f_dkey@1, value@0]
+04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_fact/f_dkey=C/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_fact/f_dkey=D/data.parquet]]}, projection=[value, f_dkey], output_partitioning=Range([f_dkey@1 ASC], [(B), (C)], 3), file_type=parquet
+05)------FilterExec: service@0 = log, projection=[d_dkey@1]
+06)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_dim/d_dkey=A/data.parquet], [], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_dim/d_dkey=C/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_dim/d_dkey=D/data.parquet]]}, projection=[service, d_dkey], output_partitioning=Range([d_dkey@1 ASC], [(B), (C)], 3), file_type=parquet, predicate=service@0 = log AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=service_null_count@2 != row_count@3 AND service_min@0 <= log AND log <= service_max@1, required_guarantees=[service in (log)]
+
+query TI rowsort
+SELECT f.f_dkey, f.value
+FROM pruning_fact f
+INNER JOIN pruning_dim d ON f.f_dkey = d.d_dkey
+WHERE d.service = 'log';
+----
+A 10
+C 30
+D 40
+
+# Pruning B from the fact side keeps [A], [], [C, D].
+query TT
+EXPLAIN SELECT f.f_dkey, f.value
+FROM pruning_fact f
+INNER JOIN pruning_dim d ON f.f_dkey = d.d_dkey
+WHERE f.value <> 20
+ORDER BY f.f_dkey;
+----
+logical_plan
+01)Sort: f.f_dkey ASC NULLS LAST
+02)--Projection: f.f_dkey, f.value
+03)----Inner Join: f.f_dkey = d.d_dkey
+04)------SubqueryAlias: f
+05)--------Filter: pruning_fact.value != Int64(20)
+06)----------TableScan: pruning_fact projection=[value, f_dkey], partial_filters=[pruning_fact.value != Int64(20)]
+07)------SubqueryAlias: d
+08)--------TableScan: pruning_dim projection=[d_dkey]
+physical_plan
+01)SortPreservingMergeExec: [f_dkey@0 ASC NULLS LAST]
+02)--SortExec: expr=[f_dkey@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(f_dkey@1, d_dkey@0)], projection=[f_dkey@1, value@0]
+04)------FilterExec: value@0 != 20
+05)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_fact/f_dkey=A/data.parquet], [], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_fact/f_dkey=C/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_fact/f_dkey=D/data.parquet]]}, projection=[value, f_dkey], output_partitioning=Range([f_dkey@1 ASC], [(B), (C)], 3), file_type=parquet, predicate=value@0 != 20, pruning_predicate=value_null_count@2 != row_count@3 AND (value_min@0 != 20 OR 20 != value_max@1), required_guarantees=[value not in (20)]
+06)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_dim/d_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_dim/d_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_dim/d_dkey=C/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/pruning_dim/d_dkey=D/data.parquet]]}, projection=[d_dkey], output_partitioning=Range([d_dkey@0 ASC], [(B), (C)], 3), file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+query TI rowsort
+SELECT f.f_dkey, f.value
+FROM pruning_fact f
+INNER JOIN pruning_dim d ON f.f_dkey = d.d_dkey
+WHERE f.value <> 20;
+----
+A 10
+C 30
+D 40
+
+##########
 # CLEANUP
 ##########
 
@@ -976,3 +1133,9 @@ DROP TABLE dimension_table_skewed;
 
 statement ok
 DROP TABLE high_cardinality_table;
+
+statement ok
+DROP TABLE pruning_fact;
+
+statement ok
+DROP TABLE pruning_dim;

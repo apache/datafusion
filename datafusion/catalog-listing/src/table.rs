@@ -1009,40 +1009,44 @@ impl ListingTable {
         get_files_with_limit(files, file_limit, ctx.config().collect_statistics()).await
     }
 
-    /// Remove only files whose collected statistics prove the filter cannot match.
-    /// This performs no I/O and leaves the normal row filters in place.
-    fn prune_files_by_statistics(
+    /// Build a predicate that can remove files whose collected statistics prove
+    /// the filter cannot match. This performs no I/O and leaves the normal row
+    /// filters in place.
+    fn file_statistics_pruning_predicate(
         &self,
         ctx: &dyn Session,
         filters: &[Expr],
-        files: FileGroup,
-    ) -> FileGroup {
+    ) -> Option<Arc<datafusion_pruning::PruningPredicate>> {
         if !ctx.config().collect_statistics() || self.expr_adapter_factory.is_some() {
-            return files;
+            return None;
         }
         // Custom adapters can change values relative to file statistics, and volatile
         // expressions must not be evaluated while planning.
-        let Some(filter) = filters
+        let filter = filters
             .iter()
             .filter(|f| !f.is_volatile())
             .cloned()
-            .reduce(Expr::and)
-        else {
-            return files;
-        };
+            .reduce(Expr::and)?;
         let Ok(schema) = DFSchema::try_from(self.table_schema.as_ref().clone()) else {
-            return files;
+            return None;
         };
         let Ok(predicate) = ctx.create_physical_expr(filter, &schema) else {
-            return files;
+            return None;
         };
-        let Some(predicate) = PruningPredicateBuilder::new()
+        PruningPredicateBuilder::new()
             .with_file_schema(Arc::clone(&self.table_schema))
             .build(predicate)
-        else {
+    }
+
+    fn prune_files_by_statistics(
+        &self,
+        predicate: Option<&datafusion_pruning::PruningPredicate>,
+        files: FileGroup,
+    ) -> FileGroup {
+        let Some(predicate) = predicate else {
             return files;
         };
-        prune_collected_files(&predicate, &self.file_schema, files)
+        prune_collected_files(predicate, &self.file_schema, files)
     }
 
     async fn list_files_for_regular_scan<'a>(
@@ -1072,7 +1076,7 @@ impl ListingTable {
         let (file_group, inexact_stats) = self
             .collect_files_for_scan(ctx, &store, filters, limit)
             .await?;
-        let file_group = self.prune_files_by_statistics(ctx, data_filters, file_group);
+        let pruning_predicate = self.file_statistics_pruning_predicate(ctx, data_filters);
 
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
         //
@@ -1086,17 +1090,30 @@ impl ListingTable {
                 let (grouped, split_points) = file_group
                     .group_by_partition_values_with_split_points(file_group_count);
                 if grouped.len() >= threshold {
+                    // Preserve the groups and split points derived from all files so
+                    // pruning cannot change the declared range partitioning.
+                    let grouped = grouped
+                        .into_iter()
+                        .map(|group| {
+                            self.prune_files_by_statistics(
+                                pruning_predicate.as_deref(),
+                                group,
+                            )
+                        })
+                        .collect();
                     (grouped, true, split_points)
                 } else {
                     let all_files: Vec<_> =
                         grouped.into_iter().flat_map(|g| g.into_inner()).collect();
-                    (
-                        FileGroup::new(all_files).split_files(file_group_count),
-                        false,
-                        vec![],
-                    )
+                    let file_group = self.prune_files_by_statistics(
+                        pruning_predicate.as_deref(),
+                        FileGroup::new(all_files),
+                    );
+                    (file_group.split_files(file_group_count), false, vec![])
                 }
             } else {
+                let file_group = self
+                    .prune_files_by_statistics(pruning_predicate.as_deref(), file_group);
                 (file_group.split_files(file_group_count), false, vec![])
             };
 
@@ -1517,6 +1534,7 @@ mod tests {
         let result = derive_common_ordering_from_files(&file_groups);
         assert_eq!(result, Some(ordering));
     }
+
     fn prune_test_files(expr: Expr, statistics: Vec<Option<Statistics>>) -> Vec<String> {
         use arrow::datatypes::DataType;
         let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Int64, true)]));
