@@ -21,7 +21,7 @@
 
 use datafusion::prelude::SessionConfig;
 
-use crate::utils;
+use crate::memory_limit_validation::utils;
 
 /// Ensures the planner selected a sort-merge join.
 const SMJ_OPERATOR_NAME: &str = "SortMergeJoinExec";

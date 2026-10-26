@@ -19,7 +19,7 @@
 
 use datafusion::prelude::SessionConfig;
 
-use crate::utils;
+use crate::memory_limit_validation::utils;
 
 #[test]
 fn nlj_no_mem_limit_runner() {

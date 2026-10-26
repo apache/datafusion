@@ -409,9 +409,7 @@ impl StepContext {
                         "-p",
                         "datafusion",
                         "--test",
-                        "fuzz",
-                        "--test",
-                        "memory_limit_validation",
+                        "extended_tests",
                         "--features",
                         "avro,backtrace,extended_tests,parquet_encryption",
                     ])
@@ -731,9 +729,9 @@ mod tests {
         );
     }
 
-    /// The `extended` step runs only the test targets that require the
-    /// `extended_tests` feature. A test gated on the feature with a `cfg` in any
-    /// other target would never run in CI.
+    /// The `extended` step runs only the `extended_tests` test target, which
+    /// requires the `extended_tests` feature. A test gated on the feature with a
+    /// `cfg` in any other target would never run in CI.
     #[test]
     fn extended_tests_feature_only_gates_whole_targets() {
         fn visit(dir: &Path, found: &mut Vec<PathBuf>) {
@@ -757,8 +755,8 @@ mod tests {
         );
         assert!(
             found.is_empty(),
-            "put tests behind `extended_tests` in a test target that requires the \
-             feature (see datafusion/core/Cargo.toml), not behind a `cfg` in {found:?}"
+            "put tests behind `extended_tests` in the `extended_tests` test target \
+             (see datafusion/core/Cargo.toml), not behind a `cfg` in {found:?}"
         );
     }
 
@@ -996,8 +994,7 @@ RUST_BACKTRACE=1 \
 cargo test \
 --profile ci \
 -p datafusion \
---test fuzz \
---test memory_limit_validation \
+--test extended_tests \
 --features avro,backtrace,extended_tests,parquet_encryption
 ")
                 },

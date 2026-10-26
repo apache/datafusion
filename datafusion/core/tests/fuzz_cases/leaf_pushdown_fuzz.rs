@@ -33,7 +33,7 @@
 //! ```text
 //! LEAF_PUSHDOWN_FUZZ_SEED=<seed> LEAF_PUSHDOWN_FUZZ_CASES=1 \
 //!   cargo test --profile ci -p datafusion --features extended_tests \
-//!   --test fuzz -- leaf_pushdown --nocapture
+//!   --test extended_tests -- leaf_pushdown --nocapture
 //! ```
 //!
 //! `LEAF_PUSHDOWN_FUZZ_CASES` also raises the case count of a normal run.

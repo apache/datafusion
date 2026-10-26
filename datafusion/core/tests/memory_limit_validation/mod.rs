@@ -16,18 +16,9 @@
 // under the License.
 
 //! Validates query's actual memory usage is consistent with the specified memory
-//! limit. This target requires the `extended_tests` feature.
-//!
-//! Run with: cargo test -p datafusion --test memory_limit_validation --features extended_tests
+//! limit.
 
 mod nlj_mem_validation;
 mod smj_mem_validation;
 mod sort_mem_validation;
 mod utils;
-
-#[cfg(test)]
-#[ctor::ctor(unsafe)]
-fn init() {
-    // Enable RUST_LOG logging configuration for test
-    let _ = env_logger::try_init();
-}

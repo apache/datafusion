@@ -199,13 +199,8 @@ ignored = ["datafusion-doc", "datafusion-macros", "dashmap"]
 nix = { version = "0.31.3", features = ["fs"] }
 
 [[test]]
-name = "fuzz"
-path = "tests/fuzz.rs"
-required-features = ["extended_tests"]
-
-[[test]]
-name = "memory_limit_validation"
-path = "tests/memory_limit_validation/main.rs"
+name = "extended_tests"
+path = "tests/extended_tests.rs"
 required-features = ["extended_tests"]
 
 [[bin]]
