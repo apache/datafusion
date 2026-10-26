@@ -25,8 +25,8 @@ use datafusion_common::exec_datafusion_err;
 use datafusion_execution::spill_file::SpillFile;
 
 use super::{
-    AsyncIPCStreamWriter, IPCStreamEncoder, IPCStreamWriter, gc_view_arrays,
-    spill_manager::{GetSlicedSize, SpillManager},
+    AsyncIPCStreamWriter, IPCStreamEncoder, IPCStreamWriter, spill_manager::SpillManager,
+    spill_pieces::SpillPieces,
 };
 
 enum InProgressWriter {
@@ -43,6 +43,9 @@ pub struct InProgressSpillFile {
     writer: Option<InProgressWriter>,
     /// Lazily initialized in-progress file, it will be moved out when the `finish` method is invoked
     in_progress_file: Option<Arc<dyn SpillFile>>,
+    /// Upper bound on the in-memory size of each written batch. See
+    /// [`Self::with_max_batch_bytes`].
+    max_batch_bytes: Option<usize>,
 }
 
 impl InProgressSpillFile {
@@ -54,7 +57,27 @@ impl InProgressSpillFile {
             spill_manager,
             in_progress_file: Some(in_progress_file),
             writer: None,
+            max_batch_bytes: None,
         }
+    }
+
+    /// Bounds the in-memory size of each batch written to this file, or `None` for no
+    /// bound.
+    ///
+    /// A batch is bounded by `batch_size` rows, so with wide rows it can be very large in
+    /// bytes. A reader must decode each spilled batch whole, and a merge of spill files
+    /// reserves memory for the largest batch of each file (`max_record_batch_memory`).
+    /// With a bound, a larger batch is split into row ranges of at most this size (best
+    /// effort: one row can be larger), and each range is written as its own IPC message.
+    /// Batches within the bound are written as they are. Row order is kept, but one
+    /// appended batch can come back as several batches when the file is read.
+    ///
+    /// The bound is set on the writer and not on the [`SpillManager`], so a reader that
+    /// expects one batch per append (such as [`crate::spill::spill_pool`]) cannot get a
+    /// bounded file from a shared manager.
+    pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+        self.max_batch_bytes = max_batch_bytes;
+        self
     }
 
     /// Appends a `RecordBatch` to the spill file, initializing the writer if necessary.
@@ -63,7 +86,10 @@ impl InProgressSpillFile {
     /// buffers. When a view array is sliced, it still references the original full buffers,
     /// causing massive spill files without GC (see issue #19414: 820MB → 33MB after GC).
     ///
-    /// Returns the post-GC sliced memory size of the batch for memory accounting.
+    /// Returns the post-GC sliced memory size of the batch for memory accounting. When the
+    /// batch size is bounded and the batch is split (see [`Self::with_max_batch_bytes`]),
+    /// this is the size of the largest piece,
+    /// which is the largest batch a reader of the file decodes.
     ///
     /// # Errors
     /// - Returns an error if the file is not active (has been finalized)
@@ -76,7 +102,7 @@ impl InProgressSpillFile {
             ));
         }
 
-        let gc_batch = gc_view_arrays(batch)?;
+        let pieces = SpillPieces::new(batch, self.max_batch_bytes)?;
 
         if self.writer.is_none() {
             // Use the SpillManager's declared schema rather than the batch's schema.
@@ -97,18 +123,23 @@ impl InProgressSpillFile {
                 self.spill_manager.metrics.spill_file_count.add(1);
             }
         }
+        let mut max_size = 0;
         if let Some(InProgressWriter::Sync(writer)) = &mut self.writer {
-            // The writer calculates how many serialized bytes were emitted
-            let (spilled_rows, delta_bytes) = writer.write(&gc_batch)?;
+            for piece in pieces {
+                let (piece, size) = piece?;
+                // The writer calculates how many serialized bytes were emitted
+                let (spilled_rows, delta_bytes) = writer.write(&piece)?;
 
-            self.spill_manager.metrics.spilled_rows.add(spilled_rows);
-            self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+                self.spill_manager.metrics.spilled_rows.add(spilled_rows);
+                self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+                max_size = max_size.max(size);
+            }
         } else if self.writer.is_some() {
             return Err(exec_datafusion_err!(
                 "Cannot use synchronous append after asynchronous spill writing has started"
             ));
         }
-        gc_batch.get_sliced_size()
+        Ok(max_size)
     }
 
     /// Appends a `RecordBatch` using the asynchronous spill writer.
@@ -117,7 +148,8 @@ impl InProgressSpillFile {
     }
 
     /// Like [`Self::append_batch_async`], but returns both the memory size and the row
-    /// count of the batch written.
+    /// count of the largest batch written. When the batch is split, both describe the
+    /// pieces a reader decodes, not the appended batch.
     pub(crate) async fn append_batch_async_with_stats(
         &mut self,
         batch: &RecordBatch,
@@ -128,7 +160,7 @@ impl InProgressSpillFile {
             ));
         }
 
-        let gc_batch = gc_view_arrays(batch)?;
+        let pieces = SpillPieces::new(batch, self.max_batch_bytes)?;
 
         if self.writer.is_none() {
             let schema = self.spill_manager.schema();
@@ -150,12 +182,18 @@ impl InProgressSpillFile {
             }
         }
 
+        let (mut max_size, mut max_rows) = (0, 0);
         match &mut self.writer {
             Some(InProgressWriter::Async(writer)) => {
-                let (spilled_rows, delta_bytes) = writer.write(&gc_batch).await?;
+                for piece in pieces {
+                    let (piece, size) = piece?;
+                    let (spilled_rows, delta_bytes) = writer.write(&piece).await?;
 
-                self.spill_manager.metrics.spilled_rows.add(spilled_rows);
-                self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+                    self.spill_manager.metrics.spilled_rows.add(spilled_rows);
+                    self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+                    max_size = max_size.max(size);
+                    max_rows = max_rows.max(piece.num_rows());
+                }
             }
             Some(InProgressWriter::Sync(_)) => {
                 return Err(exec_datafusion_err!(
@@ -168,7 +206,7 @@ impl InProgressSpillFile {
                 ));
             }
         }
-        Ok((gc_batch.get_sliced_size()?, gc_batch.num_rows()))
+        Ok((max_size, max_rows))
     }
 
     pub fn flush(&mut self) -> Result<()> {

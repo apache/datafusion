@@ -141,15 +141,19 @@ impl SpillManager {
     }
 
     /// Spill a stream of `RecordBatch`es and return the file, maximum batch memory,
-    /// and maximum batch row count.
+    /// and maximum batch row count. See [`InProgressSpillFile::with_max_batch_bytes`]
+    /// for `max_batch_bytes`.
     pub(crate) async fn spill_record_batch_stream_and_return_max_batch_stats(
         &self,
         stream: &mut SendableRecordBatchStream,
         request_description: &str,
+        max_batch_bytes: Option<usize>,
     ) -> Result<Option<(Arc<dyn SpillFile>, usize, usize)>> {
         use futures::StreamExt;
 
-        let mut in_progress_file = self.create_in_progress_file(request_description)?;
+        let mut in_progress_file = self
+            .create_in_progress_file(request_description)?
+            .with_max_batch_bytes(max_batch_bytes);
 
         let result = async {
             let mut max_record_batch_size = 0;
@@ -457,6 +461,7 @@ mod tests {
             .spill_record_batch_stream_and_return_max_batch_stats(
                 &mut stream,
                 "abort-test",
+                None,
             )
             .await
             .err()

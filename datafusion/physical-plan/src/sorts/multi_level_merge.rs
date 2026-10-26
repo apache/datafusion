@@ -157,6 +157,8 @@ pub(crate) struct MultiLevelMergeBuilder {
     reservation: MemoryReservation,
     /// Workspace retained across retries and intermediate spill passes.
     merge_pool: Option<Arc<MergeMemoryPool>>,
+    /// Bound on the size of each batch written to intermediate spill files.
+    spill_max_batch_bytes: Option<usize>,
     /// Leave memory for the aggregate consuming the merged spill rows.
     reserve_replay_headroom: bool,
     /// Avoid merging more runs than needed before the final replay pass.
@@ -200,11 +202,20 @@ impl MultiLevelMergeBuilder {
             batch_size,
             reservation,
             merge_pool: None,
+            spill_max_batch_bytes: None,
             reserve_replay_headroom: false,
             size_intermediate_merges: false,
             enable_round_robin_tie_breaker,
             fetch,
         }
+    }
+
+    pub(super) fn with_spill_max_batch_bytes(
+        mut self,
+        spill_max_batch_bytes: Option<usize>,
+    ) -> Self {
+        self.spill_max_batch_bytes = spill_max_batch_bytes;
+        self
     }
 
     pub(super) fn with_merge_pool(mut self, pool: Option<Arc<MergeMemoryPool>>) -> Self {
@@ -294,6 +305,7 @@ impl MultiLevelMergeBuilder {
                 .spill_record_batch_stream_and_return_max_batch_stats(
                     &mut stream,
                     "MultiLevelMergeBuilder intermediate spill",
+                    self.spill_max_batch_bytes,
                 )
                 .await?
             else {
@@ -813,6 +825,7 @@ impl MultiLevelMergeBuilder {
             .spill_record_batch_stream_and_return_max_batch_stats(
                 &mut halved,
                 "MultiLevelMergeBuilder split skewed spill",
+                self.spill_max_batch_bytes,
             )
             .await?;
 
@@ -907,11 +920,14 @@ fn split_batch_in_half(batch: RecordBatch) -> Vec<RecordBatch> {
     vec![batch.slice(0, mid), batch.slice(mid, num_rows - mid)]
 }
 
+/// The fewest spill files a merge reads at once.
+pub(super) const MIN_SPILL_MERGE_FAN_IN: usize = 2;
+
 fn effective_spill_merge_fan_in(configured_fan_in: usize) -> usize {
     if configured_fan_in == 0 {
         usize::MAX
     } else {
-        configured_fan_in.max(2)
+        configured_fan_in.max(MIN_SPILL_MERGE_FAN_IN)
     }
 }
 

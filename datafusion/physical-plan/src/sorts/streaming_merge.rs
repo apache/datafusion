@@ -96,6 +96,7 @@ pub struct StreamingMergeBuilder<'a> {
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     merge_pool: Option<Arc<MergeMemoryPool>>,
+    spill_max_batch_bytes: Option<usize>,
     /// Leave memory for the aggregate consuming the merged spill rows.
     reserve_replay_headroom: bool,
     min_spill_batch_rows: Option<usize>,
@@ -158,6 +159,18 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// Bound the size of each batch that a merge of spill files writes to its
+    /// intermediate spill files. See [`InProgressSpillFile::with_max_batch_bytes`].
+    ///
+    /// [`InProgressSpillFile::with_max_batch_bytes`]: crate::spill::in_progress_spill_file::InProgressSpillFile::with_max_batch_bytes
+    pub(super) fn with_spill_max_batch_bytes(
+        mut self,
+        spill_max_batch_bytes: Option<usize>,
+    ) -> Self {
+        self.spill_max_batch_bytes = spill_max_batch_bytes;
+        self
+    }
+
     /// Keep spill workspace until the final merge pass selects its buffer budget.
     pub(crate) fn with_merge_pool(mut self, pool: Arc<MergeMemoryPool>) -> Self {
         self.merge_pool = Some(pool);
@@ -217,6 +230,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             batch_size,
             reservation,
             merge_pool,
+            spill_max_batch_bytes,
             reserve_replay_headroom,
             min_spill_batch_rows,
             fetch,
@@ -260,6 +274,7 @@ impl<'a> StreamingMergeBuilder<'a> {
                 enable_round_robin_tie_breaker,
             )
             .with_merge_pool(merge_pool)
+            .with_spill_max_batch_bytes(spill_max_batch_bytes)
             .with_replay_headroom(reserve_replay_headroom)
             .with_intermediate_merge_sizing(min_spill_batch_rows)
             .create_spillable_merge_stream());
