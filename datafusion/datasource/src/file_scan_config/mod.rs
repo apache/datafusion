@@ -961,7 +961,9 @@ impl DataSource for FileScanConfig {
             Arc::clone(schema),
             self.validated_output_ordering(),
         )
-        .with_constraints(self.constraints.clone());
+        .with_constraints(self.constraints.clone())
+        // Filters only remove rows, so original exact extrema remain valid bounds.
+        .with_column_statistics(&self.statistics.column_statistics);
 
         // Only a filter that the source applies exactly gives valid equivalences.
         // A filter that is used only for pruning lets non-matching rows through.
