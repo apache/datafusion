@@ -20,7 +20,6 @@
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
-mod clustered_partial_oom;
 mod nlj_spill_unmatched;
 mod repartition_mem_limit;
 mod union_nullable_spill;
