@@ -586,7 +586,8 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::Unnest(_)
-            | LogicalPlan::RecursiveQuery(_) => {
+            | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::MaterializedCte(_) => {
                 // This rule handles recursion itself in a `ApplyOrder::TopDown` like
                 // manner. Process uncorrelated subqueries in expressions
                 // (e.g., Expr::ScalarSubquery), then direct children.

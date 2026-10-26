@@ -311,7 +311,7 @@ physical_plan
 01)MaterializedCteExec: name=r
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 03)----RecursiveQueryExec: name=r, is_distinct=false
-04)------ProjectionExec: expr=[CAST(1 AS Int64) as n]
+04)------ProjectionExec: expr=[CAST(1 AS Int64;N) as n]
 05)--------PlaceholderRowExec
 06)------CoalescePartitionsExec
 07)--------ProjectionExec: expr=[n@0 + 1 as n]
