@@ -82,6 +82,67 @@ physical_plan
 03)----CooperativeExec
 04)------CustomDataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
+# The custom node sorts by (a, b), keeps one row, and hides b. Ordering its
+# output by (a, c) must not replace the hidden b tie-breaker that selected c=20.
+query II
+SELECT a, c FROM custom_projected_limit ORDER BY a, c;
+----
+1 20
+
+query TT
+EXPLAIN SELECT a, c FROM custom_projected_limit ORDER BY a, c;
+----
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST, c@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--CustomFilterExec: true, projection=[a@0, c@1], fetch=1
+03)----SortExec: TopK(fetch=2), expr=[a@0 ASC NULLS LAST, b@2 ASC NULLS LAST], preserve_partitioning=[false]
+04)------CooperativeExec
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Refining (a) to (a, b) below the custom OFFSET 1 LIMIT 1 is safe, but its
+# output fetch=1 must not tighten TopK(3) to TopK(1): the offset needs a second row.
+query II
+SELECT a, b FROM custom_offset_limit ORDER BY a, b;
+----
+2 20
+
+query TT
+EXPLAIN SELECT a, b FROM custom_offset_limit ORDER BY a, b;
+----
+physical_plan
+01)CustomGlobalLimitExec: skip=1, fetch=1
+02)--SortExec: TopK(fetch=3), expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----CooperativeExec
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The aggregate's amount ordering can refine the inner TopK's country
+# ordering. Keep one TopK with both keys, preserving its original fetch=3.
+statement ok
+CREATE TABLE sort_pushdown_sales(country VARCHAR, amount INT) AS VALUES
+('B', 20), ('A', 10), ('C', 40), ('A', 30);
+
+query T? rowsort
+SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts
+FROM (SELECT * FROM sort_pushdown_sales ORDER BY country LIMIT 3) AS s
+GROUP BY s.country;
+----
+A [30, 10]
+B [20]
+
+query TT
+EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts
+FROM (SELECT * FROM sort_pushdown_sales ORDER BY country LIMIT 3) AS s
+GROUP BY s.country;
+----
+physical_plan
+01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@1 as amounts]
+02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]], group_clustering_mode=Full
+03)----SortExec: TopK(fetch=3), expr=[country@0 ASC NULLS LAST, amount@1 DESC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE sort_pushdown_sales;
+
 statement ok
 SET datafusion.explain.physical_plan_only = false;
 

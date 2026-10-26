@@ -31,14 +31,15 @@ use datafusion::physical_expr::expressions::{binary, col, lit, negative};
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::limit::LocalLimitExec;
+use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
+use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::test::TestMemoryExec;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
-    ExecutionPlanProperties, PlanProperties, ReplaceChildrenOptions,
+    ExecutionPlanProperties, InputDistributionRequirements, PlanProperties,
+    ReplaceChildrenOptions,
 };
 use datafusion::prelude::SessionContext;
 
@@ -89,6 +90,41 @@ pub(super) fn register_custom_sort_pushdown(ctx: &SessionContext) -> Result<()> 
             .try_with_sort_information(vec![ordering])?,
     );
     ctx.register_table("custom_ordered_input", Arc::new(CustomExec(input)))?;
+
+    // The custom node hides the final sort key while selecting its first row.
+    // Refining its visible ordering must still preserve that hidden key.
+    let batch = record_batch!(
+        ("a", Int32, [1, 1]),
+        ("c", Int32, [10, 20]),
+        ("b", Int32, [2, 1])
+    )?;
+    let schema = batch.schema();
+    let input = TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+    let ordering = [
+        PhysicalSortExpr::new_default(col("a", &schema)?).nulls_last(),
+        PhysicalSortExpr::new_default(col("b", &schema)?).nulls_last(),
+    ]
+    .into();
+    // Keep the selection ordering through earlier sort-removal passes.
+    let input = Arc::new(SortExec::new(ordering, input).with_fetch(Some(2)));
+    let projected_limit = FilterExecBuilder::new(lit(true), input)
+        .apply_projection(Some(vec![0, 1]))?
+        .with_fetch(Some(1))
+        .build()?;
+    ctx.register_table(
+        "custom_projected_limit",
+        Arc::new(CustomExec(Arc::new(projected_limit))),
+    )?;
+
+    // The output fetch excludes the skipped row, so it cannot also bound input.
+    let batch = record_batch!(("a", Int32, [2, 1, 3]), ("b", Int32, [20, 30, 10]))?;
+    let schema = batch.schema();
+    let input = TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+    let ordering =
+        [PhysicalSortExpr::new_default(col("a", &schema)?).nulls_last()].into();
+    let input = Arc::new(SortExec::new(ordering, input).with_fetch(Some(3)));
+    let limit = GlobalLimitExec::new(input, 1, Some(1));
+    ctx.register_table("custom_offset_limit", Arc::new(CustomExec(Arc::new(limit))))?;
     Ok(())
 }
 
@@ -199,6 +235,10 @@ impl ExecutionPlan for CustomExec {
 
     fn maintains_input_order(&self) -> Vec<bool> {
         self.0.maintains_input_order()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        self.0.input_distribution_requirements()
     }
 
     fn fetch(&self) -> Option<usize> {

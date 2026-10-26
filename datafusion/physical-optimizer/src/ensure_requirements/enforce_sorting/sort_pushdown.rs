@@ -69,15 +69,14 @@ impl Default for ParentRequirements {
 
 pub type SortPushDown = PlanContext<ParentRequirements>;
 
-/// Number of input rows `plan` needs from its children in order to produce
-/// the rows its parent will consume.
+/// Input row bound used by the specialized sort-pushdown handlers.
 ///
 /// `parent_fetch` is the fetch a parent imposes on `plan`'s *output*
 /// (`ParentRequirements::fetch`). It bounds `plan.fetch()` directly because
 /// both count output rows, so the effective output fetch is
 /// `min(plan.fetch(), parent_fetch)`.
 ///
-/// The input fetch is that output fetch for every operator except
+/// For these operators, the input fetch is that output fetch except for
 /// [`GlobalLimitExec`], which discards `skip` rows first and therefore needs
 /// `skip` more input rows. `skip` must be added *after* taking the minimum:
 /// `min(fetch + skip, parent_fetch)` would be too small whenever the parent
@@ -374,7 +373,7 @@ fn pushdown_sorts_helper(
                     .unwrap_or(&Distribution::UnspecifiedDistribution),
             );
         }
-    } else if let Some(adjusted) = pushdown_requirement_to_children(
+    } else if let Some(proposal) = pushdown_requirement_to_children(
         &sort_push_down.plan,
         parent_requirement.clone(),
         parent_fetch,
@@ -382,7 +381,6 @@ fn pushdown_sorts_helper(
         // For operators that can take a sort pushdown, continue with updated
         // requirements. If this node already outputs single partition (e.g. SPM),
         // don't push SinglePartition to children.
-        let current_fetch = input_fetch(&sort_push_down.plan, parent_fetch);
         let dists = sort_push_down
             .plan
             .input_distribution_requirements()
@@ -393,11 +391,14 @@ fn pushdown_sorts_helper(
             } else {
                 parent_distribution.clone()
             };
-        for (idx, (child, order)) in
-            sort_push_down.children.iter_mut().zip(adjusted).enumerate()
+        for (idx, (child, order)) in sort_push_down
+            .children
+            .iter_mut()
+            .zip(proposal.child_orderings)
+            .enumerate()
         {
             child.data.ordering_requirement = order;
-            child.data.fetch = current_fetch;
+            child.data.fetch = proposal.child_fetch;
             child.data.distribution_requirement = stronger_distribution(
                 &effective_dist,
                 dists
@@ -435,13 +436,19 @@ fn pushdown_sorts_helper(
     Ok(Transformed::yes(sort_push_down))
 }
 
+/// Child orderings and the input row bound that can accompany sort pushdown.
+struct SortPushdownProposal {
+    child_orderings: Vec<Option<OrderingRequirements>>,
+    child_fetch: Option<usize>,
+}
+
 /// Calculate the pushdown ordering requirements for children.
 /// If sort cannot be pushed down, return None.
 fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
     parent_required: OrderingRequirements,
     parent_fetch: Option<usize>,
-) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+) -> Result<Option<SortPushdownProposal>> {
     // A parent fetch can be pushed through a plan only if the plan explicitly
     // supports limit pushdown and does not change cardinality. For example, if
     // LIMIT 2 is applied below a FilterExec that removes half the rows, only one
@@ -470,7 +477,7 @@ fn pushdown_requirement_to_children(
     }
 
     let maintains_input_order = plan.maintains_input_order();
-    if is_window(plan) {
+    let child_orderings = if is_window(plan) {
         let mut required_input_ordering = plan.required_input_ordering();
         let maybe_child_requirement = required_input_ordering.swap_remove(0);
         let child_plan = plan.children().swap_remove(0);
@@ -625,8 +632,25 @@ fn pushdown_requirement_to_children(
     } else if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
         handle_hash_join(hash_join, parent_required)
     } else {
-        handle_custom_pushdown(plan, parent_required, &maintains_input_order)
-    }
+        // An offset or filter may need more input rows than its output fetch.
+        // Forward only the safe parent fetch; the child TopK retains its own bound.
+        return Ok(handle_custom_pushdown(
+            plan,
+            parent_required,
+            &maintains_input_order,
+        )?
+        .map(|child_orderings| SortPushdownProposal {
+            child_orderings,
+            child_fetch: parent_fetch,
+        }));
+    };
+
+    Ok(
+        child_orderings?.map(|child_orderings| SortPushdownProposal {
+            child_orderings,
+            child_fetch: input_fetch(plan, parent_fetch),
+        }),
+    )
 }
 
 /// Remap an ordering requirement expressed in a [`ProjectionExec`]'s output
@@ -963,11 +987,8 @@ fn handle_custom_pushdown(
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
     let plan_children = plan.children();
 
-    // Return early for leaf nodes or fetched custom nodes.
-    // Pushing a sort below an unordered fetch changes which rows it keeps.
-    // Even an ordered fetch can select different rows if its input is reordered.
-    // Native limit and merge cases are handled earlier.
-    if plan_children.is_empty() || plan.fetch().is_some() {
+    // If the plan has no children, return early:
+    if plan_children.is_empty() {
         return Ok(None);
     }
 
@@ -1072,14 +1093,29 @@ fn handle_custom_pushdown(
     }
 }
 
-/// Checks that proposed child orderings satisfy the node's input requirements
-/// and produce the requested output ordering.
+/// Checks that proposed child orderings respect fetch boundaries, satisfy the
+/// node's input requirements, and produce the requested output ordering.
 fn is_custom_sort_pushdown_valid(
     plan: &Arc<dyn ExecutionPlan>,
     child_requirements: &[Option<OrderingRequirements>],
     output_requirement: LexRequirement,
 ) -> Result<bool> {
     let plan_children = plan.children();
+
+    let selecting_sort = if plan.fetch().is_some() {
+        // Pushing a sort below an unordered fetch changes which rows it keeps.
+        // Even an ordered fetch can select different rows if its input is reordered.
+        // As for native limits, only refine a sort directly below this boundary.
+        let ([child], [Some(_)]) = (plan_children.as_slice(), child_requirements) else {
+            return Ok(false);
+        };
+        let Some(sort) = child.downcast_ref::<SortExec>() else {
+            return Ok(false);
+        };
+        Some(sort)
+    } else {
+        None
+    };
 
     // Test the proposed child orderings without moving the real sorts yet.
     let mut probe_children = Vec::with_capacity(plan_children.len());
@@ -1093,6 +1129,18 @@ fn is_custom_sort_pushdown_valid(
             }) {
                 return Ok(false);
             }
+            let ordering: LexOrdering = required.first().clone().into();
+            if let Some(sort) = selecting_sort {
+                // Preserve every key that selected the fetched rows, including
+                // keys hidden by the node's output. Prove this from the concrete
+                // proposed ordering, without relying on the old sort's ordering.
+                let mut proposed_properties = child.equivalence_properties().clone();
+                proposed_properties.clear_orderings();
+                proposed_properties.add_ordering(ordering.clone());
+                if !proposed_properties.ordering_satisfy(sort.expr().clone())? {
+                    return Ok(false);
+                }
+            }
             // A bounded operator can stop an unbounded input; a new blocking
             // sort below it cannot. An already ordered input needs no new sort.
             if child.boundedness().is_unbounded()
@@ -1103,7 +1151,7 @@ fn is_custom_sort_pushdown_valid(
                 return Ok(false);
             }
             Arc::new(
-                SortExec::new(required.first().clone().into(), Arc::clone(child))
+                SortExec::new(ordering, Arc::clone(child))
                     .with_preserve_partitioning(true),
             ) as Arc<dyn ExecutionPlan>
         } else {
@@ -1484,10 +1532,11 @@ mod tests {
             }],
             ScalarSubqueryResults::new(1),
         ));
-        assert_eq!(
-            pushdown_requirement_to_children(&plan, requirement.clone(), None)?,
-            Some(vec![Some(requirement), None])
-        );
+        let proposal =
+            pushdown_requirement_to_children(&plan, requirement.clone(), None)?
+                .expect("the main input supports sort pushdown");
+        assert_eq!(proposal.child_orderings, vec![Some(requirement), None]);
+        assert_eq!(proposal.child_fetch, None);
         Ok(())
     }
 
