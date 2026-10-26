@@ -754,10 +754,11 @@ impl<'a> UnknownMarks<'a> {
 /// The value tuples and then the join filter, if any, decide which candidates
 /// count.
 ///
-/// A row stays UNKNOWN once it is marked, so pairs that decide a row already
-/// known to be UNKNOWN are skipped, and the join filter is not evaluated for
-/// them. Without scope keys this also ends the pairing as soon as every row
-/// that can be decided is UNKNOWN. See [`UnmarkedPairs`].
+/// A row stays UNKNOWN once it is marked. So the pairing drops most pairs that
+/// decide a row already known to be UNKNOWN before the join filter is
+/// evaluated. Without scope keys this also ends the pairing as soon as every
+/// row that can be decided is UNKNOWN. See [`UnmarkedPairs`], and
+/// [`UnmarkedPairs::lookup_unmarked`] for the checks it skips.
 #[expect(clippy::too_many_arguments)]
 fn mark_null_candidates_for_probe_batch(
     left_data: &JoinLeftData,
@@ -989,8 +990,10 @@ pub(super) struct LookupBuffers {
 /// chunks of at most `batch_size` pairs.
 ///
 /// `f` marks rows (see [`UnknownMarks`]), and a marked row cannot become
-/// unmarked. So the pairing drops the pairs that decide a marked row before
-/// it sends them, and drops the marked rows again after each chunk.
+/// unmarked. So the pairing drops most pairs that decide a marked row before
+/// it sends them, and drops the marked rows again after each chunk. Some
+/// pairs of a marked row still reach `f` (see [`Self::lookup_unmarked`]).
+/// Such a pair only sets a mark that is already set.
 struct UnmarkedPairs<'a, F> {
     marks: UnknownMarks<'a>,
     batch_size: usize,
