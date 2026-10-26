@@ -411,6 +411,61 @@ A full list of benchmarks can be found [here](https://github.com/apache/datafusi
 
 _[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
 
+### Microbenchmark health checks (manual-only)
+
+To execute each Criterion case once without collecting performance measurements:
+
+```shell
+cargo xtask ci step test microbenchmarks
+```
+
+This command selects workspace bench targets, excluding `datafusion-examples`,
+`datafusion-benchmarks` (the SQL benchmark harness), and `datafusion-cli`. It enables
+`datafusion-physical-plan/test_utils`, uses the `ci-bench` profile to retain debug
+assertions and overflow checks, and supplies the small checked-in ClickBench
+fixture. It catches runtime failures such as panics; it does not detect performance
+regressions or establish result correctness unless a case asserts its results.
+
+For a hosted run, open **Actions → Microbenchmark health checks → Run workflow**,
+select the branch or tag to test, and dispatch it. Alternatively, use the GitHub CLI
+with a ref available in the target repository:
+
+```shell
+gh workflow run microbenchmarks.yml --repo apache/datafusion --ref YOUR_REF
+```
+
+The workflow checks out the selected ref and runs only microbenchmarks, not the
+other extended-test suites. Its workflow file must exist on the default branch
+before dispatch is available; the selected ref must also contain the workflow.
+
+Full microbenchmark execution is not a required merge check and does not run on
+PR updates, pushes (including release branches), merge groups, or a schedule.
+Daily runs are not configured because there is no designated owner to triage
+failures and drive fixes. Reconsider a daily tier only with explicit ownership and
+an agreed resource budget. Runtime-only breakage may remain unnoticed until an
+on-demand run. When changing benchmark fixtures, setup, or APIs, run the affected
+benchmarks and include the commands and results in your PR.
+
+#### Compilation coverage retained in CI
+
+The existing `clippy` job in `.github/workflows/rust.yml` invokes
+`ci/scripts/rust_clippy.sh`, which checks `--workspace --all-targets` twice: with
+`avro,integration-tests,extended_tests`, then with `--all-features`. All bench
+targets selected by the microbenchmark command are workspace members and therefore
+remain covered by the all-features pass, including these `required-features` gates:
+
+- `datafusion`: `parquet`, `nested_expressions`.
+- `datafusion-functions`: `crypto_expressions`, `datetime_expressions`,
+  `encoding_expressions`, `math_expressions`, `regex_expressions`,
+  `string_expressions`, `unicode_expressions`.
+- `datafusion-physical-plan`: `test_utils`.
+
+The other selected bench targets have no `required-features` gates. This retains
+bench-target compilation, not compilation under every feature combination or the
+exact `ci-bench` profile; that profile and benchmark execution are checked on
+demand. No replacement compilation job is added. Existing TPC-H plan/result checks
+in `verify benchmark results (amd64)` remain separate and unchanged.
+
 ### Parquet SQL Benchmarks
 
 The parquet SQL benchmarks can be run with
