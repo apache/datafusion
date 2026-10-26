@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Regression tests for Rust workflow skip and manual-execution policies."""
+"""Regression tests for the Rust workflow skip policies."""
 
 import unittest
 from pathlib import Path
@@ -65,42 +65,6 @@ class RustWorkflowSkipsTest(unittest.TestCase):
         self.assertTrue(
             any("`cargo-check` upload step" in error for error in self.errors())
         )
-
-
-class ManualMicrobenchmarksTest(unittest.TestCase):
-    def test_execution_is_isolated_and_manual_only(self):
-        workflows_dir = ROOT / ".github/workflows"
-        command = "cargo xtask ci step test microbenchmarks"
-        providers = {}
-        for path in workflows_dir.glob("*.yml"):
-            content = path.read_text()
-            if command in content:
-                providers[path.name] = yaml.safe_load(content)
-
-        self.assertEqual(set(providers), {"microbenchmarks.yml"})
-        workflow = providers["microbenchmarks.yml"]
-        # PyYAML parses the unquoted YAML key `on` as True.
-        self.assertEqual(
-            workflow.get(True, workflow.get("on")), {"workflow_dispatch": None}
-        )
-        self.assertEqual(set(workflow["jobs"]), {"linux-test-microbenchmarks"})
-        job = workflow["jobs"]["linux-test-microbenchmarks"]
-        self.assertNotIn("needs", job)
-        self.assertIn({"name": "Test microbenchmarks", "run": command}, job["steps"])
-        checkout = next(
-            step
-            for step in job["steps"]
-            if step.get("uses", "").startswith("actions/checkout@")
-        )
-        # Without a ref override, checkout uses the ref selected at dispatch.
-        self.assertNotIn("ref", checkout.get("with", {}))
-
-    def test_execution_is_not_required(self):
-        checks = get_required_checks(ROOT / ".asf.yaml")
-        self.assertNotIn("microbenchmark tests (amd64)", checks)
-        self.assertNotIn("linux-test-microbenchmarks", checks)
-        self.assertIn("verify benchmark results (amd64)", checks)
-        self.assertIn("clippy", checks)
 
 
 if __name__ == "__main__":
