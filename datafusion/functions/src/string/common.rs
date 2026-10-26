@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::strings::{
     GenericStringArrayBuilder, STRING_VIEW_INIT_BLOCK_SIZE, STRING_VIEW_MAX_BLOCK_SIZE,
-    StringViewArrayBuilder, StringWriter, substr_view,
+    StringViewArrayBuilder, substr_view,
 };
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
@@ -390,25 +390,56 @@ fn unicode_case(s: &str, lower: bool) -> String {
     }
 }
 
-/// Writes the case-converted form of `s` directly into `w`.
+/// Appends `s` to `builder` with its case converted.
 ///
-/// Uppercasing is a context-free character mapping, so each character is
-/// mapped and streamed straight into the output buffer, avoiding the
-/// intermediate `String` that `str::to_uppercase` allocates per row.
+/// An ASCII value is converted byte by byte straight into the builder. Other
+/// values go through `str::to_lowercase` / `str::to_uppercase`, which allocate
+/// a `String` but convert any leading run of ASCII bytes in bulk. Checking
+/// `is_ascii` first means a non-ASCII value is read up to its first non-ASCII
+/// byte before it is converted; that extra read is cheap compared with what an
+/// ASCII value saves by being written straight into the builder instead of
+/// through a temporary `String`.
 ///
-/// Lowercasing is *not* context-free — `str::to_lowercase` applies the
-/// special Greek final-sigma rule (Σ becomes ς at the end of a word but σ
-/// elsewhere), which a per-character mapping cannot reproduce — so it keeps
-/// using `str::to_lowercase`.
+/// Lowercasing needs the whole value: `Σ` becomes `ς` at the end of a word and
+/// `σ` elsewhere, so converting one character at a time, or converting the
+/// ASCII prefix separately, would give the wrong result.
 #[inline]
-fn write_unicode_case(w: &mut impl StringWriter, s: &str, lower: bool) {
-    if lower {
-        w.write_str(&s.to_lowercase());
-    } else {
-        for c in s.chars() {
-            for upper in c.to_uppercase() {
-                w.write_char(upper);
-            }
+fn append_case_converted<O: OffsetSizeTrait>(
+    builder: &mut GenericStringArrayBuilder<O>,
+    s: &str,
+    lower: bool,
+) -> Result<()> {
+    if !s.is_ascii() {
+        return builder.try_append_value(&unicode_case(s, lower));
+    }
+    // SAFETY: ASCII case conversion maps ASCII bytes to ASCII bytes, so the
+    // output is valid UTF-8.
+    unsafe {
+        if lower {
+            builder.try_append_byte_map(s.as_bytes(), |b| b.to_ascii_lowercase())
+        } else {
+            builder.try_append_byte_map(s.as_bytes(), |b| b.to_ascii_uppercase())
+        }
+    }
+}
+
+/// Like [`append_case_converted`], for a `StringViewArray`.
+#[inline]
+fn append_case_converted_view(
+    builder: &mut StringViewArrayBuilder,
+    s: &str,
+    lower: bool,
+) -> Result<()> {
+    if !s.is_ascii() {
+        return builder.try_append_value(&unicode_case(s, lower));
+    }
+    // SAFETY: ASCII case conversion maps ASCII bytes to ASCII bytes, so the
+    // output is valid UTF-8.
+    unsafe {
+        if lower {
+            builder.try_append_byte_map(s.as_bytes(), |b| b.to_ascii_lowercase())
+        } else {
+            builder.try_append_byte_map(s.as_bytes(), |b| b.to_ascii_uppercase())
         }
     }
 }
@@ -491,14 +522,14 @@ fn case_conversion_utf8view(array: &ArrayRef, lower: bool) -> Result<ArrayRef> {
             } else {
                 // SAFETY: `n.is_null(i)` was false in the branch above.
                 let s = unsafe { string_array.value_unchecked(i) };
-                builder.try_append_value(&unicode_case(s, lower))?;
+                append_case_converted_view(&mut builder, s, lower)?;
             }
         }
     } else {
         for i in 0..item_len {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
-            builder.try_append_value(&unicode_case(s, lower))?;
+            append_case_converted_view(&mut builder, s, lower)?;
         }
     }
 
@@ -540,14 +571,14 @@ fn case_conversion_array<O: OffsetSizeTrait>(
             } else {
                 // SAFETY: `n.is_null(i)` was false in the branch above.
                 let s = unsafe { string_array.value_unchecked(i) };
-                builder.try_append_with(|w| write_unicode_case(w, s, lower))?;
+                append_case_converted(&mut builder, s, lower)?;
             }
         }
     } else {
         for i in 0..item_len {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
-            builder.try_append_with(|w| write_unicode_case(w, s, lower))?;
+            append_case_converted(&mut builder, s, lower)?;
         }
     }
     Ok(Arc::new(builder.finish(nulls)?))

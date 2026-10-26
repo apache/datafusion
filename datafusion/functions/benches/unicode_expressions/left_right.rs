@@ -19,7 +19,7 @@ use std::hint::black_box;
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
-use arrow::array::StringViewArray;
+use arrow::array::{StringArray, StringViewArray};
 use arrow::datatypes::{Field, Int64Type};
 use arrow::util::bench_util::{
     create_primitive_array_range, create_string_array_with_len_range_and_prefix_and_seed,
@@ -29,6 +29,8 @@ use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_functions::unicode::{left, right};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 const BATCH_SIZE: usize = 8192;
 
@@ -40,19 +42,50 @@ enum NArg {
     PerRow(Range<i64>),
 }
 
+/// Cyrillic text, two bytes per letter, with spaces between words.
+fn create_cyrillic_string_array(str_len: &RangeInclusive<usize>) -> StringArray {
+    let letters = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
+        .chars()
+        .collect::<Vec<_>>();
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..BATCH_SIZE)
+        .map(|_| {
+            if rng.random::<f32>() < 0.1 {
+                return None;
+            }
+            let len = rng.random_range(str_len.clone());
+            let string = (0..len)
+                .map(|_| {
+                    if rng.random_ratio(1, 7) {
+                        ' '
+                    } else {
+                        letters[rng.random_range(0..letters.len())]
+                    }
+                })
+                .collect::<String>();
+            Some(string)
+        })
+        .collect()
+}
+
 fn create_args(
     str_len: &RangeInclusive<usize>,
     n: &NArg,
+    ascii: bool,
     is_string_view: bool,
 ) -> Vec<ColumnarValue> {
-    let strings = create_string_array_with_len_range_and_prefix_and_seed::<i32>(
-        BATCH_SIZE,
-        0.1,
-        *str_len.start(),
-        *str_len.end(),
-        "",
-        42,
-    );
+    let strings = if ascii {
+        create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+            BATCH_SIZE,
+            0.1,
+            *str_len.start(),
+            *str_len.end(),
+            "",
+            42,
+        )
+    } else {
+        create_cyrillic_string_array(str_len)
+    };
     let string_arg = if is_string_view {
         ColumnarValue::Array(Arc::new(strings.iter().collect::<StringViewArray>()))
     } else {
@@ -73,19 +106,24 @@ fn criterion_benchmark(c: &mut Criterion) {
     // Input lengths vary within each case, as in real data: with fixed-length
     // inputs, per-row work that depends on the input length is unrealistically
     // predictable.
+    // Lengths are in characters for non-ASCII inputs.
     let cases = [
         // Results of up to 5 chars, stored inline in StringView arrays (≤12 bytes).
-        ("short_result", 1..=32, NArg::Scalar(5)),
+        ("short_result", 1..=32, NArg::Scalar(5), true),
         // 25-char results, stored out of line.
-        ("long_result", 32..=64, NArg::Scalar(25)),
+        ("long_result", 32..=64, NArg::Scalar(25), true),
         // Short results from long inputs.
-        ("short_result_long_input", 96..=256, NArg::Scalar(5)),
+        ("short_result_long_input", 96..=256, NArg::Scalar(5), true),
         // `n` exceeds every input's length, so each result is the whole input.
-        ("n_exceeds_len", 1..=32, NArg::Scalar(40)),
+        ("n_exceeds_len", 1..=32, NArg::Scalar(40), true),
         // Negative `n` removes characters from the other end.
-        ("negative_n", 1..=32, NArg::Scalar(-5)),
+        ("negative_n", 1..=32, NArg::Scalar(-5), true),
         // `n` computed per row, as in `left(s, strpos(s, '-') - 1)`.
-        ("per_row_n", 1..=32, NArg::PerRow(1..11)),
+        ("per_row_n", 1..=32, NArg::PerRow(1..11), true),
+        // Non-ASCII inputs need a scan for character boundaries.
+        ("non_ascii short_result", 1..=32, NArg::Scalar(5), false),
+        ("non_ascii long_result", 64..=256, NArg::Scalar(100), false),
+        ("non_ascii negative_n", 64..=256, NArg::Scalar(-100), false),
     ];
     let config_options = Arc::new(ConfigOptions::default());
 
@@ -99,9 +137,9 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "string"
             };
 
-            for (case_name, str_len, n) in &cases {
+            for (case_name, str_len, n, ascii) in &cases {
                 let bench_name = format!("{array_type} {case_name}");
-                let args = create_args(str_len, n, is_string_view);
+                let args = create_args(str_len, n, *ascii, is_string_view);
                 let arg_fields: Vec<_> = args
                     .iter()
                     .enumerate()

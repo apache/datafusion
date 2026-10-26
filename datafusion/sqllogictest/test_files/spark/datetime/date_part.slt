@@ -284,3 +284,10 @@ FROM VALUES
 1999
 2000
 NULL
+
+# Nullable even for a non-null input, like the integer parts of the date_part
+# this simplifies to
+query TTT
+DESCRIBE SELECT date_part('SECOND'::string, ts) AS s FROM (VALUES (timestamp '2020-01-01')) AS t(ts)
+----
+s Int32 YES
