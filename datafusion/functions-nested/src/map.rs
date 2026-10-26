@@ -594,8 +594,8 @@ fn build_map_array(
         return exec_err!("map requires key and value lists to have the same length");
     }
 
-    let mut key_array_vec = vec![];
-    let mut value_array_vec = vec![];
+    let mut key_array_vec = Vec::with_capacity(keys.len());
+    let mut value_array_vec = Vec::with_capacity(values.len());
     for (k, v) in keys.iter().zip(values.iter()) {
         key_array_vec.push(k.as_ref());
         value_array_vec.push(v.as_ref());
@@ -606,7 +606,8 @@ fn build_map_array(
     // If it's not NULL, the offset advances by the number of entries in that map
     // NOTE: MapArray always requires i32 offsets, regardless of input list type
     let mut running_offset = 0i32;
-    let mut offset_buffer = vec![running_offset];
+    let mut offset_buffer = Vec::with_capacity(original_len + 1);
+    offset_buffer.push(running_offset);
     let mut non_null_idx = 0;
     for i in 0..original_len {
         let is_null = nulls_bitmap.as_ref().is_some_and(|nulls| nulls.is_null(i));

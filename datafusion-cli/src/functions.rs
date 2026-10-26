@@ -366,29 +366,32 @@ impl TableFunctionImpl for ParquetMetadataFunc {
         ]));
 
         // construct record batch from metadata
-        let mut filename_arr = vec![];
-        let mut row_group_id_arr = vec![];
-        let mut row_group_num_rows_arr = vec![];
-        let mut row_group_num_columns_arr = vec![];
-        let mut row_group_bytes_arr = vec![];
-        let mut column_id_arr = vec![];
-        let mut file_offset_arr = vec![];
-        let mut num_values_arr = vec![];
-        let mut path_in_schema_arr = vec![];
-        let mut type_arr = vec![];
-        let mut stats_min_arr = vec![];
-        let mut stats_max_arr = vec![];
-        let mut stats_null_count_arr = vec![];
-        let mut stats_distinct_count_arr = vec![];
-        let mut stats_min_value_arr = vec![];
-        let mut stats_max_value_arr = vec![];
-        let mut compression_arr = vec![];
-        let mut encodings_arr = vec![];
-        let mut index_page_offset_arr = vec![];
-        let mut dictionary_page_offset_arr = vec![];
-        let mut data_page_offset_arr = vec![];
-        let mut total_compressed_size_arr = vec![];
-        let mut total_uncompressed_size_arr = vec![];
+        let num_column_chunks = metadata.num_row_groups()
+            * metadata.file_metadata().schema_descr().num_columns();
+        let mut filename_arr = Vec::with_capacity(num_column_chunks);
+        let mut row_group_id_arr = Vec::with_capacity(num_column_chunks);
+        let mut row_group_num_rows_arr = Vec::with_capacity(num_column_chunks);
+        let mut row_group_num_columns_arr = Vec::with_capacity(num_column_chunks);
+        let mut row_group_bytes_arr = Vec::with_capacity(num_column_chunks);
+        let mut column_id_arr = Vec::with_capacity(num_column_chunks);
+        let mut file_offset_arr = Vec::with_capacity(num_column_chunks);
+        let mut num_values_arr = Vec::with_capacity(num_column_chunks);
+        let mut path_in_schema_arr = Vec::with_capacity(num_column_chunks);
+        let mut type_arr = Vec::with_capacity(num_column_chunks);
+        let mut stats_min_arr = Vec::with_capacity(num_column_chunks);
+        let mut stats_max_arr = Vec::with_capacity(num_column_chunks);
+        let mut stats_null_count_arr = Vec::with_capacity(num_column_chunks);
+        let mut stats_distinct_count_arr = Vec::with_capacity(num_column_chunks);
+        let mut stats_min_value_arr = Vec::with_capacity(num_column_chunks);
+        let mut stats_max_value_arr = Vec::with_capacity(num_column_chunks);
+        let mut compression_arr = Vec::with_capacity(num_column_chunks);
+        let mut encodings_arr = Vec::with_capacity(num_column_chunks);
+        let mut index_page_offset_arr = Vec::with_capacity(num_column_chunks);
+        let mut dictionary_page_offset_arr = Vec::with_capacity(num_column_chunks);
+        let mut data_page_offset_arr = Vec::with_capacity(num_column_chunks);
+        let mut total_compressed_size_arr = Vec::with_capacity(num_column_chunks);
+        let mut total_uncompressed_size_arr = Vec::with_capacity(num_column_chunks);
+        let mut encodings = Vec::new();
         for (rg_idx, row_group) in metadata.row_groups().iter().enumerate() {
             for (col_idx, column) in row_group.columns().iter().enumerate() {
                 filename_arr.push(filename);
@@ -423,7 +426,8 @@ impl TableFunctionImpl for ParquetMetadataFunc {
                 }
                 compression_arr.push(format!("{:?}", column.compression()));
                 // need to collect into Vec to format
-                let encodings: Vec<_> = column.encodings().collect();
+                encodings.clear();
+                encodings.extend(column.encodings());
                 encodings_arr.push(format!("{encodings:?}"));
                 index_page_offset_arr.push(column.index_page_offset());
                 dictionary_page_offset_arr.push(column.dictionary_page_offset());
@@ -710,17 +714,18 @@ impl TableFunctionImpl for MetadataCacheFunc {
             Field::new("extra", DataType::Utf8, true),
         ]));
 
-        // construct record batch from metadata
-        let mut path_arr = vec![];
-        let mut file_modified_arr = vec![];
-        let mut file_size_bytes_arr = vec![];
-        let mut e_tag_arr = vec![];
-        let mut version_arr = vec![];
-        let mut metadata_size_bytes = vec![];
-        let mut hits_arr = vec![];
-        let mut extra_arr = vec![];
-
         let cached_entries = self.cache_manager.get_file_metadata_cache().list_entries();
+
+        // construct record batch from metadata
+        let mut path_arr = Vec::with_capacity(cached_entries.len());
+        let mut file_modified_arr = Vec::with_capacity(cached_entries.len());
+        let mut file_size_bytes_arr = Vec::with_capacity(cached_entries.len());
+        let mut e_tag_arr = Vec::with_capacity(cached_entries.len());
+        let mut version_arr = Vec::with_capacity(cached_entries.len());
+        let mut metadata_size_bytes = Vec::with_capacity(cached_entries.len());
+        let mut hits_arr = Vec::with_capacity(cached_entries.len());
+        let mut extra_arr = Vec::with_capacity(cached_entries.len());
+        let mut extra = Vec::new();
 
         for (path, entry) in cached_entries {
             path_arr.push(path.to_string());
@@ -732,13 +737,15 @@ impl TableFunctionImpl for MetadataCacheFunc {
             metadata_size_bytes.push(entry.size_bytes as u64);
             hits_arr.push(entry.hits as u64);
 
-            let mut extra = entry
-                .value
-                .file_metadata
-                .extra_info()
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>();
+            extra.clear();
+            extra.extend(
+                entry
+                    .value
+                    .file_metadata
+                    .extra_info()
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}")),
+            );
             extra.sort();
             extra_arr.push(extra.join(" "));
         }

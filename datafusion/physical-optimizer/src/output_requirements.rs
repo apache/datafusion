@@ -295,8 +295,8 @@ impl ExecutionPlan for OutputRequirementExec {
 
         let mut requirements = self.required_input_ordering().swap_remove(0);
         if let Some(reqs) = requirements {
-            let mut updated_reqs = vec![];
             let (lexes, soft) = reqs.into_alternatives();
+            let mut updated_reqs = Vec::with_capacity(lexes.len());
             for lex in lexes.into_iter() {
                 let Some(updated_lex) = update_ordering_requirement(lex, proj_exprs)?
                 else {
@@ -313,7 +313,7 @@ impl ExecutionPlan for OutputRequirementExec {
                 Distribution::HashPartitioned(exprs)
                 | Distribution::KeyPartitioned(exprs),
             ) => {
-                let mut updated_exprs = vec![];
+                let mut updated_exprs = Vec::with_capacity(exprs.len());
                 for expr in exprs {
                     let Some(new_expr) = update_expr(expr, projection.expr(), false)?
                     else {

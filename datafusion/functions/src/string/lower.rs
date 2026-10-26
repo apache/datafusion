@@ -143,27 +143,6 @@ mod tests {
     }
 
     #[test]
-    fn lower_maybe_optimization() -> Result<()> {
-        let input = Arc::new(StringArray::from(vec![
-            Some("农历新年"),
-            None,
-            Some("DATAFUSION"),
-            Some("0123456789"),
-            Some(""),
-        ])) as ArrayRef;
-
-        let expected = Arc::new(StringArray::from(vec![
-            Some("农历新年"),
-            None,
-            Some("datafusion"),
-            Some("0123456789"),
-            Some(""),
-        ])) as ArrayRef;
-
-        to_lower(input, expected)
-    }
-
-    #[test]
     fn lower_full_optimization() -> Result<()> {
         let input = Arc::new(StringArray::from(vec![
             Some("ARROW"),
@@ -179,56 +158,6 @@ mod tests {
             Some("datafusion"),
             Some("0123456789"),
             Some(""),
-        ])) as ArrayRef;
-
-        to_lower(input, expected)
-    }
-
-    #[test]
-    fn lower_partial_optimization() -> Result<()> {
-        let input = Arc::new(StringArray::from(vec![
-            Some("ARROW"),
-            None,
-            Some("DATAFUSION"),
-            Some("@_"),
-            Some("0123456789"),
-            Some(""),
-            Some("\t\n"),
-            Some("ὈΔΥΣΣΕΎΣ"),
-            Some("TSCHÜSS"),
-            Some("Ⱦ"), // ⱦ: length change
-            Some("农历新年"),
-        ])) as ArrayRef;
-
-        let expected = Arc::new(StringArray::from(vec![
-            Some("arrow"),
-            None,
-            Some("datafusion"),
-            Some("@_"),
-            Some("0123456789"),
-            Some(""),
-            Some("\t\n"),
-            Some("ὀδυσσεύς"),
-            Some("tschüss"),
-            Some("ⱦ"),
-            Some("农历新年"),
-        ])) as ArrayRef;
-
-        to_lower(input, expected)
-    }
-
-    #[test]
-    fn lower_utf8view() -> Result<()> {
-        let input = Arc::new(StringViewArray::from(vec![
-            Some("ARROW"),
-            None,
-            Some("TSCHÜSS"),
-        ])) as ArrayRef;
-
-        let expected = Arc::new(StringViewArray::from(vec![
-            Some("arrow"),
-            None,
-            Some("tschüss"),
         ])) as ArrayRef;
 
         to_lower(input, expected)

@@ -49,10 +49,6 @@ impl OptimizerRule for EliminateFilter {
         Some(ApplyOrder::TopDown)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,

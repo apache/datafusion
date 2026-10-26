@@ -18,7 +18,8 @@
 # Detect semver-incompatible (breaking) API changes in crates modified by a PR.
 #
 # Only public workspace crates that have file changes are checked.
-# Internal crates (benchmarks, test-utils, sqllogictest, doc) are excluded.
+# Crates with `publish = false` (such as benchmarks and test-utils) and
+# datafusion-sqllogictest are excluded.
 #
 # This workflow only runs cargo-semver-checks and uploads the result as an
 # artifact. The actual PR comment is posted by a companion workflow
@@ -54,42 +55,44 @@ jobs:
     name: Check semver
     runs-on: ubuntu-latest
     steps:
+      # The checkout is GitHub's test merge commit of the PR into the base
+      # branch. Depth 2 fetches that commit and its two parents: the base
+      # branch commit the PR was merged into, and the PR head.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 2
 
-      # `origin` may point at a fork (when a contributor runs this locally) or
-      # at a stale ref. Fetch the base branch from the PR's upstream repo into
-      # a dedicated `apache/<base>` ref so the baseline is unambiguous and the
-      # same ref name works locally (`git remote add apache ...`) and in CI.
-      - name: Fetch base branch
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          REPO: ${{ github.repository }}
-        run: git fetch "https://github.com/${REPO}.git" "${BASE_REF}:refs/remotes/apache/${BASE_REF}"
+      # Compare against the base branch commit the PR was merged into, not the
+      # base branch's current tip, which may include changes the PR is not
+      # built on.
+      - name: Determine base commit
+        id: base
+        run: |
+          BASE_SHA=$(git rev-parse HEAD^1)
+          echo "sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "Base commit: $BASE_SHA"
 
       - name: Determine changed crates
         id: changed_crates
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
         run: |
-          PACKAGES=$(ci/scripts/changed_crates.sh changed-crates "apache/${BASE_REF}")
+          PACKAGES=$(ci/scripts/changed_crates.sh changed-crates "$BASE_SHA")
           echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
           echo "Changed crates: $PACKAGES"
 
-      # `datafusion-substrait` (and crates that depend on it via sqllogictest)
-      # have a build script that calls protoc, which is not preinstalled on
-      # ubuntu-latest runners.
-      - name: Install Protobuf Compiler
+      # The `substrait` crate's build script runs protoc, which is not
+      # preinstalled on ubuntu-latest runners.
+      - name: Install protoc
         if: steps.changed_crates.outputs.packages != ''
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2.87.29
+        with:
+          tool: protoc@3.21.12
 
       - name: Install cargo-semver-checks
         if: steps.changed_crates.outputs.packages != ''
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2.87.29
         with:
           tool: cargo-semver-checks
 
@@ -97,14 +100,13 @@ jobs:
         id: check_semver
         if: steps.changed_crates.outputs.packages != ''
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
           PACKAGES: ${{ steps.changed_crates.outputs.packages }}
         run: |
           set +e
           # `tee` lets cargo's output stream live into the Actions log
           # while we also keep a copy for the PR comment.
-          # Using `apache` remote here to point to the repository the pull request is against
-          ci/scripts/changed_crates.sh semver-check "apache/${BASE_REF}" $PACKAGES \
+          ci/scripts/changed_crates.sh semver-check "$BASE_SHA" $PACKAGES \
             2>&1 | tee /tmp/semver-output.txt
           EXIT_CODE=${PIPESTATUS[0]}
           # Pass the result through an output instead of failing the job:
@@ -137,7 +139,7 @@ jobs:
 
       - name: Upload artifact
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: semver-check-result
           path: semver-artifact/

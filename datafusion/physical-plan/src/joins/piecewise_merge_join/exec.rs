@@ -97,15 +97,23 @@ use crate::{
 /// in `requires_input_order`, which allows the optimizer to automatically insert a `SortExec` on that side if needed.
 /// By the time this operator runs, the buffered side is guaranteed to be in the proper order.
 ///
+/// Every match set is a suffix of the sorted buffered side's non-null keys, so a streamed row matches
+/// anything at all exactly when it matches the last of them. Each streamed batch is first checked against that
+/// key with one vectorized comparison: rows that fail it (including NULL keys) are emitted as
+/// unmatched for `Right`/`Full` and dropped otherwise, before the sort. Only the rest are sorted,
+/// and each one's first match is found by a binary search that starts at the previous row's.
+///
 /// The pseudocode for the algorithm looks like this:
 ///
 /// ```text
-/// for stream_row in stream_batch:
-///     for buffer_row in buffer_batch:
-///         if compare(stream_row, probe_row):
-///             output stream_row X buffer_batch[buffer_row:]
-///         else:
-///             continue
+/// extreme = buffer_batch[last non-null]
+/// candidates = [row for row in stream_batch if compare(row, extreme)]
+/// emit the other rows as unmatched (Right/Full) or drop them (Inner/Left)
+///
+/// start = 0
+/// for stream_row in sort(candidates):
+///     start = binary_search(buffer_batch[start:], first row matching stream_row)
+///     output stream_row X buffer_batch[start:]
 /// ```
 ///
 /// The algorithm uses the streamed side (larger) to drive the loop. This is due to every row on the stream side iterating
@@ -115,7 +123,7 @@ use crate::{
 /// Here is an example:
 ///
 /// We perform a `JoinType::Left` with these two batches and the operator being `Operator::Lt`(<). For each
-/// row on the streamed side we move a pointer on the buffered until it matches the condition. Once we reach
+/// row on the streamed side we search the buffered side for the first row that matches the condition. Once we reach
 /// the row which matches (in this case with row 1 on streamed will have its first match on row 2 on
 /// buffered; 100 < 200 is true), we can emit all rows after that match. We can emit the rows like this because
 /// if the batch is sorted in ascending order, every subsequent row will also satisfy the condition as they will

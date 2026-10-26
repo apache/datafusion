@@ -180,7 +180,7 @@ pub fn parse_flat_grouping_exprs(
     schema: &DFSchemaRef,
     ref_group_exprs: &mut Vec<Expression>,
 ) -> datafusion::common::Result<Grouping> {
-    let mut expression_references = vec![];
+    let mut expression_references = Vec::with_capacity(exprs.len());
 
     for e in exprs {
         let rex = producer.handle_expr(e, schema)?;

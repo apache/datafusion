@@ -213,6 +213,7 @@ datafusion.catalog.has_header true
 datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
 datafusion.catalog.newlines_in_values false
+datafusion.catalog.system_catalog NULL
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics true
@@ -378,6 +379,7 @@ datafusion.catalog.has_header true Default value for `format.has_header` for `CR
 datafusion.catalog.information_schema true Should DataFusion provide access to `information_schema` virtual tables for displaying schema information
 datafusion.catalog.location NULL Location scanned to load tables for `default` schema
 datafusion.catalog.newlines_in_values false Specifies whether newlines in (quoted) CSV values are supported. This is the default value for `format.newlines_in_values` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement. Parsing newlines in quoted values may be affected by execution behaviour such as parallel file scanning. Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
+datafusion.catalog.system_catalog NULL The system catalog name - when set together with `information_schema`, the `information_schema` for each catalog will only describe objects contained in the catalog itself. The global, cross-catalog `information_schema` is available under the virtual catalog named by this option.
 datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
 datafusion.execution.collect_statistics true Should DataFusion collect statistics when first creating a table. Has no effect after the table is created. Defaults to true.
@@ -402,8 +404,8 @@ datafusion.execution.parquet.bloom_filter_fpp NULL (writing) Sets bloom filter f
 datafusion.execution.parquet.bloom_filter_ndv NULL (writing) Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_on_read true (reading) Use any available bloom filters when reading parquet files
 datafusion.execution.parquet.bloom_filter_on_write false (writing) Write bloom filters for all columns when creating parquet files
-datafusion.execution.parquet.coerce_int96 NULL (reading) If true, parquet reader will read columns of physical type int96 as originating from a different resolution than nanosecond. This is useful for reading data from systems like Spark which stores microsecond resolution timestamps in an int96 allowing it to write values with a larger date range than 64-bit timestamps with nanosecond resolution.
-datafusion.execution.parquet.coerce_int96_tz NULL (reading) Optional timezone applied to INT96 columns when `coerce_int96` is set. When `Some`, INT96 columns coerce to `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default `Timestamp(<coerce_int96>, None)`. Spark and other systems write INT96 values as UTC-adjusted instants, so callers that need the resulting Arrow type to be timezone-aware (e.g. for Spark `TimestampType` semantics) should set this to `"UTC"`. No effect when `coerce_int96` is `None`.
+datafusion.execution.parquet.coerce_int96 NULL (reading) If set, parquet reader will read columns of physical type int96 as originating from this resolution instead of nanosecond. Valid values are: ns, us, ms, and s. This is useful for reading data from systems like Spark which store microsecond resolution timestamps in an int96, allowing them to write values with a larger date range than 64-bit timestamps with nanosecond resolution.
+datafusion.execution.parquet.coerce_int96_tz NULL (reading) Optional timezone applied to INT96 columns when `coerce_int96` is set. When `Some`, INT96 columns coerce to `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default `Timestamp(<coerce_int96>, None)`. Spark and other systems write INT96 values as UTC-adjusted instants, so callers that need the resulting Arrow type to be timezone-aware (e.g. for Spark `TimestampType` semantics) should set this to `"UTC"`. No effect when `coerce_int96` is `None`, but the value is still validated when it is set.
 datafusion.execution.parquet.column_index_truncate_length 64 (writing) Sets column index truncate length
 datafusion.execution.parquet.compression zstd(3) (writing) Sets default parquet compression codec. Valid values are: uncompressed, snappy, gzip(level), brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting Note that this default setting is not the same as the default parquet writer setting.
 datafusion.execution.parquet.content_defined_chunking.enabled false (writing) EXPERIMENTAL: Enable content-defined chunking (CDC) when writing parquet files. When enabled, parallel writing is automatically disabled since the chunker state must persist across row groups.
@@ -641,6 +643,13 @@ datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
+
+
+query TT
+EXPLAIN SHOW TABLES
+----
+logical_plan TableScan: information_schema.tables projection=[table_catalog, table_schema, table_name, table_type]
+physical_plan StreamingTableExec: partition_sizes=1, projection=[table_catalog, table_schema, table_name, table_type]
 
 
 # information_schema_show_tables_no_information_schema

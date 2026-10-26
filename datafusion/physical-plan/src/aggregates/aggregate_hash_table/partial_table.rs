@@ -19,7 +19,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::order::GroupClustering;
 use crate::aggregates::{AggregateExec, evaluate_group_by};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -77,7 +77,7 @@ impl AggregateHashTable<PartialMarker> {
     ) -> Result<AggregateHashTable<PartialSkipMarker>> {
         let state = self.state.building();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        let group_values = new_group_values(group_schema, &GroupClustering::None)?;
         let accumulators = state
             .accumulators
             .iter()
@@ -130,7 +130,7 @@ impl AggregateHashTable<PartialSkipMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<RecordBatch> {
-        let state = self.state.building();
+        let state = self.state.building_mut();
         let grouping_set_args = self
             .group_by_metrics
             .time_group_key_preparation(|| evaluate_group_by(&state.group_by, batch))?;
@@ -143,7 +143,7 @@ impl AggregateHashTable<PartialSkipMarker> {
         let mut output = grouping_set_args.into_iter().next().unwrap_or_default();
 
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
-        for (idx, acc) in state.accumulators.iter().enumerate() {
+        for (idx, acc) in state.accumulators.iter_mut().enumerate() {
             let values = self.group_by_metrics.time_aggregate_arguments(|| {
                 self.aggregate_argument_metrics
                     .time(idx, || acc.evaluate_row_aligned_args(batch))

@@ -21,23 +21,34 @@
 //! null-aware hash joins, are compared with `NOT EXISTS` / `EXISTS`
 //! formulations of the same three-valued logic, which do not. Random tables
 //! with NULLs on both sides are swept across batch sizes and partition counts.
+//!
+//! The subquery table is sometimes much smaller than the outer table, so
+//! `JoinSelection` also swaps `NOT IN` into a null-aware `RightAnti` that
+//! builds on the subquery side; the test checks that both plan shapes ran.
 
 use std::sync::Arc;
 
 use arrow::array::{Int32Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::util::pretty::pretty_format_batches;
+use datafusion::common::JoinType;
 use datafusion::datasource::MemTable;
+use datafusion::physical_plan::joins::HashJoinExec;
+use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn null_aware_join_matches_reference() {
+    let mut plans = NullAwarePlans::default();
     for seed in 0..20 {
         let mut rng = StdRng::seed_from_u64(seed);
-        let outer = random_table(&mut rng, &["id", "k", "a", "b", "c"]);
-        let inner = random_table(&mut rng, &["k", "x", "y", "z"]);
+        let outer = random_table(&mut rng, &["id", "k", "a", "b", "c"], 6);
+        // Alternate between a subquery table of similar size and a much
+        // smaller one that `JoinSelection` moves to the build side.
+        let inner_rows = if seed % 2 == 0 { 6 } else { 2 };
+        let inner = random_table(&mut rng, &["k", "x", "y", "z"], inner_rows);
         for target_partitions in [1, 4] {
             for batch_size in [1, 3, 8192] {
                 let config = SessionConfig::new()
@@ -57,8 +68,9 @@ async fn null_aware_join_matches_reference() {
                 ctx.register_table("o", Arc::clone(&outer) as _).unwrap();
                 ctx.register_table("i", Arc::clone(&inner) as _).unwrap();
                 for (query, reference) in cases() {
-                    let actual = run(&ctx, &query).await;
-                    let expected = run(&ctx, &reference).await;
+                    let (actual, plan) = run(&ctx, &query).await;
+                    plans.record(plan.as_ref());
+                    let (expected, _) = run(&ctx, &reference).await;
                     assert_eq!(
                         actual, expected,
                         "seed={seed} target_partitions={target_partitions} \
@@ -66,6 +78,43 @@ async fn null_aware_join_matches_reference() {
                     );
                 }
             }
+        }
+    }
+    // A fuzz run that never reaches one of the plan shapes would be vacuous.
+    assert!(plans.left_anti > 0, "{plans:?}");
+    assert!(plans.right_anti > 0, "{plans:?}");
+    assert!(plans.correlated_right_anti > 0, "{plans:?}");
+}
+
+/// Counts the null-aware anti join plans the fuzz queries ran.
+#[derive(Debug, Default)]
+struct NullAwarePlans {
+    left_anti: usize,
+    right_anti: usize,
+    /// `RightAnti` joins with more than one key or a join filter, which
+    /// decide `NOT IN` per probe row.
+    correlated_right_anti: usize,
+}
+
+impl NullAwarePlans {
+    /// Counts the null-aware anti joins in `plan` and its descendants.
+    fn record(&mut self, plan: &dyn ExecutionPlan) {
+        if let Some(join) = plan.downcast_ref::<HashJoinExec>()
+            && join.null_aware
+        {
+            match join.join_type() {
+                JoinType::LeftAnti => self.left_anti += 1,
+                JoinType::RightAnti => {
+                    self.right_anti += 1;
+                    if join.on().len() > 1 || join.filter().is_some() {
+                        self.correlated_right_anti += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        for child in plan.children() {
+            self.record(child.as_ref());
         }
     }
 }
@@ -131,8 +180,9 @@ fn cases() -> Vec<(String, String)> {
 }
 
 /// A table of nullable `Int32` columns with values in `0..3`, split into up
-/// to three partitions. A column named `id` holds unique row ids instead.
-fn random_table(rng: &mut StdRng, columns: &[&str]) -> Arc<MemTable> {
+/// to three partitions of fewer than `max_rows` rows each. A column named `id`
+/// holds unique row ids instead.
+fn random_table(rng: &mut StdRng, columns: &[&str], max_rows: i32) -> Arc<MemTable> {
     let schema = Arc::new(Schema::new(
         columns
             .iter()
@@ -143,7 +193,7 @@ fn random_table(rng: &mut StdRng, columns: &[&str]) -> Arc<MemTable> {
     let mut next_id = 0;
     let partitions = (0..rng.random_range(1..4))
         .map(|_| {
-            let rows = rng.random_range(0..6);
+            let rows = rng.random_range(0..max_rows);
             let arrays = columns
                 .iter()
                 .map(|name| {
@@ -167,9 +217,16 @@ fn random_table(rng: &mut StdRng, columns: &[&str]) -> Arc<MemTable> {
     Arc::new(MemTable::try_new(schema, partitions).unwrap())
 }
 
-/// The rows of `sql`, sorted.
-async fn run(ctx: &SessionContext, sql: &str) -> Vec<String> {
-    let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+/// The rows of `sql`, sorted, and the physical plan that produced them.
+async fn run(ctx: &SessionContext, sql: &str) -> (Vec<String>, Arc<dyn ExecutionPlan>) {
+    let plan = ctx
+        .sql(sql)
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+    let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await.unwrap();
     let formatted = pretty_format_batches(&batches).unwrap().to_string();
     let mut rows: Vec<String> = formatted
         .lines()
@@ -178,5 +235,5 @@ async fn run(ctx: &SessionContext, sql: &str) -> Vec<String> {
         .map(String::from)
         .collect();
     rows.sort();
-    rows
+    (rows, plan)
 }

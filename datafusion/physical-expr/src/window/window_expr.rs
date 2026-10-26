@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 
 use arrow::array::BooleanArray;
-use arrow::array::{Array, ArrayRef, new_empty_array};
+use arrow::array::{Array, ArrayRef, make_comparator, new_empty_array};
 use arrow::compute::SortOptions;
 use arrow::compute::filter as arrow_filter;
 use arrow::compute::kernels::sort::SortColumn;
@@ -31,7 +31,6 @@ use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::RandomState;
-use datafusion_common::utils::compare_rows;
 use datafusion_common::{
     Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, exec_err,
     internal_err,
@@ -350,8 +349,13 @@ pub trait AggregateWindowExpr: WindowExpr {
 
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
-        let mut row_wise_results: Vec<ScalarValue> = vec![];
+        let mut row_wise_results: Vec<ScalarValue> =
+            Vec::with_capacity(length.saturating_sub(idx));
         let is_causal = self.get_window_frame().is_causal();
+        // These ordering arrays do not change during this evaluation. Compare
+        // their last/most-recent rows lazily once, since comparator setup can
+        // scan entire dictionary arrays to compute logical nulls.
+        let mut row_ahead = None;
         while idx < length {
             // Start search from the last_range. This squeezes searched range.
             let cur_range =
@@ -366,6 +370,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                     most_recent_row_order_bys,
                     self.order_by(),
                     idx,
+                    &mut row_ahead,
                 )?
             {
                 break;
@@ -421,6 +426,7 @@ pub(crate) fn filter_arrays(
 ///   columns.
 /// * `sort_exprs`: Defines the lexicographical ordering in question.
 /// * `idx`: The current index in the window frame.
+/// * `row_ahead`: The last/most-recent row comparison, reused within one evaluation.
 ///
 /// # Returns
 ///
@@ -431,6 +437,7 @@ pub(crate) fn is_end_bound_safe(
     most_recent_order_bys: Option<&[ArrayRef]>,
     sort_exprs: &[PhysicalSortExpr],
     idx: usize,
+    row_ahead: &mut Option<bool>,
 ) -> Result<bool> {
     if sort_exprs.is_empty() {
         // Early return if no sort expressions are present:
@@ -447,6 +454,7 @@ pub(crate) fn is_end_bound_safe(
             most_recent_order_bys.map(|items| &items[0]),
             &sort_exprs[0].options,
             idx,
+            row_ahead,
         ),
         WindowFrameContext::Groups {
             window_frame,
@@ -457,6 +465,7 @@ pub(crate) fn is_end_bound_safe(
             &order_bys[0],
             most_recent_order_bys.map(|items| &items[0]),
             &sort_exprs[0].options,
+            row_ahead,
         ),
     }
 }
@@ -504,18 +513,14 @@ fn is_end_bound_safe_for_range(
     most_recent_ob_col: Option<&ArrayRef>,
     sort_options: &SortOptions,
     idx: usize,
+    row_ahead: &mut Option<bool>,
 ) -> Result<bool> {
     match end_bound {
-        WindowFrameBound::Preceding(value) => {
-            let zero = ScalarValue::new_zero(&value.data_type())?;
-            if value.eq(&zero) {
-                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
-            } else {
-                Ok(true)
-            }
-        }
-        WindowFrameBound::CurrentRow => {
-            is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+        // A frame ending in `N PRECEDING` can only reach the end of the buffer
+        // when the current row's frame ends at its last peer, as for a NULL or
+        // NaN ORDER BY value, so it is safe once a row past its peers arrives.
+        WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow => {
+            is_row_ahead(orderby_col, most_recent_ob_col, sort_options, row_ahead)
         }
         WindowFrameBound::Following(delta) => {
             let Some(most_recent_ob_col) = most_recent_ob_col else {
@@ -560,23 +565,24 @@ fn is_end_bound_safe_for_groups(
     orderby_col: &ArrayRef,
     most_recent_ob_col: Option<&ArrayRef>,
     sort_options: &SortOptions,
+    row_ahead: &mut Option<bool>,
 ) -> Result<bool> {
     match end_bound {
         WindowFrameBound::Preceding(value) => {
             let zero = ScalarValue::new_zero(&value.data_type())?;
             if value.eq(&zero) {
-                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+                is_row_ahead(orderby_col, most_recent_ob_col, sort_options, row_ahead)
             } else {
                 Ok(true)
             }
         }
         WindowFrameBound::CurrentRow => {
-            is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+            is_row_ahead(orderby_col, most_recent_ob_col, sort_options, row_ahead)
         }
         WindowFrameBound::Following(ScalarValue::UInt64(Some(offset))) => {
             let delta = state.group_end_indices.len() - state.current_group_idx;
             if delta == (*offset as usize) + 1 {
-                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+                is_row_ahead(orderby_col, most_recent_ob_col, sort_options, row_ahead)
             } else {
                 Ok(false)
             }
@@ -585,23 +591,27 @@ fn is_end_bound_safe_for_groups(
     }
 }
 
-/// This utility function checks whether `current_cols` is ahead of the `old_cols`
-/// in terms of `sort_options`.
+/// Checks whether the most recent input row is ahead of the partition's last row.
+/// Both arrays stay unchanged during one evaluation, so reuse the comparison.
 fn is_row_ahead(
     old_col: &ArrayRef,
     current_col: Option<&ArrayRef>,
     sort_options: &SortOptions,
+    row_ahead: &mut Option<bool>,
 ) -> Result<bool> {
+    if let Some(ahead) = *row_ahead {
+        return Ok(ahead);
+    }
     let Some(current_col) = current_col else {
         return Ok(false);
     };
     if old_col.is_empty() || current_col.is_empty() {
         return Ok(false);
     }
-    let last_value = ScalarValue::try_from_array(old_col, old_col.len() - 1)?;
-    let current_value = ScalarValue::try_from_array(current_col, 0)?;
-    let cmp = compare_rows(&[current_value], &[last_value], &[*sort_options])?;
-    Ok(cmp.is_gt())
+    let cmp = make_comparator(old_col.as_ref(), current_col.as_ref(), *sort_options)?;
+    let ahead = cmp(old_col.len() - 1, 0).is_lt();
+    *row_ahead = Some(ahead);
+    Ok(ahead)
 }
 
 /// Get order by expression results inside `order_by_columns`.
@@ -787,7 +797,8 @@ mod tests {
             &SortOptions {
                 descending: false,
                 nulls_first: false
-            }
+            },
+            &mut None,
         )?);
         assert!(!is_row_ahead(
             &old_values,
@@ -795,7 +806,8 @@ mod tests {
             &SortOptions {
                 descending: false,
                 nulls_first: false
-            }
+            },
+            &mut None,
         )?);
 
         Ok(())
