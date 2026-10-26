@@ -332,8 +332,14 @@ Only committed files are checked. Commit a change before running it.
 
 CI runs two dependency checks, and `./dev/rust_lint.sh` runs both:
 
-- `ci/scripts/check_circular_dependencies.sh` builds and runs [`dev/depcheck`],
-  which fails on dependency cycles between DataFusion crates.
+- `ci/scripts/check_circular_dependencies.sh` fails on dependency cycles
+  between DataFusion crates, including one through a dev-dependency, which
+  Cargo allows when building but which prevents publishing the crates. It runs
+  `cargo publish --workspace --dry-run --no-verify`, which packages every crate
+  that does not set `publish = false` without building or uploading anything,
+  so it also fails on any other problem that would stop the crates from being
+  published to crates.io. It reads the crates.io index and accepts uncommitted
+  changes.
 - `ci/scripts/check_unused_dependencies.sh` runs `cargo machete --with-metadata`
   from the repository root. The lint suite installs [cargo-machete] with the
   version in `ci/scripts/utils/tool_versions.sh` if it is missing.
@@ -345,7 +351,6 @@ To run either check on its own:
 ./ci/scripts/check_unused_dependencies.sh
 ```
 
-[`dev/depcheck`]: https://github.com/apache/datafusion/tree/main/dev/depcheck
 [cargo-machete]: https://github.com/bnjbvr/cargo-machete
 
 ## Examples README Check

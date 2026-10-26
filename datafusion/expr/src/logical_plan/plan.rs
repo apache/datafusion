@@ -39,7 +39,9 @@ use crate::expr_rewriter::{
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::materialized_cte::MaterializedCte;
+use crate::logical_plan::materialized_cte::{
+    MaterializedCte, MaterializedCtePlan, MaterializedCteScan,
+};
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
     check_aggregate_and_window_nesting, check_no_window_functions,
@@ -111,7 +113,8 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Visiting and Rewriting `LogicalPlan`s
 ///
 /// Using the [`tree_node`] API, you can recursively walk all nodes in a
-/// `LogicalPlan`. For example, to find all column references in a plan:
+/// `LogicalPlan`. [`TreeNode::apply`] visits a node before its inputs. For
+/// example, to find table names and expressions in a plan:
 ///
 /// ```
 /// # use std::collections::HashSet;
@@ -134,17 +137,22 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 ///  .project(vec![col("name"), col("salary")])?
 ///  .build()?;
 ///
-/// // use apply to walk the plan and collect all expressions
+/// // use apply to walk the plan and collect table names and expressions
+/// let mut table_names = HashSet::new();
 /// let mut expressions = HashSet::new();
 /// plan.apply(|node| {
+///   if let LogicalPlan::TableScan(scan) = node {
+///     table_names.insert(scan.table_name.to_string());
+///   }
 ///   // collect all expressions in the plan
 ///   node.apply_expressions(|expr| {
 ///    expressions.insert(expr.clone());
 ///    Ok(TreeNodeRecursion::Continue) // control walk of expressions
 ///   })?;
 ///   Ok(TreeNodeRecursion::Continue) // control walk of plan nodes
-/// }).unwrap();
+/// })?;
 ///
+/// assert_eq!(table_names, HashSet::from(["employee".to_string()]));
 /// // we found the expression in projection and filter
 /// assert_eq!(expressions.len(), 3);
 /// println!("Found expressions: {:?}", expressions);
@@ -159,6 +167,11 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Ok(())
 /// # }
 /// ```
+///
+/// [`TreeNode::apply`] and [`TreeNode::rewrite`] traverse plan inputs, but do
+/// not visit subqueries embedded in expressions. Use
+/// [`LogicalPlan::apply_with_subqueries`] and
+/// [`LogicalPlan::rewrite_with_subqueries`] to include those subqueries.
 ///
 /// You can also rewrite plans using the [`tree_node`] API. For example, to
 /// replace the filter predicate in a plan:
@@ -211,6 +224,56 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Ok(())
 /// # }
 /// ```
+///
+/// For more control over traversal, implement a [`TreeNodeRewriter`] and use
+/// [`TreeNode::rewrite`]. Its `f_down` method runs before rewriting inputs and
+/// `f_up` runs after them. The following example removes Filter nodes in
+/// `f_up` by replacing each with its already rewritten input. This changes
+/// query semantics and is only an illustration of the API.
+///
+/// ```
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_expr::{col, lit, LogicalPlan, table_scan};
+/// # use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+/// # use datafusion_common::Result;
+/// # fn main() -> Result<()> {
+/// # let schema = Schema::new(vec![
+/// #     Field::new("name", DataType::Utf8, false),
+/// #     Field::new("salary", DataType::Int32, false),
+/// # ]);
+/// let plan = table_scan(Some("employee"), &schema, None)?
+///     .filter(col("salary").gt(lit(1000)))?
+///     .project(vec![col("name"), col("salary")])?
+///     .build()?;
+///
+/// struct RemoveFilters;
+///
+/// impl TreeNodeRewriter for RemoveFilters {
+///     type Node = LogicalPlan;
+///
+///     fn f_up(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+///         match node {
+///             LogicalPlan::Filter(filter) => {
+///                 Ok(Transformed::yes(filter.input.as_ref().clone()))
+///             }
+///             _ => Ok(Transformed::no(node)),
+///         }
+///     }
+/// }
+///
+/// let rewritten = plan.rewrite(&mut RemoveFilters)?;
+/// assert!(rewritten.transformed);
+/// assert_eq!(rewritten.data.display_indent().to_string(),
+///     "Projection: employee.name, employee.salary\n  TableScan: employee");
+/// # Ok(())
+/// # }
+/// ```
+///
+/// See the [plan walking example] for a complete walkthrough, including
+/// collecting tables and filter predicates from subqueries.
+///
+/// [`TreeNodeRewriter`]: datafusion_common::tree_node::TreeNodeRewriter
+/// [plan walking example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/plan_walk.rs
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
@@ -302,6 +365,9 @@ pub enum LogicalPlan {
     /// Match each left row with at most one ordered row from the right input.
     /// This is used to implement SQL `ASOF JOIN`.
     AsOfJoin(AsOfJoin),
+    /// A node of a SQL `WITH x AS MATERIALIZED (...)` CTE. See
+    /// [`MaterializedCtePlan`].
+    MaterializedCte(MaterializedCtePlan),
 }
 
 impl Default for LogicalPlan {
@@ -358,6 +424,8 @@ impl LogicalPlan {
             LogicalPlan::Explain(explain) => &explain.schema,
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => cte.schema(),
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => &scan.schema,
             LogicalPlan::Union(Union { schema, .. }) => schema,
             LogicalPlan::DescribeTable(DescribeTable { output_schema, .. }) => {
                 output_schema
@@ -476,6 +544,12 @@ impl LogicalPlan {
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+                cte,
+                continuation,
+                ..
+            })) => vec![cte, continuation],
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => vec![],
             LogicalPlan::Union(Union { inputs, .. }) => {
                 inputs.iter().map(|arc| arc.as_ref()).collect()
             }
@@ -612,12 +686,11 @@ impl LogicalPlan {
                     .map_or(Ok(None), |v| v.map(Some))
             }
             // A materialized CTE outputs the output of its continuation.
-            LogicalPlan::Extension(Extension { node }) => {
-                match node.as_any().downcast_ref::<MaterializedCte>() {
-                    Some(cte) => cte.continuation.head_output_expr(),
-                    None => Ok(None),
-                }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                cte.continuation.head_output_expr()
             }
+            LogicalPlan::Extension(_)
+            | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => Ok(None),
             LogicalPlan::Subquery(_) => Ok(None),
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Statement(_)
@@ -750,6 +823,10 @@ impl LogicalPlan {
             }) => SubqueryAlias::try_new(input, alias).map(LogicalPlan::SubqueryAlias),
             LogicalPlan::Limit(_) => Ok(self),
             LogicalPlan::Ddl(_) => Ok(self),
+            // A `Cte` takes the schema of its continuation, and does not store
+            // it. A `Scan` keeps the schema of the CTE body, which also keeps
+            // its schema.
+            LogicalPlan::MaterializedCte(_) => Ok(self),
             LogicalPlan::Extension(Extension { node }) => {
                 // todo make an API that does not require cloning
                 // This requires a copy of the extension nodes expressions and inputs
@@ -1167,6 +1244,18 @@ impl LogicalPlan {
             LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
                 node: e.node.with_exprs_and_inputs(expr, inputs)?,
             })),
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                self.assert_no_expressions(expr)?;
+                let (body, continuation) = self.only_two_inputs(inputs)?;
+                Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                    cte.with_new_inputs(Arc::new(body), Arc::new(continuation)),
+                )))
+            }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => {
+                self.assert_no_expressions(expr)?;
+                self.assert_no_inputs(inputs)?;
+                Ok(self.clone())
+            }
             LogicalPlan::Union(Union { schema, .. }) => {
                 self.assert_no_expressions(expr)?;
                 let input_schema = inputs[0].schema();
@@ -1542,7 +1631,8 @@ impl LogicalPlan {
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::Extension(_) => None,
+            | LogicalPlan::Extension(_)
+            | LogicalPlan::MaterializedCte(_) => None,
         }
     }
 
@@ -1619,7 +1709,8 @@ impl LogicalPlan {
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::Extension(_) => 0,
+            | LogicalPlan::Extension(_)
+            | LogicalPlan::MaterializedCte(_) => 0,
         }
     }
 
@@ -1652,6 +1743,7 @@ impl LogicalPlan {
             LogicalPlan::Explain(_) => Ok(None),
             LogicalPlan::Analyze(_) => Ok(None),
             LogicalPlan::Extension(_) => Ok(None),
+            LogicalPlan::MaterializedCte(_) => Ok(None),
             LogicalPlan::Distinct(_) => Ok(None),
             LogicalPlan::Dml(_) => Ok(None),
             LogicalPlan::Ddl(_) => Ok(None),
@@ -1691,6 +1783,7 @@ impl LogicalPlan {
             LogicalPlan::Explain(_) => Ok(None),
             LogicalPlan::Analyze(_) => Ok(None),
             LogicalPlan::Extension(_) => Ok(None),
+            LogicalPlan::MaterializedCte(_) => Ok(None),
             LogicalPlan::Distinct(_) => Ok(None),
             LogicalPlan::Dml(_) => Ok(None),
             LogicalPlan::Ddl(_) => Ok(None),
@@ -2220,7 +2313,11 @@ impl LogicalPlan {
                         Ok(())
                     }
                     LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
-                        write!(f, "Dml: op=[{op}] table=[{table_name}]")
+                        write!(f, "Dml: op=[{op}] table=[{table_name}]")?;
+                        if let WriteOp::MergeInto(merge_op) = op {
+                            write!(f, " {merge_op}")?;
+                        }
+                        Ok(())
                     }
                     LogicalPlan::Copy(CopyTo {
                         input: _,
@@ -2433,6 +2530,16 @@ impl LogicalPlan {
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union(_) => write!(f, "Union"),
                     LogicalPlan::Extension(e) => e.node.fmt_for_explain(f),
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                        MaterializedCte { name, .. },
+                    )) => {
+                        write!(f, "MaterializedCte: name={name}")
+                    }
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+                        MaterializedCteScan { name, .. },
+                    )) => {
+                        write!(f, "MaterializedCteScan: name={name}")
+                    }
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
                     }

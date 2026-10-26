@@ -39,8 +39,8 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraint, Constraints, Result, ScalarValue, Statistics, internal_datafusion_err,
-    internal_err,
+    Constraint, Constraints, Result, ScalarValue, SplitPoint, Statistics,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
@@ -52,7 +52,9 @@ use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
+use datafusion_physical_expr::{
+    EquivalenceProperties, Partitioning, RangePartitioning, split_conjunction,
+};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -613,15 +615,52 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
     }
 }
 
-/// Builds output partitioning over `partition_cols` (resolved to their indices in
-/// `schema`) with `partition_count` partitions. Returns `None` when there are no
-/// partition columns. Callers use this to declare the output partitioning of a scan
-/// whose file groups are organized by partition column values.
+/// Builds `Partitioning::Hash` over `partition_cols` (resolved to their indices in
+/// `schema`). Returns `None` when there are no partition columns.
+#[deprecated(
+    since = "56.0.0",
+    note = "Use `output_range_partitioning_from_split_points` instead"
+)]
 pub fn output_partitioning_from_partition_fields(
     schema: &Schema,
     partition_cols: &Fields,
     partition_count: usize,
 ) -> Option<Partitioning> {
+    let exprs = partition_column_exprs(schema, partition_cols)?;
+    Some(Partitioning::Hash(exprs, partition_count))
+}
+
+/// Builds the [`Partitioning::Range`] for file groups from
+/// [`FileGroup::group_by_partition_values_with_split_points`], each column sorted with
+/// `SortOptions::default()` to match how the groups were cut. Returns `None` when there
+/// are no partition columns or one is missing from `schema`, and errors when
+/// `split_points` are not strictly ordered. Split point values must have the partition
+/// column types in `schema`.
+pub fn output_range_partitioning_from_split_points(
+    schema: &Schema,
+    partition_cols: &Fields,
+    split_points: Vec<SplitPoint>,
+) -> Result<Option<Partitioning>> {
+    let Some(exprs) = partition_column_exprs(schema, partition_cols) else {
+        return Ok(None);
+    };
+    let sort_exprs = exprs
+        .into_iter()
+        .map(PhysicalSortExpr::new_default)
+        .collect::<Vec<_>>();
+    let Some(ordering) = LexOrdering::new(sort_exprs) else {
+        return Ok(None);
+    };
+    let range = RangePartitioning::try_new(ordering, split_points)?;
+    Ok(Some(Partitioning::Range(range)))
+}
+
+/// Resolves `partition_cols` to `Column` expressions in `schema`, or `None` when there
+/// are no partition columns or one is missing.
+fn partition_column_exprs(
+    schema: &Schema,
+    partition_cols: &Fields,
+) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
     if partition_cols.is_empty() {
         return None;
     }
@@ -635,8 +674,7 @@ pub fn output_partitioning_from_partition_fields(
             .position(|field| field.name() == name)?;
         exprs.push(Arc::new(Column::new(name, idx)));
     }
-
-    Some(Partitioning::Hash(exprs, partition_count))
+    Some(exprs)
 }
 
 fn project_output_partitioning(
@@ -832,6 +870,23 @@ impl DataSource for FileScanConfig {
         // would invalidate the partition-to-file-group mapping.
         if self.output_partitioning.is_some() {
             return Ok(None);
+        }
+
+        // An ordered scan can use the size-balanced split of an unordered
+        // scan when every new group is still sorted. That split keeps the
+        // files in group order and only moves the group boundaries, so groups
+        // like `[f1, f2], [f3, f4]` with a large `f1` become
+        // `[f1 head], [f1 tail, f2], ...`.
+        if output_ordering.is_some()
+            && let Some(balanced) = self.file_source.repartitioned(
+                target_partitions,
+                repartition_file_min_size,
+                None,
+                self,
+            )?
+            && balanced.validated_output_ordering() == self.validated_output_ordering()
+        {
+            return Ok(Some(Arc::new(balanced)));
         }
 
         let source = self.file_source.repartitioned(
@@ -3150,6 +3205,14 @@ mod tests {
 
         let partitioning = config.output_partitioning();
         assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
+
+        let partitioning = output_range_partitioning_from_split_points(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            vec![],
+        )
+        .unwrap();
+        assert!(partitioning.is_none());
     }
 
     #[test]
@@ -3174,21 +3237,43 @@ mod tests {
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f3.parquet".to_string(), 1024)]),
         ];
-        config.output_partitioning = output_partitioning_from_partition_fields(
+        let dict = |v: &str| wrap_partition_value_in_dict(ScalarValue::from(v));
+        config.output_partitioning = output_range_partitioning_from_split_points(
             config.file_source.table_schema().table_schema(),
             config.table_partition_cols(),
-            config.file_groups.len(),
-        );
+            vec![
+                SplitPoint::new(vec![dict("2026-09")]),
+                SplitPoint::new(vec![dict("2026-10")]),
+            ],
+        )
+        .unwrap();
 
         let partitioning = config.output_partitioning();
         match partitioning {
-            Partitioning::Hash(exprs, num_partitions) => {
-                assert_eq!(num_partitions, 3);
-                assert_eq!(exprs.len(), 1);
-                assert_eq!(exprs[0].downcast_ref::<Column>().unwrap().name(), "date");
+            Partitioning::Range(range) => {
+                assert_eq!(range.partition_count(), 3);
+                assert_eq!(range.ordering().len(), 1);
+                let sort_expr = &range.ordering()[0];
+                assert_eq!(
+                    sort_expr.expr.downcast_ref::<Column>().unwrap().name(),
+                    "date"
+                );
+                assert_eq!(sort_expr.options, arrow::compute::SortOptions::default());
+                assert_eq!(range.split_points().len(), 2);
             }
-            _ => panic!("Expected Hash partitioning"),
+            other => panic!("Expected Range partitioning, got {other}"),
         }
+
+        let err = output_range_partitioning_from_split_points(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            vec![
+                SplitPoint::new(vec![dict("2026-10")]),
+                SplitPoint::new(vec![dict("2026-09")]),
+            ],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("strictly ordered"), "{err}");
 
         // Test multiple partition columns
         let multiple_partition_cols = vec![
@@ -3206,24 +3291,25 @@ mod tests {
             FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
         ];
-        config.output_partitioning = output_partitioning_from_partition_fields(
+        config.output_partitioning = output_range_partitioning_from_split_points(
             config.file_source.table_schema().table_schema(),
             config.table_partition_cols(),
-            config.file_groups.len(),
-        );
+            vec![SplitPoint::new(vec![dict("2026"), dict("09")])],
+        )
+        .unwrap();
 
         let partitioning = config.output_partitioning();
         match partitioning {
-            Partitioning::Hash(exprs, num_partitions) => {
-                assert_eq!(num_partitions, 2);
-                assert_eq!(exprs.len(), 2);
-                let col_names: Vec<_> = exprs
+            Partitioning::Range(range) => {
+                assert_eq!(range.partition_count(), 2);
+                let col_names: Vec<_> = range
+                    .ordering()
                     .iter()
-                    .map(|e| e.downcast_ref::<Column>().unwrap().name())
+                    .map(|e| e.expr.downcast_ref::<Column>().unwrap().name())
                     .collect();
                 assert_eq!(col_names, vec!["year", "month"]);
             }
-            _ => panic!("Expected Hash partitioning"),
+            other => panic!("Expected Range partitioning, got {other}"),
         }
     }
 
@@ -3290,6 +3376,176 @@ mod tests {
                 }],
             },
         ))
+    }
+
+    fn ordered_scan_with_groups(file_groups: Vec<FileGroup>) -> FileScanConfig {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(MockSource::new(schema)),
+        )
+        .with_file_groups(file_groups)
+        .with_output_ordering(vec![LexOrdering::new(vec![sort_expr]).unwrap()])
+        .build()
+    }
+
+    fn sized_file_with_stats(
+        name: &str,
+        size: u64,
+        min: f64,
+        max: f64,
+    ) -> PartitionedFile {
+        let mut file = make_file_with_stats(name, min, max);
+        file.object_meta.size = size;
+        file
+    }
+
+    /// The files of each group, with whether each file reads only a range
+    fn group_files(config: &FileScanConfig) -> Vec<Vec<(&str, bool)>> {
+        config
+            .file_groups
+            .iter()
+            .map(|group| {
+                group
+                    .iter()
+                    .map(|f| (f.object_meta.location.as_ref(), f.range.is_some()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn group_sizes(config: &FileScanConfig) -> Vec<u64> {
+        config
+            .file_groups
+            .iter()
+            .map(|group| group.iter().map(|f| f.effective_size()).sum())
+            .collect()
+    }
+
+    /// An ordered scan whose files are sorted across groups gets the same
+    /// size-balanced split as an unordered scan and keeps its ordering.
+    #[test]
+    fn repartition_balances_ordered_groups() -> Result<()> {
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![
+                sized_file_with_stats("f1", 8000, 0.0, 9.0),
+                sized_file_with_stats("f2", 8000, 10.0, 19.0),
+            ]),
+            FileGroup::new(vec![
+                sized_file_with_stats("f3", 1000, 20.0, 29.0),
+                sized_file_with_stats("f4", 1000, 30.0, 39.0),
+            ]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(group_sizes(&config), vec![16000, 2000]);
+
+        let repartitioned = DataSource::repartitioned(&config, 4, 0, ordering)?
+            .expect("ordered groups should be rebalanced");
+        let repartitioned = repartitioned
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig");
+        assert_eq!(group_sizes(repartitioned), vec![4500, 4500, 4500, 4500]);
+        assert_eq!(
+            repartitioned.validated_output_ordering(),
+            config.validated_output_ordering()
+        );
+        Ok(())
+    }
+
+    /// If moving the group boundaries would put overlapping files in one
+    /// group, the scan keeps its groups and its ordering.
+    #[test]
+    fn repartition_keeps_ordered_groups_when_rebalancing_breaks_order() -> Result<()> {
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![
+                sized_file_with_stats("f1", 8000, 0.0, 9.0),
+                sized_file_with_stats("f2", 8000, 10.0, 19.0),
+            ]),
+            FileGroup::new(vec![
+                sized_file_with_stats("f3", 1000, 5.0, 15.0),
+                sized_file_with_stats("f4", 1000, 16.0, 25.0),
+            ]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(config.validated_output_ordering().len(), 1);
+
+        assert!(DataSource::repartitioned(&config, 4, 0, ordering)?.is_none());
+        Ok(())
+    }
+
+    /// With `NULLS FIRST`, a file with NULLs can only be the first file of a
+    /// group, so a size-balanced split that puts it after another file is not
+    /// used.
+    #[test]
+    fn repartition_keeps_ordered_groups_when_rebalancing_misplaces_nulls() -> Result<()> {
+        let mut with_nulls = sized_file_with_stats("f2", 1000, 10.0, 19.0);
+        Arc::make_mut(with_nulls.statistics.as_mut().unwrap()).column_statistics[0]
+            .null_count = Precision::Exact(1);
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![sized_file_with_stats("f1", 8000, 0.0, 9.0)]),
+            FileGroup::new(vec![with_nulls]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(config.validated_output_ordering().len(), 1);
+
+        let repartitioned = DataSource::repartitioned(&config, 4, 0, ordering)?
+            .expect("the large file should be split");
+        let repartitioned = repartitioned
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig");
+        assert_eq!(
+            group_files(repartitioned),
+            vec![
+                vec![("f1", true)],
+                vec![("f2", true)],
+                vec![("f1", true)],
+                vec![("f1", true)],
+            ]
+        );
+        assert_eq!(
+            repartitioned.validated_output_ordering(),
+            config.validated_output_ordering()
+        );
+        Ok(())
+    }
+
+    /// If moving the group boundaries would put overlapping files in one
+    /// group, the ordered split is used instead: it keeps multi-file groups
+    /// and only splits single-file groups.
+    #[test]
+    fn repartition_falls_back_to_ordered_split_when_rebalancing_breaks_order()
+    -> Result<()> {
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![
+                sized_file_with_stats("f1", 8000, 0.0, 9.0),
+                sized_file_with_stats("f2", 8000, 10.0, 19.0),
+            ]),
+            FileGroup::new(vec![sized_file_with_stats("f3", 1000, 5.0, 15.0)]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(config.validated_output_ordering().len(), 1);
+
+        let repartitioned = DataSource::repartitioned(&config, 4, 0, ordering)?
+            .expect("the single-file group should be split");
+        let repartitioned = repartitioned
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig");
+        assert_eq!(
+            group_files(repartitioned),
+            vec![
+                vec![("f1", false), ("f2", false)],
+                vec![("f3", true)],
+                vec![("f3", true)],
+                vec![("f3", true)],
+            ]
+        );
+        assert_eq!(
+            repartitioned.validated_output_ordering(),
+            config.validated_output_ordering()
+        );
+        Ok(())
     }
 
     fn make_exact_empty_file(name: &str) -> PartitionedFile {

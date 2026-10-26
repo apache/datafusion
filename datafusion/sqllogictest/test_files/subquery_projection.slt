@@ -403,8 +403,9 @@ statement ok
 DROP TABLE t2;
 
 # A non-equality correlation leaves one key and a residual join filter. The
-# null-aware `LeftAnti` hash join applies the residual filter when it looks
-# for UNKNOWN rows. For `k = 1` the key is NULL and the correlated subquery
+# null-aware anti hash join (here swapped to a `RightAnti` that builds on the
+# smaller subquery) applies the residual filter when it looks for UNKNOWN
+# rows. For `k = 1` the key is NULL and the correlated subquery
 # result is empty, and `NULL NOT IN (<empty set>)` is TRUE. Both rows are
 # correct.
 statement ok
@@ -438,10 +439,10 @@ logical_plan
 05)------Projection: CAST(rb.k AS Int64), rb.z
 06)--------TableScan: rb projection=[k, z]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(nullif(ra.k,Int64(1))@2, rb.k@0)], filter=z@1 > z@0, projection=[k@0], null_aware
-02)--ProjectionExec: expr=[k@0 as k, z@1 as z, nullif(CAST(k@0 AS Int64), 1) as nullif(ra.k,Int64(1))]
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(rb.k@0, nullif(ra.k,Int64(1))@2)], filter=z@1 > z@0, projection=[k@0], null_aware
+02)--ProjectionExec: expr=[CAST(k@0 AS Int64) as rb.k, z@1 as z]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)--ProjectionExec: expr=[CAST(k@0 AS Int64) as rb.k, z@1 as z]
+04)--ProjectionExec: expr=[k@0 as k, z@1 as z, nullif(CAST(k@0 AS Int64), 1) as nullif(ra.k,Int64(1))]
 05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok

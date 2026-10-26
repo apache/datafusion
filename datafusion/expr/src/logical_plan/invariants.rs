@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::MaterializedCtePlan;
 use datafusion_common::{
     DFSchemaRef, Result, assert_or_internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
@@ -355,6 +356,9 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
             }
         },
         LogicalPlan::Extension(_) => Ok(()),
+        // A materialized CTE is not checked, as when it was an extension
+        // node. `PullUpCorrelatedExpr` rewrites its continuation, or stops.
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(_)) => Ok(()),
         plan => check_no_outer_references(plan),
     }
 }

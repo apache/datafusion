@@ -16,11 +16,23 @@
 // under the License.
 
 //! [`OptimizeProjections`] identifies and eliminates unused columns
+//!
+//! # Precedence over `PushDownLeafProjections`
+//!
+//! `OptimizeProjections` merges adjacent projections, including a recovery
+//! projection over an extraction projection that
+//! [`PushDownLeafProjections`] creates. To keep the two rules from undoing each
+//! other, `PushDownLeafProjections` only creates that pair when the extraction
+//! projection moves below the input. See the module documentation of
+//! [`extract_leaf_expressions`](crate::extract_leaf_expressions).
+//!
+//! [`PushDownLeafProjections`]: crate::extract_leaf_expressions::PushDownLeafProjections
 
 mod required_indices;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_expr::logical_plan::MaterializedCtePlan;
 use std::sync::Arc;
 
 use datafusion_common::{
@@ -364,8 +376,18 @@ fn optimize_projections(
                     .collect()
             }
         }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+            // The scans are leaves whose schema is the schema of the body, so
+            // the body keeps every column. The output is the output of the
+            // continuation, so the continuation needs what the parent needs.
+            vec![
+                RequiredIndices::new_for_all_exprs(&cte.cte),
+                RequiredIndices::new_from_indices(indices.into_inner()),
+            ]
+        }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
+        | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
