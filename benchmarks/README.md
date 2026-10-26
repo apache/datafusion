@@ -87,6 +87,25 @@ To run for specific query, for example Q21
 ./bench.sh run tpch10 21
 ```
 
+## Statistics accuracy reports
+
+Compare estimated operator row counts with actual output using the `statistics`
+command. Parquet metadata may lack distinct counts (NDVs), and a key's min/max
+range can contain gaps. To collect exact NDVs for selected join keys before
+planning the queries, pass `--collect-ndv TABLE.COLUMN` for each key:
+
+```shell
+cargo run --profile ci -p datafusion-benchmarks --bin dfbench -- statistics \
+  --path /path/to/tpch/data --query_path /path/to/repro.sql \
+  --collect-ndv orders.o_orderkey --collect-ndv lineitem.l_orderkey
+```
+
+Collection scans the selected columns and uses `COUNT(DISTINCT ...)` across all
+files. NULL is excluded. Memory use grows with NDV, and collection happens before
+the reported query execution. Without this option, planning uses file metadata.
+Collected statistics are reused only for scans whose file metadata matches the
+collected snapshot; pruned subsets and changed listings use file statistics.
+
 ## Compile profile benchmark
 
 Generate the data required for the compile profile helper (TPC-H SF=1):
@@ -147,12 +166,14 @@ To verify that datafusion picked up your configuration, run the benchmarks with 
 ## Comparing performance of main and a branch
 
 For TPC-H
+
 ```shell
 ./benchmarks/compare_tpch.sh main mybranch
 ```
 
-For TPC-DS. 
-To get data in `DATA_DIR` for TPCDS, please follow instructions in `./benchmarks/bench.sh data tcpds` 
+For TPC-DS.
+To get data in `DATA_DIR` for TPCDS, please follow instructions in `./benchmarks/bench.sh data tcpds`
+
 ```shell
 DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/ ./benchmarks/compare_tpcds.sh main mybranch
 ```
@@ -1035,6 +1056,7 @@ The checked-in result files hold the counts for that default, so `--result-mode 
 
 ./bench.sh run projection_subquery
 ```
+
 ## Cancellation
 
 Test performance of cancelling queries.
@@ -1074,6 +1096,7 @@ Benchmark for queries on pre-sorted data to test sort order optimization.
 This benchmark uses a subset of the ClickBench dataset (hits.parquet, ~14GB) that has been pre-sorted by the EventTime column. The queries are designed to test DataFusion's performance when the data is already sorted as is common in timeseries workloads.
 
 The benchmark includes queries that:
+
 - Scan pre-sorted data with ORDER BY clauses that match the sort order
 - Test reverse scans on sorted data
 - Verify the performance result
@@ -1081,6 +1104,7 @@ The benchmark includes queries that:
 #### Generating Sorted Data
 
 The sorted dataset is automatically generated from the ClickBench partitioned dataset. You can configure the memory used during the sorting process with the `DATAFUSION_MEMORY_GB` environment variable. The default memory limit is 12GB.
+
 ```bash
 ./bench.sh data clickbench_sorted
 ```
@@ -1092,6 +1116,7 @@ DATAFUSION_MEMORY_GB=16 ./bench.sh data clickbench_sorted
 ```
 
 This command will:
+
 1. Download the ClickBench partitioned dataset if not present
 2. Sort hits.parquet by EventTime in ascending order
 3. Save the sorted file as hits_sorted.parquet
@@ -1110,17 +1135,18 @@ Benchmarks for sort pushdown optimizations on TPC-H lineitem data (SF=1).
 
 ### Variants
 
-| Benchmark | Description |
-|-----------|-------------|
-| `sort_pushdown` | Baseline — no `WITH ORDER`, tests standard sort behavior |
-| `sort_pushdown_sorted` | With `WITH ORDER` — tests sort elimination on sorted files |
-| `sort_pushdown_inexact` | Inexact path (`--sorted` DESC) — multi-file with scrambled RGs, tests reverse scan + RG reorder |
-| `sort_pushdown_inexact_unsorted` | No `WITH ORDER` — same data, tests Unsupported path + RG reorder |
-| `sort_pushdown_inexact_overlap` | Multi-file scrambled RGs — streaming data scenario |
+| Benchmark                        | Description                                                                                     |
+| -------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `sort_pushdown`                  | Baseline — no `WITH ORDER`, tests standard sort behavior                                        |
+| `sort_pushdown_sorted`           | With `WITH ORDER` — tests sort elimination on sorted files                                      |
+| `sort_pushdown_inexact`          | Inexact path (`--sorted` DESC) — multi-file with scrambled RGs, tests reverse scan + RG reorder |
+| `sort_pushdown_inexact_unsorted` | No `WITH ORDER` — same data, tests Unsupported path + RG reorder                                |
+| `sort_pushdown_inexact_overlap`  | Multi-file scrambled RGs — streaming data scenario                                              |
 
 ### Queries
 
 **sort_pushdown / sort_pushdown_sorted** (q1-q8):
+
 - q1-q4: ASC queries (sort elimination with `--sorted`)
 - q5-q8: DESC LIMIT queries (reverse scan + TopK optimization with `--sorted`)
 

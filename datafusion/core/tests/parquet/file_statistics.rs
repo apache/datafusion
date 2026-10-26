@@ -19,6 +19,7 @@ use std::fs;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
+use arrow::{array::Int64Array, record_batch::RecordBatch};
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
@@ -47,6 +48,212 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use tempfile::tempdir;
+
+fn write_statistics_keys(path: &std::path::Path, keys: Vec<Option<i64>>) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("payload", DataType::Int64, false),
+        Field::new("key", DataType::Int64, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(vec![0; keys.len()])),
+            Arc::new(Int64Array::from(keys)),
+        ],
+    )
+    .unwrap();
+    let properties = parquet::file::properties::WriterProperties::builder()
+        .set_max_row_group_row_count(Some(2))
+        .build();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(
+        fs::File::create(path).unwrap(),
+        schema,
+        Some(properties),
+    )
+    .unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+}
+
+#[tokio::test]
+async fn collected_statistics_deduplicate_across_files_and_row_groups() {
+    let directory = tempdir().unwrap();
+    write_statistics_keys(
+        &directory.path().join("a.parquet"),
+        vec![Some(1), Some(5), None, Some(9)],
+    );
+    write_statistics_keys(
+        &directory.path().join("b.parquet"),
+        vec![Some(1), Some(9), None],
+    );
+    let ctx = SessionContext::new();
+    let table = get_listing_table(
+        &ListingTableUrl::parse(directory.path().to_str().unwrap()).unwrap(),
+        None,
+        &ListingOptions::new(Arc::new(ParquetFormat::default())),
+    )
+    .await
+    .with_collected_statistics(&ctx.state(), &["key", "payload", "key"])
+    .await
+    .unwrap();
+
+    let plan = table.scan(&ctx.state(), None, &[], None).await.unwrap();
+    let stats = StatisticsContext::new()
+        .compute(plan.as_ref(), &StatisticsArgs::new())
+        .unwrap();
+    assert_eq!(stats.num_rows, Precision::Exact(7));
+    assert_eq!(
+        stats.column_statistics[0].distinct_count,
+        Precision::Exact(1)
+    );
+    assert_eq!(
+        stats.column_statistics[1].distinct_count,
+        Precision::Exact(3)
+    );
+    assert_eq!(stats.column_statistics[1].null_count, Precision::Exact(2));
+
+    let plan = table
+        .scan(&ctx.state(), Some(&[1]), &[], None)
+        .await
+        .unwrap();
+    let stats = StatisticsContext::new()
+        .compute(plan.as_ref(), &StatisticsArgs::new())
+        .unwrap();
+    assert_eq!(stats.column_statistics.len(), 1);
+    assert_eq!(
+        stats.column_statistics[0].distinct_count,
+        Precision::Exact(3)
+    );
+}
+
+#[tokio::test]
+async fn collected_statistics_handle_empty_and_all_null_columns() {
+    for keys in [vec![], vec![None, None]] {
+        let directory = tempdir().unwrap();
+        let rows = keys.len();
+        write_statistics_keys(&directory.path().join("a.parquet"), keys);
+        let ctx = SessionContext::new();
+        let table = get_listing_table(
+            &ListingTableUrl::parse(directory.path().to_str().unwrap()).unwrap(),
+            None,
+            &ListingOptions::new(Arc::new(ParquetFormat::default())),
+        )
+        .await
+        .with_collected_statistics(&ctx.state(), &["key"])
+        .await
+        .unwrap();
+        let plan = table.scan(&ctx.state(), None, &[], None).await.unwrap();
+        let stats = StatisticsContext::new()
+            .compute(plan.as_ref(), &StatisticsArgs::new())
+            .unwrap();
+        assert_eq!(stats.num_rows, Precision::Exact(rows));
+        assert_eq!(
+            stats.column_statistics[1].distinct_count,
+            Precision::Exact(0)
+        );
+        assert_eq!(
+            stats.column_statistics[1].null_count,
+            Precision::Exact(rows)
+        );
+    }
+}
+
+#[tokio::test]
+async fn collected_statistics_improve_sparse_join_estimates() {
+    let directory = tempdir().unwrap();
+    write_statistics_keys(
+        &directory.path().join("orders.parquet"),
+        vec![Some(1), Some(5), Some(12)],
+    );
+    write_statistics_keys(
+        &directory.path().join("lineitem.parquet"),
+        [Some(1), Some(5), Some(12)].repeat(4),
+    );
+    let config = SessionConfig::new().with_target_partitions(1);
+    for collect in [false, true] {
+        let ctx = SessionContext::new_with_config(config.clone());
+        for name in ["orders", "lineitem"] {
+            let path = directory.path().join(format!("{name}.parquet"));
+            let mut table = get_listing_table(
+                &ListingTableUrl::parse(path.to_str().unwrap()).unwrap(),
+                None,
+                &ListingOptions::new(Arc::new(ParquetFormat::default())),
+            )
+            .await;
+            if collect {
+                table = table
+                    .with_collected_statistics(&ctx.state(), &["key"])
+                    .await
+                    .unwrap();
+            }
+            ctx.register_table(name, Arc::new(table)).unwrap();
+        }
+        let df = ctx
+            .sql("SELECT l.key FROM orders o JOIN lineitem l ON o.key = l.key")
+            .await
+            .unwrap();
+        let plan = df.create_physical_plan().await.unwrap();
+        let stats = StatisticsContext::new()
+            .compute(plan.as_ref(), &StatisticsArgs::new())
+            .unwrap();
+        assert_eq!(
+            stats.num_rows,
+            Precision::Inexact(if collect { 12 } else { 3 })
+        );
+        let batches = datafusion_physical_plan::collect(plan, ctx.task_ctx())
+            .await
+            .unwrap();
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 12);
+    }
+}
+
+#[tokio::test]
+async fn collected_statistics_are_not_reused_for_changed_files_or_pruned_subsets() {
+    let directory = tempdir().unwrap();
+    for partition in [1, 2] {
+        let path = directory.path().join(format!("p={partition}"));
+        fs::create_dir(&path).unwrap();
+        write_statistics_keys(&path.join("a.parquet"), vec![Some(1), Some(5)]);
+    }
+    let ctx = SessionContext::new();
+    let table = get_listing_table(
+        &ListingTableUrl::parse(directory.path().to_str().unwrap()).unwrap(),
+        None,
+        &ListingOptions::new(Arc::new(ParquetFormat::default()))
+            .with_table_partition_cols(vec![("p".into(), DataType::Int32)]),
+    )
+    .await
+    .with_collected_statistics(&ctx.state(), &["key", "p"])
+    .await
+    .unwrap();
+    let plan = table
+        .scan(&ctx.state(), None, &[col("p").eq(lit(1))], None)
+        .await
+        .unwrap();
+    let stats = StatisticsContext::new()
+        .compute(plan.as_ref(), &StatisticsArgs::new())
+        .unwrap();
+    assert_eq!(stats.num_rows, Precision::Exact(2));
+    assert_eq!(stats.column_statistics[1].distinct_count, Precision::Absent);
+
+    write_statistics_keys(
+        &directory.path().join("p=1").join("new.parquet"),
+        vec![Some(9)],
+    );
+    // Respect the existing listing-cache policy: make the new file visible
+    // before checking that the collected NDV snapshot is invalidated.
+    ctx.runtime_env()
+        .cache_manager
+        .get_list_files_cache()
+        .unwrap()
+        .clear();
+    let plan = table.scan(&ctx.state(), None, &[], None).await.unwrap();
+    let stats = StatisticsContext::new()
+        .compute(plan.as_ref(), &StatisticsArgs::new())
+        .unwrap();
+    assert_eq!(stats.num_rows, Precision::Exact(5));
+    assert_eq!(stats.column_statistics[1].distinct_count, Precision::Absent);
+}
 
 #[tokio::test]
 async fn check_stats_precision_with_filter_pushdown() {

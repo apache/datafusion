@@ -1013,8 +1013,8 @@ fn estimate_inner_join_cardinality(
         .iter()
         .zip(right_column_statistics.iter())
     {
-        let left_max_distinct = max_distinct_count(left_num_rows, left_stat);
-        let right_max_distinct = max_distinct_count(right_num_rows, right_stat);
+        let left_max_distinct = estimate_distinct_count(left_num_rows, left_stat);
+        let right_max_distinct = estimate_distinct_count(right_num_rows, right_stat);
         let max_distinct = left_max_distinct.max(&right_max_distinct);
         if max_distinct.get_value().is_some() {
             // Seems like there are a few implementations of this algorithm that implement
@@ -1174,8 +1174,8 @@ fn estimate_semi_join_cardinality(
             continue;
         }
 
-        let outer_ndv = max_distinct_count(outer_num_rows, outer_stat);
-        let inner_ndv = max_distinct_count(inner_num_rows, inner_stat);
+        let outer_ndv = estimate_distinct_count(outer_num_rows, outer_stat);
+        let inner_ndv = estimate_distinct_count(inner_num_rows, inner_stat);
 
         if let (Some(&o), Some(&i)) = (outer_ndv.get_value(), inner_ndv.get_value())
             && o > 0
@@ -1207,12 +1207,12 @@ fn estimate_semi_join_cardinality(
     }
 }
 
-/// Estimate the number of maximum distinct values that can be present in the
-/// given column from its statistics. If distinct_count is available, uses it
-/// directly. Otherwise, if the column is numeric and has min/max values, it
-/// estimates the maximum distinct count from those. Otherwise, the num_rows
-/// is used.
-fn max_distinct_count(
+/// Estimate a column's NDV, preferring an explicitly supplied distinct count.
+///
+/// Without NDV statistics, use the row count and value range as an upper bound.
+/// Even exact row counts and range endpoints do not make this an exact NDV:
+/// values may repeat and the range may contain gaps. Keep that fallback inexact.
+fn estimate_distinct_count(
     num_rows: &Precision<usize>,
     stats: &ColumnStatistics,
 ) -> Precision<usize> {
@@ -1230,56 +1230,62 @@ fn max_distinct_count(
                 }
             }
         }
-        _ => {
-            // The number can never be greater than the number of rows we have
-            // minus the nulls (since they don't count as distinct values).
-            let result = match num_rows {
-                Precision::Absent => Precision::Absent,
-                Precision::Inexact(count) => {
-                    // To safeguard against inexact number of rows (e.g. 0) being smaller than
-                    // an exact null count we need to do a checked subtraction.
-                    match count.checked_sub(*stats.null_count.get_value().unwrap_or(&0)) {
-                        None => Precision::Inexact(0),
-                        Some(non_null_count) => Precision::Inexact(non_null_count),
-                    }
-                }
-                Precision::Exact(count) => {
-                    let null_count = *stats.null_count.get_value().unwrap_or(&0);
-                    let non_null_count = count.checked_sub(null_count).unwrap_or(0);
-                    if stats.null_count.is_exact().unwrap_or(false) {
-                        Precision::Exact(non_null_count)
-                    } else {
-                        Precision::Inexact(non_null_count)
-                    }
-                }
-            };
-            // Cap the estimate using the number of possible values:
-            if let (Some(min), Some(max)) =
-                (stats.min_value.get_value(), stats.max_value.get_value())
-                && let Some(range_dc) = Interval::try_new(min.clone(), max.clone())
-                    .ok()
-                    .and_then(|e| e.cardinality())
-            {
-                let range_dc = range_dc as usize;
-                // Note that the `unwrap` calls in the below statement are safe.
-                return if result == Precision::Absent
-                    || &range_dc < result.get_value().unwrap()
-                {
-                    if stats.min_value.is_exact().unwrap()
-                        && stats.max_value.is_exact().unwrap()
-                    {
-                        Precision::Exact(range_dc)
-                    } else {
-                        Precision::Inexact(range_dc)
-                    }
-                } else {
-                    result
-                };
-            }
-
-            result
-        }
+        _ => match distinct_count_upper_bound(num_rows, stats) {
+            // A zero upper bound also determines NDV exactly.
+            Precision::Exact(0) => Precision::Exact(0),
+            bound => bound.to_inexact(),
+        },
     }
+}
+
+/// Bound NDV by the non-null row count and the number of possible values in
+/// the column's range. Precision describes the bound, not the actual NDV.
+fn distinct_count_upper_bound(
+    num_rows: &Precision<usize>,
+    stats: &ColumnStatistics,
+) -> Precision<usize> {
+    let result = match num_rows {
+        Precision::Absent => Precision::Absent,
+        Precision::Inexact(count) => {
+            // To safeguard against inexact number of rows (e.g. 0) being smaller than
+            // an exact null count we need to do a checked subtraction.
+            match count.checked_sub(*stats.null_count.get_value().unwrap_or(&0)) {
+                None => Precision::Inexact(0),
+                Some(non_null_count) => Precision::Inexact(non_null_count),
+            }
+        }
+        Precision::Exact(count) => {
+            let null_count = *stats.null_count.get_value().unwrap_or(&0);
+            let non_null_count = count.checked_sub(null_count).unwrap_or(0);
+            if stats.null_count.is_exact().unwrap_or(false) {
+                Precision::Exact(non_null_count)
+            } else {
+                Precision::Inexact(non_null_count)
+            }
+        }
+    };
+    // Cap the estimate using the number of possible values:
+    if let (Some(min), Some(max)) =
+        (stats.min_value.get_value(), stats.max_value.get_value())
+        && let Some(range_dc) = Interval::try_new(min.clone(), max.clone())
+            .ok()
+            .and_then(|e| e.cardinality())
+    {
+        let range_dc = range_dc as usize;
+        // Note that the `unwrap` calls in the below statement are safe.
+        return if result == Precision::Absent || &range_dc < result.get_value().unwrap() {
+            if stats.min_value.is_exact().unwrap() && stats.max_value.is_exact().unwrap()
+            {
+                Precision::Exact(range_dc)
+            } else {
+                Precision::Inexact(range_dc)
+            }
+        } else {
+            result
+        };
+    }
+
+    result
 }
 
 enum OnceFutState<T> {
@@ -3518,7 +3524,7 @@ mod tests {
             (
                 (5, Inexact(1), Inexact(100), Inexact(50), Absent),
                 (10, Inexact(1), Inexact(100), Inexact(50), Absent),
-                // max_distinct_count caps: left NDV=min(50,5)=5, right NDV=min(50,10)=10
+                // estimate_distinct_count caps: left NDV=min(50,5)=5, right NDV=min(50,10)=10
                 // cardinality = (5 * 10) / max(5, 10) = 50 / 10 = 5
                 Some(Inexact(5)),
             ),
@@ -3526,7 +3532,7 @@ mod tests {
             (
                 (3, Inexact(1), Inexact(100), Inexact(100), Absent),
                 (10, Inexact(1), Inexact(100), Inexact(5), Absent),
-                // max_distinct_count caps: left NDV=min(100,3)=3, right NDV=min(5,10)=5
+                // estimate_distinct_count caps: left NDV=min(100,3)=3, right NDV=min(5,10)=5
                 // cardinality = (3 * 10) / max(3, 5) = 30 / 5 = 6
                 Some(Inexact(6)),
             ),
@@ -3598,6 +3604,59 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_inner_join_cardinality_sparse_keys() {
+        let stats = |rows, min, max, ndv| Statistics {
+            num_rows: Exact(rows),
+            total_byte_size: Absent,
+            column_statistics: vec![create_column_stats(
+                Exact(min),
+                Exact(max),
+                ndv,
+                Exact(0),
+            )],
+        };
+
+        for (left, right, expected) in [
+            // Sparse order keys: explicit NDVs take precedence over the range.
+            (
+                stats(1_500_000, 1, 6_000_000, Inexact(1_500_000)),
+                stats(6_001_215, 1, 6_000_000, Inexact(1_500_000)),
+                Inexact(6_001_215),
+            ),
+            // Without NDVs, the same input statistics cannot distinguish a
+            // sparse foreign-key domain from a dense domain with unmatched keys.
+            // The range-based fallback must remain an estimate even though
+            // every input statistic is exact.
+            (
+                stats(1_500_000, 1, 6_000_000, Absent),
+                stats(6_001_215, 1, 6_000_000, Absent),
+                Inexact(1_500_303),
+            ),
+            // Dense keys retain their range-based estimate.
+            (
+                stats(100, 1, 100, Absent),
+                stats(400, 1, 100, Absent),
+                Inexact(400),
+            ),
+            // Disjoint ranges still prove that no keys match.
+            (
+                stats(100, 1, 100, Absent),
+                stats(400, 101, 200, Absent),
+                Exact(0),
+            ),
+        ] {
+            assert_eq!(
+                estimate_inner_join_cardinality(&left, &right),
+                Some(expected),
+            );
+            assert_eq!(
+                estimate_inner_join_cardinality(&right, &left),
+                Some(expected),
+            );
+        }
     }
 
     #[test]
@@ -5315,7 +5374,7 @@ mod tests {
     }
 
     #[test]
-    fn test_max_distinct_count_no_overflow_when_null_count_exceeds_num_rows() {
+    fn test_estimate_distinct_count_no_overflow_when_null_count_exceeds_num_rows() {
         let num_rows = Exact(2);
         let stats = ColumnStatistics {
             distinct_count: Absent,
@@ -5325,7 +5384,7 @@ mod tests {
             sum_value: Absent,
             byte_size: Absent,
         };
-        let result = max_distinct_count(&num_rows, &stats);
+        let result = estimate_distinct_count(&num_rows, &stats);
         assert_eq!(result, Exact(0));
     }
 
@@ -5780,9 +5839,31 @@ mod tests {
     }
 
     #[test]
-    fn test_max_distinct_count_preserves_precision_when_not_capped() {
+    fn test_estimate_distinct_count_without_ndv_is_an_estimate() {
+        // Exact min/max delimit possible values, not the values actually present.
+        // Likewise, an exact non-null row count does not prove uniqueness.
+        for (num_rows, min, max, null_count, expected) in [
+            (Exact(100), Exact(1), Exact(20), Exact(0), Inexact(20)),
+            (Exact(10), Exact(1), Exact(100), Exact(0), Inexact(10)),
+            (Exact(10), Absent, Absent, Exact(2), Inexact(8)),
+            (Absent, Exact(1), Exact(20), Absent, Inexact(20)),
+            (Exact(10), Absent, Absent, Exact(10), Exact(0)),
+            (Absent, Absent, Absent, Absent, Absent),
+        ] {
+            assert_eq!(
+                estimate_distinct_count(
+                    &num_rows,
+                    &create_column_stats(min, max, Absent, null_count),
+                ),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn test_estimate_distinct_count_preserves_precision_when_not_capped() {
         assert_eq!(
-            max_distinct_count(
+            estimate_distinct_count(
                 &Exact(10),
                 &ColumnStatistics {
                     distinct_count: Exact(5),
@@ -5792,7 +5873,7 @@ mod tests {
             Exact(5)
         );
         assert_eq!(
-            max_distinct_count(
+            estimate_distinct_count(
                 &Exact(10),
                 &ColumnStatistics {
                     distinct_count: Inexact(5),
@@ -5803,7 +5884,7 @@ mod tests {
         );
         // Inexact num_rows does not affect an exact NDV that is within bounds
         assert_eq!(
-            max_distinct_count(
+            estimate_distinct_count(
                 &Inexact(10),
                 &ColumnStatistics {
                     distinct_count: Exact(5),
@@ -5815,12 +5896,12 @@ mod tests {
     }
 
     #[test]
-    fn test_max_distinct_count_demotes_to_inexact_when_capped() {
+    fn test_estimate_distinct_count_demotes_to_inexact_when_capped() {
         // Exact NDV > Exact num_rows is an illegal state (NDV <= num_rows is a
         // mathematical invariant), but the code handles it defensively by
         // capping and demoting to inexact
         assert_eq!(
-            max_distinct_count(
+            estimate_distinct_count(
                 &Exact(10),
                 &ColumnStatistics {
                     distinct_count: Exact(15),
@@ -5830,7 +5911,7 @@ mod tests {
             Inexact(10)
         );
         assert_eq!(
-            max_distinct_count(
+            estimate_distinct_count(
                 &Inexact(10),
                 &ColumnStatistics {
                     distinct_count: Exact(15),
@@ -5840,7 +5921,7 @@ mod tests {
             Inexact(10)
         );
         assert_eq!(
-            max_distinct_count(
+            estimate_distinct_count(
                 &Exact(10),
                 &ColumnStatistics {
                     distinct_count: Inexact(15),

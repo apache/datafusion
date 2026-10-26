@@ -22,11 +22,13 @@ use crate::helpers::{
 use crate::{ListingOptions, ListingTableConfig};
 use arrow::datatypes::{Field, Metadata, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
+use datafusion_catalog::default_table_source::DefaultTableSource;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
+use datafusion_common::cast::as_int64_array;
 use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
-    Constraints, DFSchema, SchemaExt, SplitPoint, Statistics, internal_datafusion_err,
-    plan_err, project_schema,
+    Column, Constraints, DFSchema, SchemaExt, SplitPoint, Statistics, exec_err,
+    internal_datafusion_err, plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -46,17 +48,18 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
-    Expr, Partitioning as LogicalPartitioning, TableProviderFilterPushDown, TableType,
+    Expr, ExprFunctionExt, LogicalPlanBuilder, Partitioning as LogicalPartitioning,
+    TableProviderFilterPushDown, TableType, lit,
 };
 use datafusion_physical_expr::{create_lex_ordering, create_physical_partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::limit::GlobalLimitExec;
+use datafusion_physical_plan::{ExecutionPlan, collect};
 use futures::future::BoxFuture;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
-use object_store::ObjectStore;
+use object_store::{ObjectMeta, ObjectStore, path::Path};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -200,6 +203,8 @@ pub struct ListingTable {
     definition: Option<String>,
     /// Cache for collected file statistics
     collected_statistics: Option<Arc<FileStatisticsCache>>,
+    /// Statistics collected by scanning a particular set of files.
+    collected_table_statistics: Option<Arc<CollectedTableStatistics>>,
     /// Constraints applied to this table
     constraints: Constraints,
     /// Column default expressions for columns that are not physically present in the data files
@@ -210,6 +215,23 @@ pub struct ListingTable {
     /// validation. Constant for the table, so computed once here instead of per
     /// file.
     file_schema_fingerprint: Arc<SchemaFingerprint>,
+}
+
+#[derive(Debug)]
+struct CollectedTableStatistics {
+    statistics: Statistics,
+    files: HashMap<Path, ObjectMeta>,
+}
+
+fn file_metadata(file_groups: &[FileGroup]) -> HashMap<Path, ObjectMeta> {
+    file_groups
+        .iter()
+        .flat_map(FileGroup::iter)
+        .map(|file| {
+            let metadata = &file.object_meta;
+            (metadata.location.clone(), metadata.clone())
+        })
+        .collect()
 }
 
 impl ListingTable {
@@ -277,6 +299,7 @@ impl ListingTable {
             options,
             definition: None,
             collected_statistics: None,
+            collected_table_statistics: None,
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             expr_adapter_factory: config.expr_adapter_factory,
@@ -284,6 +307,94 @@ impl ListingTable {
         };
 
         Ok(table)
+    }
+
+    /// Collect exact row counts, null counts, and distinct counts for `columns`.
+    ///
+    /// This explicitly scans the selected columns using `COUNT(DISTINCT ...)`.
+    /// Memory use grows with the number of distinct values. Collection is never
+    /// performed automatically during query planning. NULL is excluded from NDV.
+    /// Counts are aggregated across all files, including overlapping key domains.
+    ///
+    /// The returned table uses these statistics only when a scan's file metadata
+    /// matches the collected snapshot. Pruned subsets and changed file listings
+    /// fall back to file statistics. Recollect after changing the underlying data.
+    pub async fn with_collected_statistics(
+        mut self,
+        state: &dyn Session,
+        columns: &[&str],
+    ) -> datafusion_common::Result<Self> {
+        if columns.is_empty() {
+            return plan_err!("Statistics collection requires at least one column");
+        }
+        let mut indices = vec![];
+        for column in columns {
+            let index = self.table_schema.index_of(column)?;
+            if !indices.contains(&index) {
+                indices.push(index);
+            }
+        }
+        self.collected_table_statistics = None;
+        let listing = self.list_files_for_scan(state, &[], None).await?;
+        let files = file_metadata(&listing.file_groups);
+        let count = state.aggregate_functions().get("count").ok_or_else(|| {
+            internal_datafusion_err!("Statistics collection requires the count aggregate")
+        })?;
+        let mut aggregates = vec![count.call(vec![lit(1_i64)]).alias("rows")];
+        for (position, index) in indices.iter().enumerate() {
+            let column = Expr::Column(Column::new_unqualified(
+                self.table_schema.field(*index).name(),
+            ));
+            aggregates.push(
+                count
+                    .call(vec![column.clone()])
+                    .distinct()
+                    .build()?
+                    .alias(format!("ndv_{position}")),
+            );
+            aggregates.push(
+                count
+                    .call(vec![column])
+                    .alias(format!("nonnull_{position}")),
+            );
+        }
+        let source = Arc::new(DefaultTableSource::new(Arc::new(self.clone())));
+        let plan = LogicalPlanBuilder::scan("statistics", source, Some(indices.clone()))?
+            .aggregate(Vec::<Expr>::new(), aggregates)?
+            .build()?;
+        let plan = state.create_physical_plan(&plan).await?;
+        let batches = collect(plan, state.task_ctx()).await?;
+        let batch = batches.first().ok_or_else(|| {
+            internal_datafusion_err!("Statistics collection returned no aggregate row")
+        })?;
+        let count_value = |index| -> datafusion_common::Result<usize> {
+            let value = as_int64_array(batch.column(index))?.value(0);
+            usize::try_from(value).map_err(|error| {
+                internal_datafusion_err!("Invalid statistics count: {error}")
+            })
+        };
+        let rows = count_value(0)?;
+        let mut statistics = listing.statistics;
+        statistics.num_rows = Precision::Exact(rows);
+        // Empty listings may have statistics for the file schema only.
+        statistics.column_statistics.resize_with(
+            self.table_schema.fields().len(),
+            datafusion_common::ColumnStatistics::new_unknown,
+        );
+        for (position, index) in indices.into_iter().enumerate() {
+            let column = &mut statistics.column_statistics[index];
+            column.distinct_count = Precision::Exact(count_value(1 + position * 2)?);
+            column.null_count = Precision::Exact(rows - count_value(2 + position * 2)?);
+        }
+        let after = self.list_files_for_scan(state, &[], None).await?;
+        if files != file_metadata(&after.file_groups) {
+            return exec_err!(
+                "Files changed while collecting statistics; retry collection"
+            );
+        }
+        self.collected_table_statistics =
+            Some(Arc::new(CollectedTableStatistics { statistics, files }));
+        Ok(self)
     }
 
     /// Assign constraints
@@ -668,12 +779,18 @@ impl ListingTable {
 
         let ListFilesResult {
             file_groups: mut partitioned_file_lists,
-            statistics,
+            mut statistics,
             grouped_by_partition: partitioned_by_file_group,
             partition_split_points,
         } = self
             .list_files_for_scan(state, &partition_filters, statistic_file_limit)
             .await?;
+
+        if let Some(collected) = &self.collected_table_statistics
+            && collected.files == file_metadata(&partitioned_file_lists)
+        {
+            statistics = collected.statistics.clone();
+        }
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {

@@ -24,6 +24,7 @@ use std::process::Command;
 use std::sync::{Arc, LazyLock};
 
 use clap::Args;
+use datafusion::datasource::listing::ListingTable;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::metrics::MetricValue;
@@ -63,6 +64,10 @@ pub struct RunOpt {
     /// Path to a SQL file or directory of SQL query files.
     #[arg(required = true, short = 'Q', long = "query_path")]
     query_path: PathBuf,
+
+    /// Scan TABLE.COLUMN to collect an exact NDV before planning queries. May be repeated.
+    #[arg(long = "collect-ndv", value_name = "TABLE.COLUMN")]
+    collect_ndv: Vec<String>,
 }
 
 impl RunOpt {
@@ -71,6 +76,7 @@ impl RunOpt {
         config.options_mut().optimizer.prefer_hash_join = true;
         let ctx = SessionContext::new_with_config(config);
         register_parquet_files(&ctx, &self.path).await?;
+        collect_table_ndvs(&ctx, &self.collect_ndv).await?;
 
         let branch = current_branch_name();
         let result_path = self.report_path(&branch);
@@ -710,6 +716,36 @@ async fn register_parquet_files(ctx: &SessionContext, path: &Path) -> Result<()>
     Ok(())
 }
 
+async fn collect_table_ndvs(ctx: &SessionContext, columns: &[String]) -> Result<()> {
+    let mut tables = BTreeMap::<&str, Vec<&str>>::new();
+    for column in columns {
+        let Some((table, column)) = column.split_once('.') else {
+            return config_err!("--collect-ndv requires TABLE.COLUMN, got '{column}'");
+        };
+        if table.is_empty() || column.is_empty() {
+            return config_err!(
+                "--collect-ndv requires non-empty table and column names"
+            );
+        }
+        tables.entry(table).or_default().push(column);
+    }
+    for (name, columns) in tables {
+        let provider = ctx.table_provider(name).await?;
+        let table = provider.downcast_ref::<ListingTable>().ok_or_else(|| {
+            datafusion_common::config_datafusion_err!(
+                "--collect-ndv requires a ListingTable: {name}"
+            )
+        })?;
+        let table = table
+            .clone()
+            .with_collected_statistics(&ctx.state(), &columns)
+            .await?;
+        ctx.deregister_table(name)?;
+        ctx.register_table(name, Arc::new(table))?;
+    }
+    Ok(())
+}
+
 fn collect_parquet_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(path)? {
         let path = entry?.path();
@@ -771,6 +807,7 @@ mod tests {
     async fn applies_session_changing_statements_before_reporting_queries() {
         let directory = tempdir().unwrap();
         let options = RunOpt {
+            collect_ndv: vec![],
             query: None,
             compare: None,
             path: directory.path().to_path_buf(),
@@ -800,6 +837,7 @@ mod tests {
     async fn reports_estimates_from_session_statistics_registry() {
         let directory = tempdir().unwrap();
         let options = RunOpt {
+            collect_ndv: vec![],
             query: None,
             compare: None,
             path: directory.path().to_path_buf(),
@@ -863,6 +901,7 @@ mod tests {
         .unwrap();
         fs::write(directory.path().join("04.sql"), "SELECT 1,").unwrap();
         let options = RunOpt {
+            collect_ndv: vec![],
             query: None,
             compare: None,
             path: directory.path().to_path_buf(),
@@ -893,6 +932,7 @@ mod tests {
         )
         .unwrap();
         let options = RunOpt {
+            collect_ndv: vec![],
             query: None,
             compare: None,
             path: directory.path().to_path_buf(),
@@ -929,6 +969,57 @@ mod tests {
 
         store_report(&path, &reports).unwrap();
         assert_eq!(load_comparison_report(&path).unwrap(), Some(reports));
+    }
+
+    #[tokio::test]
+    async fn collects_requested_ndvs_before_reporting_queries() {
+        let directory = tempdir().unwrap();
+        let ctx = SessionContext::new();
+        ctx.sql("SELECT * FROM (VALUES (1), (5), (12), (1)) AS t(key)")
+            .await
+            .unwrap()
+            .write_parquet(
+                directory.path().join("keys").to_str().unwrap(),
+                datafusion::dataframe::DataFrameWriteOptions::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        register_parquet_files(&ctx, directory.path())
+            .await
+            .unwrap();
+        let options = RunOpt {
+            collect_ndv: vec!["keys.key".into()],
+            query: None,
+            compare: None,
+            path: directory.path().to_path_buf(),
+            query_path: directory.path().to_path_buf(),
+        };
+        collect_table_ndvs(&ctx, &options.collect_ndv)
+            .await
+            .unwrap();
+        let statement = sql_statements(
+            "SELECT a.key FROM keys a JOIN keys b ON a.key = b.key",
+            &ctx.state().config_options().sql_parser,
+        )
+        .unwrap()
+        .pop_front()
+        .unwrap();
+        let report = options.report_statement(&ctx, statement).await.unwrap();
+        let join = report.iter().find(|op| op.name == "HashJoinExec").unwrap();
+        assert_eq!(join.estimated_rows, StatisticValue::Inexact(5));
+        assert_eq!(join.runtime_output_rows, Some(6));
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_ndv_requests() {
+        let ctx = SessionContext::new();
+        for request in ["key", ".key", "keys."] {
+            let error = collect_table_ndvs(&ctx, &[request.into()])
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("--collect-ndv"));
+        }
     }
 
     #[tokio::test]
