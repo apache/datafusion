@@ -23,8 +23,9 @@ impl LimitPushPastWindows {
     }
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Default)]
 enum Phase {
+    #[default]
     FindOrGrow,
     Apply,
 }
@@ -33,9 +34,20 @@ enum Phase {
 struct TraverseState {
     pub limit: Option<usize>,
     pub lookahead: usize,
+    pub phase: Phase,
 }
 
 impl TraverseState {
+    /// Forget the chain we were walking: no limit in hand, nothing to grow by,
+    /// and back to looking for the next limit.
+    pub fn reset(&mut self) {
+        self.limit = None;
+        self.lookahead = 0;
+        self.phase = Phase::FindOrGrow;
+    }
+
+    /// Start a chain from a limit we just found. The phase is deliberately left
+    /// alone: this only runs while we are still in [`Phase::FindOrGrow`].
     pub fn reset_limit(&mut self, limit: Option<usize>) {
         self.limit = limit;
         self.lookahead = 0;
@@ -56,7 +68,6 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             return Ok(original);
         }
         let mut ctx = TraverseState::default();
-        let mut phase = Phase::FindOrGrow;
         let result = original.transform_down(|node| {
             // helper closure to DRY out most the early return cases
             let reset = |node,
@@ -64,8 +75,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
              -> datafusion_common::Result<
                 Transformed<Arc<dyn ExecutionPlan>>,
             > {
-                ctx.limit = None;
-                ctx.lookahead = 0;
+                ctx.reset();
                 Ok(Transformed::no(node))
             };
 
@@ -75,13 +85,13 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // grab the latest limit we see
-            if phase == Phase::FindOrGrow && get_limit(&node, &mut ctx) {
+            if ctx.phase == Phase::FindOrGrow && get_limit(&node, &mut ctx) {
                 return Ok(Transformed::no(node));
             }
 
             // grow the limit if we hit a window function
             if let LimitBehavior::Window(lookahead) = node.limit_behavior() {
-                phase = Phase::Apply;
+                ctx.phase = Phase::Apply;
                 if !grow_limit(lookahead, &mut ctx) {
                     return reset(node, &mut ctx);
                 }
@@ -89,7 +99,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // Apply the limit if we hit a sortpreservingmerge node
-            if phase == Phase::Apply
+            if ctx.phase == Phase::Apply
                 && let Some(out) = apply_limit(&node, &mut ctx)
             {
                 return Ok(out);
@@ -141,16 +151,15 @@ fn apply_limit(
     if !node.is::<SortExec>() && !node.is::<SortPreservingMergeExec>() {
         return None;
     }
-    let latest = ctx.limit.take();
+    let latest = ctx.limit;
+    let lookahead = ctx.lookahead;
+    ctx.reset();
     let Some(fetch) = latest else {
-        ctx.limit = None;
-        ctx.lookahead = 0;
         return Some(Transformed::no(Arc::clone(node)));
     };
     // A fetch that overflows can't drop any rows, so skip the pushdown rather
     // than turning the sort into a TopK that holds every row and can't spill.
-    let Some(fetch) = fetch.checked_add(ctx.lookahead) else {
-        ctx.lookahead = 0;
+    let Some(fetch) = fetch.checked_add(lookahead) else {
         return Some(Transformed::no(Arc::clone(node)));
     };
     let fetch = match node.fetch() {
