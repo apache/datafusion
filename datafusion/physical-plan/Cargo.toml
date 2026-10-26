@@ -144,6 +144,11 @@ name = "union_schema"
 
 [[bench]]
 harness = false
+name = "sort_spill"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "spill_io"
 
 [[bench]]
