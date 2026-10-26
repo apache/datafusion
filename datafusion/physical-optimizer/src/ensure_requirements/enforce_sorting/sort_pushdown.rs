@@ -966,20 +966,18 @@ fn expr_source_side(
     }
 }
 
-/// Handles the custom pushdown of parent-required sorting requirements down to
-/// the child execution plans, considering whether the input order is maintained.
+/// [`handle_projection_pushdown`] remaps columns and rejects computed projections.
+/// This generic fallback must prove its proposed input orderings are safe.
 ///
 /// # Arguments
 ///
 /// * `plan` - A reference to an `ExecutionPlan` for which the pushdown will be applied.
 /// * `parent_required` - The sorting requirements expected by the parent node.
-/// * `maintains_input_order` - A vector of booleans indicating whether each child
-///   maintains the input order.
+/// * `maintains_input_order` - Whether the node preserves each input's row order.
 ///
 /// # Returns
 ///
-/// Returns `Ok(Some(Vec<Option<LexRequirement>>))` if the sorting requirements can be
-/// pushed down, `Ok(None)` if not. On error, returns a `Result::Err`.
+/// Returns validated child orderings, or `None` to decline pushdown. Errors propagate.
 fn handle_custom_pushdown(
     plan: &Arc<dyn ExecutionPlan>,
     parent_required: OrderingRequirements,
@@ -992,25 +990,15 @@ fn handle_custom_pushdown(
         return Ok(None);
     }
 
-    // Collect all unique column indices used in the parent-required sorting
-    // expression:
-    let requirement = parent_required.into_single();
-    // Evaluating a computed key earlier can fail on rows this node would discard.
-    if requirement
+    // Use the preferred alternative. Computed keys may fail on discarded rows.
+    let output_requirement = parent_required.into_single();
+    let Some(columns) = output_requirement
         .iter()
-        .any(|sort| sort.expr.downcast_ref::<Column>().is_none())
-    {
+        .map(|sort| sort.expr.downcast_ref::<Column>())
+        .collect::<Option<Vec<_>>>()
+    else {
         return Ok(None);
-    }
-    let all_indices: HashSet<usize> = requirement
-        .iter()
-        .flat_map(|order| {
-            collect_columns(&order.expr)
-                .iter()
-                .map(|col| col.index())
-                .collect::<HashSet<_>>()
-        })
-        .collect();
+    };
 
     // Get the number of fields in each child's schema:
     let children_schema_lengths: Vec<usize> = plan_children
@@ -1018,7 +1006,7 @@ fn handle_custom_pushdown(
         .map(|c| c.schema().fields().len())
         .collect();
 
-    // Find the index of the order-maintaining child:
+    // Use the first order-maintaining input for this candidate mapping.
     let Some(maintained_child_idx) = maintains_input_order
         .iter()
         .enumerate()
@@ -1028,69 +1016,50 @@ fn handle_custom_pushdown(
         return Ok(None);
     };
 
-    // Check if all required columns come from the order-maintaining child:
+    // Matching column positions is only a candidate; prove output ordering below.
     let start_idx = children_schema_lengths[..maintained_child_idx]
         .iter()
         .sum::<usize>();
     let end_idx = start_idx + children_schema_lengths[maintained_child_idx];
-    let all_from_maintained_child =
-        all_indices.iter().all(|i| i >= &start_idx && i < &end_idx);
+    let fits_maintained_input = columns
+        .iter()
+        .all(|col| (start_idx..end_idx).contains(&col.index()));
 
-    // If all columns are from the maintained child, update the parent requirements:
-    if all_from_maintained_child {
-        let sub_offset = children_schema_lengths
+    let child_requirements = if fits_maintained_input {
+        // Remap the columns into the maintained child's schema.
+        let child_schema = plan_children[maintained_child_idx].schema();
+        let mapped_requirement = columns
             .iter()
-            .take(maintained_child_idx)
-            .sum::<usize>();
-        // Transform the parent-required expression for the child schema by
-        // adjusting columns:
-        let updated_parent_req = requirement
-            .clone()
-            .into_iter()
-            .map(|req| {
-                let child_schema = plan_children[maintained_child_idx].schema();
-                let updated_columns = req
-                    .expr
-                    .transform_up(|expr| {
-                        if let Some(col) = expr.downcast_ref::<Column>() {
-                            let new_index = col.index() - sub_offset;
-                            Ok(Transformed::yes(Arc::new(Column::new(
-                                child_schema.field(new_index).name(),
-                                new_index,
-                            ))))
-                        } else {
-                            Ok(Transformed::no(expr))
-                        }
-                    })?
-                    .data;
-                Ok(PhysicalSortRequirement::new(updated_columns, req.options))
+            .zip(output_requirement.iter())
+            .map(|(col, req)| {
+                let index = col.index() - start_idx;
+                let col = Column::new(child_schema.field(index).name(), index);
+                PhysicalSortRequirement::new(Arc::new(col), req.options)
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
 
-        // Prepare the result, populating with the updated requirements for children that maintain order
-        let result: Vec<_> = maintains_input_order
+        // Propose the same ordering for every order-maintaining input.
+        maintains_input_order
             .iter()
             .map(|&maintains_order| {
                 if maintains_order {
-                    LexRequirement::new(updated_parent_req.clone())
+                    LexRequirement::new(mapped_requirement.clone())
                         .map(OrderingRequirements::new)
                 } else {
                     None
                 }
             })
-            .collect();
-
-        // A custom node can preserve row positions while reversing value order
-        // (e.g. `-a AS a`). Keep the outer sort unless the proposed child sorts
-        // satisfy the node's input requirements and give its output the
-        // requested ordering.
-        if !is_custom_sort_pushdown_valid(plan, &result, requirement)? {
-            return Ok(None);
-        }
-        Ok(Some(result))
+            .collect::<Vec<_>>()
     } else {
-        Ok(None)
+        return Ok(None);
+    };
+
+    // Row positions can stay unchanged while value order reverses (`-a AS a`).
+    // Prove that the candidate satisfies both input and output requirements.
+    if !is_custom_sort_pushdown_valid(plan, &child_requirements, output_requirement)? {
+        return Ok(None);
     }
+    Ok(Some(child_requirements))
 }
 
 /// Checks that proposed child orderings respect fetch boundaries, satisfy the
