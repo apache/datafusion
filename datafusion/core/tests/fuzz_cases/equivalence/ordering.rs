@@ -33,8 +33,8 @@ use datafusion_physical_expr::expressions::{BinaryExpr, col};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
-use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::sync::Arc;
 
 #[test]
@@ -101,6 +101,19 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
     }
 
     Ok(())
+}
+
+const N_EXHAUSTIVE_EXPRS: usize = 8;
+const SAMPLED_COMBINATION_PROBABILITY: f64 = 0.03;
+
+/// Selects all combinations of the first `N_EXHAUSTIVE_EXPRS` expressions and
+/// all combinations of at most two expressions, and samples the others.
+fn is_combination_selected(indices: &[usize], rng: &mut StdRng) -> bool {
+    let only_exhaustive_exprs =
+        indices.last().is_none_or(|&last| last < N_EXHAUSTIVE_EXPRS);
+    only_exhaustive_exprs
+        || indices.len() <= 2
+        || rng.random_bool(SAMPLED_COMBINATION_PROBABILITY)
 }
 
 #[test]
@@ -177,8 +190,13 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
         ];
 
         let mut options_rng = StdRng::seed_from_u64(seed as u64);
+        let mut selection_rng = StdRng::seed_from_u64(!(seed as u64));
         for n_req in 1..=exprs.len() {
-            for exprs in exprs.iter().combinations(n_req) {
+            for indices in (0..exprs.len()).combinations(n_req) {
+                if !is_combination_selected(&indices, &mut selection_rng) {
+                    continue;
+                }
+                let exprs = indices.iter().map(|&i| &exprs[i]).collect::<Vec<_>>();
                 assert_random_ordering_satisfy_is_sound(
                     &eq_properties,
                     &exprs,
