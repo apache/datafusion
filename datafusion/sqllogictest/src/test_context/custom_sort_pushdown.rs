@@ -201,7 +201,14 @@ impl TableProvider for CustomExec {
         _: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let plan: Arc<dyn ExecutionPlan> = Arc::new(self.clone());
-        if let Some(projection) = projection {
+        // Keep identity projections out of the plan so sort pushdown reaches
+        // this custom node before native projection-specific handling.
+        if let Some(projection) = projection
+            && !projection
+                .iter()
+                .copied()
+                .eq(0..self.0.schema().fields().len())
+        {
             let expressions = ProjectionExprs::from_indices(projection, &self.0.schema());
             Ok(Arc::new(ProjectionExec::try_new(
                 expressions.iter().cloned(),
