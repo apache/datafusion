@@ -166,7 +166,11 @@ fn apply_limit(
         None => fetch,
         Some(existing) => existing.min(fetch),
     };
-    Some(Transformed::complete(node.with_fetch(Some(fetch)).unwrap()))
+    // Carry on past this sort rather than stopping. `ctx` was reset above, so it
+    // now holds exactly what it held at the start of the traversal, which makes
+    // walking the subtree below equivalent to running the rule on it afresh --
+    // and that subtree may hold another independent limit over another window.
+    Some(Transformed::yes(node.with_fetch(Some(fetch)).unwrap()))
 }
 
 fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
