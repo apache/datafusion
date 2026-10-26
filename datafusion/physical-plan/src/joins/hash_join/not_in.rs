@@ -1000,6 +1000,9 @@ struct UnmarkedPairs<'a, F> {
     /// Whether the rows that the pairs decide may hold rows marked since they
     /// were last refreshed.
     needs_refresh: bool,
+    /// All the matches that the scope map lookups returned.
+    #[cfg(test)]
+    looked_up_matches: usize,
     f: F,
 }
 
@@ -1014,6 +1017,8 @@ where
             build_chunk: Vec::with_capacity(batch_size),
             probe_chunk: Vec::with_capacity(batch_size),
             needs_refresh: false,
+            #[cfg(test)]
+            looked_up_matches: 0,
             f,
         }
     }
@@ -1067,6 +1072,10 @@ where
                 &mut lookup.probe_indices,
                 &mut lookup.build_indices,
             );
+            #[cfg(test)]
+            {
+                self.looked_up_matches += lookup.build_indices.len();
+            }
             for i in 0..lookup.build_indices.len() {
                 self.push(
                     to_build_row(lookup.build_indices[i]),
@@ -1163,4 +1172,302 @@ fn retain_unmarked(
         .filter(|pair| is_unmarked(*pair))
         .unzip();
     (build.into(), probe.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::joins::join_hash_map::JoinHashMapU64;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    /// The input of one run of [`UnmarkedPairs`]. Each row has a scope key,
+    /// and the hash of a key is `key % hash_modulus`, so different scopes can
+    /// share a hash.
+    #[derive(Debug)]
+    struct Case {
+        mark_build_rows: bool,
+        /// Whether to pair through a scope map, or as a cross product.
+        through_scope_map: bool,
+        batch_size: usize,
+        hash_modulus: u64,
+        /// The scope key of each build row.
+        build_keys: Vec<u64>,
+        /// The scope key of each probe row.
+        probe_keys: Vec<u64>,
+        /// The probe rows to pair, a subset of all the probe rows.
+        probe_rows: Vec<u32>,
+        /// The build rows to pair, a subset of all the build rows. The scope
+        /// map stores positions in this list, as for the NULL-valued build
+        /// rows.
+        build_rows: Vec<u64>,
+        /// The rows marked before the pairing starts, as by earlier probe
+        /// batches.
+        marked_before: Vec<bool>,
+        /// Seed of the pairs that pass the join filter.
+        filter_seed: u64,
+        /// One in this many pairs passes the join filter. `u64::MAX` passes
+        /// none.
+        filter_one_in: u64,
+        /// Whether each chunk of pairs also marks a random build row, as
+        /// another probe partition can while this one pairs.
+        foreign_marks: bool,
+    }
+
+    impl Case {
+        fn random(rng: &mut StdRng) -> Self {
+            let mark_build_rows = rng.random_bool(0.5);
+            let num_build = rng.random_range(0..80);
+            let num_probe = rng.random_range(0..300);
+            // Few keys give large scopes, which make the pairing switch to
+            // groups.
+            let num_keys = rng.random_range(1..12);
+            let build_keys: Vec<u64> = (0..num_build)
+                .map(|_| rng.random_range(0..num_keys))
+                .collect();
+            let probe_keys: Vec<u64> = (0..num_probe)
+                .map(|_| rng.random_range(0..num_keys))
+                .collect();
+            let probe_rows = (0..num_probe as u32)
+                .filter(|_| rng.random_bool(0.9))
+                .collect();
+            let build_rows = (0..num_build as u64)
+                .filter(|_| rng.random_bool(0.8))
+                .collect();
+            let num_marked = if mark_build_rows {
+                num_build
+            } else {
+                num_probe
+            };
+            let marked_before = (0..num_marked).map(|_| rng.random_bool(0.1)).collect();
+            Self {
+                mark_build_rows,
+                through_scope_map: rng.random_bool(0.8),
+                batch_size: [1, 2, 3, 7, 64, 8192][rng.random_range(0..6)],
+                hash_modulus: rng.random_range(1..=num_keys),
+                build_keys,
+                probe_keys,
+                probe_rows,
+                build_rows,
+                marked_before,
+                filter_seed: rng.random(),
+                filter_one_in: [1, 2, 5, 50, u64::MAX][rng.random_range(0..5)],
+                foreign_marks: mark_build_rows && rng.random_bool(0.3),
+            }
+        }
+
+        fn passes_filter(&self, build_row: u64, probe_row: u32) -> bool {
+            let mixed = (build_row ^ self.filter_seed)
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .wrapping_add(probe_row as u64)
+                .wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+            self.filter_one_in != u64::MAX
+                && (mixed >> 7).is_multiple_of(self.filter_one_in)
+        }
+
+        fn decided_row(&self, build_row: u64, probe_row: u32) -> usize {
+            if self.mark_build_rows {
+                build_row as usize
+            } else {
+                probe_row as usize
+            }
+        }
+
+        /// The marks after every pair of the same scope that passes the
+        /// filter has marked its row.
+        fn expected_marks(&self) -> Vec<bool> {
+            let mut marks = self.marked_before.clone();
+            for build_row in &self.build_rows {
+                for probe_row in &self.probe_rows {
+                    let same_scope = self.build_keys[*build_row as usize]
+                        == self.probe_keys[*probe_row as usize];
+                    let paired = !self.through_scope_map || same_scope;
+                    if paired && self.passes_filter(*build_row, *probe_row) {
+                        marks[self.decided_row(*build_row, *probe_row)] = true;
+                    }
+                }
+            }
+            marks
+        }
+
+        /// Runs [`UnmarkedPairs`] like [`mark_null_candidates_for_probe_batch`]
+        /// does, and returns the marks and the pairing.
+        fn run(&self) -> Result<(Vec<bool>, Stats)> {
+            let mut bitmap = BooleanBufferBuilder::new(self.marked_before.len());
+            for marked in &self.marked_before {
+                bitmap.append(*marked);
+            }
+            let bitmap = Mutex::new(bitmap);
+            let marks = if self.mark_build_rows {
+                UnknownMarks::Build(&bitmap)
+            } else {
+                UnknownMarks::Probe(&bitmap)
+            };
+            let hash = |key: u64| key % self.hash_modulus;
+
+            let mut foreign_marks = vec![];
+            let mark = |build: UInt64Array, probe: UInt32Array| {
+                assert!(build.len() <= self.batch_size);
+                if self.foreign_marks {
+                    let row = (self.filter_seed as usize)
+                        .wrapping_add(foreign_marks.len().wrapping_mul(0x9E37_79B9))
+                        % self.marked_before.len();
+                    bitmap.lock().set_bit(row, true);
+                    foreign_marks.push(row);
+                }
+                // Like `mark_scope_matches` and `mark`: drop the pairs of
+                // different scopes, then apply the filter.
+                let mut bitmap = bitmap.lock();
+                for (build_row, probe_row) in build.values().iter().zip(probe.values()) {
+                    let build_key = self.build_keys[*build_row as usize];
+                    let probe_key = self.probe_keys[*probe_row as usize];
+                    if self.through_scope_map {
+                        assert_eq!(hash(build_key), hash(probe_key));
+                        if build_key != probe_key {
+                            continue;
+                        }
+                    }
+                    if self.passes_filter(*build_row, *probe_row) {
+                        bitmap.set_bit(self.decided_row(*build_row, *probe_row), true);
+                    }
+                }
+                Ok(())
+            };
+
+            let mut pairs = UnmarkedPairs::new(marks, self.batch_size, mark);
+            if self.through_scope_map {
+                let mut scope_map = JoinHashMapU64::with_capacity(self.build_rows.len());
+                let build_hashes: Vec<u64> = self
+                    .build_rows
+                    .iter()
+                    .map(|row| hash(self.build_keys[*row as usize]))
+                    .collect();
+                scope_map
+                    .update_from_iter(Box::new(build_hashes.iter().enumerate().rev()), 0);
+                let probe_hashes: Vec<u64> =
+                    self.probe_keys.iter().map(|key| hash(*key)).collect();
+                pairs.scope_matches(
+                    &scope_map,
+                    |position| self.build_rows[position as usize],
+                    self.probe_rows.iter().copied(),
+                    &probe_hashes,
+                    &mut LookupBuffers::default(),
+                )?;
+            } else {
+                pairs.cross_product(
+                    self.build_rows.iter().copied(),
+                    self.probe_rows.iter().copied(),
+                )?;
+            }
+            let looked_up_matches = pairs.looked_up_matches;
+            pairs.finish()?;
+            let bitmap = bitmap.into_inner().finish();
+            let marks = (0..bitmap.len()).map(|row| bitmap.value(row)).collect();
+            Ok((
+                marks,
+                Stats {
+                    looked_up_matches,
+                    foreign_marks,
+                },
+            ))
+        }
+    }
+
+    #[derive(Debug)]
+    struct Stats {
+        looked_up_matches: usize,
+        /// The rows that `foreign_marks` marked.
+        foreign_marks: Vec<usize>,
+    }
+
+    /// Compares the marks of [`UnmarkedPairs`] with those of every pair, on
+    /// random inputs: hash collisions between scopes, rows marked before or
+    /// meanwhile by other partitions, filters that pass none to all of the
+    /// pairs, marks on build or probe rows, and lookups that switch to groups
+    /// or not.
+    #[test]
+    fn unmarked_pairs_match_brute_force() -> Result<()> {
+        let mut rng = StdRng::seed_from_u64(0x5C0BE);
+        for i in 0..3000 {
+            let case = Case::random(&mut rng);
+            let (marks, stats) = case.run()?;
+            let mut expected = case.expected_marks();
+            for row in &stats.foreign_marks {
+                expected[*row] = true;
+            }
+            assert_eq!(marks, expected, "case {i}: {case:?}");
+        }
+        Ok(())
+    }
+
+    /// One scope holds every row, and every pair passes. Returns the matches
+    /// that the scope map lookups walked.
+    fn walked_matches_in_one_scope(
+        mark_build_rows: bool,
+        num_build: usize,
+        num_probe: usize,
+        batch_size: usize,
+    ) -> Result<usize> {
+        let num_marked = if mark_build_rows {
+            num_build
+        } else {
+            num_probe
+        };
+        let case = Case {
+            mark_build_rows,
+            through_scope_map: true,
+            batch_size,
+            hash_modulus: 1,
+            build_keys: vec![0; num_build],
+            probe_keys: vec![0; num_probe],
+            probe_rows: (0..num_probe as u32).collect(),
+            build_rows: (0..num_build as u64).collect(),
+            marked_before: vec![false; num_marked],
+            filter_seed: 0,
+            filter_one_in: 1,
+            foreign_marks: false,
+        };
+        let (marks, stats) = case.run()?;
+        assert!(marks.iter().all(|marked| *marked));
+        Ok(stats.looked_up_matches)
+    }
+
+    /// With marks on the probe rows, a scope with far more build rows than
+    /// probe rows. A lookup per probe row walks the whole hash chain for
+    /// every probe row, even after the probe row is marked.
+    #[test]
+    fn marked_probe_rows_walk_whole_chains() -> Result<()> {
+        for batch_size in [16, 8192] {
+            let (num_build, num_probe) = (50_000, 500);
+            let walked =
+                walked_matches_in_one_scope(false, num_build, num_probe, batch_size)?;
+            assert_eq!(walked, num_build * num_probe, "batch_size {batch_size}");
+        }
+        Ok(())
+    }
+
+    /// One scope with many rows, where every pair passes. A lookup per probe
+    /// row walks every build row of the scope for every probe row, even after
+    /// the rows are marked. So the scope map lookups walk one match per pair
+    /// of rows.
+    #[test]
+    fn scope_lookups_walk_every_pair() -> Result<()> {
+        for mark_build_rows in [true, false] {
+            for batch_size in [1, 16, 8192] {
+                let (num_build, num_probe) = (2_000, 2_000);
+                let walked = walked_matches_in_one_scope(
+                    mark_build_rows,
+                    num_build,
+                    num_probe,
+                    batch_size,
+                )?;
+                assert_eq!(
+                    walked,
+                    num_build * num_probe,
+                    "marks on build rows: {mark_build_rows}, batch_size {batch_size}"
+                );
+            }
+        }
+        Ok(())
+    }
 }
