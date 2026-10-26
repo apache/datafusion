@@ -29,6 +29,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 
+use crate::expressions::lit;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
 
@@ -341,6 +342,28 @@ impl DynamicFilterPhysicalExpr {
             generation: new_generation,
         });
         Ok(())
+    }
+
+    /// Reset this dynamic filter so its producer can publish a new expression
+    /// during a later execution of the same plan.
+    pub fn reset(&self) {
+        let mut current = self.inner.write();
+        // Keep the generation increasing: `current()` caches by generation, so going
+        // back would let a later update hit the previous run's cached expression.
+        let new_generation = current.generation + 1;
+        *current = Inner {
+            expression_id: current.expression_id,
+            generation: new_generation,
+            expr: lit(true),
+            is_complete: false,
+        };
+        drop(current);
+
+        // The channel still holds `Complete` from the previous run; publish
+        // `InProgress` so `wait_complete()` waits for this run's filter.
+        let _ = self.state_watch.send(FilterState::InProgress {
+            generation: new_generation,
+        });
     }
 
     /// Mark this dynamic filter as complete and broadcast to all waiters.
@@ -1030,6 +1053,21 @@ mod test {
 
         // wait_complete should return immediately
         dynamic_filter.wait_complete().await;
+    }
+
+    #[test]
+    fn test_reset_reopens_completed_filter() {
+        let dynamic_filter =
+            DynamicFilterPhysicalExpr::new(vec![], lit(false) as Arc<dyn PhysicalExpr>);
+        dynamic_filter.mark_complete();
+        let generation_before_reset = dynamic_filter.inner.read().generation;
+
+        dynamic_filter.reset();
+
+        let inner = dynamic_filter.inner.read();
+        assert!(!inner.is_complete);
+        assert!(inner.generation > generation_before_reset);
+        assert_eq!(inner.expr.to_string(), "true");
     }
 
     #[test]

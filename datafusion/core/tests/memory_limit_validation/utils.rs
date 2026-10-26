@@ -102,7 +102,7 @@ where
 /// environment variable set. Re-invokes the current test binary directly,
 /// avoiding cargo overhead and recompilation.
 pub fn spawn_test_process(module: &str, test: &str) {
-    let test_path = format!("memory_limit::memory_limit_validation::{module}::{test}");
+    let test_path = format!("memory_limit_validation::{module}::{test}");
     let exe = std::env::current_exe().expect("Failed to get test binary path");
     let output = Command::new(exe)
         .arg(&test_path)
@@ -118,6 +118,11 @@ pub fn spawn_test_process(module: &str, test: &str) {
         output.status.success(),
         "Test '{test}' failed with status: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
         output.status,
+    );
+    // A path that matches no test passes without running anything.
+    assert!(
+        stdout.contains("running 1 test"),
+        "Test path '{test_path}' did not select exactly one test\nstdout:\n{stdout}",
     );
 }
 
