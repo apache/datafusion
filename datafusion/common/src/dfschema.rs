@@ -2004,6 +2004,19 @@ mod tests {
                     "width {width}, name {name}"
                 );
                 assert_eq!(
+                    schema.fields_with_unqualified_name(name),
+                    scanned.iter().map(|(_, f)| *f).collect::<Vec<_>>(),
+                    "width {width}, name {name}"
+                );
+                assert_eq!(
+                    schema.columns_with_unqualified_name(name),
+                    scanned
+                        .iter()
+                        .map(|(q, f)| Column::new(q.cloned(), f.name()))
+                        .collect::<Vec<_>>(),
+                    "width {width}, name {name}"
+                );
+                assert_eq!(
                     schema.has_column_with_unqualified_name(name),
                     !scanned.is_empty()
                 );
@@ -2035,6 +2048,12 @@ mod tests {
         let mut schema = name_lookup_schema(&[(None, "a")], LINEAR_NAME_SCAN_MAX + 1);
         assert_eq!(schema.index_of_column_by_name(None, "a"), Some(0));
         let index = Arc::clone(schema.name_index.get().unwrap());
+
+        // The index is derived state, so it must not show in equality or `Debug`.
+        let unprobed = name_lookup_schema(&[(None, "a")], LINEAR_NAME_SCAN_MAX + 1);
+        assert!(unprobed.name_index.get().is_none());
+        assert_eq!(schema, unprobed);
+        assert_eq!(format!("{schema:?}"), format!("{unprobed:?}"));
 
         // Clones and qualifier rewrites keep the fields, so they share the index.
         assert!(Arc::ptr_eq(
