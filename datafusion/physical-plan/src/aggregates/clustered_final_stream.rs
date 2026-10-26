@@ -261,7 +261,9 @@ impl ClusteredFinalAggregateStream {
     /// 1. Start.
     /// 2. Merge one input batch:
     ///    - If memory fits and no groups are complete, continue reading input.
-    ///    - If OOM, spill.
+    ///    - If OOM with a spill context, spill.
+    ///    - If OOM without one, emit the completed groups (edge 3), or return
+    ///      the error when no group is complete.
     /// 3. Prepare output:
     ///    - Before any spill, a prefix of groups is complete: materialize the
     ///      entire prefix once, retaining the input and active groups to resume
