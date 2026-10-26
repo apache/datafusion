@@ -331,7 +331,8 @@ impl ClusteredSingleAggregateStream {
                         ));
                 timer.done();
                 // Check the reservation before taking completed groups, as the partial
-                // stream does, so a refused reservation still triggers spilling.
+                // stream does, so spilling is unchanged. Without spilling, the refusal
+                // is returned below only if no group is complete.
                 let oom = match resize_result {
                     Ok(()) => None,
                     Err(e @ DataFusionError::ResourcesExhausted(_)) => {
@@ -350,9 +351,7 @@ impl ClusteredSingleAggregateStream {
                                 );
                             }
                             // Spilling is not supported, see comments at
-                            // `ClusteredSingleAggregateState` for details. Keep
-                            // the refused reservation and return it only if no
-                            // completed group can be emitted below.
+                            // `ClusteredSingleAggregateState` for details.
                             None => Some(e),
                         }
                     }
@@ -392,7 +391,6 @@ impl ClusteredSingleAggregateStream {
                             },
                         )
                     }
-                    // No group is complete, so memory cannot be released.
                     (Ok(None), Some(oom)) => Self::break_with_err(oom),
                     // Can't do early emit, continue aggregating.
                     (Ok(None), None) => ControlFlow::Continue(

@@ -337,14 +337,13 @@ impl Aggregating {
             self.table.aggregate_batch(&batch)?;
 
             // Check the reservation before taking completed groups, as the partial
-            // stream does, so a refused reservation still triggers spilling.
+            // stream does, so spilling is unchanged. Without spilling, the refusal
+            // is returned below only if no group is complete.
             let oom = match (
                 reservation.try_resize(self.reservation_size()),
                 self.spill_context.as_mut(),
             ) {
                 (Ok(()), _) => None,
-                // Without spilling, keep the refused reservation and return it
-                // only if no completed group can be emitted below.
                 (Err(oom @ DataFusionError::ResourcesExhausted(_)), None) => Some(oom),
                 (
                     Err(oom @ DataFusionError::ResourcesExhausted(_)),
@@ -372,7 +371,6 @@ impl Aggregating {
                 continue;
             }
             let Some(batch) = self.table.take_completed_result_batch()? else {
-                // No group is complete, so memory cannot be released.
                 match oom {
                     Some(oom) => return Err(oom),
                     None => continue,
