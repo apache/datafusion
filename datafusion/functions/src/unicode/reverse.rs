@@ -26,6 +26,7 @@ use arrow::array::{Array, ArrayRef, AsArray, StringArrayType};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::types::logical_string;
+use datafusion_common::utils::offset_span_len;
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
@@ -102,14 +103,26 @@ fn reverse(args: &[ArrayRef]) -> Result<ArrayRef> {
     let len = args[0].len();
 
     match args[0].data_type() {
-        LargeUtf8 => reverse_impl(
-            &args[0].as_string::<i64>(),
-            GenericStringArrayBuilder::<i64>::with_capacity(len, 1024),
-        ),
-        Utf8 => reverse_impl(
-            &args[0].as_string::<i32>(),
-            GenericStringArrayBuilder::<i32>::with_capacity(len, 1024),
-        ),
+        LargeUtf8 => {
+            let string_array = args[0].as_string::<i64>();
+            reverse_impl(
+                &string_array,
+                GenericStringArrayBuilder::<i64>::with_capacity(
+                    len,
+                    offset_span_len(string_array.offsets()),
+                ),
+            )
+        }
+        Utf8 => {
+            let string_array = args[0].as_string::<i32>();
+            reverse_impl(
+                &string_array,
+                GenericStringArrayBuilder::<i32>::with_capacity(
+                    len,
+                    offset_span_len(string_array.offsets()),
+                ),
+            )
+        }
         Utf8View => reverse_impl(
             &args[0].as_string_view(),
             StringViewArrayBuilder::with_capacity(len),

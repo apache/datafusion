@@ -26,7 +26,7 @@ use arrow::{
 };
 use arrow_schema::{DataType, Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
-use datafusion_common::utils::normalize_float_zero;
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{ColumnarValue, JoinType, Operator};
@@ -581,13 +581,12 @@ fn build_matched_indices_and_mark_buffered(
         .buffered_data
         .batch()
         .slice(buffered_range.0, buffered_range.1);
-    let mut buffered_columns = new_buffered_batch.columns().to_vec();
+    let mut buffered_columns = Vec::with_capacity(join_schema.fields().len());
+    buffered_columns.extend_from_slice(new_buffered_batch.columns());
 
     let indices = UInt32Array::from_value(streamed_range.0 as u32, streamed_range.1);
     let new_stream_batch = take_record_batch(&stream_batch.batch, &indices)?;
-    let streamed_columns = new_stream_batch.columns().to_vec();
-
-    buffered_columns.extend(streamed_columns);
+    buffered_columns.extend_from_slice(new_stream_batch.columns());
 
     Ok(RecordBatch::try_new(
         Arc::clone(join_schema),
@@ -609,7 +608,7 @@ fn buffered_extreme(
     let last = values.slice(end - 1, 1);
     // `apply_cmp` normalizes `-0.0` only in flat float scalars, not inside a
     // `ScalarValue::Dictionary`, so normalize the key before taking it.
-    let extreme = normalize_float_zero(&last);
+    let extreme = normalize_floats(&last);
     Ok(Some(ColumnarValue::Scalar(ScalarValue::try_from_array(
         &extreme, 0,
     )?)))

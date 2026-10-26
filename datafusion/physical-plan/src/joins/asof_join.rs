@@ -79,10 +79,10 @@ use arrow::array::{
 use arrow::buffer::NullBuffer;
 use arrow::compute::{SortOptions, interleave};
 use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
-use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     ColumnStatistics, JoinSide, JoinType, NullEquality, Result, Statistics,
     assert_eq_or_internal_err, internal_err, plan_err, project_schema,
@@ -915,7 +915,7 @@ impl InputCursor {
             // Arrow's comparator distinguishes -0.0 from +0.0, while SQL does
             // not. Normalizing once here is cheaper than fixing every row-level
             // comparison and lets the cached comparator use the arrays directly.
-            self.match_array = Some(normalize_float_zero(&match_array));
+            self.match_array = Some(normalize_floats(&match_array));
             self.key_batch_id += 1;
             self.batch = Some(batch);
         }
@@ -1009,6 +1009,7 @@ impl PendingRows {
         &self,
         source_column: usize,
         data_type: &arrow::datatypes::DataType,
+        interleave_indices: &mut Vec<(usize, usize)>,
     ) -> Result<ArrayRef> {
         if self.indices.is_empty() {
             return internal_err!("ASOF output materialization has no pending rows");
@@ -1041,15 +1042,12 @@ impl PendingRows {
                 .map(|batch| batch.column(source_column).as_ref()),
         );
         let source_offset = usize::from(has_null);
-        let interleave_indices = self
-            .indices
-            .iter()
-            .map(|index| match index {
-                Some((source, row)) => (source + source_offset, *row),
-                None => (0, 0),
-            })
-            .collect::<Vec<_>>();
-        interleave(&source_arrays, &interleave_indices).map_err(Into::into)
+        interleave_indices.clear();
+        interleave_indices.extend(self.indices.iter().map(|index| match index {
+            Some((source, row)) => (source + source_offset, *row),
+            None => (0, 0),
+        }));
+        interleave(&source_arrays, interleave_indices).map_err(Into::into)
     }
 
     fn clear(&mut self) {
@@ -1374,6 +1372,7 @@ impl AsOfJoinStream {
         let _timer = self.metrics.baseline.elapsed_compute().timer();
         let row_count = self.pending_left.len();
         let mut arrays = Vec::with_capacity(self.schema.fields().len());
+        let mut interleave_indices = Vec::new();
         for (field, column) in self.schema.fields().iter().zip(&self.column_indices) {
             let pending = match column.side {
                 JoinSide::Left => &self.pending_left,
@@ -1382,7 +1381,11 @@ impl AsOfJoinStream {
                     return internal_err!("ASOF projection cannot contain a mark column");
                 }
             };
-            arrays.push(pending.materialize_column(column.index, field.data_type())?);
+            arrays.push(pending.materialize_column(
+                column.index,
+                field.data_type(),
+                &mut interleave_indices,
+            )?);
         }
         self.pending_left.clear();
         self.pending_right.clear();

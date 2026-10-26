@@ -207,6 +207,9 @@ impl Unparser<'_> {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Unnest(_) => not_impl_err!("Unsupported plan: {plan:?}"),
+            LogicalPlan::MaterializedCte(_) => {
+                not_impl_err!("Unparsing a MATERIALIZED CTE is not supported: {plan:?}")
+            }
         }
     }
 
@@ -503,7 +506,8 @@ impl Unparser<'_> {
                         .iter()
                         .any(|column| column.relation.is_some())
                 });
-                let mut input_names = HashSet::new();
+                let mut input_names =
+                    HashSet::with_capacity(projection.input.schema().fields().len());
                 let unique_input_names = projection
                     .input
                     .schema()
@@ -2582,11 +2586,11 @@ impl Unparser<'_> {
                     if project_vec.is_empty() {
                         builder = builder.project(self.empty_projection_fallback())?;
                     } else {
+                        let schema = table_scan.source.schema();
                         let project_columns = project_vec
                             .iter()
                             .copied()
                             .map(|i| {
-                                let schema = table_scan.source.schema();
                                 let field = schema.field(i);
                                 if alias.is_some() {
                                     Column::new(alias.clone(), field.name().clone())
