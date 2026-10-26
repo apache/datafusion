@@ -181,6 +181,42 @@ statement ok
 DROP TABLE abs_equivalence;
 
 ###
+### Projection equalities and TopK
+###
+
+# Independent volatile calls must keep the outer sort above the inner TopK.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query TT
+EXPLAIN SELECT r, x FROM (
+  SELECT random() AS r, CAST(random() AS FLOAT) AS x
+  FROM generate_series(1, 2000) ORDER BY r LIMIT 1000
+) ORDER BY x;
+----
+physical_plan
+01)SortExec: expr=[x@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--SortExec: TopK(fetch=1000), expr=[r@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[random() as r, CAST(random() AS Float32) as x]
+04)------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=2000, batch_size=8192]
+
+# A deterministic cast is a valid equality, but can introduce ties. The
+# inner TopK must still select by r, even though its output is ordered by x.
+statement ok
+CREATE TABLE lossy_topk AS VALUES (16777217), (16777216);
+
+query IR
+SELECT r, x FROM (
+  SELECT column1 AS r, CAST(column1 AS FLOAT) AS x FROM lossy_topk
+  ORDER BY r LIMIT 1
+) ORDER BY x;
+----
+16777216 16777216
+
+statement ok
+DROP TABLE lossy_topk;
+
+###
 ### Order-preserving repartition of an unbounded input
 ###
 
@@ -208,6 +244,19 @@ physical_plan
 02)--BoundedWindowAggExec: wdw=[sum(t_inf.c) PARTITION BY [x] ORDER BY [t_inf.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(t_inf.c) PARTITION BY [x] ORDER BY [t_inf.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 03)----RepartitionExec: partitioning=Hash([x@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, x@0 ASC NULLS LAST
 04)------ProjectionExec: expr=[CAST(a@0 AS Int64) as x, a@0 as a, b@1 as b, c@2 as c]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+06)----------StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
+
+# Strictly increasing functions also retain their derived ordering after merging.
+query TT
+EXPLAIN SELECT a, x, SUM(c) OVER (PARTITION BY x ORDER BY b) s
+FROM (SELECT to_unixtime(a) x, a, b, c FROM t_inf);
+----
+physical_plan
+01)ProjectionExec: expr=[a@1 as a, x@0 as x, sum(t_inf.c) PARTITION BY [x] ORDER BY [t_inf.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as s]
+02)--BoundedWindowAggExec: wdw=[sum(t_inf.c) PARTITION BY [x] ORDER BY [t_inf.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(t_inf.c) PARTITION BY [x] ORDER BY [t_inf.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----RepartitionExec: partitioning=Hash([x@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, x@0 ASC NULLS LAST
+04)------ProjectionExec: expr=[to_unixtime(a@0) as x, a@0 as a, b@1 as b, c@2 as c]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 06)----------StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 

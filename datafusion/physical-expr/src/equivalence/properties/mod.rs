@@ -1410,7 +1410,8 @@ impl EquivalenceProperties {
     /// # Returns
     ///
     /// Returns an [`ExprProperties`] object containing the ordering and range
-    /// information for the given expression.
+    /// information for the given expression. If its ordering is unknown, falls
+    /// back to the sort properties of an equivalent expression.
     pub fn get_expr_properties(&self, expr: Arc<dyn PhysicalExpr>) -> ExprProperties {
         let class = self.eq_group.get_equivalence_class(&expr);
         let mut properties = self.get_expr_properties_from_tree(expr);

@@ -329,11 +329,16 @@ fn pushdown_sorts_helper(
                 sort_ordering.clone().into(),
                 parent_requirement.first().clone(),
             );
-            sort_push_down.data.ordering_requirement = if current_is_stricter {
-                Some(OrderingRequirements::from(sort_ordering))
-            } else {
-                Some(parent_requirement)
-            };
+            // A fetched sort selects rows using its own keys. Even if those
+            // keys satisfy the parent ordering, replacing them with a weaker
+            // ordering can change which rows survive (e.g. a lossy cast can
+            // introduce ties). Keep the selection keys in that case.
+            sort_push_down.data.ordering_requirement =
+                if current_is_stricter || (sort_fetch.is_some() && satisfy_parent) {
+                    Some(OrderingRequirements::from(sort_ordering))
+                } else {
+                    Some(parent_requirement)
+                };
             // Recursive call to helper, so it doesn't transform_down and miss
             // the new node (previous child of sort):
             return pushdown_sorts_helper(sort_push_down);

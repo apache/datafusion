@@ -2201,16 +2201,13 @@ impl RepartitionExec {
         preserve_order: bool,
     ) -> EquivalenceProperties {
         let mut eq_properties = input.equivalence_properties().clone();
-        let input_partitions = input.output_partitioning().partition_count();
-        if !Self::maintains_input_order_helper(input, preserve_order)[0] {
+        // Fusing several input partitions keeps only the merge key ordering,
+        // and per-partition constants no longer hold.
+        if input.output_partitioning().partition_count() > 1 {
             eq_properties.clear_orderings();
-        } else if input_partitions > 1 {
-            eq_properties.clear_orderings();
-            if let Some(ordering) = input.output_ordering() {
+            if preserve_order && let Some(ordering) = input.output_ordering() {
                 eq_properties.add_ordering(ordering.clone());
             }
-        }
-        if input_partitions > 1 {
             eq_properties.clear_per_partition_constants();
         }
         eq_properties

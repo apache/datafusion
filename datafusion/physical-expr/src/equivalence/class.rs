@@ -22,14 +22,16 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use super::ProjectionMapping;
-use crate::expressions::{CastExpr, Literal};
+use crate::expressions::Literal;
 use crate::physical_expr::add_offset_to_expr;
 use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result, ScalarValue};
-use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use datafusion_physical_expr_common::physical_expr::{
+    format_physical_expr_list, is_volatile,
+};
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -753,7 +755,9 @@ impl EquivalenceGroup {
             for (target, _) in targets.iter() {
                 cls.push(Arc::clone(target));
             }
-            if source.is::<CastExpr>() {
+            // Retain deterministic expressions as equalities so orderings derived
+            // through strict functions can be inferred after a merge clears orderings.
+            if !source.children().is_empty() && !is_volatile(source) {
                 let augmented = augmented
                     .get_or_insert_with(|| self.augment_projection_mapping(mapping));
                 if let Some(projected) = Self::project_expr_indirect(augmented, source) {
