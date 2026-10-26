@@ -85,8 +85,8 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------ProjectionExec: expr=[]
 06)----------PiecewiseMergeJoin: operator=Lt, join_type=Inner, on=(CAST(v AS Int64) < value)
-07)------------SortPreservingMergeExec: [CAST(v@0 AS Int64) DESC]
-08)--------------SortExec: expr=[CAST(v@0 AS Int64) DESC], preserve_partitioning=[true]
+07)------------SortPreservingMergeExec: [CAST(v@0 AS Int64) DESC NULLS LAST]
+08)--------------SortExec: expr=[CAST(v@0 AS Int64) DESC NULLS LAST], preserve_partitioning=[true]
 09)----------------DataSourceExec: partitions=4, partition_sizes=[2, 1, 1, 1]
 10)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 11)--------------LazyMemoryExec: partitions=1, batch_generators=[range: start=3, end=8, batch_size=2]

@@ -105,7 +105,7 @@ impl MemoryPool for GreedyMemoryPool {
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
         self.used
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 let new_used = used + additional;
                 (new_used <= self.pool_size).then_some(new_used)
             })

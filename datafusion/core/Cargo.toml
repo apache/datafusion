@@ -247,6 +247,10 @@ name = "filter_query_sql"
 
 [[bench]]
 harness = false
+name = "in_list_rewrite"
+
+[[bench]]
+harness = false
 name = "struct_query_sql"
 
 [[bench]]
@@ -340,3 +344,7 @@ required-features = ["parquet"]
 [[bench]]
 harness = false
 name = "reset_plan_states"
+
+[[bench]]
+harness = false
+name = "partition_metrics"

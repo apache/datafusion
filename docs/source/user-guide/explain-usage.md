@@ -131,7 +131,7 @@ physical plan in Figure 1 in tree format will look like
 Each node in the tree/plan ends with `Exec` and is sometimes also called an `operator` or `ExecutionPlan` where data is
 processed, transformed and sent up.
 
-1. First, data in parquet the `hits.parquet` file us read in parallel using 16 cores in 16 "partitions" (more on this later) from `DataSourceExec`, which applies a first pass at filtering during the scan.
+1. First, data in parquet the `hits.parquet` file is read in parallel using 16 cores in 16 "partitions" (more on this later) from `DataSourceExec`, which applies a first pass at filtering during the scan.
 2. Next, the output is filtered using `FilterExec` to ensure only rows where `starts_with(URL, 'http://domcheloveplanet.ru/')` evaluates to true are passed on
 3. The `CoalesceBatchesExec` then ensures that the data is grouped into larger batches for processing
 4. The `ProjectionExec` then projects the data to rename the `WatchID` and `ClientIP` columns to `wid` and `ip` respectively.
@@ -242,6 +242,12 @@ When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains 
 - `statistics_eval_time`: time spent parsing and evaluating row group-level statistics
 - `row_pushdown_eval_time`: time spent evaluating row-level filters
 - `page_index_eval_time`: time required to evaluate the page index filters
+
+`output_rows_skew` is also reported by operators that execute in multiple
+partitions: `RepartitionExec`, `HashJoinExec`, `AggregateExec`,
+`BoundedWindowAggExec` and `WindowAggExec`. It shows how evenly their output
+rows are spread across partitions, which helps spot data skew (for example, a
+hot join or grouping key). With a single partition the skew is always `0%`.
 
 ## Postgres-style `EXPLAIN (...)` options
 

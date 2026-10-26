@@ -21,15 +21,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::physical_optimizer::test_utils::{
-    RequirementsTestExec, bounded_window_exec_with_can_repartition, check_integrity,
-    coalesce_partitions_exec, parquet_exec_with_sort, parquet_exec_with_stats,
-    repartition_exec, schema, sort_exec, sort_exec_with_preserve_partitioning,
-    sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
+    RequirementsTestExec, TestStreamPartition, bounded_window_exec_with_can_repartition,
+    check_integrity, coalesce_partitions_exec, parquet_exec_with_sort,
+    parquet_exec_with_stats, repartition_exec, schema, sort_exec,
+    sort_exec_with_preserve_partitioning, sort_merge_join_exec,
+    sort_preserving_merge_exec, union_exec,
 };
 
-use arrow::array::{Int64Array, RecordBatch, UInt8Array, UInt64Array};
+use arrow::array::{
+    Int64Array, RecordBatch, TimestampNanosecondArray, UInt8Array, UInt64Array,
+};
 use arrow::compute::SortOptions;
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use datafusion::assert_batches_sorted_eq;
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::MemTable;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -38,6 +42,7 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::NullEquality;
 use datafusion_common::ScalarValue;
 use datafusion_common::Statistics;
 use datafusion_common::config::CsvOptions;
@@ -72,18 +77,21 @@ use datafusion_physical_plan::operator_statistics::{
 };
 
 use datafusion_physical_expr::{
-    Distribution, Partitioning, RangePartitioning, SplitPoint,
+    AcrossPartitions, ConstExpr, Distribution, Partitioning, RangePartitioning,
+    ScalarFunctionExpr, SplitPoint,
 };
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::joins::SortMergeJoinExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
@@ -416,6 +424,34 @@ fn range_partitioning(
         .into_iter()
         .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
         .collect::<Vec<_>>();
+
+    Ok(Partitioning::Range(RangePartitioning::try_new(
+        ordering,
+        split_points,
+    )?))
+}
+
+fn range_partitioning_multi(
+    keys: &[(&str, SortOptions)],
+    split_rows: &[&[i64]],
+) -> Result<Partitioning> {
+    let sort_exprs = keys
+        .iter()
+        .map(|(name, options)| Ok(PhysicalSortExpr::new(col(name, &schema())?, *options)))
+        .collect::<Result<Vec<_>>>()?;
+
+    let ordering = LexOrdering::new(sort_exprs).expect("range keys must not be empty");
+
+    let split_points = split_rows
+        .iter()
+        .map(|row| {
+            SplitPoint::new(
+                row.iter()
+                    .map(|value| ScalarValue::Int64(Some(*value)))
+                    .collect(),
+            )
+        })
+        .collect();
 
     Ok(Partitioning::Range(RangePartitioning::try_new(
         ordering,
@@ -926,6 +962,233 @@ fn range_aggregate_reuses_range_partitioning() -> Result<()> {
     Ok(())
 }
 
+fn timestamp_range_input(split: i64) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "timestamp",
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        false,
+    )]));
+    let hour = 3_600_000_000_000;
+    let (before_split, after_split): (Vec<_>, Vec<_>) =
+        [0, 1, hour, hour + 1, 2 * hour, 2 * hour + 1]
+            .into_iter()
+            .partition(|timestamp| *timestamp < split);
+    let partitions = [before_split, after_split]
+        .into_iter()
+        .map(|values| -> Result<_> {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(TimestampNanosecondArray::from(values))],
+            )?;
+            Ok(vec![batch])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let range = RangePartitioning::try_new(
+        [PhysicalSortExpr::new_default(col("timestamp", &schema)?)].into(),
+        vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+            Some(split),
+            None,
+        )])],
+    )?;
+    let source = MemorySourceConfig::try_new_exec(&partitions, schema, None)?;
+    Ok(Arc::new(
+        source
+            .as_ref()
+            .clone()
+            .with_partitioning(Partitioning::Range(range)),
+    ))
+}
+
+fn date_trunc_expr(
+    input: &dyn ExecutionPlan,
+    precision: &str,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(ScalarFunctionExpr::new(
+        "date_trunc",
+        datafusion_functions::datetime::date_trunc(),
+        vec![lit(precision), col("timestamp", &input.schema())?],
+        Field::new(
+            "bucket",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        )
+        .into(),
+        Arc::new(ConfigOptions::default()),
+    )))
+}
+
+/// Builds separate Partial and Final stages without projected range metadata.
+/// This exercises checking group locality through the partial stage's input.
+fn partial_final_date_trunc_count(
+    input: Arc<dyn ExecutionPlan>,
+    precision: &str,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    let group_by = PhysicalGroupBy::new_single(vec![(
+        date_trunc_expr(input.as_ref(), precision)?,
+        "bucket".to_string(),
+    )]);
+    let count = Arc::new(
+        AggregateExprBuilder::new(count_udaf(), vec![col("timestamp", &input_schema)?])
+            .schema(Arc::clone(&input_schema))
+            .alias("count")
+            .build()?,
+    );
+    let partial = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        group_by.clone(),
+        vec![Arc::clone(&count)],
+        vec![None],
+        input,
+        Arc::clone(&input_schema),
+    )?);
+    assert!(matches!(
+        partial.properties().output_partitioning(),
+        Partitioning::UnknownPartitioning(2)
+    ));
+
+    Ok(Arc::new(AggregateExec::try_new(
+        AggregateMode::FinalPartitioned,
+        group_by.as_final(),
+        vec![count],
+        vec![None],
+        partial,
+        input_schema,
+    )?))
+}
+
+#[tokio::test]
+async fn aligned_hour_groups_avoid_shuffle_through_partial_aggregate() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let input = timestamp_range_input(hour)?;
+    let aggregate = partial_final_date_trunc_count(input, "hour")?;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+    let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+
+    assert_plan!(
+        optimized,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[bucket@0 as bucket], aggr=[count]
+      AggregateExec: mode=Partial, gby=[date_trunc(hour, timestamp@0) as bucket], aggr=[count]
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
+    let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------------------+-------+",
+            "| bucket              | count |",
+            "+---------------------+-------+",
+            "| 1970-01-01T00:00:00 | 2     |",
+            "| 1970-01-01T01:00:00 | 2     |",
+            "| 1970-01-01T02:00:00 | 2     |",
+            "+---------------------+-------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn crossing_day_groups_keep_shuffle_through_partial_aggregate() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let input = timestamp_range_input(hour)?;
+    let aggregate = partial_final_date_trunc_count(input, "day")?;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+    let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+
+    assert_plan!(
+        optimized,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[bucket@0 as bucket], aggr=[count]
+      RepartitionExec: partitioning=Hash([bucket@0], 2), input_partitions=2
+        AggregateExec: mode=Partial, gby=[date_trunc(day, timestamp@0) as bucket], aggr=[count]
+          DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
+    let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------------------+-------+",
+            "| bucket              | count |",
+            "+---------------------+-------+",
+            "| 1970-01-01T00:00:00 | 6     |",
+            "+---------------------+-------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+#[test]
+fn range_transform_aggregate_optimization_is_idempotent() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+
+    for precision in ["hour", "day"] {
+        let input = timestamp_range_input(hour)?;
+        let aggregate = partial_final_date_trunc_count(input, precision)?;
+        let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+        SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+        let reoptimized =
+            EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
+        SanityCheckPlan::new().optimize(Arc::clone(&reoptimized), &config)?;
+        assert_plan!(optimized, reoptimized);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn range_transform_locality_does_not_satisfy_join_distribution() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let left = timestamp_range_input(hour)?;
+    let right = timestamp_range_input(2 * hour)?;
+    let left_key = date_trunc_expr(left.as_ref(), "hour")?;
+    let right_key = date_trunc_expr(right.as_ref(), "hour")?;
+    for (input, key) in [(&left, &left_key), (&right, &right_key)] {
+        assert!(input.output_partitioning().keeps_keys_local(
+            &[Arc::clone(key)],
+            input.equivalence_properties(),
+            false,
+        ));
+    }
+    let join =
+        hash_join_exec(left, right, &vec![(left_key, right_key)], &JoinType::Inner);
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+    let optimized = EnsureRequirements::new().optimize(join, &config)?;
+    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    assert_plan!(
+        optimized,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(date_trunc(hour, timestamp@0), date_trunc(hour, timestamp@0))]
+      RepartitionExec: partitioning=Hash([date_trunc(hour, timestamp@0)], 2), input_partitions=2
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+      RepartitionExec: partitioning=Hash([date_trunc(hour, timestamp@0)], 2), input_partitions=2
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
+    let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
+    assert_eq!(
+        batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        3 * 2 * 2,
+        "three hour buckets, each joining two left rows with two right rows"
+    );
+    Ok(())
+}
+
 #[test]
 fn range_grouping_set_aggregate_rehashes_with_grouping_id() -> Result<()> {
     let input = parquet_exec_with_output_partitioning(range_partitioning(
@@ -1021,6 +1284,609 @@ fn range_inner_hash_join_rehashes_incompatible_range_partitioning() -> Result<()
     );
 
     Ok(())
+}
+
+/// Optimizes `plan` under both `top_down_join_key_reordering` settings with
+/// round-robin and file-scan repartitioning disabled. Checks the expected plan,
+/// validates it with [`SanityCheckPlan`], and verifies that a second
+/// [`EnsureRequirements`] pass leaves it unchanged.
+fn check_range_join_key_alignment(
+    plan: Arc<dyn ExecutionPlan>,
+    check: impl Fn(&Arc<dyn ExecutionPlan>),
+) -> Result<()> {
+    check_range_join_key_alignment_with_partitions(4, plan, check)
+}
+
+/// [`check_range_join_key_alignment`] with `target_partitions` target partitions.
+fn check_range_join_key_alignment_with_partitions(
+    target_partitions: usize,
+    plan: Arc<dyn ExecutionPlan>,
+    check: impl Fn(&Arc<dyn ExecutionPlan>),
+) -> Result<()> {
+    for top_down in [true, false] {
+        let mut config =
+            TestConfig::default().with_query_execution_partitions(target_partitions);
+        config.config.optimizer.top_down_join_key_reordering = top_down;
+        config.config.optimizer.enable_round_robin_repartition = false;
+        config.config.optimizer.repartition_file_scans = false;
+
+        let optimized = config.try_to_plan(Arc::clone(&plan), &[Run::Distribution])?;
+        check(&optimized);
+        SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config.config)?;
+
+        let second = config.try_to_plan(Arc::clone(&optimized), &[Run::Distribution])?;
+        assert_eq!(
+            displayable(optimized.as_ref()).indent(true).to_string(),
+            displayable(second.as_ref()).indent(true).to_string(),
+            "plan changed on the second pass; top_down={top_down}"
+        );
+        SanityCheckPlan::new().optimize(second, &config.config)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn range_join_key_alignment_reversed_keys() -> Result<()> {
+    let partitioning = range_partitioning_multi(
+        &[("a", SortOptions::default()), ("b", SortOptions::default())],
+        &[&[10, 0], &[20, 0], &[30, 0]],
+    )?;
+
+    let left = parquet_exec_with_output_partitioning(partitioning.clone());
+    let right = projection_exec_with_alias(
+        parquet_exec_with_output_partitioning(partitioning),
+        vec![
+            ("a".to_string(), "a1".to_string()),
+            ("b".to_string(), "b1".to_string()),
+        ],
+    );
+
+    // Written in the opposite order of the range keys.
+    let join_on: JoinOn = vec![
+        (col("b", &left.schema())?, col("b1", &right.schema())?),
+        (col("a", &left.schema())?, col("a1", &right.schema())?),
+    ];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    check_range_join_key_alignment(join, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1)]
+              DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
+              ProjectionExec: expr=[a@0 as a1, b@1 as b1]
+                DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
+            "
+            );
+        }
+    })
+}
+
+#[test]
+fn range_join_key_alignment_crossed_keys() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning_multi(
+        &[("a", SortOptions::default()), ("b", SortOptions::default())],
+        &[&[10, 0], &[20, 0], &[30, 0]],
+    )?);
+
+    let right = parquet_exec_with_output_partitioning(range_partitioning_multi(
+        &[("b", SortOptions::default()), ("a", SortOptions::default())],
+        &[&[10, 0], &[20, 0], &[30, 0]],
+    )?);
+
+    // Unaliased columns crossed: left.b = right.a, left.a = right.b. The
+    // left range key list equals the *right* key list, so matching must be
+    // done per input or the permutation is missed.
+    let join_on: JoinOn = vec![
+        (col("b", &left.schema())?, col("a", &right.schema())?),
+        (col("a", &left.schema())?, col("b", &right.schema())?),
+    ];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    check_range_join_key_alignment(join, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1), (b@1, a@0)]
+              DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
+              DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([b@1 ASC, a@0 ASC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
+            "
+            );
+        }
+    })
+}
+
+#[test]
+fn range_join_key_alignment_sort_merge_join() -> Result<()> {
+    let asc = SortOptions::default();
+    let desc = SortOptions {
+        descending: true,
+        nulls_first: true,
+    };
+    let partitioning = range_partitioning_multi(
+        &[("a", asc), ("b", desc)],
+        &[&[10, 0], &[20, 0], &[30, 0]],
+    )?;
+    let left = parquet_exec_with_output_partitioning(partitioning.clone());
+    let right = parquet_exec_with_output_partitioning(partitioning);
+    let on = vec![
+        (col("b", &left.schema())?, col("b", &right.schema())?),
+        (col("a", &left.schema())?, col("a", &right.schema())?),
+    ];
+    // `sort_options` are per key pair and must be permuted with `on`; the
+    // projection must survive the rebuild.
+    let join: Arc<dyn ExecutionPlan> = Arc::new(
+        SortMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            JoinType::Inner,
+            vec![desc, asc],
+            NullEquality::NullEqualsNothing,
+        )?
+        .with_projection(Some(vec![0, 5]))?,
+    );
+
+    check_range_join_key_alignment(join, |plan| {
+        let smj = plan.downcast_ref::<SortMergeJoinExec>().unwrap();
+        assert_eq!(smj.sort_options, vec![asc, desc]);
+        assert_eq!(smj.projection, Some(vec![0, 5]));
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0), (b@1, b@1)], projection=[a@0, a@5]
+              SortExec: expr=[a@0 ASC, b@1 DESC], preserve_partitioning=[true]
+                DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 DESC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
+              SortExec: expr=[a@0 ASC, b@1 DESC], preserve_partitioning=[true]
+                DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 DESC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
+            "
+            );
+        }
+    })
+}
+
+/// Four unbounded partitions declared as `Range([a, b])` whose rows are
+/// ordered by each of `orderings` within each partition: partition membership
+/// and row order are independent.
+fn unbounded_range_stream(orderings: &[[&str; 2]]) -> Result<Arc<dyn ExecutionPlan>> {
+    ordered_stream(
+        range_partitioning_multi(
+            &[("a", SortOptions::default()), ("b", SortOptions::default())],
+            &[&[10, 0], &[20, 0], &[30, 0]],
+        )?,
+        orderings,
+        true,
+    )
+}
+
+/// A stream table with `partitioning` whose rows are ordered by each of
+/// `orderings` within each partition.
+fn ordered_stream(
+    partitioning: Partitioning,
+    orderings: &[[&str; 2]],
+    infinite: bool,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = schema();
+    let orderings = orderings
+        .iter()
+        .map(|[first, second]| {
+            Ok([
+                PhysicalSortExpr::new(col(first, &schema)?, SortOptions::default()),
+                PhysicalSortExpr::new(col(second, &schema)?, SortOptions::default()),
+            ]
+            .into())
+        })
+        .collect::<Result<Vec<LexOrdering>>>()?;
+    let partitions = (0..partitioning.partition_count())
+        .map(|_| {
+            Arc::new(TestStreamPartition {
+                schema: Arc::clone(&schema),
+            }) as _
+        })
+        .collect();
+    let exec = StreamingTableExec::try_new(
+        Arc::clone(&schema),
+        partitions,
+        None,
+        orderings,
+        infinite,
+        None,
+    )?
+    .with_output_partitioning(partitioning)?;
+    Ok(Arc::new(exec))
+}
+
+/// Passes its input through and additionally declares `column` constant
+/// within each partition, with values that may differ across partitions.
+#[derive(Debug)]
+struct PerPartitionConstantExec {
+    input: Arc<dyn ExecutionPlan>,
+    column: String,
+    cache: Arc<PlanProperties>,
+}
+
+impl PerPartitionConstantExec {
+    fn try_new(input: Arc<dyn ExecutionPlan>, column: &str) -> Result<Self> {
+        let mut eq_properties = input.equivalence_properties().clone();
+        eq_properties.add_constants([ConstExpr::new(
+            col(column, &input.schema())?,
+            AcrossPartitions::Heterogeneous,
+        )])?;
+        let cache = PlanProperties::new(
+            eq_properties,
+            input.output_partitioning().clone(),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        );
+        Ok(Self {
+            input,
+            column: column.to_string(),
+            cache: Arc::new(cache),
+        })
+    }
+}
+
+impl DisplayAs for PerPartitionConstantExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "PerPartitionConstantExec: {}", self.column)
+            }
+            DisplayFormatType::TreeRender => write!(f, ""),
+        }
+    }
+}
+
+impl ExecutionPlan for PerPartitionConstantExec {
+    fn name(&self) -> &'static str {
+        "PerPartitionConstantExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_eq!(children.len(), 1);
+        Ok(Arc::new(Self::try_new(
+            children.pop().unwrap(),
+            &self.column,
+        )?))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion::execution::context::TaskContext>,
+    ) -> Result<datafusion_physical_plan::SendableRecordBatchStream> {
+        unreachable!();
+    }
+}
+
+#[test]
+fn range_join_key_alignment_keeps_streamable_sort_merge_join_keys() -> Result<()> {
+    // A sort-merge join on (b, a) over unbounded Range([a, b]) inputs whose
+    // rows are ordered by `ordered_by`.
+    let smj_on_b_a = |ordered_by: [&str; 2]| -> Result<Arc<dyn ExecutionPlan>> {
+        let left = unbounded_range_stream(&[ordered_by])?;
+        let right = unbounded_range_stream(&[ordered_by])?;
+        let on = vec![
+            (col("b", &left.schema())?, col("b", &right.schema())?),
+            (col("a", &left.schema())?, col("a", &right.schema())?),
+        ];
+        Ok(Arc::new(SortMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            JoinType::Inner,
+            vec![SortOptions::default(); 2],
+            NullEquality::NullEqualsNothing,
+        )?))
+    };
+
+    // Rows are sorted by the keys as written, (b, a). Realigning the keys to
+    // the range order (a, b) would require a full sort of each unbounded
+    // input, which is pipeline breaking, so the keys stay as written and the
+    // inputs are repartitioned with an order-preserving exchange instead.
+    check_range_join_key_alignment(smj_on_b_a(["b", "a"])?, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            SortMergeJoinExec: join_type=Inner, on=[(b@1, b@1), (a@0, a@0)]
+              RepartitionExec: partitioning=Hash([b@1, a@0], 4), input_partitions=4, preserve_order=true, sort_exprs=b@1 ASC, a@0 ASC
+                StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_ordering=[b@1 ASC, a@0 ASC]
+              RepartitionExec: partitioning=Hash([b@1, a@0], 4), input_partitions=4, preserve_order=true, sort_exprs=b@1 ASC, a@0 ASC
+                StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_ordering=[b@1 ASC, a@0 ASC]
+            "
+            );
+        }
+    })?;
+
+    // Rows are already sorted by the range order (a, b), so realigning the
+    // keys adds no sort: the join is aligned and runs without any exchange.
+    check_range_join_key_alignment(smj_on_b_a(["a", "b"])?, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+              StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_ordering=[a@0 ASC, b@1 ASC]
+              StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_ordering=[a@0 ASC, b@1 ASC]
+            "
+            );
+        }
+    })
+}
+
+#[test]
+fn range_join_key_alignment_ignores_per_partition_constants() -> Result<()> {
+    // `a` is constant within each partition of the unbounded right input, so
+    // its (b, a) row order also satisfies (a, b) locally. Realigning the keys
+    // to the left Range([a, b]) would repartition the right input, which
+    // drops that constant and forces a blocking sort, so the keys are kept.
+    let left = ordered_stream(
+        range_partitioning_multi(
+            &[("a", SortOptions::default()), ("b", SortOptions::default())],
+            &[&[10, 0], &[20, 0], &[30, 0]],
+        )?,
+        &[["b", "a"]],
+        false,
+    )?;
+    let right: Arc<dyn ExecutionPlan> = Arc::new(PerPartitionConstantExec::try_new(
+        ordered_stream(Partitioning::UnknownPartitioning(4), &[["b", "a"]], true)?,
+        "a",
+    )?);
+    let join_on: JoinOn = vec![
+        (col("b", &left.schema())?, col("b", &right.schema())?),
+        (col("a", &left.schema())?, col("a", &right.schema())?),
+    ];
+    let join = sort_merge_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    check_range_join_key_alignment(join, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            SortMergeJoinExec: join_type=Inner, on=[(b@1, b@1), (a@0, a@0)]
+              RepartitionExec: partitioning=Hash([b@1, a@0], 4), input_partitions=4, preserve_order=true, sort_exprs=b@1 ASC, a@0 ASC
+                StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_ordering=[b@1 ASC, a@0 ASC]
+              RepartitionExec: partitioning=Hash([b@1, a@0], 4), input_partitions=4, preserve_order=true, sort_exprs=b@1 ASC, a@0 ASC
+                PerPartitionConstantExec: a
+                  StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, a@0 ASC]
+            "
+            );
+        }
+    })
+}
+
+#[test]
+fn range_join_key_alignment_sees_every_ordering_of_an_unbounded_input() -> Result<()> {
+    // Unbounded Range([a, b]) inputs sorted by (c, d) and, separately, by
+    // (a, b). The second ordering satisfies the range order, so realigning
+    // the keys from (b, a) to (a, b) adds no sort and needs no exchange.
+    let left = unbounded_range_stream(&[["c", "d"], ["a", "b"]])?;
+    let right = unbounded_range_stream(&[["c", "d"], ["a", "b"]])?;
+    let join_on: JoinOn = vec![
+        (col("b", &left.schema())?, col("b", &right.schema())?),
+        (col("a", &left.schema())?, col("a", &right.schema())?),
+    ];
+    let join = sort_merge_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    check_range_join_key_alignment(join, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+              StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_orderings=[[c@2 ASC, d@3 ASC], [a@0 ASC, b@1 ASC]]
+              StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_orderings=[[c@2 ASC, d@3 ASC], [a@0 ASC, b@1 ASC]]
+            "
+            );
+        }
+    })
+}
+
+#[test]
+fn range_join_key_alignment_skips_single_partition_range() -> Result<()> {
+    // A single-partition Range layout has nothing to co-partition with, so
+    // realigning the keys would only replace the existing (b, a) order with
+    // two sorts.
+    let input = || {
+        ordered_stream(
+            range_partitioning_multi(
+                &[("a", SortOptions::default()), ("b", SortOptions::default())],
+                &[],
+            )?,
+            &[["b", "a"]],
+            false,
+        )
+    };
+    let left = input()?;
+    let right = input()?;
+    let join_on: JoinOn = vec![
+        (col("b", &left.schema())?, col("b", &right.schema())?),
+        (col("a", &left.schema())?, col("a", &right.schema())?),
+    ];
+    let join = sort_merge_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    check_range_join_key_alignment_with_partitions(1, join, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            SortMergeJoinExec: join_type=Inner, on=[(b@1, b@1), (a@0, a@0)]
+              StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 ASC], [], 1), output_ordering=[b@1 ASC, a@0 ASC]
+              StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 ASC], [], 1), output_ordering=[b@1 ASC, a@0 ASC]
+            "
+            );
+        }
+    })
+}
+
+#[test]
+fn range_join_key_alignment_right_input_only() -> Result<()> {
+    // The left input has no Range layout, so the keys follow the right input
+    // and only the left input is repartitioned.
+    let left =
+        parquet_exec_with_output_partitioning(Partitioning::UnknownPartitioning(4));
+    let right = projection_exec_with_alias(
+        parquet_exec_with_output_partitioning(range_partitioning_multi(
+            &[("a", SortOptions::default()), ("b", SortOptions::default())],
+            &[&[10, 0], &[20, 0], &[30, 0]],
+        )?),
+        vec![
+            ("a".to_string(), "a1".to_string()),
+            ("b".to_string(), "b1".to_string()),
+        ],
+    );
+    let join_on: JoinOn = vec![
+        (col("b", &left.schema())?, col("b1", &right.schema())?),
+        (col("a", &left.schema())?, col("a1", &right.schema())?),
+    ];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    check_range_join_key_alignment(join, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1)]
+              RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), input_partitions=4
+                DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=UnknownPartitioning(4), file_type=parquet
+              ProjectionExec: expr=[a@0 as a1, b@1 as b1]
+                DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
+            "
+            );
+        }
+    })
+}
+
+#[test]
+fn range_join_key_alignment_equivalent_keys() -> Result<()> {
+    // `a = c` holds on the left, so the join key `c` matches the range key `a`
+    // only through the input's equivalence classes. The right input has no
+    // Range layout, so the alignment can only come from the left.
+    let predicate = Arc::new(BinaryExpr::new(
+        col("a", &schema())?,
+        Operator::Eq,
+        col("c", &schema())?,
+    ));
+    let left: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+        predicate,
+        parquet_exec_with_output_partitioning(range_partitioning_multi(
+            &[("a", SortOptions::default()), ("b", SortOptions::default())],
+            &[&[10, 0], &[20, 0], &[30, 0]],
+        )?),
+    )?);
+    let right = projection_exec_with_alias(
+        parquet_exec_with_output_partitioning(Partitioning::UnknownPartitioning(4)),
+        vec![
+            ("a".to_string(), "a1".to_string()),
+            ("b".to_string(), "b1".to_string()),
+        ],
+    );
+    let join_on: JoinOn = vec![
+        (col("b", &left.schema())?, col("b1", &right.schema())?),
+        (col("c", &left.schema())?, col("a1", &right.schema())?),
+    ];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    check_range_join_key_alignment(join, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, a1@0), (b@1, b1@1)]
+              FilterExec: a@0 = c@2
+                DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
+              RepartitionExec: partitioning=Range([a1@0 ASC, b1@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), input_partitions=4
+                ProjectionExec: expr=[a@0 as a1, b@1 as b1]
+                  DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=UnknownPartitioning(4), file_type=parquet
+            "
+            );
+        }
+    })
+}
+
+#[test]
+fn range_join_key_alignment_swapped_range_keys_still_repartition() -> Result<()> {
+    // Same inputs as the crossed-key test, but joined b = b and a = a. The
+    // layouts share split values yet are not co-partitioned for these pairs:
+    // a row with a = 10, b = 20 is in partition 1 under Range([a, b]) and in
+    // partition 2 under Range([b, a]). Aligning the keys to the left input
+    // must leave the right input unsatisfied so it is still repartitioned.
+    let left = parquet_exec_with_output_partitioning(range_partitioning_multi(
+        &[("a", SortOptions::default()), ("b", SortOptions::default())],
+        &[&[10, 0], &[20, 0], &[30, 0]],
+    )?);
+
+    let right = parquet_exec_with_output_partitioning(range_partitioning_multi(
+        &[("b", SortOptions::default()), ("a", SortOptions::default())],
+        &[&[10, 0], &[20, 0], &[30, 0]],
+    )?);
+
+    let join_on: JoinOn = vec![
+        (col("b", &left.schema())?, col("b", &right.schema())?),
+        (col("a", &left.schema())?, col("a", &right.schema())?),
+    ];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    check_range_join_key_alignment(join, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+              DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
+              RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), input_partitions=4
+                DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([b@1 ASC, a@0 ASC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
+            "
+            );
+        }
+    })
 }
 
 #[test]
@@ -4156,7 +5022,7 @@ fn parallelization_multiple_files() -> Result<()> {
                                                                                         @r"
     SortRequiredExec: [a@0 ASC]
       FilterExec: c@2 = 0
-        DataSourceExec: file_groups={8 groups: [[x:0..25], [y:0..25], [x:25..50], [y:25..50], [x:50..75], [y:50..75], [x:75..100], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+        DataSourceExec: file_groups={8 groups: [[x:0..25], [x:25..50], [x:50..75], [x:75..100], [y:0..25], [y:25..50], [y:50..75], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
     let plan_8_sort = test_config_concurrency_8.to_plan(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_8_distrib, plan_8_sort);
@@ -4867,9 +5733,9 @@ fn preserve_ordering_for_streaming_sorted_aggregate() -> Result<()> {
 
     let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib, @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(b)], group_clustering_mode=Full
       RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(b)], group_clustering_mode=Full
           DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
 
@@ -4901,9 +5767,9 @@ fn preserve_ordering_for_streaming_partially_sorted_aggregate() -> Result<()> {
 
     let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib, @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], ordering_mode=PartiallySorted([0])
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], group_clustering_mode=Partial([0])
       RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
-        AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], ordering_mode=PartiallySorted([0])
+        AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], group_clustering_mode=Partial([0])
           DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
 

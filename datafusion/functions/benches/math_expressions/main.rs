@@ -40,6 +40,7 @@ mod round_dense;
 mod signum;
 mod trunc;
 mod trunc_precision;
+mod unary_math;
 
 criterion_main!(
     atan2::benches,
@@ -58,4 +59,5 @@ criterion_main!(
     signum::benches,
     trunc::benches,
     trunc_precision::benches,
+    unary_math::benches,
 );

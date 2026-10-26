@@ -28,9 +28,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
-use crate::execution_plan::{
-    CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
-};
+use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::sort_pushdown::SortOrderPushdownResult;
@@ -304,7 +302,11 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::Equal
+        if self.fetch.is_none() {
+            CardinalityEffect::Equal
+        } else {
+            CardinalityEffect::LowerEqual
+        }
     }
 
     /// Tries to swap `projection` with its input, which is known to be a
@@ -341,18 +343,6 @@ impl ExecutionPlan for CoalescePartitionsExec {
             metrics: self.metrics.clone(),
             cache: Arc::clone(&self.cache),
         }))
-    }
-
-    fn with_preserve_order(
-        &self,
-        preserve_order: bool,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.input
-            .with_preserve_order(preserve_order)
-            .and_then(|new_input| {
-                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
-                    .ok()
-            })
     }
 
     fn gather_filters_for_pushdown(
@@ -697,5 +687,22 @@ mod tests {
         assert_eq!(row_count, 400, "Should return exactly 400 rows");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_cardinality_effect_with_fetch() {
+        let input = test::scan_partitioned(4);
+
+        let coalesce = CoalescePartitionsExec::new(Arc::clone(&input));
+        assert!(matches!(
+            coalesce.cardinality_effect(),
+            CardinalityEffect::Equal
+        ));
+
+        let coalesce = CoalescePartitionsExec::new(input).with_fetch(Some(10));
+        assert!(matches!(
+            coalesce.cardinality_effect(),
+            CardinalityEffect::LowerEqual
+        ));
     }
 }
