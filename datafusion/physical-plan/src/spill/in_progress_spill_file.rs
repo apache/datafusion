@@ -295,8 +295,13 @@ impl InProgressSpillFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int64Array;
-    use arrow_schema::{DataType, Field, Schema};
+    use crate::spill::SPILL_BATCH_MEMORY_MARGIN;
+    use arrow::array::{
+        Array, ArrayRef, DictionaryArray, Int32Array, Int64Array, ListBuilder,
+        MapBuilder, StringArray, StringBuilder, StringViewArray, StructArray,
+    };
+    use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
+    use datafusion_common::utils::memory::get_record_batch_memory_size;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr_common::metrics::{
         ExecutionPlanMetricsSet, SpillMetrics,
@@ -362,6 +367,441 @@ mod tests {
         );
         assert_eq!(batches[1], nullable_batch);
 
+        Ok(())
+    }
+
+    const WIDE: usize = 64 * 1024;
+
+    fn wide_value(i: usize) -> String {
+        format!("{i}{}", "x".repeat(WIDE))
+    }
+
+    fn manager(schema: SchemaRef) -> Result<Arc<SpillManager>> {
+        let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        Ok(Arc::new(SpillManager::new(runtime, metrics, schema)))
+    }
+
+    /// Writes `batches` through a bounded spill file, reads the file back with the reader's
+    /// size check on, and returns what was read and the recorded largest batch.
+    async fn round_trip(
+        batches: &[RecordBatch],
+        max_batch_bytes: usize,
+    ) -> Result<(Vec<RecordBatch>, usize)> {
+        let manager = manager(batches[0].schema())?;
+        let mut file = manager
+            .create_in_progress_file("test")?
+            .with_max_batch_bytes(Some(max_batch_bytes));
+        let mut max_memory = 0;
+        for batch in batches {
+            max_memory = max_memory.max(file.append_batch(batch)?);
+        }
+        let file = file.finish()?.unwrap();
+        let read = manager
+            .read_spill_as_stream(file, Some(max_memory))?
+            .try_collect::<Vec<_>>()
+            .await?;
+        // The reader only logs a batch larger than the recorded size plus its margin, so
+        // check it here: the merge reserves memory from the recorded size.
+        for batch in &read {
+            let size = get_record_batch_memory_size(batch);
+            assert!(
+                size <= max_memory + SPILL_BATCH_MEMORY_MARGIN,
+                "read back a batch of {size} bytes, recorded {max_memory}"
+            );
+        }
+        Ok((read, max_memory))
+    }
+
+    fn assert_same_rows(read: &[RecordBatch], written: &[RecordBatch]) {
+        let schema = written[0].schema();
+        let read = arrow::compute::concat_batches(&schema, read).unwrap();
+        let written = arrow::compute::concat_batches(&schema, written).unwrap();
+        assert_eq!(read, written);
+    }
+
+    /// Slices of one large view array keep the whole parent's data buffers alive. The split
+    /// must look at what each slice points at, or every half reports the whole parent and the
+    /// batch is written unsplit.
+    #[tokio::test]
+    async fn view_slices_of_a_large_parent_are_split() -> Result<()> {
+        let parent = StringViewArray::from_iter_values((0..256).map(wide_value));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "v",
+            DataType::Utf8View,
+            false,
+        )]));
+        // Two slices that each share the parent's buffers (about 16 MiB).
+        let batches: Vec<RecordBatch> = [(0, 128), (128, 128)]
+            .into_iter()
+            .map(|(offset, len)| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(parent.slice(offset, len))],
+                )
+            })
+            .collect::<std::result::Result<_, _>>()?;
+
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(&batches, budget).await?;
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(
+            read.len() >= 16,
+            "expected at least 16 pieces, got {}",
+            read.len()
+        );
+        assert_same_rows(&read, &batches);
+        Ok(())
+    }
+
+    /// Many rows share each long value, so the pieces reference overlapping parts of the
+    /// parent's data buffers. The bound and the row order must still hold.
+    #[tokio::test]
+    async fn repeated_view_values_are_split_and_kept_in_order() -> Result<()> {
+        let values = (0..256).map(|i| wide_value(i % 4));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "v",
+                DataType::Utf8View,
+                false,
+            )])),
+            vec![Arc::new(StringViewArray::from_iter_values(values))],
+        )?;
+        let budget = 256 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(read.len() > 1);
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// Each key points at its own wide value, so the dictionary values are most of the batch.
+    /// Split pieces drop the values they do not use, so the dictionary is divided between
+    /// them, and each piece passes the reader's size check.
+    #[tokio::test]
+    async fn dictionary_with_large_values_is_divided() -> Result<()> {
+        let values = StringArray::from_iter_values((0..128).map(wide_value));
+        let keys = Int32Array::from_iter_values(0..128);
+        let dictionary = DictionaryArray::try_new(keys, Arc::new(values))?;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "d",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            )])),
+            vec![Arc::new(dictionary)],
+        )?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(
+            read.len() >= 8,
+            "expected at least 8 pieces, got {}",
+            read.len()
+        );
+        let cast =
+            |b: &RecordBatch| arrow::compute::cast(b.column(0), &DataType::Utf8).unwrap();
+        let read_values: Vec<ArrayRef> = read.iter().map(cast).collect();
+        let read_values = arrow::compute::concat(
+            &read_values.iter().map(|a| a.as_ref()).collect::<Vec<_>>(),
+        )?;
+        assert_eq!(&read_values, &cast(&batch));
+        Ok(())
+    }
+
+    /// One row larger than the budget cannot be split. It is written whole and recorded, so
+    /// the reader's check still passes.
+    #[tokio::test]
+    async fn single_wide_row_is_written_whole() -> Result<()> {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, false)])),
+            vec![Arc::new(StringArray::from_iter_values([wide_value(0)]))],
+        )?;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), 1024).await?;
+        assert!(max_memory > 1024);
+        assert_eq!(read, vec![batch]);
+        Ok(())
+    }
+
+    /// Without a bound, one appended batch is one written batch, as before.
+    #[tokio::test]
+    async fn unbounded_manager_keeps_batches_whole() -> Result<()> {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "v",
+                DataType::Utf8View,
+                false,
+            )])),
+            vec![Arc::new(StringViewArray::from_iter_values(
+                (0..64).map(wide_value),
+            ))],
+        )?;
+        let manager = manager(batch.schema())?;
+        let file = manager
+            .spill_record_batch_and_finish(std::slice::from_ref(&batch), "test")?
+            .unwrap();
+        let read = manager
+            .read_spill_as_stream(file, None)?
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(read.len(), 1);
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// A `List<Utf8>` column: `rows` rows of four quarter-`WIDE` strings each.
+    fn wide_list(rows: usize) -> ArrayRef {
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        for i in 0..rows {
+            for _ in 0..4 {
+                builder
+                    .values()
+                    .append_value(format!("{i}{}", "x".repeat(WIDE / 4)));
+            }
+            builder.append(true);
+        }
+        Arc::new(builder.finish())
+    }
+
+    /// A sliced list keeps its whole child array. The split must measure and copy only the
+    /// child range that each piece uses, or both halves report the parent and the batch is
+    /// written unsplit.
+    #[tokio::test]
+    async fn list_column_is_split() -> Result<()> {
+        let list = wide_list(256);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "l",
+            list.data_type().clone(),
+            false,
+        )]));
+        // A slice of a larger parent, as a sort or aggregate emits.
+        let batch = RecordBatch::try_new(schema, vec![list.slice(64, 128)])?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(
+            read.len() >= 8,
+            "expected at least 8 pieces, got {}",
+            read.len()
+        );
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// A map keeps its whole entries array when it is sliced, like a list.
+    #[tokio::test]
+    async fn map_column_is_split() -> Result<()> {
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+        for i in 0..256 {
+            builder.keys().append_value(format!("k{i}"));
+            builder.values().append_value(wide_value(i));
+            builder.append(true)?;
+        }
+        let map: ArrayRef = Arc::new(builder.finish());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "m",
+            map.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![map.slice(64, 128)])?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(
+            read.len() >= 8,
+            "expected at least 8 pieces, got {}",
+            read.len()
+        );
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// A struct narrows its children when it is sliced, but a list inside it still keeps its
+    /// whole child array.
+    #[tokio::test]
+    async fn struct_with_list_child_is_split() -> Result<()> {
+        let list = wide_list(256);
+        let ids: ArrayRef = Arc::new(Int64Array::from_iter_values(0..256));
+        let fields = Fields::from(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("l", list.data_type().clone(), false),
+        ]);
+        let structs: ArrayRef =
+            Arc::new(StructArray::try_new(fields.clone(), vec![ids, list], None)?);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(fields),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![structs.slice(64, 128)])?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(
+            read.len() >= 8,
+            "expected at least 8 pieces, got {}",
+            read.len()
+        );
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    fn dictionary_type(values: DataType) -> DataType {
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(values))
+    }
+
+    /// A small batch whose keys use a few values of a large dictionary, as `take` produces
+    /// when a sort emits a chunk. It is within the budget, so it is written as it is: the
+    /// batches of a spill file keep sharing one dictionary, which the reader decodes once.
+    #[tokio::test]
+    async fn unsplit_batch_keeps_its_dictionary() -> Result<()> {
+        let values = StringArray::from_iter_values((0..4).map(|i| format!("v{i}")));
+        let keys = Int32Array::from_iter_values([3, 1, 1, 0]);
+        let dictionary = DictionaryArray::try_new(keys, Arc::new(values))?;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "d",
+                dictionary_type(DataType::Utf8),
+                false,
+            )])),
+            vec![Arc::new(dictionary)],
+        )?;
+        let pieces =
+            SpillPieces::new(&batch, Some(1024 * 1024))?.collect::<Result<Vec<_>>>()?;
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].0, batch);
+        Ok(())
+    }
+
+    /// Values of a dictionary inside a struct are not pruned, so every piece would carry
+    /// the whole dictionary. The batch is written whole instead.
+    #[tokio::test]
+    async fn nested_dictionary_is_written_whole() -> Result<()> {
+        let values = StringArray::from_iter_values((0..128).map(wide_value));
+        let keys = Int32Array::from_iter_values(0..128);
+        let dictionary: ArrayRef =
+            Arc::new(DictionaryArray::try_new(keys, Arc::new(values))?);
+        let fields = Fields::from(vec![Field::new(
+            "d",
+            dictionary_type(DataType::Utf8),
+            false,
+        )]);
+        let structs: ArrayRef = Arc::new(StructArray::try_new(
+            fields.clone(),
+            vec![dictionary],
+            None,
+        )?);
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "s",
+                DataType::Struct(fields),
+                false,
+            )])),
+            vec![structs],
+        )?;
+        let budget = 1024 * 1024;
+        let (read, _) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert_eq!(read.len(), 1);
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// Rows of a list view can share child ranges, so copying each piece's ranges out can
+    /// multiply the data. A batch with a list view is written whole.
+    #[tokio::test]
+    async fn list_view_with_shared_child_is_written_whole() -> Result<()> {
+        let child: ArrayRef = Arc::new(StringArray::from_iter_values([wide_value(0)]));
+        let field = Arc::new(Field::new_list_field(DataType::Utf8, false));
+        let rows = 1024;
+        let list_view: ArrayRef = Arc::new(arrow::array::ListViewArray::try_new(
+            Arc::clone(&field),
+            vec![0; rows].into(),
+            vec![1; rows].into(),
+            child,
+            None,
+        )?);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "l",
+            DataType::ListView(field),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![list_view])?;
+        let pieces =
+            SpillPieces::new(&batch, Some(16 * 1024))?.collect::<Result<Vec<_>>>()?;
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].0, batch);
+        Ok(())
+    }
+
+    /// The largest row count returned with the size describes the pieces, not the
+    /// appended batch.
+    #[tokio::test]
+    async fn stats_count_rows_per_piece() -> Result<()> {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, false)])),
+            vec![Arc::new(StringArray::from_iter_values(
+                (0..64).map(wide_value),
+            ))],
+        )?;
+        let manager = manager(batch.schema())?;
+        let mut file = manager
+            .create_in_progress_file("test")?
+            .with_max_batch_bytes(Some(4 * WIDE + WIDE / 2));
+        let (size, rows) = file.append_batch_async_with_stats(&batch).await?;
+        assert!(size <= 4 * WIDE + WIDE / 2);
+        assert_eq!(rows, 4);
+        Ok(())
+    }
+
+    /// A piece whose dictionary keys are all null has no used values. After the unused
+    /// values are dropped the dictionary is empty, which must not panic when measured.
+    #[tokio::test]
+    async fn dictionary_with_only_null_keys() -> Result<()> {
+        let values = StringArray::from_iter_values((0..64).map(wide_value));
+        let keys = Int32Array::from_iter((0..64).map(|i| (i >= 8).then_some(i)));
+        let dictionary: ArrayRef =
+            Arc::new(DictionaryArray::try_new(keys, Arc::new(values))?);
+        let fields =
+            Fields::from(vec![Field::new("d", dictionary_type(DataType::Utf8), true)]);
+        let structs: ArrayRef = Arc::new(StructArray::try_new(
+            fields.clone(),
+            vec![Arc::clone(&dictionary)],
+            None,
+        )?);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", dictionary_type(DataType::Utf8), true),
+            Field::new("s", DataType::Struct(fields), false),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![dictionary, structs])?;
+        // Pieces of 8 rows: the first has only null keys.
+        let budget = 20 * WIDE;
+        for batch in [batch.slice(0, 8), batch.slice(0, 0), batch] {
+            if batch.num_rows() == 0 {
+                SpillPieces::new(&batch, Some(budget))?.collect::<Result<Vec<_>>>()?;
+                continue;
+            }
+            let (read, _) = round_trip(std::slice::from_ref(&batch), budget).await?;
+            assert_same_rows(&read, &[batch]);
+        }
         Ok(())
     }
 }
