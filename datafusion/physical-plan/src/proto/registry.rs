@@ -24,7 +24,7 @@
 //! registration order, which two independent crates cannot agree on.
 //!
 //! An extension plan implements [`ExtensionPlanFromProto`] instead, and
-//! [`ExtensionPlanFromProto::register`] puts its decoder in the
+//! [`ExtensionPlanFromProto::register_proto`] puts its decoder in the
 //! [`ProtoDecoderRegistry`] the decoding session carries. Lookup is by name,
 //! so registration order does not matter. Built-ins cannot be registered;
 //! anything unnamed or unregistered still takes the codec chain, unchanged.
@@ -108,7 +108,7 @@ pub trait ExtensionPlanFromProto: ExecutionPlan + Sized {
     /// expression or a data source can use the same name in the same registry.
     ///
     /// Add it to the session's registry with
-    /// `config.update_extension(MyExec::register)?`, which keeps the decoders
+    /// `config.update_extension(MyExec::register_proto)?`, which keeps the decoders
     /// that other libraries added. See [`ProtoDecoderRegistry`].
     ///
     /// A built-in plan does not implement this trait, so it cannot be
@@ -119,7 +119,7 @@ pub trait ExtensionPlanFromProto: ExecutionPlan + Sized {
     /// use datafusion_physical_plan::proto::{ExtensionPlanFromProto, ProtoDecoderRegistry};
     ///
     /// let mut registry = ProtoDecoderRegistry::new();
-    /// FilterExec::register(&mut registry).unwrap();
+    /// FilterExec::register_proto(&mut registry).unwrap();
     /// ```
     ///
     /// The same imports without that call compile, so the failure above is
@@ -133,7 +133,7 @@ pub trait ExtensionPlanFromProto: ExecutionPlan + Sized {
     /// let mut registry = ProtoDecoderRegistry::new();
     /// let _ = (FilterExec::try_from_proto, &mut registry);
     /// ```
-    fn register(registry: &mut ProtoDecoderRegistry) -> Result<()> {
+    fn register_proto(registry: &mut ProtoDecoderRegistry) -> Result<()> {
         registry.register_decoder::<dyn ExecutionPlan, Self, ExecutionPlanDecoder>(
             Self::NAME,
             Self::try_from_proto,
@@ -145,7 +145,7 @@ pub trait ExtensionPlanFromProto: ExecutionPlan + Sized {
 /// to the monomorphized [`ExtensionPlanFromProto::try_from_proto`].
 ///
 /// Deliberately private, and the same type on both the
-/// [`ExtensionPlanFromProto::register`] and the [`decode_execution_plan`] side.
+/// [`ExtensionPlanFromProto::register_proto`] and the [`decode_execution_plan`] side.
 /// [`ExtensionPlanFromProto`] is the public contract and
 /// [`decode_execution_plan`] (hidden, internal to DataFusion) is the only way
 /// to invoke one, so this can
@@ -215,9 +215,9 @@ mod tests {
         use datafusion_execution::config::SessionConfig;
 
         let mut config = SessionConfig::new();
-        config.update_extension(RegisteredExec::register)?;
+        config.update_extension(RegisteredExec::register_proto)?;
         let before = config.clone();
-        config.update_extension(OtherRegisteredExec::register)?;
+        config.update_extension(OtherRegisteredExec::register_proto)?;
 
         let names = |config: &SessionConfig| {
             let registry = config.get_extension::<ProtoDecoderRegistry>().unwrap();
@@ -240,8 +240,8 @@ mod tests {
     #[test]
     fn register_is_idempotent_for_the_same_type() -> Result<()> {
         let mut registry = ProtoDecoderRegistry::new();
-        RegisteredExec::register(&mut registry)?;
-        RegisteredExec::register(&mut registry)?;
+        RegisteredExec::register_proto(&mut registry)?;
+        RegisteredExec::register_proto(&mut registry)?;
 
         assert_eq!(execution_plan_names(&registry).count(), 1);
         assert!(execution_plan_names(&registry).any(|name| name == RegisteredExec::NAME));
@@ -251,11 +251,11 @@ mod tests {
     #[test]
     fn register_rejects_a_name_collision_between_types() -> Result<()> {
         let mut registry = ProtoDecoderRegistry::new();
-        RegisteredExec::register(&mut registry)?;
+        RegisteredExec::register_proto(&mut registry)?;
 
         // A distinct type declaring the same `NAME`: the collision two
         // independent crates could hit, caught at registration.
-        let err = RegisteredExecClone::register(&mut registry)
+        let err = RegisteredExecClone::register_proto(&mut registry)
             .expect_err("colliding registration must fail");
         assert!(
             err.to_string().contains(RegisteredExec::NAME)
@@ -268,8 +268,8 @@ mod tests {
     #[test]
     fn register_keeps_distinct_names_apart() -> Result<()> {
         let mut registry = ProtoDecoderRegistry::new();
-        RegisteredExec::register(&mut registry)?;
-        OtherRegisteredExec::register(&mut registry)?;
+        RegisteredExec::register_proto(&mut registry)?;
+        OtherRegisteredExec::register_proto(&mut registry)?;
 
         assert_eq!(execution_plan_names(&registry).count(), 2);
         let mut names: Vec<&str> = execution_plan_names(&registry).collect();
@@ -282,8 +282,8 @@ mod tests {
     #[test]
     fn register_rejects_an_empty_plan_name() {
         let mut registry = ProtoDecoderRegistry::new();
-        let err =
-            UnnamedExec::register(&mut registry).expect_err("an empty NAME must fail");
+        let err = UnnamedExec::register_proto(&mut registry)
+            .expect_err("an empty NAME must fail");
         assert!(
             err.to_string().contains("empty name"),
             "unexpected error: {err}"
@@ -300,7 +300,7 @@ mod tests {
         registry.register_decoder::<dyn OtherKind, u8, u32>(RegisteredExec::NAME, 7)?;
 
         assert!(execution_plan_names(&registry).next().is_none());
-        RegisteredExec::register(&mut registry)?;
+        RegisteredExec::register_proto(&mut registry)?;
         assert_eq!(
             execution_plan_names(&registry).collect::<Vec<_>>(),
             vec![RegisteredExec::NAME]

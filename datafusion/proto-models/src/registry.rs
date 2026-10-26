@@ -64,8 +64,8 @@ struct Registered {
 /// ```rust,ignore
 /// // in each library
 /// pub fn register(config: &mut SessionConfig) -> Result<()> {
-///     config.update_extension(MyExec::register)?;
-///     config.update_extension(MyExpr::register)
+///     config.update_extension(MyExec::register_proto)?;
+///     config.update_extension(MyExpr::register_proto)
 /// }
 ///
 /// // in the application that owns the session

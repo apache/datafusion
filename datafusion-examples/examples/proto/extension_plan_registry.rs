@@ -95,7 +95,7 @@ mod crate_a {
     use super::*;
 
     pub fn register(config: &mut SessionConfig) -> Result<()> {
-        config.update_extension(ParentExec::register)
+        config.update_extension(ParentExec::register_proto)
     }
 }
 
@@ -104,7 +104,7 @@ mod crate_b {
     use super::*;
 
     pub fn register(config: &mut SessionConfig) -> Result<()> {
-        config.update_extension(ChildExec::register)
+        config.update_extension(ChildExec::register_proto)
     }
 }
 

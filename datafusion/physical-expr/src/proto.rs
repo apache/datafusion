@@ -17,7 +17,7 @@
 
 //! The `PhysicalExpr` face of the session-scoped [`ProtoDecoderRegistry`],
 //! which routes extension expressions to their decoders by name:
-//! [`ExtensionExprFromProto::register`] and [`physical_expr_names`], all keyed on `dyn PhysicalExpr`. The store itself
+//! [`ExtensionExprFromProto::register_proto`] and [`physical_expr_names`], all keyed on `dyn PhysicalExpr`. The store itself
 //! is shared with every other extension kind, so a session carries one
 //! registry.
 
@@ -37,7 +37,7 @@ use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 /// Only extension expressions implement this. A built-in expression has an
 /// `ExprType` variant of its own, keeps the inherent `try_from_proto`
 /// dispatched from that variant, and has no wire name to be registered under —
-/// so it has no [`register`](Self::register) method.
+/// so it has no [`register`](Self::register_proto) method.
 ///
 /// One impl block says what the expression is called and how it decodes; its
 /// `try_to_proto` on [`PhysicalExpr`] writes the matching node with
@@ -81,7 +81,7 @@ use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 /// }
 ///
 /// let mut config = SessionConfig::new();
-/// config.update_extension(MyExpr::register)?;
+/// config.update_extension(MyExpr::register_proto)?;
 /// ```
 pub trait ExtensionExprFromProto: PhysicalExpr + Sized {
     /// The name this expression type is written and registered under.
@@ -113,7 +113,7 @@ pub trait ExtensionExprFromProto: PhysicalExpr + Sized {
     /// plan or a data source can use the same name in the same registry.
     ///
     /// Add it to the session's registry with
-    /// `config.update_extension(MyExpr::register)?`, which keeps the decoders
+    /// `config.update_extension(MyExpr::register_proto)?`, which keeps the decoders
     /// that other libraries added. One registry holds every kind, so a library
     /// registers its plans and its expressions into the same registry.
     ///
@@ -136,9 +136,9 @@ pub trait ExtensionExprFromProto: PhysicalExpr + Sized {
     /// use datafusion_proto_models::ProtoDecoderRegistry;
     ///
     /// let mut registry = ProtoDecoderRegistry::new();
-    /// Column::register(&mut registry).unwrap();
+    /// Column::register_proto(&mut registry).unwrap();
     /// ```
-    fn register(registry: &mut ProtoDecoderRegistry) -> Result<()> {
+    fn register_proto(registry: &mut ProtoDecoderRegistry) -> Result<()> {
         registry.register_decoder::<dyn PhysicalExpr, Self, PhysicalExprDecoder>(
             Self::NAME,
             Self::try_from_proto,
@@ -175,7 +175,7 @@ pub fn extension_expr_node<T: ExtensionExprFromProto>(
 /// to the monomorphized [`ExtensionExprFromProto::try_from_proto`].
 ///
 /// Deliberately private, and the same type on both the
-/// [`ExtensionExprFromProto::register`] and the [`decode_physical_expr`] side.
+/// [`ExtensionExprFromProto::register_proto`] and the [`decode_physical_expr`] side.
 /// [`ExtensionExprFromProto`] is the public contract and
 /// [`decode_physical_expr`] (hidden, internal to DataFusion) is the only way
 /// to invoke one, so the storage
