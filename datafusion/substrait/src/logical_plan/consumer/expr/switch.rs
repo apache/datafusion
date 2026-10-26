@@ -20,12 +20,14 @@ use datafusion::common::{DFSchema, substrait_err};
 use datafusion::logical_expr::{Case, Expr};
 use substrait::proto::expression::SwitchExpression;
 
-/// Reads Substrait's `SwitchExpression` as a `CASE` over a base expression.
+/// Reads Substrait's [`SwitchExpression`] as a `CASE` over a base expression.
 ///
-/// The two line up: a switch compares its `match` against the literal in each
-/// arm, which is what `CASE <base> WHEN <value>` does, and `CaseExpr` evaluates
-/// the base once rather than per arm. A `match` that is `NULL` matches no arm
-/// and answers from `ELSE`, the same as `CASE`.
+/// Substrait defines a [switch] as "an optimized form of a generic if
+/// expression where all conditions are equality to the same value", which is
+/// what `CASE <base> WHEN <value>` is, down to `CaseExpr` evaluating the base
+/// once rather than once per arm.
+///
+/// [switch]: https://substrait.io/expressions/specialized_record_expressions/#switch-expression
 pub async fn from_switch(
     consumer: &impl SubstraitConsumer,
     switch: &SwitchExpression,
