@@ -21,15 +21,17 @@ use crate::fuzz_cases::equivalence::utils::{
     create_test_schema_2, generate_table_for_eq_properties, generate_table_for_orderings,
     is_table_same_after_sort,
 };
-use arrow::compute::SortOptions;
-use datafusion_common::Result;
+use arrow::array::{ArrayRef, Float64Array, RecordBatch, new_null_array};
+use arrow::compute::{SortOptions, sort};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Operator, ScalarUDF};
-use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::equivalence::{
     convert_to_orderings, convert_to_sort_exprs,
 };
-use datafusion_physical_expr::expressions::{BinaryExpr, col};
+use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
+use datafusion_physical_expr::{EquivalenceProperties, ScalarFunctionExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
@@ -243,6 +245,140 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+const ALL_SORT_OPTIONS: [SortOptions; 4] = [
+    SortOptions {
+        descending: false,
+        nulls_first: false,
+    },
+    SortOptions {
+        descending: false,
+        nulls_first: true,
+    },
+    SortOptions {
+        descending: true,
+        nulls_first: false,
+    },
+    SortOptions {
+        descending: true,
+        nulls_first: true,
+    },
+];
+
+/// Returns `0.0..=5.0` and `n_nulls` NULLs, sorted with `options`.
+fn sorted_f64_array(options: SortOptions, n_nulls: usize) -> Result<ArrayRef> {
+    let values = (0..6)
+        .map(|v| Some(v as f64))
+        .chain(std::iter::repeat_n(None, n_nulls))
+        .collect::<Float64Array>();
+    Ok(sort(&values, Some(options))?)
+}
+
+/// Returns whether `eq_properties` claims the ordering of `exprs` with
+/// `options`, and asserts that `batch` has every claimed ordering.
+fn assert_claim_is_sound(
+    eq_properties: &EquivalenceProperties,
+    exprs: &[&Arc<dyn PhysicalExpr>],
+    options: SortOptions,
+    batch: &RecordBatch,
+) -> Result<bool> {
+    let sort_exprs = exprs
+        .iter()
+        .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), options));
+    let Some(ordering) = LexOrdering::new(sort_exprs) else {
+        unreachable!("Test should always produce non-degenerate orderings");
+    };
+    let claimed = eq_properties.ordering_satisfy(ordering.clone())?;
+    if claimed {
+        assert!(
+            is_table_same_after_sort(ordering.clone(), batch)?,
+            "requirement: {ordering:?}, eq_properties: {eq_properties}"
+        );
+    }
+    Ok(claimed)
+}
+
+#[test]
+fn test_ordering_satisfy_all_null_ordered_column() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Float64, true),
+        Field::new("b", DataType::Float64, true),
+    ]));
+    let col_a = &col("a", &schema)?;
+    let col_b = &col("b", &schema)?;
+    for options in ALL_SORT_OPTIONS {
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        eq_properties.add_ordering([
+            PhysicalSortExpr::new(Arc::clone(col_a), options),
+            PhysicalSortExpr::new(Arc::clone(col_b), options),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                new_null_array(&DataType::Float64, 6),
+                sorted_f64_array(options, 0)?,
+            ],
+        )?;
+        for required in ALL_SORT_OPTIONS {
+            for exprs in [
+                vec![col_a],
+                vec![col_b],
+                vec![col_a, col_b],
+                vec![col_b, col_a],
+            ] {
+                assert_claim_is_sound(&eq_properties, &exprs, required, &batch)?;
+            }
+        }
+        for exprs in [vec![col_a], vec![col_a, col_b]] {
+            assert!(
+                assert_claim_is_sound(&eq_properties, &exprs, options, &batch)?,
+                "requirement: {exprs:?} {options:?}, eq_properties: {eq_properties}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn test_ordering_satisfy_null_constant_operand() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+    let col_a = col("a", &schema)?;
+    // `x` has the ordering of `a`.
+    let x =
+        Arc::new(BinaryExpr::new(col_a, Operator::Gt, lit(2.0))) as Arc<dyn PhysicalExpr>;
+    let null = lit(ScalarValue::Boolean(None));
+    let x_and_null = Arc::new(BinaryExpr::new(
+        Arc::clone(&x),
+        Operator::And,
+        Arc::clone(&null),
+    )) as Arc<dyn PhysicalExpr>;
+    let x_or_null = Arc::new(BinaryExpr::new(Arc::clone(&x), Operator::Or, null))
+        as Arc<dyn PhysicalExpr>;
+    for options in ALL_SORT_OPTIONS {
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        eq_properties.add_ordering([PhysicalSortExpr::new(col("a", &schema)?, options)]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![sorted_f64_array(options, 2)?],
+        )?;
+        assert!(
+            assert_claim_is_sound(&eq_properties, &[&x], options, &batch)?,
+            "requirement: {x} {options:?}, eq_properties: {eq_properties}"
+        );
+        // A NULL operand moves rows to the NULL position, so `AND` and `OR`
+        // keep the ordering only for some NULL positions.
+        let mut n_claimed = 0;
+        for expr in [&x_and_null, &x_or_null] {
+            for required in ALL_SORT_OPTIONS {
+                if assert_claim_is_sound(&eq_properties, &[expr], required, &batch)? {
+                    n_claimed += 1;
+                }
+            }
+        }
+        assert!(n_claimed > 0, "no claim with {options:?}");
+    }
     Ok(())
 }
 
