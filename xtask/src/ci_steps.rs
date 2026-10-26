@@ -18,14 +18,12 @@
 //! CI steps that can be inspected or run through `cargo xtask`.
 
 use crate::Result;
-use std::env;
-use std::ffi::OsStr;
+use crate::command::{CommandSpec, EnvReader, system_env};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 type StepResult<T> = std::result::Result<T, StepError>;
-type StepRunner = fn(&StepContext, &[String]) -> StepResult<CiCommand>;
+type StepRunner = fn(&StepContext, &[String]) -> StepResult<CommandSpec>;
 
 const CI_COMMAND: &str = "cargo xtask ci step";
 const CI_SHORTCUT: &str = "cargo ci-step";
@@ -42,7 +40,6 @@ struct StepInfo {
     help_usage: &'static str,
     help_examples: &'static [&'static str],
     help_description: &'static str,
-    error_message: &'static str,
     runner: StepRunner,
 }
 
@@ -52,7 +49,6 @@ static CI_STEPS: &[StepInfo] = &[
         help_usage: "check <workspace|package> [default|no-default|feature] [--explain]",
         help_examples: &["check workspace", "check datafusion default"],
         help_description: "Check workspace or package compilation",
-        error_message: "Cargo check step failed",
         runner: StepContext::run_check,
     },
     StepInfo {
@@ -60,7 +56,6 @@ static CI_STEPS: &[StepInfo] = &[
         help_usage: "test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
-        error_message: "Cargo test step failed",
         runner: StepContext::run_test,
     },
 ];
@@ -130,14 +125,14 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
 
 struct StepContext {
     root: PathBuf,
-    env_reader: fn(&str) -> Result<String>,
+    env_reader: EnvReader,
 }
 
 impl StepContext {
     fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
-            env_reader: required_env,
+            env_reader: system_env,
         }
     }
 
@@ -156,9 +151,9 @@ impl StepContext {
                 Ok(())
             }
             step_args => {
-                let (action, step, command) = self.ci_step(step_args)?;
+                let (action, command) = self.ci_step(step_args)?;
                 match action {
-                    StepAction::Execute => command.execute(step.error_message),
+                    StepAction::Execute => command.execute(),
                     StepAction::Explain => {
                         command.explain();
                         Ok(())
@@ -169,10 +164,7 @@ impl StepContext {
     }
 
     /// Parses a CI step into an action and its complete command description.
-    fn ci_step(
-        &self,
-        args: &[String],
-    ) -> Result<(StepAction, &'static StepInfo, CiCommand)> {
+    fn ci_step(&self, args: &[String]) -> Result<(StepAction, CommandSpec)> {
         let (action, args) = match args.split_last() {
             Some((arg, args)) if arg == "--explain" => (StepAction::Explain, args),
             _ => (StepAction::Execute, args),
@@ -183,18 +175,23 @@ impl StepContext {
 
         let step = find_step(step)?;
         let command = (step.runner)(self, args).map_err(|error| error.render(step))?;
-        Ok((action, step, command))
+        Ok((action, command))
     }
 
     /// Implementation for `cargo xtask ci step check [args]`
-    fn run_check(&self, args: &[String]) -> StepResult<CiCommand> {
+    fn run_check(&self, args: &[String]) -> StepResult<CommandSpec> {
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-        let mut command = self.cargo();
-        command.args(["check", "--profile", "ci"]);
+        let mut builder = CommandSpec::builder(self.env_reader);
+        builder
+            .current_dir(&self.root)
+            .failure_message("CI check step failed");
 
         match args.as_slice() {
             ["workspace"] => {
-                command.args([
+                builder.program("cargo").args([
+                    "check",
+                    "--profile",
+                    "ci",
                     "--workspace",
                     "--all-targets",
                     "--features",
@@ -203,13 +200,30 @@ impl StepContext {
                 ]);
             }
             [package, "default"] => {
-                command.args(["--all-targets", "-p", package]);
+                builder.program("cargo").args([
+                    "check",
+                    "--profile",
+                    "ci",
+                    "--all-targets",
+                    "-p",
+                    package,
+                ]);
             }
             [package, "no-default"] => {
-                command.args(["--no-default-features", "-p", package]);
+                builder.program("cargo").args([
+                    "check",
+                    "--profile",
+                    "ci",
+                    "--no-default-features",
+                    "-p",
+                    package,
+                ]);
             }
             [package, feature] => {
-                command.args([
+                builder.program("cargo").args([
+                    "check",
+                    "--profile",
+                    "ci",
                     "--no-default-features",
                     "-p",
                     package,
@@ -220,55 +234,78 @@ impl StepContext {
             _ => return Err(StepError::Usage),
         }
 
-        Ok(command)
+        builder.build().map_err(StepError::InvalidCommand)
     }
 
     /// Implementation for `cargo xtask ci step test [args]`
-    fn run_test(&self, args: &[String]) -> StepResult<CiCommand> {
+    fn run_test(&self, args: &[String]) -> StepResult<CommandSpec> {
         let [variant] = args else {
             return Err(StepError::Usage);
         };
 
-        let mut command = self.cargo();
+        let mut cmd_builder = CommandSpec::builder(self.env_reader);
+        cmd_builder
+            .current_dir(&self.root)
+            .failure_message("CI test step failed");
+
         match variant.as_str() {
             "workspace" => {
-                command.args([
-                    "llvm-cov",
-                    "--profile",
-                    "ci",
-                    "--exclude",
-                    "datafusion-examples",
-                    "--exclude",
-                    "ffi_example_table_provider",
-                    "--exclude",
-                    "datafusion-cli",
-                    "--workspace",
-                    "--lib",
-                    "--tests",
-                    "--bins",
-                    "--features",
-                    "serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait",
-                    "--codecov",
-                    "--output-path",
-                    "target/codecov.json",
-                ]);
+                cmd_builder
+                    .program("cargo")
+                    .args([
+                        "llvm-cov",
+                        "--profile",
+                        "ci",
+                        "--exclude",
+                        "datafusion-examples",
+                        "--exclude",
+                        "ffi_example_table_provider",
+                        "--exclude",
+                        "datafusion-cli",
+                        "--workspace",
+                        "--lib",
+                        "--tests",
+                        "--bins",
+                        "--features",
+                        "serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait",
+                        "--codecov",
+                        "--output-path",
+                        "target/codecov.json",
+                    ])
+                    .env("RUST_BACKTRACE", "1")
+                    .requires_executable(
+                        "cargo-llvm-cov",
+                        "install it with `cargo install cargo-llvm-cov --locked`",
+                    );
             }
             "cli" => {
-                command.args([
-                    "test",
-                    "--features",
-                    "backtrace",
-                    "--profile",
-                    "ci",
-                    "-p",
-                    "datafusion-cli",
-                    "--lib",
-                    "--tests",
-                    "--bins",
-                ]);
+                cmd_builder.doc(
+                    "Run CLI tests with storage integration enabled. The AWS credentials\n\
+                     shown below are fixed test values, not secrets.",
+                );
+                cmd_builder
+                    .program("cargo")
+                    .args([
+                        "test",
+                        "--features",
+                        "backtrace",
+                        "--profile",
+                        "ci",
+                        "-p",
+                        "datafusion-cli",
+                        "--lib",
+                        "--tests",
+                        "--bins",
+                    ])
+                    .env("RUST_BACKTRACE", "1")
+                    .env("AWS_ENDPOINT", "http://127.0.0.1:9000")
+                    .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
+                    .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
+                    .env("TEST_STORAGE_INTEGRATION", "1")
+                    .env("AWS_ALLOW_HTTP", "true");
             }
             "doctest" => {
-                command.args([
+                cmd_builder.program("cargo").args([
                     "test",
                     "--profile",
                     "ci",
@@ -278,7 +315,7 @@ impl StepContext {
                 ]);
             }
             "ffi" => {
-                command.args([
+                cmd_builder.program("cargo").args([
                     "test",
                     "--profile",
                     "ci",
@@ -293,18 +330,19 @@ impl StepContext {
                 ]);
             }
             "microbenchmarks" => {
-                // The SQL benchmark harness needs separately generated datasets
-                // and is covered by the benchmark result verification job.
-                // Select only bench targets (not lib/bin unit tests), and tell
-                // Criterion to execute each benchmark once instead of timing it.
-                // Keep debug assertions and overflow checks enabled without the
-                // cost of unoptimized execution on the larger benchmark datasets.
-                command.env(
+                cmd_builder.doc(
+                    "Run each Criterion benchmark once without timing it, selecting only\n\
+                     bench targets (not lib/bin unit tests). Keep debug assertions and\n\
+                     overflow checks enabled while optimizing execution for larger datasets.\n\
+                     The SQL benchmark harness needs separately generated datasets and\n\
+                     is covered by the benchmark result verification job.",
+                );
+                cmd_builder.env(
                     "CLICKBENCH_DATA_PATH",
                     self.root
                         .join("datafusion/core/tests/data/clickbench_hits_10.parquet"),
                 );
-                command.args([
+                cmd_builder.program("cargo").args([
                     "test",
                     "--profile",
                     "ci-bench",
@@ -325,7 +363,9 @@ impl StepContext {
                 ]);
             }
             "benchmark-plan" => {
-                command
+                let tpch_data = self.root.join(TPCH_DATA_DIR);
+                cmd_builder
+                    .program("cargo")
                     .args([
                         "test",
                         "plan_q",
@@ -338,10 +378,16 @@ impl StepContext {
                         "--test-threads=1",
                     ])
                     .env("RUST_MIN_STACK", "20971520")
-                    .env("TPCH_DATA", self.root.join(TPCH_DATA_DIR));
+                    .env("TPCH_DATA", tpch_data.as_os_str())
+                    .requires_path(
+                        tpch_data,
+                        "generate the TPC-H fixture data before running this step",
+                    );
             }
             "benchmark-sqllogic" => {
-                command
+                let tpch_data = self.root.join(TPCH_DATA_DIR);
+                cmd_builder
+                    .program("cargo")
                     .args([
                         "test",
                         "--features",
@@ -354,18 +400,16 @@ impl StepContext {
                         "sqllogictests",
                     ])
                     .env("RUST_MIN_STACK", "20971520")
-                    .env("TPCH_DATA", self.root.join(TPCH_DATA_DIR))
-                    .env("INCLUDE_TPCH", "true");
+                    .env("TPCH_DATA", tpch_data.as_os_str())
+                    .env("INCLUDE_TPCH", "true")
+                    .requires_path(
+                        tpch_data,
+                        "generate the TPC-H fixture data before running this step",
+                    );
             }
             "postgres" => {
-                let host = self
-                    .required_env("POSTGRES_HOST")
-                    .map_err(StepError::Message)?;
-                let port = self
-                    .required_env("POSTGRES_PORT")
-                    .map_err(StepError::Message)?;
-                let uri = format!("postgresql://postgres:postgres@{host}:{port}/db_test");
-                command
+                cmd_builder
+                    .program("cargo")
                     .args([
                         "test",
                         "--features",
@@ -378,10 +422,13 @@ impl StepContext {
                     ])
                     .current_dir(self.root.join("datafusion/sqllogictest"))
                     .env("PG_COMPAT", "true")
-                    .env("PG_URI", uri);
+                    .env_template(
+                        "PG_URI",
+                        "postgresql://postgres:postgres@{POSTGRES_HOST}:{POSTGRES_PORT}/db_test",
+                    );
             }
             "substrait" | "substrait-optimized" => {
-                command.args([
+                cmd_builder.program("cargo").args([
                     "test",
                     "-p",
                     "datafusion-sqllogictest",
@@ -393,15 +440,18 @@ impl StepContext {
                     "--substrait-round-trip",
                 ]);
                 if variant == "substrait-optimized" {
-                    command.args(["--substrait-optimize", "joins_conditionless.slt"]);
+                    cmd_builder.args(["--substrait-optimize", "joins_conditionless.slt"]);
                 } else {
-                    command.args(["limit.slt"]);
+                    cmd_builder.args(["limit.slt"]);
                 }
             }
             "extended" => {
-                // Tests behind the `extended_tests` feature. The `workspace`
-                // step runs everything else.
-                command
+                cmd_builder.doc(
+                    "Run tests behind the `extended_tests` feature. The `workspace`\n\
+                     step runs the remaining tests.",
+                );
+                cmd_builder
+                    .program("cargo")
                     .args([
                         "test",
                         "--profile",
@@ -416,9 +466,12 @@ impl StepContext {
                     .env("RUST_BACKTRACE", "1");
             }
             "spill-pool-fuzz" => {
-                // Run more random scenarios of the spill pool fuzzer than the
-                // `workspace` step does (about a minute).
-                command
+                cmd_builder.doc(
+                    "Run more random spill pool fuzzer scenarios than the `workspace`\n\
+                     step. This takes about a minute.",
+                );
+                cmd_builder
+                    .program("cargo")
                     .args([
                         "test",
                         "--profile",
@@ -434,10 +487,12 @@ impl StepContext {
                     .env("DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS", "1000");
             }
             "hash-collisions" => {
-                // Check answers are correct when hash values collide. The CI job
-                // runs from the `datafusion` directory with the builder setup,
-                // which sets `RUST_BACKTRACE=1`.
-                command
+                cmd_builder.doc(
+                    "Check that results stay correct when hash values collide.\n\
+                     Run from the `datafusion` directory with `RUST_BACKTRACE=1`.",
+                );
+                cmd_builder
+                    .program("cargo")
                     .args([
                         "test",
                         "--profile",
@@ -459,9 +514,11 @@ impl StepContext {
                     .env("RUST_BACKTRACE", "1");
             }
             "sqlite" => {
-                // The CI job skips the builder setup because backtraces make this
-                // suite expensive, so `RUST_BACKTRACE` is deliberately not set.
-                command.args([
+                cmd_builder.doc(
+                    "Run SQL logic tests including the SQLite suite. This step does not\n\
+                     set `RUST_BACKTRACE` because backtraces make the suite expensive.",
+                );
+                cmd_builder.program("cargo").args([
                     "test",
                     "--features",
                     "backtrace,parquet_encryption",
@@ -476,15 +533,7 @@ impl StepContext {
             _ => return Err(StepError::Usage),
         }
 
-        Ok(command)
-    }
-
-    fn cargo(&self) -> CiCommand {
-        CiCommand::new("cargo", &self.root)
-    }
-
-    fn required_env(&self, name: &str) -> Result<String> {
-        (self.env_reader)(name)
+        cmd_builder.build().map_err(StepError::InvalidCommand)
     }
 }
 
@@ -497,169 +546,24 @@ enum StepAction {
 #[derive(Debug)]
 enum StepError {
     Usage,
-    Message(String),
+    InvalidCommand(String),
 }
 
 impl StepError {
     fn render(self, step: &StepInfo) -> String {
         match self {
             Self::Usage => format!("usage: {CI_COMMAND} {}", step.help_usage),
-            Self::Message(message) => message,
-        }
-    }
-}
-
-/// Command shared by invocation and `--explain`
-struct CiCommand {
-    command: Command,
-}
-
-impl CiCommand {
-    fn new(program: impl AsRef<OsStr>, current_dir: impl AsRef<Path>) -> Self {
-        let mut command = Command::new(program);
-        command.current_dir(current_dir);
-        Self { command }
-    }
-
-    fn args<I, S>(&mut self, args: I) -> &mut Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        self.command.args(args);
-        self
-    }
-
-    fn env<K, V>(&mut self, key: K, value: V) -> &mut Self
-    where
-        K: AsRef<OsStr>,
-        V: AsRef<OsStr>,
-    {
-        self.command.env(key, value);
-        self
-    }
-
-    fn current_dir(&mut self, directory: impl AsRef<Path>) -> &mut Self {
-        self.command.current_dir(directory);
-        self
-    }
-
-    fn explain(&self) {
-        println!("{}", self.full_command());
-    }
-
-    fn execute(mut self, error_message: &str) -> Result<()> {
-        println!("+ {}", self.full_command());
-        let status = self
-            .command
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .map_err(|error| format!("{error_message}: {error}"))?;
-
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("{error_message}: {status}"))
-        }
-    }
-
-    fn full_command(&self) -> String {
-        let mut lines = Vec::new();
-
-        if let Some(current_dir) = self.command.get_current_dir() {
-            lines.push(format!("cd {} &&", shell_quote(current_dir.as_os_str())));
-        }
-
-        for (key, value) in self.command.get_envs() {
-            let Some(value) = value else {
-                continue;
-            };
-            lines.push(format!("{}={}", shell_quote(key), shell_quote(value)));
-        }
-
-        lines.extend(shell_command_lines(
-            self.command.get_program(),
-            self.command.get_args(),
-        ));
-        lines.join(" \\\n")
-    }
-}
-
-/// Groups option-value pairs so the result reads like a hand-written command.
-fn shell_command_lines<'a>(
-    program: &OsStr,
-    args: impl Iterator<Item = &'a OsStr>,
-) -> Vec<String> {
-    let args = args.collect::<Vec<_>>();
-    let mut lines = vec![shell_quote(program)];
-    let mut index = 0;
-
-    // Keep command names and leading positional arguments together, such as
-    // `cargo check` and `cargo test plan_q`.
-    while index < args.len() && !is_option(args[index]) {
-        lines[0].push(' ');
-        lines[0].push_str(&shell_quote(args[index]));
-        index += 1;
-    }
-
-    while index < args.len() {
-        let arg = args[index];
-        let mut line = shell_quote(arg);
-        index += 1;
-
-        if arg == "--" {
-            while index < args.len() {
-                line.push(' ');
-                line.push_str(&shell_quote(args[index]));
-                index += 1;
+            Self::InvalidCommand(message) => {
+                format!("invalid CI command definition: {message}")
             }
-        } else if !arg.to_string_lossy().contains('=')
-            && index < args.len()
-            && !is_option(args[index])
-        {
-            line.push(' ');
-            line.push_str(&shell_quote(args[index]));
-            index += 1;
         }
-
-        lines.push(line);
     }
-
-    lines
-}
-
-fn is_option(value: &OsStr) -> bool {
-    value.to_string_lossy().starts_with('-')
-}
-
-/// Quotes one shell word when it contains characters that need protection.
-fn shell_quote(value: &OsStr) -> String {
-    let value = value.to_string_lossy();
-    if !value.is_empty()
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(
-                    byte,
-                    b'_' | b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-'
-                )
-        })
-    {
-        value.into_owned()
-    } else {
-        format!("'{}'", value.replace('\'', "'\"'\"'"))
-    }
-}
-
-fn required_env(name: &str) -> Result<String> {
-    env::var(name)
-        .map_err(|_| format!("required environment variable `{name}` is not set"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]";
 
@@ -685,10 +589,10 @@ mod tests {
     #[test]
     fn explain_builds_the_same_command_as_execute() {
         let context = context();
-        let (execute_action, _, execute_command) = context
+        let (execute_action, execute_command) = context
             .ci_step(&args(&["check", "datafusion", "default"]))
             .unwrap();
-        let (explain_action, _, explain_command) = context
+        let (explain_action, explain_command) = context
             .ci_step(&args(&["check", "datafusion", "default", "--explain"]))
             .unwrap();
 
@@ -836,7 +740,9 @@ cargo check \
                 command: &["test", "workspace"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
 cd /workspace && \
+RUST_BACKTRACE=1 \
 cargo llvm-cov \
 --profile ci \
 --exclude datafusion-examples \
@@ -856,7 +762,16 @@ cargo llvm-cov \
                 command: &["test", "cli"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Run CLI tests with storage integration enabled. The AWS credentials
+# shown below are fixed test values, not secrets.
+
 cd /workspace && \
+AWS_ACCESS_KEY_ID=TEST-DataFusionLogin \
+AWS_ALLOW_HTTP=true \
+AWS_ENDPOINT=http://127.0.0.1:9000 \
+AWS_SECRET_ACCESS_KEY=TEST-DataFusionPassword \
+RUST_BACKTRACE=1 \
+TEST_STORAGE_INTEGRATION=1 \
 cargo test \
 --features backtrace \
 --profile ci \
@@ -898,6 +813,12 @@ cargo test \
                 command: &["test", "microbenchmarks"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Run each Criterion benchmark once without timing it, selecting only
+# bench targets (not lib/bin unit tests). Keep debug assertions and
+# overflow checks enabled while optimizing execution for larger datasets.
+# The SQL benchmark harness needs separately generated datasets and
+# is covered by the benchmark result verification job.
+
 cd /workspace && \
 CLICKBENCH_DATA_PATH=/workspace/datafusion/core/tests/data/clickbench_hits_10.parquet \
 cargo test \
@@ -917,6 +838,7 @@ cargo test \
                 command: &["test", "benchmark-plan"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Requires path `/workspace/datafusion/sqllogictest/test_files/tpch/data` (generate the TPC-H fixture data before running this step)
 cd /workspace && \
 RUST_MIN_STACK=20971520 \
 TPCH_DATA=/workspace/datafusion/sqllogictest/test_files/tpch/data \
@@ -932,6 +854,7 @@ cargo test plan_q \
                 command: &["test", "benchmark-sqllogic"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Requires path `/workspace/datafusion/sqllogictest/test_files/tpch/data` (generate the TPC-H fixture data before running this step)
 cd /workspace && \
 INCLUDE_TPCH=true \
 RUST_MIN_STACK=20971520 \
@@ -948,6 +871,8 @@ cargo test \
                 command: &["test", "postgres"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Requires environment variable `POSTGRES_HOST`
+# Requires environment variable `POSTGRES_PORT`
 cd /workspace/datafusion/sqllogictest && \
 PG_COMPAT=true \
 PG_URI=postgresql://postgres:postgres@postgres.example:15432/db_test \
@@ -989,6 +914,9 @@ cargo test \
                 command: &["test", "extended"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Run tests behind the `extended_tests` feature. The `workspace`
+# step runs the remaining tests.
+
 cd /workspace && \
 RUST_BACKTRACE=1 \
 cargo test \
@@ -1003,6 +931,9 @@ cargo test \
                 command: &["test", "spill-pool-fuzz"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Run more random spill pool fuzzer scenarios than the `workspace`
+# step. This takes about a minute.
+
 cd /workspace && \
 DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS=1000 \
 RUST_BACKTRACE=1 \
@@ -1018,6 +949,9 @@ cargo test \
                 command: &["test", "hash-collisions"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Check that results stay correct when hash values collide.
+# Run from the `datafusion` directory with `RUST_BACKTRACE=1`.
+
 cd /workspace/datafusion && \
 RUST_BACKTRACE=1 \
 cargo test \
@@ -1037,6 +971,9 @@ cargo test \
                 command: &["test", "sqlite"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Run SQL logic tests including the SQLite suite. This step does not
+# set `RUST_BACKTRACE` because backtraces make the suite expensive.
+
 cd /workspace && \
 cargo test \
 --features backtrace,parquet_encryption \
@@ -1055,10 +992,10 @@ cargo test \
                 .copied()
                 .chain(std::iter::once("--explain"))
                 .collect::<Vec<_>>();
-            let (action, _, actual) = context.ci_step(&args(&explain_args)).unwrap();
+            let (action, actual) = context.ci_step(&args(&explain_args)).unwrap();
 
             assert_eq!(action, StepAction::Explain);
-            expected(&actual.full_command());
+            expected(&actual.explanation());
         }
     }
 }

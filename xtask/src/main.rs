@@ -80,6 +80,7 @@
 //! ```
 
 mod ci_steps;
+mod command;
 
 use std::env;
 use std::path::PathBuf;
