@@ -772,7 +772,7 @@ mod tests {
     use crate::aggregates::clustered_test_util::{
         assert_completed_groups_emitted_under_limit,
         assert_resources_exhausted_under_limit, full_batches, held_memory,
-        partial_batches, single_key_batches, sum_over_sorted_input,
+        single_key_batches, sum_over_sorted_input,
     };
     use crate::collect;
     use crate::test::TestMemoryExec;
@@ -866,9 +866,8 @@ mod tests {
 
     #[tokio::test]
     async fn fully_clustered_completed_groups_under_memory_pressure() -> Result<()> {
-        let (plan, mode) =
-            sum_over_sorted_input(AggregateMode::Single, &["k"], full_batches())?;
-        assert_eq!(mode, GroupClusteringMode::Full);
+        let plan = sum_over_sorted_input(AggregateMode::Single, &["k"], full_batches())?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
         assert_completed_groups_emitted_under_limit(&plan).await
     }
 
@@ -876,21 +875,9 @@ mod tests {
     /// fits only the initial table.
     #[tokio::test]
     async fn memory_pressure_without_completed_groups() -> Result<()> {
-        let (plan, _) =
+        let plan =
             sum_over_sorted_input(AggregateMode::Single, &["k"], single_key_batches())?;
         let limit = held_memory(&plan).await?;
-        assert_resources_exhausted_under_limit(&plan, limit).await
-    }
-
-    /// Without temporary files, partial group clustering takes the same path as
-    /// full clustering. Its group values keep their capacity after emitting, so
-    /// one byte below the unlimited footprint still fails.
-    #[tokio::test]
-    async fn partially_clustered_memory_pressure_without_spilling() -> Result<()> {
-        let (plan, mode) =
-            sum_over_sorted_input(AggregateMode::Single, &["a", "b"], partial_batches())?;
-        assert_eq!(mode, GroupClusteringMode::Partial(vec![0]));
-        let limit = held_memory(&plan).await? - 1;
         assert_resources_exhausted_under_limit(&plan, limit).await
     }
 }

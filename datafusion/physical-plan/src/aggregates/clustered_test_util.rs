@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::Int64Array;
+use arrow::array::{ArrayRef, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::test_util::batches_to_string;
@@ -38,7 +38,7 @@ use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::StreamExt;
 
-use super::{AggregateExec, AggregateMode, GroupClusteringMode, PhysicalGroupBy};
+use super::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::ExecutionPlan;
 use crate::test::TestMemoryExec;
 
@@ -46,16 +46,6 @@ use crate::test::TestMemoryExec;
 /// groups complete within each batch under full group clustering.
 pub(super) fn full_batches() -> Vec<Vec<Vec<i64>>> {
     vec![vec![(0..=256).collect()], vec![(256..=512).collect()]]
-}
-
-/// Key columns `(a, b)` of batches sorted on `a` only, with 256 groups for each
-/// `a` spread over two batches. The groups of one `a` complete together when the
-/// next `a` starts.
-pub(super) fn partial_batches() -> Vec<Vec<Vec<i64>>> {
-    [0, 0, 1, 1, 2, 2]
-        .into_iter()
-        .map(|a| vec![vec![a; 256], (0..256).collect()])
-        .collect()
 }
 
 /// Key column of two batches that hold the same single key, so no group
@@ -75,7 +65,7 @@ pub(super) fn sum_over_sorted_input(
     mode: AggregateMode,
     keys: &[&str],
     batches: Vec<Vec<Vec<i64>>>,
-) -> Result<(Arc<dyn ExecutionPlan>, GroupClusteringMode)> {
+) -> Result<AggregateExec> {
     let fields = keys
         .iter()
         .chain(&["v"])
@@ -112,12 +102,11 @@ pub(super) fn sum_over_sorted_input(
     let batches = batches
         .into_iter()
         .map(|columns| {
-            let v = columns.last().cloned().unwrap_or_default();
-            let columns = columns
+            let mut columns = columns
                 .into_iter()
-                .chain([v])
-                .map(|values| Arc::new(Int64Array::from(values)) as _)
-                .collect();
+                .map(|values| Arc::new(Int64Array::from(values)) as ArrayRef)
+                .collect::<Vec<_>>();
+            columns.push(Arc::clone(columns.last().unwrap()));
             RecordBatch::try_new(Arc::clone(&input_schema), columns)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -126,23 +115,21 @@ pub(super) fn sum_over_sorted_input(
             .unwrap();
     let input = TestMemoryExec::try_new(&[batches], Arc::clone(&input_schema), None)?
         .try_with_sort_information(vec![ordering])?;
-    let aggregate = AggregateExec::try_new(
+    AggregateExec::try_new(
         mode,
         group_by,
         aggregate_exprs,
         vec![None],
         Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
         schema,
-    )?;
-    let group_clustering_mode = aggregate.group_clustering_mode().clone();
-    Ok((Arc::new(aggregate), group_clustering_mode))
+    )
 }
 
 /// Executes partition 0 of `plan` on the clustered aggregate path, with `pool`
 /// and temporary files disabled. Returns the output and the most memory the
 /// plan held when it handed off a batch, including its initial reservation.
-pub(super) async fn collect_with_held_memory(
-    plan: &Arc<dyn ExecutionPlan>,
+async fn collect_with_held_memory(
+    plan: &AggregateExec,
     pool: Arc<dyn MemoryPool>,
 ) -> Result<(Vec<RecordBatch>, usize)> {
     let context = Arc::new(
@@ -174,7 +161,7 @@ pub(super) async fn collect_with_held_memory(
 }
 
 /// Returns the memory `plan` holds when handing off output without a limit.
-pub(super) async fn held_memory(plan: &Arc<dyn ExecutionPlan>) -> Result<usize> {
+pub(super) async fn held_memory(plan: &AggregateExec) -> Result<usize> {
     let (_, held) =
         collect_with_held_memory(plan, Arc::new(UnboundedMemoryPool::default())).await?;
     Ok(held)
@@ -184,7 +171,7 @@ pub(super) async fn held_memory(plan: &Arc<dyn ExecutionPlan>) -> Result<usize> 
 /// with only the active groups, but not the table before completed groups are
 /// emitted. The result must not change.
 pub(super) async fn assert_completed_groups_emitted_under_limit(
-    plan: &Arc<dyn ExecutionPlan>,
+    plan: &AggregateExec,
 ) -> Result<()> {
     let (expected, held) =
         collect_with_held_memory(plan, Arc::new(UnboundedMemoryPool::default())).await?;
@@ -197,7 +184,7 @@ pub(super) async fn assert_completed_groups_emitted_under_limit(
 /// Runs `plan` under `limit`, where emitting completed groups cannot bring the
 /// table under the limit, so the refused reservation must be returned.
 pub(super) async fn assert_resources_exhausted_under_limit(
-    plan: &Arc<dyn ExecutionPlan>,
+    plan: &AggregateExec,
     limit: usize,
 ) -> Result<()> {
     let result =

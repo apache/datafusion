@@ -429,9 +429,8 @@ mod tests {
 
     #[tokio::test]
     async fn fully_clustered_completed_groups_under_memory_pressure() -> Result<()> {
-        let (plan, mode) =
-            sum_over_sorted_input(AggregateMode::Partial, &["k"], full_batches())?;
-        assert_eq!(mode, GroupClusteringMode::Full);
+        let plan = sum_over_sorted_input(AggregateMode::Partial, &["k"], full_batches())?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
         assert_completed_groups_emitted_under_limit(&plan).await
     }
 }
