@@ -24,7 +24,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::pushdown_sort::PushdownSort;
 use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, collect};
+use datafusion_physical_plan::{ExecutionPlan, collect};
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
@@ -1100,7 +1100,9 @@ fn test_sort_pushdown_with_test_scan_arbitrary_ordering() {
 // ============================================================================
 
 #[test]
-fn test_custom_plan_can_opt_into_sort_pushdown() -> Result<()> {
+fn test_sort_pushdown_exact_no_fetch_no_limit() {
+    // When a source returns Exact (without fetch), the SortExec should be
+    // removed entirely with no GlobalLimitExec wrapper.
     let schema = schema();
     let a = sort_expr("a", &schema);
     let b = sort_expr("b", &schema);
@@ -1108,16 +1110,20 @@ fn test_custom_plan_can_opt_into_sort_pushdown() -> Result<()> {
         Arc::new(TestScan::new(schema.clone(), vec![]).with_exact_pushdown(true));
 
     let ordering = LexOrdering::new(vec![a, b.reverse()]).unwrap();
-    let plan = sort_exec(ordering.clone(), source);
-    let mut config = ConfigOptions::new();
-    config.execution.target_partitions = 1;
-    let plan = EnsureRequirements::new().optimize(plan, &config)?;
-    assert!(plan.is::<SortExec>());
+    let plan = sort_exec(ordering, source);
 
-    let optimized = PushdownSort::new().optimize(plan, &config)?;
-    assert!(optimized.is::<TestScan>());
-    assert_eq!(optimized.output_ordering(), Some(&ordering));
-    Ok(())
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
+        -   TestScan
+      output:
+        Ok:
+          - TestScan: requested_ordering=[a@0 ASC, b@1 DESC NULLS LAST]
+    "
+    );
 }
 
 #[test]
