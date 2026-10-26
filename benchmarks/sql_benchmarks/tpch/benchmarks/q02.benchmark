@@ -2,8 +2,6 @@ name Q02
 group tpch
 subgroup sf${BENCH_SIZE:-1}
 
-init sql_benchmarks/tpch/init/set_config.sql
-
 load sql_benchmarks/tpch/init/load_${TPCH_FILE_TYPE:-parquet}.sql
 
 assert I

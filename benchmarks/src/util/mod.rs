@@ -22,5 +22,5 @@ mod run;
 pub mod simulated_object_store;
 
 pub use memory::print_memory_stats;
-pub use options::CommonOpt;
+pub use options::{CommonOpt, QueryOpt};
 pub use run::{BenchQuery, BenchmarkRun, QueryResult};
