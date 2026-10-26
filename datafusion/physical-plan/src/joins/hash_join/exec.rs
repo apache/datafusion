@@ -35,7 +35,6 @@ use crate::joins::hash_join::build::{HashJoinBuild, JoinBuildState};
 use crate::joins::hash_join::hash_join_table::{HashJoinTableConfig, RegularJoinKind};
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::not_in::{NotIn, NotInBuild};
-use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::regular_join::RegularHashJoinStream;
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
@@ -45,6 +44,7 @@ use crate::joins::hash_join::stream::{
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::key_range_bitmap::KeyRangeBitmap;
+use crate::joins::probe_completion::{Completion, ProbeCompletion};
 use crate::joins::utils::{
     OnceAsync, OnceFut, asymmetric_join_output_partitioning, emits_unmatched_left_rows,
     is_existence_join, reorder_output_after_swap, swap_join_projection, update_hash,
@@ -321,19 +321,21 @@ impl JoinLeftData {
     /// Whether some probe partition has already recorded a NULL join key.
     ///
     /// Only an early-exit hint for the probe phase: it may lag behind sibling
-    /// partitions. Final-stage decisions must use the [`ProbeSideSummary`]
+    /// partitions. Final-stage decisions must use the
+    /// [`ProbeSideSummary`](crate::joins::probe_completion::ProbeSideSummary)
     /// returned by [`Self::report_probe_completed`] instead.
     pub(super) fn probe_side_has_null_hint(&self) -> bool {
         self.probe_completion.saw_null_key_hint()
     }
 
-    /// Marks this probe partition as finished, returning `Some` for the last
-    /// one together with what every partition saw.
+    /// Marks this probe partition as finished, returning
+    /// [`Completion::Emit`] for the last one together with what every
+    /// partition saw.
     ///
     /// The summary is reachable only through this call, which is what stops
     /// the final stage from reading the shared flags before its own
     /// decrement. See [`ProbeCompletion`] for why that ordering matters.
-    pub(super) fn report_probe_completed(&self) -> Option<ProbeSideSummary> {
+    pub(super) fn report_probe_completed(&self) -> Completion {
         self.probe_completion.report_completed()
     }
 }
@@ -489,8 +491,14 @@ impl HashJoinExecBuilder {
     pub fn reset_state(mut self) -> Self {
         self.exec.left_fut = Default::default();
         self.exec.regular_left_fut = Default::default();
-        self.exec.dynamic_filter = None;
+
+        if let Some(dynamic_filter) = &mut self.exec.dynamic_filter {
+            dynamic_filter.filter.reset();
+            dynamic_filter.build_accumulator = OnceLock::new();
+        }
+
         self.exec.metrics = ExecutionPlanMetricsSet::new();
+
         self
     }
 
