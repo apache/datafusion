@@ -411,7 +411,7 @@ A full list of benchmarks can be found [here](https://github.com/apache/datafusi
 
 _[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
 
-### Microbenchmark health checks (manual-only)
+### Microbenchmark health checks (local-only)
 
 To execute each Criterion case once without collecting performance measurements:
 
@@ -426,20 +426,10 @@ assertions and overflow checks, and supplies the small checked-in ClickBench
 fixture. It catches runtime failures such as panics; it does not detect performance
 regressions or establish result correctness unless a case asserts its results.
 
-For a hosted run, open **Actions → Microbenchmark health checks → Run workflow**,
-select the branch or tag to test, and dispatch it. Alternatively, use the GitHub CLI
-with a ref available in the target repository:
-
-```shell
-gh workflow run microbenchmarks.yml --repo apache/datafusion --ref YOUR_REF
-```
-
-The workflow checks out the selected ref and runs only microbenchmarks, not the
-other extended-test suites. Its workflow file must exist on the default branch
-before dispatch is available; the selected ref must also contain the workflow.
-
-Full microbenchmark execution is not a required merge check and does not run on
-PR updates, pushes (including release branches), merge groups, or a schedule.
+Run this command locally from the checkout you want to test. No dedicated GitHub
+Actions workflow is provided. Full microbenchmark execution is not a required
+merge check and does not run on PR updates, pushes (including release branches),
+merge groups, or a schedule.
 Daily runs are not configured because there is no designated owner to triage
 failures and drive fixes. Reconsider a daily tier only with explicit ownership and
 an agreed resource budget. Runtime-only breakage may remain unnoticed until an
