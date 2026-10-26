@@ -21,8 +21,6 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
 mod clustered_partial_oom;
-#[cfg(feature = "extended_tests")]
-mod memory_limit_validation;
 mod nlj_spill_unmatched;
 mod repartition_mem_limit;
 mod union_nullable_spill;

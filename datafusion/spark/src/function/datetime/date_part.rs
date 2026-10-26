@@ -81,10 +81,10 @@ impl ScalarUDFImpl for SparkDatePart {
         internal_err!("Use return_field_from_args in this case instead.")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-
-        Ok(Arc::new(Field::new(self.name(), DataType::Int32, nullable)))
+    // Nullable, like the integer parts of `date_part`, which this simplifies to,
+    // because they can be NULL for a non-null input
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int32, true)))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

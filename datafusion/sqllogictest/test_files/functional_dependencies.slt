@@ -647,6 +647,79 @@ statement ok
 drop table t_unnest_fd;
 
 ##########
+## Default window frame
+##
+## A window with ORDER BY and no explicit frame defaults to RANGE UNBOUNDED
+## PRECEDING AND CURRENT ROW, where rows that tie on the ORDER BY keys are
+## peers. When the first ORDER BY column is unique there are no ties, so the
+## planner uses the cheaper, equivalent ROWS frame instead.
+##########
+
+# 7.1 PRIMARY KEY: no ties, so the ROWS frame is used.
+query IIII
+SELECT x, y, sum(y) OVER (ORDER BY x) AS s, count(*) OVER (ORDER BY x) AS c
+FROM t_pk ORDER BY x;
+----
+1 10 10 1
+2 20 30 2
+
+query TT
+EXPLAIN SELECT sum(y) OVER (ORDER BY x) FROM t_pk;
+----
+logical_plan
+01)Projection: sum(t_pk.y) ORDER BY [t_pk.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--WindowAggr: windowExpr=[[sum(CAST(t_pk.y AS Int64)) ORDER BY [t_pk.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----TableScan: t_pk projection=[x, y]
+
+# 7.2 Nullable UNIQUE: the two NULL rows of `x` tie and are peers, so the
+# RANGE frame must be kept and both NULL rows see the same result.
+query IIII
+SELECT x, y, sum(y) OVER (ORDER BY x NULLS FIRST) AS s,
+       count(*) OVER (ORDER BY x NULLS FIRST) AS c
+FROM t_uniq ORDER BY x NULLS FIRST, y;
+----
+NULL 1 3 2
+NULL 2 3 2
+1 3 6 3
+
+query TT
+EXPLAIN SELECT sum(y) OVER (ORDER BY x NULLS FIRST) FROM t_uniq;
+----
+logical_plan
+01)Projection: sum(t_uniq.y) ORDER BY [t_uniq.x ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--WindowAggr: windowExpr=[[sum(CAST(t_uniq.y AS Int64)) ORDER BY [t_uniq.x ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----TableScan: t_uniq projection=[x, y]
+
+# 7.3 A UNIQUE column declared NOT NULL has no ties, so ROWS is used.
+query IIII
+SELECT x, y, sum(y) OVER (ORDER BY x) AS s, count(*) OVER (ORDER BY x) AS c
+FROM t_uniq_not_null ORDER BY x;
+----
+1 10 10 1
+2 20 30 2
+
+query TT
+EXPLAIN SELECT sum(y) OVER (ORDER BY x) FROM t_uniq_not_null;
+----
+logical_plan
+01)Projection: sum(t_uniq_not_null.y) ORDER BY [t_uniq_not_null.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--WindowAggr: windowExpr=[[sum(CAST(t_uniq_not_null.y AS Int64)) ORDER BY [t_uniq_not_null.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----TableScan: t_uniq_not_null projection=[x, y]
+
+# 7.4 After `GROUP BY x` the NULL rows of the nullable UNIQUE `x` collapse
+# into one group, so `x` is unique again and ROWS is used.
+query TT
+EXPLAIN SELECT sum(cnt) OVER (ORDER BY x)
+FROM (SELECT x, count(*) AS cnt FROM t_uniq GROUP BY x);
+----
+logical_plan
+01)Projection: sum(cnt) ORDER BY [t_uniq.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--WindowAggr: windowExpr=[[sum(cnt) ORDER BY [t_uniq.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----Projection: t_uniq.x, count(Int64(1)) AS count(*) AS cnt
+04)------Aggregate: groupBy=[[t_uniq.x]], aggr=[[count(Int64(1))]]
+05)--------TableScan: t_uniq projection=[x]
+
+##########
 ## Cleanup
 ##########
 

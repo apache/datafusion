@@ -138,6 +138,89 @@ SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'x
 ----
 fooxx
 
+statement ok
+CREATE TABLE regexp_replace_dict AS
+SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS url
+FROM (VALUES
+    ('https://www.example.com/path'),
+    ('http://test.org/foo/bar'),
+    ('https://example.com/')
+) AS t(column1);
+
+query T
+SELECT DISTINCT arrow_typeof(regexp_replace(url, '^https?://(?:www\.)?([^/]+)/.*$', '\1'))
+FROM regexp_replace_dict;
+----
+Dictionary(Int32, Utf8)
+
+statement ok
+DROP TABLE regexp_replace_dict;
+
+statement ok
+CREATE TABLE regexp_replace_dict_runtime_scalars AS
+SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS s,
+       column2 AS p
+FROM (VALUES ('abc', 'a'), ('abd', 'b')) AS v;
+
+query T
+SELECT regexp_replace(s, 'a', arrow_typeof(p))
+FROM regexp_replace_dict_runtime_scalars
+ORDER BY p;
+----
+Utf8bc
+Utf8bd
+
+statement ok
+DROP TABLE regexp_replace_dict_runtime_scalars;
+
+statement ok
+CREATE TABLE regexp_replace_dict_types AS SELECT
+  arrow_cast(column1, 'Dictionary(Int32, LargeUtf8)') AS dl,
+  arrow_cast(column1, 'Dictionary(Int32, Utf8View)') AS dv,
+  arrow_cast(column1, 'Dictionary(Int32, Binary)') AS db,
+  arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS d8,
+  column1 AS s
+FROM (VALUES ('abc'), ('abd'), (NULL)) AS v;
+
+query TT
+SELECT arrow_typeof(regexp_replace(dl, 'a', 'x')), regexp_replace(dl, 'a', 'x')
+FROM regexp_replace_dict_types
+ORDER BY s NULLS LAST;
+----
+Dictionary(Int32, LargeUtf8) xbc
+Dictionary(Int32, LargeUtf8) xbd
+Dictionary(Int32, LargeUtf8) NULL
+
+query TT
+SELECT arrow_typeof(regexp_replace(dv, 'a', 'x')), regexp_replace(dv, 'a', 'x')
+FROM regexp_replace_dict_types
+ORDER BY s NULLS LAST;
+----
+Dictionary(Int32, Utf8View) xbc
+Dictionary(Int32, Utf8View) xbd
+Dictionary(Int32, Utf8View) NULL
+
+query TT
+SELECT arrow_typeof(regexp_replace(db, 'a', 'x')), regexp_replace(db, 'a', 'x')
+FROM regexp_replace_dict_types
+ORDER BY s NULLS LAST;
+----
+Dictionary(Int32, Utf8) xbc
+Dictionary(Int32, Utf8) xbd
+Dictionary(Int32, Utf8) NULL
+
+query TT
+SELECT arrow_typeof(regexp_replace(d8, s, 'x')), regexp_replace(d8, s, 'x')
+FROM regexp_replace_dict_types
+ORDER BY s NULLS LAST;
+----
+Utf8 x
+Utf8 x
+Utf8 NULL
+
+statement ok
+DROP TABLE regexp_replace_dict_types;
+
 query TTT
 select
     regexp_replace(col, NULL, 'c'),
