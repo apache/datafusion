@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Run all tests that are found in the `fuzz_cases` directory.
-/// Fuzz tests are slow and gated behind the `extended_tests` feature.
-/// Run with: cargo test --features extended_tests
-#[cfg(feature = "extended_tests")]
+//! Tests too slow to run on every PR: fuzz tests and memory limit validation.
+//! This target requires the `extended_tests` feature.
+//!
+//! Run with: cargo test -p datafusion --test extended_tests --features extended_tests
+
 mod fuzz_cases;
+mod memory_limit_validation;
 
 #[cfg(test)]
 #[ctor::ctor(unsafe)]

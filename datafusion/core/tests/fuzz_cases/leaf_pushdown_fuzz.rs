@@ -33,7 +33,7 @@
 //! ```text
 //! LEAF_PUSHDOWN_FUZZ_SEED=<seed> LEAF_PUSHDOWN_FUZZ_CASES=1 \
 //!   cargo test --profile ci -p datafusion --features extended_tests \
-//!   --test fuzz -- leaf_pushdown --nocapture
+//!   --test extended_tests -- leaf_pushdown --nocapture
 //! ```
 //!
 //! `LEAF_PUSHDOWN_FUZZ_CASES` also raises the case count of a normal run.
@@ -76,7 +76,7 @@ const INCLUDE_FALSE_BRANCH_UNION_SHAPES: bool = false;
 /// Cases of the short run. Keep this low: the whole test must stay in a few
 /// seconds.
 const DEFAULT_CASES: usize = 250;
-/// Cases of the long run, gated behind the `extended_tests` feature.
+/// Cases of the long run.
 const EXTENDED_CASES: usize = 5000;
 /// Highest share of cases that may fail to plan on both sides. A higher share
 /// means the generator makes junk.
@@ -777,9 +777,6 @@ async fn leaf_pushdown_parquet_fuzz() {
     run_parquet(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES / 2)).await;
 }
 
-/// The whole `fuzz_cases` tree is behind the `extended_tests` feature today.
-/// The attribute keeps the long run gated if that changes.
-#[cfg(feature = "extended_tests")]
 #[tokio::test(flavor = "multi_thread")]
 async fn leaf_pushdown_fuzz_extended() {
     run_memory(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_CASES)).await;
