@@ -1,0 +1,24 @@
+---
+source: datafusion/sql/tests/cases/params.rs
+expression: "plans.join(\"\\n\")"
+---
+** Initial Plan:
+Limit: skip=0, fetch=$1
+  Projection: $1 AS value
+    Filter: string_with_extension.value = $1
+      TableScan: string_with_extension
+** Final Plan:
+Limit: skip=0, fetch=Utf8("1") FieldMetadata { inner: {"ARROW:extension:name": "example.string"} }
+  Projection: Utf8("1") FieldMetadata { inner: {"ARROW:extension:name": "example.string"} } AS value
+    Filter: string_with_extension.value = Utf8("1") FieldMetadata { inner: {"ARROW:extension:name": "example.string"} }
+      TableScan: string_with_extension
+** Initial Plan:
+Limit: skip=$1, fetch=None
+  Projection: $1 AS value
+    Filter: string_with_extension.value = $1
+      TableScan: string_with_extension
+** Final Plan:
+Limit: skip=Utf8("1") FieldMetadata { inner: {"ARROW:extension:name": "example.string"} }, fetch=None
+  Projection: Utf8("1") FieldMetadata { inner: {"ARROW:extension:name": "example.string"} } AS value
+    Filter: string_with_extension.value = Utf8("1") FieldMetadata { inner: {"ARROW:extension:name": "example.string"} }
+      TableScan: string_with_extension

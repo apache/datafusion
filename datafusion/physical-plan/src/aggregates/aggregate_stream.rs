@@ -17,6 +17,7 @@
 
 //! Aggregate without grouping columns
 
+use crate::aggregates::aggregate_argument::AggregateArgument;
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     aggregate_sub_metrics,
@@ -47,7 +48,6 @@ use std::task::{Context, Poll};
 use super::AggregateExec;
 use crate::filter::batch_filter;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Stream, StreamExt};
 
 /// stream struct for aggregation without grouping columns
@@ -68,7 +68,7 @@ struct AggregateStreamInner {
     schema: SchemaRef,
     mode: AggregateMode,
     input: SendableRecordBatchStream,
-    aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    aggregate_arguments: Vec<Vec<AggregateArgument>>,
     filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
     aggregate_argument_metrics: AggregateArgumentMetrics,
     aggregate_accumulator_metrics: AggregateAccumulatorMetrics,
@@ -85,7 +85,6 @@ struct AggregateStreamInner {
 }
 
 impl AggregateStreamInner {
-    // TODO: check if we get Null handling correct
     /// # Examples
     /// - Example 1
     ///   Accumulators: min(c1)
@@ -113,17 +112,18 @@ impl AggregateStreamInner {
             Vec::with_capacity(filter_state.accumulator_dyn_filter_info.len());
 
         for acc_info in &filter_state.accumulator_dyn_filter_info {
-            // Skip if we don't yet have a meaningful bound
+            // Every aggregate needs a bound before we can prune rows. Otherwise,
+            // another aggregate's predicate could discard its first non-NULL value.
             let bound = {
                 let guard = acc_info.shared_bound.lock();
                 if (*guard).is_null() {
-                    continue;
+                    return Ok(lit(true));
                 }
                 guard.clone()
             };
 
-            let agg_exprs = self
-                .aggregate_expressions
+            let agg_args = self
+                .aggregate_arguments
                 .get(acc_info.aggr_index)
                 .ok_or_else(|| {
                     internal_datafusion_err!(
@@ -132,12 +132,15 @@ impl AggregateStreamInner {
                     )
                 })?;
             // Only aggregates with a single argument are supported.
-            let column_expr = agg_exprs.first().ok_or_else(|| {
-                internal_datafusion_err!(
-                    "Aggregate expression at index {} expected a single argument",
-                    acc_info.aggr_index
-                )
-            })?;
+            let column_expr = agg_args
+                .first()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Aggregate expression at index {} expected a single argument",
+                        acc_info.aggr_index
+                    )
+                })?
+                .expr();
 
             let literal = lit(bound);
             let predicate: Arc<dyn PhysicalExpr> = match acc_info.aggr_type {
@@ -263,9 +266,9 @@ fn scalar_cmp_null_short_circuit(
     v1: &ScalarValue,
     v2: &ScalarValue,
 ) -> Option<ScalarValue> {
-    match (v1, v2) {
-        (ScalarValue::Null, ScalarValue::Null) => Some(ScalarValue::Null),
-        (ScalarValue::Null, other) | (other, ScalarValue::Null) => Some(other.clone()),
+    match (v1.is_null(), v2.is_null()) {
+        (true, _) => Some(v2.clone()),
+        (_, true) => Some(v1.clone()),
         _ => None,
     }
 }
@@ -295,23 +298,26 @@ impl AggregateStream {
         partition: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_filter_expr = Arc::clone(&agg.filter_expr);
+        let agg_filter_expr = agg.clone_filter_exprs();
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
 
-        let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
+        let aggregate_arguments = aggregate_expressions(agg.aggr_expr(), &agg.mode, 0)?
+            .into_iter()
+            .map(|exprs| exprs.into_iter().map(AggregateArgument::new).collect())
+            .collect();
         let filter_expressions = match agg.mode.input_mode() {
             AggregateInputMode::Raw => agg_filter_expr,
-            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr().len()].into(),
         };
         let aggregate_labels = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .map(|agg_expr| aggregate_metric_label(agg_expr))
             .collect::<Vec<_>>();
         let accumulators = create_accumulators_with_metrics(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &aggregate_sub_metrics(
                 &agg.metrics,
                 partition,
@@ -361,7 +367,7 @@ impl AggregateStream {
             mode: agg.mode,
             input,
             baseline_metrics,
-            aggregate_expressions,
+            aggregate_arguments,
             filter_expressions,
             aggregate_argument_metrics,
             aggregate_accumulator_metrics,
@@ -386,7 +392,7 @@ impl AggregateStream {
                                 &this.mode,
                                 &batch,
                                 &mut this.accumulators,
-                                &this.aggregate_expressions,
+                                &mut this.aggregate_arguments,
                                 &this.filter_expressions,
                                 &this.aggregate_argument_metrics,
                                 &this.aggregate_accumulator_metrics,
@@ -476,7 +482,7 @@ fn aggregate_batch(
     mode: &AggregateMode,
     batch: &RecordBatch,
     accumulators: &mut [AccumulatorItem],
-    expressions: &[Vec<Arc<dyn PhysicalExpr>>],
+    arguments: &mut [Vec<AggregateArgument>],
     filters: &[Option<Arc<dyn PhysicalExpr>>],
     aggregate_argument_metrics: &AggregateArgumentMetrics,
     aggregate_accumulator_metrics: &AggregateAccumulatorMetrics,
@@ -491,17 +497,20 @@ fn aggregate_batch(
     // 1.1
     accumulators
         .iter_mut()
-        .zip(expressions)
+        .zip(arguments)
         .zip(filters)
         .enumerate()
-        .try_for_each(|(index, ((accum, expr), filter))| {
+        .try_for_each(|(index, ((accum, arguments), filter))| {
             // 1.2 and 1.3
             let values = aggregate_argument_metrics.time(index, || {
                 let batch = match filter {
                     Some(filter) => Cow::Owned(batch_filter(batch, filter)?),
                     None => Cow::Borrowed(batch),
                 };
-                evaluate_expressions_to_arrays(expr, batch.as_ref())
+                arguments
+                    .iter_mut()
+                    .map(|argument| argument.evaluate(batch.as_ref()))
+                    .collect::<Result<Vec<_>>>()
             })?;
 
             // 1.4
@@ -578,12 +587,17 @@ fn finalize_aggregation_with_metrics(
 mod tests {
     use super::*;
     use crate::aggregates::PhysicalGroupBy;
+    use crate::common::collect as collect_stream;
     use crate::metrics::{MetricValue, MetricsSet};
     use crate::test::TestMemoryExec;
     use crate::{ExecutionPlan, collect};
-    use arrow::array::{Float64Array, UInt32Array};
+    use arrow::array::{Float64Array, Int32Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_functions_aggregate::{array_agg::array_agg_udaf, sum::sum_udaf};
+    use datafusion_functions_aggregate::{
+        array_agg::array_agg_udaf,
+        min_max::{max_udaf, min_udaf},
+        sum::sum_udaf,
+    };
     use datafusion_physical_expr::aggregate::{
         AggregateExprBuilder, AggregateFunctionExpr,
     };
@@ -675,6 +689,67 @@ mod tests {
         for (mode, expected) in cases {
             assert!(accumulator_phases(&mode) == expected, "{mode:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn aggregate_dynamic_filter_recovers_from_null_bounds() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let first = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 8])),
+                Arc::new(Int32Array::from(vec![None, None])),
+            ],
+        )?;
+        let second = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![2, 3])),
+                Arc::new(Int32Array::from(vec![5, 7])),
+            ],
+        )?;
+        let input = TestMemoryExec::try_new_exec(
+            &[vec![first], vec![second]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let mut aggregates = Vec::new();
+        for column in ["a", "b"] {
+            for function in [min_udaf(), max_udaf()] {
+                let alias = format!("{}({column})", function.name());
+                aggregates.push(Arc::new(
+                    AggregateExprBuilder::new(function, vec![col(column, &schema)?])
+                        .schema(Arc::clone(&schema))
+                        .alias(alias)
+                        .build()?,
+                ));
+            }
+        }
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            aggregates,
+            vec![None; 4],
+            input,
+            schema,
+        )?;
+        let filter = &aggregate.dynamic_filter.as_ref().unwrap().filter;
+        let context = Arc::new(TaskContext::default());
+
+        // Execute partitions sequentially to make filter publication deterministic.
+        collect_stream(aggregate.execute(0, Arc::clone(&context))?).await?;
+        assert_eq!(filter.current()?.to_string(), "true");
+
+        // Typed NULL bounds must recover so filtering resumes for every aggregate.
+        collect_stream(aggregate.execute(1, context)?).await?;
+        assert_eq!(
+            filter.current()?.to_string(),
+            "a@0 < 1 OR a@0 > 8 OR b@1 < 5 OR b@1 > 7"
+        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -841,10 +916,8 @@ mod tests {
 
         let context = Arc::new(TaskContext::default());
         for partition in 0..2 {
-            let _ = crate::common::collect(
-                aggregate.execute(partition, Arc::clone(&context))?,
-            )
-            .await?;
+            let _ = collect_stream(aggregate.execute(partition, Arc::clone(&context))?)
+                .await?;
         }
 
         let metrics = aggregate.metrics().unwrap();

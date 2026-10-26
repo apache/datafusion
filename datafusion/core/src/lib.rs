@@ -855,7 +855,19 @@ pub mod physical_plan {
 }
 
 // Reexport testing macros for compatibility
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub use datafusion_common::assert_batches_eq;
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub use datafusion_common::assert_batches_sorted_eq;
 
 /// re-export of [`datafusion_sql`] crate
@@ -895,10 +907,22 @@ pub mod variable {
     pub use datafusion_expr::var_provider::{VarProvider, VarType};
 }
 
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
 #[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
 pub mod test;
 
 mod schema_equivalence;
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub mod test_util;
 
 #[cfg(doctest)]

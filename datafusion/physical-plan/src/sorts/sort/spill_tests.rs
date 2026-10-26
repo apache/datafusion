@@ -151,21 +151,32 @@ fn fixture() -> Result<Fixture> {
         Field::new("sales", DataType::Decimal128(28, 2), true),
         Field::new("payload", DataType::Utf8, false),
     ]));
-    let categories = StringArray::from_iter(
-        (0..total).map(|i| (i % 11 != 0).then(|| format!("category-{:04}", i % 100))),
-    );
-    // Every non-null sales value is distinct, so sorting has no ambiguous ties.
-    let sales = Decimal128Array::from_iter(
-        (0..total).map(|i| (i != 1).then_some(((total - i) * 100) as i128)),
-    )
-    .with_precision_and_scale(28, 2)?;
-    let payload = StringArray::from_iter_values(
-        (0..total).map(|i| format!("row-{i:08}-{}", "x".repeat(64))),
-    );
-    let columns: Vec<ArrayRef> =
-        vec![Arc::new(categories), Arc::new(sales), Arc::new(payload)];
-    let parent = RecordBatch::try_new(schema, columns)?;
-    let batches: Vec<_> = (0..count).map(|i| parent.slice(i * rows, rows)).collect();
+    // Build each batch separately so it owns its buffers. Zero-copy slices of
+    // one parent would share them, and the sort reserves shared buffers once.
+    let batches = (0..count)
+        .map(|batch| {
+            let range = batch * rows..(batch + 1) * rows;
+            let categories = StringArray::from_iter(
+                range
+                    .clone()
+                    .map(|i| (i % 11 != 0).then(|| format!("category-{:04}", i % 100))),
+            );
+            // Every non-null sales value is distinct, so sorting has no ambiguous ties.
+            let sales = Decimal128Array::from_iter(
+                range
+                    .clone()
+                    .map(|i| (i != 1).then_some(((total - i) * 100) as i128)),
+            )
+            .with_precision_and_scale(28, 2)?;
+            let payload = StringArray::from_iter_values(
+                range.map(|i| format!("row-{i:08}-{}", "x".repeat(64))),
+            );
+            let columns: Vec<ArrayRef> =
+                vec![Arc::new(categories), Arc::new(sales), Arc::new(payload)];
+            Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let parent = concat_batches(&schema, &batches)?;
     let ordering = [
         PhysicalSortExpr::new(
             Arc::new(Column::new("category", 0)),
@@ -898,17 +909,19 @@ async fn check_final_spilled_merge_releases_unused_workspace(
         .try_next()
         .await?
         .expect("the final spilled merge must produce output");
-    assert_ne!(first_batch.num_rows(), 0);
-    assert!(first_batch.num_rows() <= rows);
+    // Every full input batch has the same fixed payload width, so the spill-derived
+    // byte target fits exactly the configured number of rows.
+    assert_eq!(first_batch.num_rows(), rows);
     assert!(
         pool.state.lock().unwrap().denied > denied_before,
         "the initial two-buffer reservation must fail before retrying"
     );
-    if intermediate {
-        assert!(spill_file_count.value() > spills_before);
-    } else {
-        assert_eq!(spill_file_count.value(), spills_before);
-    }
+    // Five inputs require two pairwise intermediate merges; the small tail then
+    // fits alongside the two merged runs in the final pass. Three inputs merge directly.
+    assert_eq!(
+        spill_file_count.value(),
+        spills_before + if intermediate { 2 } else { 0 },
+    );
     let live_merge_bytes = pool.reserved() - transient.size();
     let live_output_headroom = live_merge_bytes
         .checked_sub(single_buffer_bytes)

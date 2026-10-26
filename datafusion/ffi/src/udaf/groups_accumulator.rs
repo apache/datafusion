@@ -138,7 +138,6 @@ unsafe extern "C" fn update_batch_fn_wrapper(
     unsafe {
         let accumulator = accumulator.inner_mut();
         let values = sresult_return!(process_values(values));
-        let group_indices: Vec<usize> = group_indices.into_iter().collect();
         let opt_filter = sresult_return!(process_opt_filter(opt_filter));
 
         sresult!(accumulator.update_batch(
@@ -196,7 +195,6 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
     unsafe {
         let accumulator = accumulator.inner_mut();
         let values = sresult_return!(process_values(values));
-        let group_indices: Vec<usize> = group_indices.into_iter().collect();
 
         sresult!(accumulator.merge_batch(&values, &group_indices, total_num_groups))
     }

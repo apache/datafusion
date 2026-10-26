@@ -677,6 +677,7 @@ pub struct DerivedRelationBuilder {
     lateral: Option<bool>,
     subquery: Option<Box<ast::Query>>,
     alias: Option<ast::TableAlias>,
+    projection_names: Vec<ast::Ident>,
 }
 
 impl DerivedRelationBuilder {
@@ -692,18 +693,49 @@ impl DerivedRelationBuilder {
         self.alias = value;
         self
     }
+    pub(super) fn projection_names(&mut self, value: Vec<ast::Ident>) -> &mut Self {
+        self.projection_names = value;
+        self
+    }
     fn build(&self) -> Result<ast::TableFactor, BuilderError> {
+        let mut subquery = match self.subquery {
+            Some(ref value) => value.clone(),
+            None => {
+                return Err(Into::into(UninitializedFieldError::from("subquery")));
+            }
+        };
+        if self
+            .alias
+            .as_ref()
+            .is_none_or(|alias| alias.columns.is_empty())
+            && let ast::SetExpr::Select(select) = subquery.body.as_mut()
+            && select.projection.len() == self.projection_names.len()
+        {
+            for (item, alias) in select.projection.iter_mut().zip(&self.projection_names)
+            {
+                if let ast::SelectItem::UnnamedExpr(expr) = item {
+                    let preserves_name = match expr {
+                        ast::Expr::Identifier(name) => name.value == alias.value,
+                        ast::Expr::CompoundIdentifier(names) => {
+                            names.last().is_some_and(|name| name.value == alias.value)
+                        }
+                        _ => false,
+                    };
+                    if !preserves_name {
+                        *item = ast::SelectItem::ExprWithAlias {
+                            expr: expr.clone(),
+                            alias: alias.clone(),
+                        };
+                    }
+                }
+            }
+        }
         Ok(ast::TableFactor::Derived {
             lateral: match self.lateral {
                 Some(ref value) => *value,
                 None => return Err(Into::into(UninitializedFieldError::from("lateral"))),
             },
-            subquery: match self.subquery {
-                Some(ref value) => value.clone(),
-                None => {
-                    return Err(Into::into(UninitializedFieldError::from("subquery")));
-                }
-            },
+            subquery,
             alias: self.alias.clone(),
             sample: None,
         })
@@ -713,6 +745,7 @@ impl DerivedRelationBuilder {
             lateral: Default::default(),
             subquery: Default::default(),
             alias: Default::default(),
+            projection_names: Default::default(),
         }
     }
 }

@@ -123,11 +123,24 @@ impl PushedDownPredicate {
 }
 
 /// Discriminant for the result of pushing down a filter into a child node.
+///
+/// This tells the parent whether it still has to evaluate the filter. It does
+/// not tell the parent how, or if, the child uses the filter.
+///
+/// For example, a child that replies [`PushedDown::No`] can still keep the
+/// filter and use it in an inexact way, such as to prune files, row groups or
+/// pages with statistics.
 #[derive(Debug, Clone, Copy)]
 pub enum PushedDown {
-    /// The predicate was successfully pushed down into the child node.
+    /// The child guarantees that it applies the predicate exactly: it never
+    /// produces a row for which the predicate is not true. The parent does
+    /// not need to evaluate the predicate again.
     Yes,
-    /// The predicate could not be pushed down into the child node.
+    /// The child does not guarantee that it applies the predicate exactly,
+    /// so the parent must still evaluate it.
+    ///
+    /// The child may ignore the predicate, or it may use it in an inexact
+    /// way, for example for statistics pruning.
     No,
 }
 

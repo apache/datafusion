@@ -224,7 +224,13 @@ impl WindowFrame {
                 }
                 _ => true,
             },
-            WindowFrameUnits::Range | WindowFrameUnits::Groups => match &end_bound {
+            // For a row whose ORDER BY value is NULL or NaN, an offset bound
+            // ends the RANGE frame at its last peer, which may be a later row.
+            WindowFrameUnits::Range => matches!(
+                &end_bound,
+                WindowFrameBound::Preceding(value) if value.is_null()
+            ),
+            WindowFrameUnits::Groups => match &end_bound {
                 WindowFrameBound::Preceding(value) => {
                     if value.is_null() {
                         // Unbounded preceding

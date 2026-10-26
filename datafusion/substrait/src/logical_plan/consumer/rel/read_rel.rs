@@ -26,7 +26,7 @@ use datafusion::common::{
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
-    EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Values,
+    EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, TableScanBuilder, Values,
 };
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
@@ -61,13 +61,13 @@ pub async fn from_read_rel(
                 _ => return plan_err!("No table named '{table_ref}'"),
             };
 
-            LogicalPlanBuilder::scan_with_filters(
+            let table_scan = TableScanBuilder::new(
                 table_ref,
                 provider_as_source(Arc::clone(&provider)),
-                None,
-                filters,
-            )?
-            .build()?
+            )
+            .with_filters(filters)
+            .build()?;
+            LogicalPlanBuilder::table_scan(table_scan)?.build()?
         };
 
         ensure_schema_compatibility(plan.schema(), schema.clone())?;
@@ -139,7 +139,7 @@ pub async fn from_read_rel(
                 }));
             }
 
-            let mut rows = vec![];
+            let mut rows = Vec::with_capacity(vt.expressions.len());
             for row in &vt.expressions {
                 if row.fields.len() != substrait_schema.fields().len() {
                     return substrait_err!(
@@ -149,7 +149,7 @@ pub async fn from_read_rel(
                     );
                 }
 
-                let mut row_exprs = vec![];
+                let mut row_exprs = Vec::with_capacity(row.fields.len());
                 let mut name_idx = 0;
                 for expression in &row.fields {
                     // Top-level names are provided through schema

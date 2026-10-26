@@ -753,14 +753,20 @@ impl ProjectionExprs {
                     ColumnStatistics {
                         min_value: Precision::Exact(literal.value().clone()),
                         max_value: Precision::Exact(literal.value().clone()),
-                        distinct_count: Precision::Exact(1),
+                        distinct_count: Precision::Exact(0),
                         null_count,
                         sum_value: Precision::Exact(literal.value().clone()),
                         byte_size: Precision::Exact(0),
                     }
                 } else {
                     let value = literal.value();
-                    let distinct_count = Precision::Exact(1);
+                    let distinct_count = match stats.num_rows {
+                        Precision::Exact(0) | Precision::Inexact(0) => stats.num_rows,
+                        Precision::Exact(_) => Precision::Exact(1),
+                        Precision::Inexact(_) | Precision::Absent => {
+                            Precision::Inexact(1)
+                        }
+                    };
                     let null_count = Precision::Exact(0);
 
                     let byte_size = if let Some(byte_width) = data_type.primitive_width()
@@ -1294,8 +1300,10 @@ impl ProjectionMapping {
         input_schema: &SchemaRef,
     ) -> Result<Self> {
         // Construct a map from the input expressions to the output expression of the projection:
-        let mut map = IndexMap::<_, ProjectionTargets>::new();
-        for (expr_idx, (expr, name)) in expr.into_iter().enumerate() {
+        let exprs = expr.into_iter();
+        let mut map =
+            IndexMap::<_, ProjectionTargets>::with_capacity(exprs.size_hint().0);
+        for (expr_idx, (expr, name)) in exprs.enumerate() {
             let target_expr = Arc::new(Column::new(&name, expr_idx)) as _;
             let source_expr = expr.transform_down(|e| match e.downcast_ref::<Column>() {
                 Some(col) => {
@@ -1429,7 +1437,7 @@ pub fn project_orderings(
     orderings: &[LexOrdering],
     schema: &SchemaRef,
 ) -> Vec<LexOrdering> {
-    let mut projected_orderings = vec![];
+    let mut projected_orderings = Vec::with_capacity(orderings.len());
 
     for ordering in orderings {
         projected_orderings.extend(project_ordering(ordering, schema));
@@ -1471,7 +1479,7 @@ pub fn project_ordering(
     ordering: &LexOrdering,
     schema: &SchemaRef,
 ) -> Option<LexOrdering> {
-    let mut projected_exprs = vec![];
+    let mut projected_exprs = Vec::with_capacity(ordering.len());
     for PhysicalSortExpr { expr, options } in ordering.iter() {
         let transformed = Arc::clone(expr).transform_up(|expr| {
             let Some(col) = expr.downcast_ref::<Column>() else {
@@ -2489,6 +2497,81 @@ pub(crate) mod tests {
                 assert!(!is_within_extrema(
                     &bounds[0], &bounds[1], &bounds[2], &bounds[3],
                 ));
+            }
+        }
+    }
+
+    #[test]
+    fn test_project_statistics_lossless_cast() {
+        use Precision::{Absent, Exact, Inexact};
+
+        for (lower, upper, targets) in [
+            (
+                ScalarValue::UInt8(Some(0)),
+                ScalarValue::UInt8(Some(u8::MAX)),
+                vec![DataType::Int16, DataType::Int32, DataType::Int64],
+            ),
+            (
+                ScalarValue::UInt16(Some(0)),
+                ScalarValue::UInt16(Some(u16::MAX)),
+                vec![DataType::Int32, DataType::Int64],
+            ),
+            (
+                ScalarValue::UInt32(Some(0)),
+                ScalarValue::UInt32(Some(u32::MAX)),
+                vec![DataType::Int64],
+            ),
+            (
+                ScalarValue::Utf8(Some(String::new())),
+                ScalarValue::Utf8(Some("🦀".to_string())),
+                vec![DataType::Utf8View],
+            ),
+            (
+                ScalarValue::Binary(Some(vec![])),
+                ScalarValue::Binary(Some(vec![0xff])),
+                vec![DataType::LargeBinary, DataType::BinaryView],
+            ),
+        ] {
+            for target in targets {
+                // A globally safe cast does not need two exact extrema. Preserve
+                // whichever bounds are available without upgrading their precision.
+                for (min_value, max_value) in [
+                    (Exact(lower.clone()), Exact(upper.clone())),
+                    (Exact(lower.clone()), Absent),
+                    (Absent, Exact(upper.clone())),
+                    (Inexact(lower.clone()), Inexact(upper.clone())),
+                    (Inexact(lower.clone()), Absent),
+                    (Absent, Inexact(upper.clone())),
+                ] {
+                    let input = ColumnStatistics {
+                        min_value: min_value.clone(),
+                        max_value: max_value.clone(),
+                        null_count: Exact(1),
+                        distinct_count: Inexact(3),
+                        sum_value: Absent,
+                        byte_size: Absent,
+                    };
+                    let expr = CastExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        target.clone(),
+                        None,
+                    );
+                    let output =
+                        project_column_statistics_through_expr(&expr, &[input], None);
+                    assert_eq!(
+                        output,
+                        ColumnStatistics {
+                            min_value: min_value.cast_to(&target).unwrap(),
+                            max_value: max_value.cast_to(&target).unwrap(),
+                            null_count: Exact(1),
+                            distinct_count: Inexact(3),
+                            sum_value: Absent,
+                            byte_size: Absent,
+                        },
+                        "{} -> {target}, {min_value:?}..{max_value:?}",
+                        lower.data_type()
+                    );
+                }
             }
         }
     }
@@ -3612,7 +3695,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             output_stats.column_statistics[0].distinct_count,
-            Precision::Exact(1) // All NULLs are considered the same
+            Precision::Exact(0) // NULLs are not counted as distinct values
         );
         assert_eq!(
             output_stats.column_statistics[0].null_count,
@@ -3636,6 +3719,53 @@ pub(crate) mod tests {
             output_stats.column_statistics[1].max_value,
             Precision::Exact(ScalarValue::Int64(Some(21)))
         );
+
+        Ok(())
+    }
+
+    // A literal's distinct count depends on whether any row is present: an
+    // estimated row count cannot prove the value appears. NULLs are not
+    // counted as distinct values, matching `COUNT(DISTINCT)`.
+    #[test]
+    fn test_project_statistics_literal_distinct_count_by_row_count() -> Result<()> {
+        let input_schema = get_schema();
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+                alias: "constant".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Literal::new(ScalarValue::Int64(None))),
+                alias: "null_col".to_string(),
+            },
+        ]);
+        let output_schema = projection.project_schema(&input_schema)?;
+
+        let cases = [
+            (Precision::Exact(0), Precision::Exact(0)),
+            (Precision::Exact(5), Precision::Exact(1)),
+            (Precision::Inexact(0), Precision::Inexact(0)),
+            (Precision::Inexact(5), Precision::Inexact(1)),
+            (Precision::Absent, Precision::Inexact(1)),
+        ];
+        for (num_rows, expected) in cases {
+            let input_stats = Statistics {
+                num_rows,
+                total_byte_size: Precision::Absent,
+                column_statistics: Statistics::unknown_column(&input_schema),
+            };
+            let output_stats =
+                projection.project_statistics(input_stats, &output_schema)?;
+            assert_eq!(
+                output_stats.column_statistics[0].distinct_count, expected,
+                "non-null literal, num_rows={num_rows:?}"
+            );
+            assert_eq!(
+                output_stats.column_statistics[1].distinct_count,
+                Precision::Exact(0),
+                "NULL literal, num_rows={num_rows:?}"
+            );
+        }
 
         Ok(())
     }

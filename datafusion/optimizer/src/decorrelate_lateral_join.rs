@@ -23,6 +23,7 @@ use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
 use crate::utils::evaluates_to_null;
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::{Expr, Join, expr};
 
 use datafusion_common::tree_node::{
@@ -45,10 +46,6 @@ impl DecorrelateLateralJoin {
 }
 
 impl OptimizerRule for DecorrelateLateralJoin {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -153,6 +150,8 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
             (rewritten_subquery, correlation_filter, original_join_filter)
         };
 
+    let correlation_filter = correlation_filter.map(strip_outer_reference);
+
     // For LEFT lateral joins, verify that all column references in the
     // correlation filter are resolvable within the join's left and right
     // schemas. If the lateral subquery references columns from an outer scope,
@@ -236,7 +235,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     let new_plan = if let Some(expr_map) = collected_count_expr_map {
         let join_schema = new_plan.schema();
         let alias_qualifier = alias.as_ref();
-        let mut proj_exprs: Vec<Expr> = vec![];
+        let mut proj_exprs: Vec<Expr> = Vec::with_capacity(join_schema.fields().len());
 
         for (i, (qualifier, field)) in join_schema.iter().enumerate() {
             let col = Expr::Column(Column::new(qualifier.cloned(), field.name()));
@@ -287,7 +286,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     // assumes it is deterministic.
     let new_plan = if let Some(on_cond) = on_condition_for_projection {
         let schema = Arc::clone(new_plan.schema());
-        let mut proj_exprs: Vec<Expr> = vec![];
+        let mut proj_exprs: Vec<Expr> = Vec::with_capacity(schema.fields().len());
 
         for (i, (qualifier, field)) in schema.iter().enumerate() {
             let col = Expr::Column(Column::new(qualifier.cloned(), field.name()));
