@@ -258,12 +258,14 @@ The following runtime configuration settings are available:
 
 # Tuning Guide
 
-## Short Queries
+## Short Queries and Point Lookups
 
 By default DataFusion will attempt to maximize parallelism and use all cores --
 For example, if you have 32 cores, each plan will split the data into 32
-partitions. However, if your data is small, the overhead of splitting the data
-to enable parallelization can dominate the actual computation.
+partitions. However, if your data is small, or the query only reads a few rows
+(for example, a point lookup such as `SELECT * FROM t WHERE id = 42`), the
+overhead of planning, opening files, and splitting the data to enable
+parallelization can dominate the actual computation.
 
 You can find out how many cores are being used via the [`EXPLAIN`] command and look
 at the number of partitions in the plan.
@@ -276,7 +278,7 @@ does not apply to user defined data sources and only works when DataFusion has a
 
 If you know your data is small, you can set the `datafusion.execution.target_partitions`
 option to a smaller number to reduce the overhead of repartitioning. For very small datasets (e.g. less
-than 1MB), we recommend setting `target_partitions` to 1 to avoid repartitioning altogether.
+than 1MB) or point lookups, we recommend setting `target_partitions` to 1 to avoid repartitioning altogether.
 
 ```sql
 SET datafusion.execution.target_partitions = '1';
@@ -284,35 +286,23 @@ SET datafusion.execution.target_partitions = '1';
 
 [`listingtable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 
-## Point Queries (Single Row Lookups)
+For point lookups on Parquet data, the following techniques also help:
 
-Point queries look up a small number of rows by key (for example,
-`SELECT * FROM t WHERE id = 42`). For these queries the fixed costs of planning,
-opening files, and coordinating partitions often dominate the actual work, so
-the goal is to read as little data as possible and to avoid unnecessary
-parallelism.
-
-For Parquet data, the most effective techniques are:
-
-- Sort the data by the lookup key so min/max statistics prune most row groups
-  and pages, and use relatively small row groups and pages (for example, ~128k
-  rows per row group and ~1k rows per page) so that pruning is fine grained.
-- Set `datafusion.execution.target_partitions` to `1` to avoid the overhead of
-  parallelism, as described in [Short Queries](#short-queries).
+- Sort the data by the lookup key so min/max statistics can prune row groups
+  and pages.
 - Enable `datafusion.execution.parquet.pushdown_filters` so filters are
-  evaluated while decoding Parquet rather than after the whole row group is read.
-- Keep Parquet metadata caching enabled (the default) and size the cache with
+  evaluated while decoding Parquet.
+- Set the Parquet metadata cache size via
   `datafusion.runtime.metadata_cache_limit` so it holds the metadata for the
   files you query repeatedly.
 - Reuse prepared statements to avoid re-planning each query.
 
 ```sql
-SET datafusion.execution.target_partitions = '1';
 SET datafusion.execution.parquet.pushdown_filters = true;
 ```
 
 See the [Best Practices for Single Row Lookups (Point Queries)] blog post for
-benchmarks and a detailed walk through of each of these settings.
+more details.
 
 [best practices for single row lookups (point queries)]: https://datafusion.apache.org/blog/2026/10/24/point-queries/
 
