@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-
 # A correlated `NOT IN` with an equality correlation pairs rows through a
 # hash map on the scope key. When a scope holds many rows, the join stops
 # looking up each probe row and groups the probe rows by scope hash. These
