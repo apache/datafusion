@@ -341,30 +341,29 @@ impl Aggregating {
             // Check the reservation before taking completed groups, as the partial
             // stream does, so spilling is unchanged. Without spilling, the refusal
             // is returned below only if no group is complete.
-            let oom = match (
-                reservation.try_resize(self.reservation_size()),
-                self.spill_context.as_mut(),
-            ) {
-                (Ok(()), _) => None,
-                (Err(oom @ DataFusionError::ResourcesExhausted(_)), None) => Some(oom),
-                (
-                    Err(oom @ DataFusionError::ResourcesExhausted(_)),
-                    Some(spill_context),
-                ) => {
-                    if self.table.is_empty() {
-                        return Err(oom);
+            let oom = match reservation.try_resize(self.reservation_size()) {
+                Ok(()) => None,
+                Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
+                    match self.spill_context.as_mut() {
+                        None => Some(oom),
+                        Some(spill_context) => {
+                            if self.table.is_empty() {
+                                return Err(oom);
+                            }
+                            spill_context
+                                .sort_and_spill(self.table.take_state_batch()?)?;
+                            reservation.try_resize(self.table.memory_size()).map_err(
+                                |e| {
+                                    e.context(
+                                        "Decreasing allocation after spilling should succeed",
+                                    )
+                                },
+                            )?;
+                            continue;
+                        }
                     }
-                    spill_context.sort_and_spill(self.table.take_state_batch()?)?;
-                    reservation
-                        .try_resize(self.table.memory_size())
-                        .map_err(|e| {
-                            e.context(
-                                "Decreasing allocation after spilling should succeed",
-                            )
-                        })?;
-                    continue;
                 }
-                (Err(e), _) => return Err(e),
+                Err(e) => return Err(e),
             };
 
             if self.spill_context.as_ref().is_some_and(|s| s.has_spills()) {

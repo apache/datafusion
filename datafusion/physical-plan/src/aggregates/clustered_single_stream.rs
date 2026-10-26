@@ -295,7 +295,7 @@ impl ClusteredSingleAggregateStream {
     ) -> ClusteredSingleAggregateStateTransition {
         let ClusteredSingleAggregateState::ReadingInput {
             mut table,
-            mut spill_context,
+            spill_context,
         } = original_state
         else {
             return Self::break_with_internal_err(
@@ -336,7 +336,7 @@ impl ClusteredSingleAggregateStream {
                 let oom = match resize_result {
                     Ok(()) => None,
                     Err(e @ DataFusionError::ResourcesExhausted(_)) => {
-                        match spill_context.take() {
+                        match spill_context {
                             Some(spill_context) => {
                                 if table.is_empty() {
                                     return Self::break_with_internal_err(
