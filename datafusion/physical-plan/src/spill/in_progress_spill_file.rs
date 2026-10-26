@@ -297,7 +297,7 @@ mod tests {
     use super::*;
     use crate::spill::SPILL_BATCH_MEMORY_MARGIN;
     use arrow::array::{
-        Array, ArrayRef, DictionaryArray, Int32Array, Int64Array, ListBuilder,
+        Array, ArrayRef, AsArray, DictionaryArray, Int32Array, Int64Array, ListBuilder,
         MapBuilder, StringArray, StringBuilder, StringViewArray, StructArray,
     };
     use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
@@ -773,35 +773,44 @@ mod tests {
     }
 
     /// A piece whose dictionary keys are all null has no used values. After the unused
-    /// values are dropped the dictionary is empty, which must not panic when measured.
+    /// values are dropped the dictionary is empty, which must not panic when measured, and
+    /// must read back as nulls.
     #[tokio::test]
     async fn dictionary_with_only_null_keys() -> Result<()> {
         let values = StringArray::from_iter_values((0..64).map(wide_value));
         let keys = Int32Array::from_iter((0..64).map(|i| (i >= 8).then_some(i)));
         let dictionary: ArrayRef =
             Arc::new(DictionaryArray::try_new(keys, Arc::new(values))?);
-        let fields =
-            Fields::from(vec![Field::new("d", dictionary_type(DataType::Utf8), true)]);
-        let structs: ArrayRef = Arc::new(StructArray::try_new(
-            fields.clone(),
-            vec![Arc::clone(&dictionary)],
-            None,
-        )?);
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("d", dictionary_type(DataType::Utf8), true),
-            Field::new("s", DataType::Struct(fields), false),
-        ]));
-        let batch = RecordBatch::try_new(schema, vec![dictionary, structs])?;
-        // Pieces of 8 rows: the first has only null keys.
-        let budget = 20 * WIDE;
-        for batch in [batch.slice(0, 8), batch.slice(0, 0), batch] {
-            if batch.num_rows() == 0 {
-                SpillPieces::new(&batch, Some(budget))?.collect::<Result<Vec<_>>>()?;
-                continue;
-            }
-            let (read, _) = round_trip(std::slice::from_ref(&batch), budget).await?;
-            assert_same_rows(&read, &[batch]);
-        }
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            dictionary_type(DataType::Utf8),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![dictionary])?;
+        // Pieces of at most 4 rows: the first ones have only null keys.
+        let budget = 4 * WIDE + WIDE / 2;
+        let pieces =
+            SpillPieces::new(&batch, Some(budget))?.collect::<Result<Vec<_>>>()?;
+        assert!(pieces.len() > 1);
+        assert!(
+            pieces.iter().any(|(piece, _)| piece
+                .column(0)
+                .as_any_dictionary()
+                .values()
+                .is_empty()),
+            "expected a piece with an empty dictionary"
+        );
+        SpillPieces::new(&batch.slice(0, 0), Some(budget))?
+            .collect::<Result<Vec<_>>>()?;
+
+        let (read, _) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        let cast =
+            |b: &RecordBatch| arrow::compute::cast(b.column(0), &DataType::Utf8).unwrap();
+        let read_values: Vec<ArrayRef> = read.iter().map(cast).collect();
+        let read_values = arrow::compute::concat(
+            &read_values.iter().map(|a| a.as_ref()).collect::<Vec<_>>(),
+        )?;
+        assert_eq!(&read_values, &cast(&batch));
         Ok(())
     }
 }

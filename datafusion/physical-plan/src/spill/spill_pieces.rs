@@ -59,16 +59,25 @@ impl SpillPieces {
         let batch = gc_view_arrays(batch)?;
         let size = batch.get_sliced_size()?;
         let rows = batch.num_rows();
+        let whole = |batch, size| Self {
+            whole: Some((batch, size)),
+            batch: RecordBatch::new_empty(Arc::new(Schema::empty())),
+            max_batch_bytes: 0,
+            pending: vec![],
+        };
         let Some(max_batch_bytes) = max_batch_bytes
             .filter(|max| size > *max && rows > 1 && can_split(batch.schema_ref()))
         else {
-            return Ok(Self {
-                whole: Some((batch, size)),
-                batch: RecordBatch::new_empty(Arc::new(Schema::empty())),
-                max_batch_bytes: 0,
-                pending: vec![],
-            });
+            return Ok(whole(batch, size));
         };
+        // A shared dictionary can hold many values that no row of this batch uses. Drop
+        // them once before choosing the row ranges, so that the ranges are sized by what
+        // the batch uses and the pieces do not each prune the whole dictionary again.
+        let batch = prune_dictionaries(&batch)?;
+        let size = batch.get_sliced_size()?;
+        if size <= max_batch_bytes {
+            return Ok(whole(batch, size));
+        }
         // The sliced size over-counts nested columns, whose children are not narrowed by
         // a slice, so this can give more pieces than needed but not fewer.
         let pieces = size.div_ceil(max_batch_bytes.max(1)).min(rows);
@@ -139,6 +148,36 @@ fn compact(slice: &RecordBatch) -> Result<RecordBatch> {
     let options = RecordBatchOptions::new().with_row_count(Some(slice.num_rows()));
     let piece = RecordBatch::try_new_with_options(slice.schema(), columns, &options)?;
     gc_view_arrays(&piece)
+}
+
+/// Drops the values of top-level dictionaries that no key uses.
+fn prune_dictionaries(batch: &RecordBatch) -> Result<RecordBatch> {
+    if !batch
+        .schema_ref()
+        .fields()
+        .iter()
+        .any(|field| matches!(field.data_type(), DataType::Dictionary(_, _)))
+    {
+        return Ok(batch.clone());
+    }
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| {
+            Ok(match column.data_type() {
+                DataType::Dictionary(_, _) => {
+                    garbage_collect_any_dictionary(column.as_any_dictionary())?
+                }
+                _ => Arc::clone(column),
+            })
+        })
+        .collect::<Result<Vec<ArrayRef>>>()?;
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    Ok(RecordBatch::try_new_with_options(
+        batch.schema(),
+        columns,
+        &options,
+    )?)
 }
 
 /// Whether [`compact`] narrows every column of `schema` to its rows. It does not for list
