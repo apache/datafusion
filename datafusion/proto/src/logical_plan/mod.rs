@@ -2411,6 +2411,11 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
+            LogicalPlan::MaterializedCte(_) => {
+                not_impl_err!(
+                    "LogicalPlan serde is not yet implemented for MATERIALIZED CTEs"
+                )
+            }
             LogicalPlan::RecursiveQuery(recursive) => {
                 let static_term = LogicalPlanNode::try_from_logical_plan(
                     recursive.static_term.as_ref(),
