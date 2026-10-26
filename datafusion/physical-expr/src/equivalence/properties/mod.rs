@@ -31,7 +31,6 @@ use crate::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Constraint, Constraints, HashMap, HashSet, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
@@ -1218,26 +1217,13 @@ impl EquivalenceProperties {
         &self,
         mapping: &ProjectionMapping,
     ) -> Vec<Vec<Arc<dyn PhysicalExpr>>> {
-        let mut groupings = self
-            .geq_cache
+        self.geq_cache
             .iter()
             .filter_map(|grouping| {
                 self.project_expressions(grouping.iter(), mapping)
                     .collect::<Option<Vec<_>>>()
             })
-            .collect::<Vec<_>>();
-
-        // A projection expression that safely preserves a one-expression
-        // grouping establishes the same property for its output column.
-        for (source, targets) in mapping.iter() {
-            if self.get_expr_properties(Arc::clone(source)).sort_properties
-                == SortProperties::Grouped
-            {
-                groupings
-                    .extend(targets.iter().map(|(target, _)| vec![Arc::clone(target)]));
-            }
-        }
-        groupings
+            .collect()
     }
 
     /// Projects constraints according to the given projection mapping.
@@ -1397,7 +1383,7 @@ impl EquivalenceProperties {
                             let expr = Arc::clone(&exprs[idx]);
                             Some((PhysicalSortExpr::new_default(expr), idx))
                         }
-                        SortProperties::Grouped | SortProperties::Unordered => None,
+                        SortProperties::Unordered => None,
                     }
                 })
                 .collect::<Vec<_>>();
