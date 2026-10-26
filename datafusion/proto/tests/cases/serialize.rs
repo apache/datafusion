@@ -198,6 +198,52 @@ fn roundtrip_qualified_alias() {
 }
 
 #[test]
+fn roundtrip_alias_origin() {
+    use datafusion_expr::AliasOrigin;
+    use datafusion_expr::expr::Alias;
+
+    for origin in [
+        AliasOrigin::User,
+        AliasOrigin::CommonSubexpr,
+        AliasOrigin::LeafExtraction,
+    ] {
+        // The name deliberately provides no hint about the origin.
+        let expr =
+            Expr::Alias(Alias::new(col("c1"), Some("t"), "alias").with_origin(origin));
+        assert_eq!(expr, roundtrip_expr(&expr));
+
+        #[cfg(feature = "json")]
+        {
+            let codec = DefaultLogicalExtensionCodec {};
+            let proto = serialize_expr(&expr, &codec).unwrap();
+            let json = serde_json::to_string(&proto).unwrap();
+            let restored = serde_json::from_str(&json).unwrap();
+            let ctx = SessionContext::new();
+            assert_eq!(
+                expr,
+                parse_expr(&restored, &ctx.task_ctx(), &codec).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn alias_without_origin_is_user_alias() {
+    // User aliases omit the new field on serialization, matching older plans.
+    for name in ["alias", "__datafusion_extracted_1", "__common_expr_1"] {
+        let expr = col("c1").alias(name);
+        let proto = serialize_expr(&expr, &DefaultLogicalExtensionCodec {}).unwrap();
+        let Some(datafusion_proto::protobuf::logical_expr_node::ExprType::Alias(alias)) =
+            &proto.expr_type
+        else {
+            panic!("expected alias");
+        };
+        assert_eq!(alias.origin, None);
+        assert_eq!(expr, roundtrip_expr(&expr));
+    }
+}
+
+#[test]
 fn roundtrip_placeholder_with_metadata() {
     let expr = Expr::Placeholder(Placeholder::new_with_field(
         "placeholder_id".to_string(),

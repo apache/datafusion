@@ -712,13 +712,32 @@ impl Unnest {
     }
 }
 
+/// The origin of an alias, independent of its displayed name.
+///
+/// This marker controls optimizer rewrites; it does not make alias names unique.
+/// SQL cannot represent the marker, so aliases parsed from SQL have origin
+/// [`Self::User`], including SQL emitted by the unparser.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AliasOrigin {
+    /// An alias supplied by a user or created to preserve an expression's name.
+    #[default]
+    User,
+    /// An intermediate expression created by common subexpression elimination.
+    CommonSubexpr,
+    /// An expression extracted for pushdown towards leaf nodes.
+    LeafExtraction,
+}
+
 /// Alias expression
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
     pub name: String,
-    pub metadata: Option<FieldMetadata>,
+    /// Optional field metadata, boxed to keep [`Expr`] compact.
+    pub metadata: Option<Box<FieldMetadata>>,
+    /// Identifies optimizer-generated aliases without interpreting their names.
+    pub origin: AliasOrigin,
 }
 
 impl Hash for Alias {
@@ -726,6 +745,7 @@ impl Hash for Alias {
         self.expr.hash(state);
         self.relation.hash(state);
         self.name.hash(state);
+        self.origin.hash(state);
     }
 }
 
@@ -741,6 +761,7 @@ impl PartialOrd for Alias {
         };
         self.name
             .partial_cmp(&other.name)
+            .map(|cmp| cmp.then_with(|| self.origin.cmp(&other.origin)))
             // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
             .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
@@ -758,11 +779,18 @@ impl Alias {
             relation: relation.map(|r| r.into()),
             name: name.into(),
             metadata: None,
+            origin: AliasOrigin::User,
         }
     }
 
     pub fn with_metadata(mut self, metadata: Option<FieldMetadata>) -> Self {
-        self.metadata = metadata;
+        self.metadata = metadata.map(Box::new);
+        self
+    }
+
+    /// Set the origin of this alias.
+    pub fn with_origin(mut self, origin: AliasOrigin) -> Self {
+        self.origin = origin;
         self
     }
 
@@ -779,12 +807,14 @@ impl Alias {
             relation,
             name,
             metadata,
+            origin,
         } = self;
         Ok(Expr::Alias(Alias {
             expr: Box::new(f(*expr)?),
             relation,
             name,
             metadata,
+            origin,
         }))
     }
 }
@@ -2474,17 +2504,20 @@ impl NormalizeEq for Expr {
                     expr: self_expr,
                     relation: self_relation,
                     name: self_name,
+                    origin: self_origin,
                     ..
                 }),
                 Expr::Alias(Alias {
                     expr: other_expr,
                     relation: other_relation,
                     name: other_name,
+                    origin: other_origin,
                     ..
                 }),
             ) => {
                 self_name == other_name
                     && self_relation == other_relation
+                    && self_origin == other_origin
                     && self_expr.normalize_eq(other_expr)
             }
             (
@@ -2840,10 +2873,12 @@ impl HashNode for Expr {
                 expr: _expr,
                 relation,
                 name,
+                origin,
                 ..
             }) => {
                 relation.hash(state);
                 name.hash(state);
+                origin.hash(state);
             }
             Expr::Column(column) => {
                 column.hash(state);

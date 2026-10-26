@@ -748,6 +748,62 @@ async fn optimized_duckdb_unparse_top_level_sort_over_agg_uses_select_alias() ->
 }
 
 #[tokio::test]
+async fn optimized_extraction_alias_roundtrip() -> Result<()> {
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion_expr::AliasOrigin;
+
+    let ctx = SessionContext::new();
+    ctx.sql(
+        "CREATE TABLE extraction_input AS SELECT * FROM (VALUES
+        (1, {value: 100, label: 'alpha'}),
+        (2, {value: 200, label: 'beta'})
+        ) AS t(id, s)",
+    )
+    .await?
+    .collect()
+    .await?;
+    let plan = ctx
+        .sql(
+            "SELECT s['label'] AS __datafusion_extracted_1
+        FROM extraction_input WHERE s['value'] > 150",
+        )
+        .await?
+        .into_optimized_plan()?;
+
+    let mut has_extraction = false;
+    plan.apply_with_subqueries(|node| {
+        node.apply_expressions(|expr| {
+            expr.apply(|expr| {
+                if matches!(expr, Expr::Alias(alias) if alias.origin == AliasOrigin::LeafExtraction) {
+                    has_extraction = true;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+        })
+    })?;
+    assert!(
+        has_extraction,
+        "test must exercise an optimizer-generated alias"
+    );
+
+    // SQL has no alias-origin information. Replanning must treat the printed
+    // aliases as user aliases and still optimize and execute them correctly.
+    let sql = plan_to_sql(&plan)?.to_string();
+    let batches = ctx.sql(&sql).await?.collect().await?;
+    datafusion::assert_batches_eq!(
+        [
+            "+--------------------------+",
+            "| __datafusion_extracted_1 |",
+            "+--------------------------+",
+            "| beta                     |",
+            "+--------------------------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn optimized_filter_with_subquery_alias() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.sql("create table t (a int)").await?.collect().await?;

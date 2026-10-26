@@ -143,7 +143,7 @@ pub fn create_physical_expr(
             if let Expr::Literal(v, prior_metadata) = expr.as_ref() {
                 let new_metadata = FieldMetadata::merge_options(
                     prior_metadata.as_ref(),
-                    metadata.as_ref(),
+                    metadata.as_deref(),
                 );
                 Ok(Arc::new(Literal::new_with_metadata(
                     v.clone(),

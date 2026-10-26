@@ -158,12 +158,14 @@ impl TreeNode for Expr {
                 relation,
                 name,
                 metadata,
+                origin,
             }) => expr.map_elements(f)?.update_data(|expr| {
                 Expr::Alias(Alias {
                     expr,
                     relation,
                     name,
                     metadata,
+                    origin,
                 })
             }),
             Expr::InSubquery(InSubquery {

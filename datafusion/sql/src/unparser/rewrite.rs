@@ -481,6 +481,7 @@ pub(super) fn inject_column_aliases(
                 relation,
                 name: col_alias.value,
                 metadata: None,
+                origin: Default::default(),
             })
         })
         .collect::<Vec<_>>();

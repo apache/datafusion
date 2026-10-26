@@ -31,7 +31,7 @@ use datafusion_common::cse::{CSE, CSEController, FoundCommonNodes};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, qualified_name};
 use datafusion_expr::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, HigherOrderFunction,
+    AggregateFunction, AggregateFunctionParams, Alias, AliasOrigin, HigherOrderFunction,
     ScalarFunction, WindowFunction, WindowFunctionParams,
 };
 use datafusion_expr::logical_plan::{
@@ -333,7 +333,12 @@ impl CommonSubexprEliminate {
 
                         let mut agg_exprs = common_exprs
                             .into_iter()
-                            .map(|(expr, expr_alias)| expr.alias(expr_alias))
+                            .map(|(expr, expr_alias)| {
+                                Expr::Alias(
+                                    Alias::new(expr, None::<&str>, expr_alias)
+                                        .with_origin(AliasOrigin::CommonSubexpr),
+                                )
+                            })
                             .collect::<Vec<_>>();
 
                         let mut proj_exprs = Vec::with_capacity(
@@ -355,12 +360,11 @@ impl CommonSubexprEliminate {
                                 } else {
                                     expr_rewritten
                                 };
-                                if let Expr::Alias(Alias { expr, name, .. }) =
-                                    expr_rewritten
-                                {
-                                    agg_exprs.push(expr.alias(&name));
-                                    proj_exprs
-                                        .push(Expr::Column(Column::from_name(name)));
+                                if let Expr::Alias(alias) = expr_rewritten {
+                                    proj_exprs.push(Expr::Column(Column::from_name(
+                                        alias.name.clone(),
+                                    )));
+                                    agg_exprs.push(Expr::Alias(alias));
                                 } else {
                                     let expr_alias =
                                         config.alias_generator().next(CSE_PREFIX);
@@ -369,7 +373,14 @@ impl CommonSubexprEliminate {
                                     let out_name =
                                         qualified_name(qualifier.as_ref(), &field_name);
 
-                                    agg_exprs.push(expr_rewritten.alias(&expr_alias));
+                                    agg_exprs.push(Expr::Alias(
+                                        Alias::new(
+                                            expr_rewritten,
+                                            None::<&str>,
+                                            &expr_alias,
+                                        )
+                                        .with_origin(AliasOrigin::CommonSubexpr),
+                                    ));
                                     proj_exprs.push(
                                         Expr::Column(Column::from_name(expr_alias))
                                             .alias(out_name),
@@ -853,7 +864,10 @@ fn build_common_expr_project_plan(
         .into_iter()
         .map(|(expr, expr_alias)| {
             fields_set.insert(expr_alias.clone());
-            Ok(expr.alias(expr_alias))
+            Ok(Expr::Alias(
+                Alias::new(expr, None::<&str>, expr_alias)
+                    .with_origin(AliasOrigin::CommonSubexpr),
+            ))
         })
         .collect::<Result<Vec<_>>>()?;
 

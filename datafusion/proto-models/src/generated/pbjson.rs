@@ -866,6 +866,9 @@ impl serde::Serialize for AliasNode {
         if !self.metadata.is_empty() {
             len += 1;
         }
+        if self.origin.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AliasNode", len)?;
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
@@ -878,6 +881,11 @@ impl serde::Serialize for AliasNode {
         }
         if !self.metadata.is_empty() {
             struct_ser.serialize_field("metadata", &self.metadata)?;
+        }
+        if let Some(v) = self.origin.as_ref() {
+            let v = AliasOrigin::try_from(*v)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
+            struct_ser.serialize_field("origin", &v)?;
         }
         struct_ser.end()
     }
@@ -893,6 +901,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
             "alias",
             "relation",
             "metadata",
+            "origin",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -901,6 +910,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
             Alias,
             Relation,
             Metadata,
+            Origin,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -926,6 +936,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                             "alias" => Ok(GeneratedField::Alias),
                             "relation" => Ok(GeneratedField::Relation),
                             "metadata" => Ok(GeneratedField::Metadata),
+                            "origin" => Ok(GeneratedField::Origin),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -949,6 +960,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                 let mut alias__ = None;
                 let mut relation__ = None;
                 let mut metadata__ = None;
+                let mut origin__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -977,6 +989,12 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                                 map_.next_value::<std::collections::HashMap<_, _>>()?
                             );
                         }
+                        GeneratedField::Origin => {
+                            if origin__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("origin"));
+                            }
+                            origin__ = map_.next_value::<::std::option::Option<AliasOrigin>>()?.map(|x| x as i32);
+                        }
                     }
                 }
                 Ok(AliasNode {
@@ -984,10 +1002,85 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                     alias: alias__.unwrap_or_default(),
                     relation: relation__.unwrap_or_default(),
                     metadata: metadata__.unwrap_or_default(),
+                    origin: origin__,
                 })
             }
         }
         deserializer.deserialize_struct("datafusion.AliasNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for AliasOrigin {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::User => "USER",
+            Self::CommonSubexpr => "COMMON_SUBEXPR",
+            Self::LeafExtraction => "LEAF_EXTRACTION",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for AliasOrigin {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "USER",
+            "COMMON_SUBEXPR",
+            "LEAF_EXTRACTION",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = AliasOrigin;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "USER" => Ok(AliasOrigin::User),
+                    "COMMON_SUBEXPR" => Ok(AliasOrigin::CommonSubexpr),
+                    "LEAF_EXTRACTION" => Ok(AliasOrigin::LeafExtraction),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for AnalyzeExecNode {

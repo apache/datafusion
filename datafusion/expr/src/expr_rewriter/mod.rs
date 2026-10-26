@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, Unnest};
+use crate::expr::{Alias, AliasOrigin, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan};
 
@@ -295,8 +295,8 @@ fn coerce_exprs_for_schema(
             let new_type = dst_schema.field(idx).data_type();
             if new_type != &expr.get_type(src_schema)? {
                 match expr {
-                    Expr::Alias(Alias { expr, name, .. }) => {
-                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                    Expr::Alias(alias) => {
+                        alias.try_map_expr(|expr| expr.cast_to(new_type, src_schema))
                     }
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
@@ -349,6 +349,7 @@ pub enum SavedName {
     Saved {
         relation: Option<TableReference>,
         name: String,
+        origin: AliasOrigin,
     },
     /// Name is not preserved
     None,
@@ -384,10 +385,15 @@ impl NamePreserver {
                 Expr::Alias(alias) => SavedName::Saved {
                     relation: alias.relation.clone(),
                     name: alias.name.clone(),
+                    origin: alias.origin,
                 },
                 _ => {
                     let (relation, name) = expr.qualified_name();
-                    SavedName::Saved { relation, name }
+                    SavedName::Saved {
+                        relation,
+                        name,
+                        origin: AliasOrigin::User,
+                    }
                 }
             }
         } else {
@@ -400,12 +406,22 @@ impl SavedName {
     /// Ensures the qualified name of the rewritten expression is preserved
     pub fn restore(self, expr: Expr) -> Expr {
         match self {
-            SavedName::Saved { relation, name } => {
+            SavedName::Saved {
+                relation,
+                name,
+                origin,
+            } => {
                 let (new_relation, new_name) = expr.qualified_name();
                 if new_relation != relation || new_name != name {
-                    expr.alias_qualified(relation, name)
+                    Expr::Alias(Alias::new(expr, relation, name).with_origin(origin))
                 } else {
-                    expr
+                    match expr {
+                        Expr::Alias(alias) => Expr::Alias(alias.with_origin(origin)),
+                        expr if origin != AliasOrigin::User => Expr::Alias(
+                            Alias::new(expr, relation, name).with_origin(origin),
+                        ),
+                        expr => expr,
+                    }
                 }
             }
             SavedName::None => expr,
@@ -650,6 +666,45 @@ mod test {
                 "Mutated state = Utf8(\"CO\")"
             ]
         )
+    }
+
+    #[test]
+    fn test_rewrite_preserves_alias_origin() -> Result<()> {
+        let preserver = NamePreserver::new_for_projection();
+        for origin in [AliasOrigin::CommonSubexpr, AliasOrigin::LeafExtraction] {
+            let alias =
+                Alias::new(col("a") + lit(1), Some("t"), "extracted").with_origin(origin);
+            let expr = Expr::Alias(alias.clone());
+
+            // Tree traversal and direct child replacement must both preserve origin.
+            let rewritten = expr
+                .clone()
+                .transform_up(|expr| {
+                    Ok(if expr == col("a") {
+                        Transformed::yes(col("b"))
+                    } else {
+                        Transformed::no(expr)
+                    })
+                })?
+                .data;
+            let expected = alias.try_map_expr(|_| Ok(col("b") + lit(1)))?;
+            assert_eq!(rewritten, expected);
+
+            // Restore the marker even when a rewrite has kept the same column name
+            // but removed the Alias wrapper.
+            let saved = preserver.save(&expr);
+            let restored =
+                saved.restore(Expr::Column(Column::new(Some("t"), "extracted")));
+            assert!(matches!(restored, Expr::Alias(alias) if alias.origin == origin));
+            let restored = preserver.save(&expr).restore(lit(2));
+            assert_eq!(
+                restored,
+                Expr::Alias(
+                    Alias::new(lit(2), Some("t"), "extracted").with_origin(origin)
+                )
+            );
+        }
+        Ok(())
     }
 
     #[test]

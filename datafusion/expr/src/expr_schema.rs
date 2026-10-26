@@ -552,7 +552,7 @@ impl ExprSchemable for Expr {
             }) => {
                 let mut combined_metadata = expr.metadata(schema)?;
                 if let Some(metadata) = metadata {
-                    combined_metadata.extend(metadata.clone());
+                    combined_metadata.extend(metadata.as_ref().clone());
                 }
 
                 Ok(expr

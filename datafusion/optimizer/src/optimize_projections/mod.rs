@@ -636,6 +636,7 @@ fn merge_consecutive_projections_one_level(
                 relation,
                 name,
                 metadata,
+                origin,
             }) => rewrite_expr(*expr, &prev_projection).map(|result| {
                 result.update_data(|expr| {
                     // After substitution, the inner expression may now have the
@@ -652,6 +653,7 @@ fn merge_consecutive_projections_one_level(
                             relation,
                             name,
                             metadata,
+                            origin,
                         })
                     }
                 })

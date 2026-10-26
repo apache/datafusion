@@ -657,6 +657,14 @@ message AliasNode {
   string alias = 2;
   repeated TableReference relation = 3;
   map<string, string> metadata = 4;
+  // Missing origins in older plans are treated as user aliases.
+  optional AliasOrigin origin = 5;
+}
+
+enum AliasOrigin {
+  USER = 0;
+  COMMON_SUBEXPR = 1;
+  LEAF_EXTRACTION = 2;
 }
 
 message BinaryExprNode {

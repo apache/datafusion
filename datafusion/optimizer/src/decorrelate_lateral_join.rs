@@ -264,6 +264,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
                     relation: qualifier.cloned(),
                     name: name.to_string(),
                     metadata: None,
+                    origin: Default::default(),
                 }));
                 continue;
             }

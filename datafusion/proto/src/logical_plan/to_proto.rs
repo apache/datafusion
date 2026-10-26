@@ -65,6 +65,7 @@ pub fn serialize_expr(
             relation,
             name,
             metadata,
+            origin,
         }) => {
             let alias = Box::new(protobuf::AliasNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
@@ -77,6 +78,15 @@ pub fn serialize_expr(
                     .as_ref()
                     .map(|m| m.to_hashmap())
                     .unwrap_or_default(),
+                origin: match origin {
+                    datafusion_expr::AliasOrigin::User => None,
+                    datafusion_expr::AliasOrigin::CommonSubexpr => {
+                        Some(protobuf::AliasOrigin::CommonSubexpr as i32)
+                    }
+                    datafusion_expr::AliasOrigin::LeafExtraction => {
+                        Some(protobuf::AliasOrigin::LeafExtraction as i32)
+                    }
+                },
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Alias(alias)),

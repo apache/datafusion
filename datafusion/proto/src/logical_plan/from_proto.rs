@@ -277,15 +277,31 @@ pub fn parse_expr(
 
             builder.build().map_err(Error::DataFusionError)
         }
-        ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
-            parse_required_expr(alias.expr.as_deref(), ctx, "expr", codec)?,
-            alias
-                .relation
-                .first()
-                .map(|r| TableReference::try_from(r.clone()))
-                .transpose()?,
-            alias.alias.clone(),
-        ))),
+        ExprType::Alias(alias) => Ok(Expr::Alias(
+            Alias::new(
+                parse_required_expr(alias.expr.as_deref(), ctx, "expr", codec)?,
+                alias
+                    .relation
+                    .first()
+                    .map(|r| TableReference::try_from(r.clone()))
+                    .transpose()?,
+                alias.alias.clone(),
+            )
+            .with_origin(match alias.origin {
+                None => datafusion_expr::AliasOrigin::User,
+                Some(origin) => match protobuf::AliasOrigin::try_from(origin)
+                    .map_err(|_| Error::unknown("AliasOrigin", origin))?
+                {
+                    protobuf::AliasOrigin::User => datafusion_expr::AliasOrigin::User,
+                    protobuf::AliasOrigin::CommonSubexpr => {
+                        datafusion_expr::AliasOrigin::CommonSubexpr
+                    }
+                    protobuf::AliasOrigin::LeafExtraction => {
+                        datafusion_expr::AliasOrigin::LeafExtraction
+                    }
+                },
+            }),
+        )),
         ExprType::IsNullExpr(is_null) => Ok(Expr::IsNull(Box::new(parse_required_expr(
             is_null.expr.as_deref(),
             ctx,

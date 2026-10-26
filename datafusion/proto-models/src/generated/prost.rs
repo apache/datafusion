@@ -1043,6 +1043,9 @@ pub struct AliasNode {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
+    /// Missing origins in older plans are treated as user aliases.
+    #[prost(enumeration = "AliasOrigin", optional, tag = "5")]
+    pub origin: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BinaryExprNode {
@@ -2907,6 +2910,35 @@ impl FileFormatKind {
             "FILE_FORMAT_KIND_PARQUET" => Some(Self::Parquet),
             "FILE_FORMAT_KIND_ARROW" => Some(Self::Arrow),
             "FILE_FORMAT_KIND_AVRO" => Some(Self::Avro),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AliasOrigin {
+    User = 0,
+    CommonSubexpr = 1,
+    LeafExtraction = 2,
+}
+impl AliasOrigin {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::User => "USER",
+            Self::CommonSubexpr => "COMMON_SUBEXPR",
+            Self::LeafExtraction => "LEAF_EXTRACTION",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "USER" => Some(Self::User),
+            "COMMON_SUBEXPR" => Some(Self::CommonSubexpr),
+            "LEAF_EXTRACTION" => Some(Self::LeafExtraction),
             _ => None,
         }
     }

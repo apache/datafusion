@@ -608,7 +608,7 @@ fn lower_aggregate_display(
     while let Expr::Alias(alias) = expr {
         if alias_name.is_none() {
             alias_name = Some(alias.name);
-            alias_metadata = alias.metadata;
+            alias_metadata = alias.metadata.map(|metadata| *metadata);
         }
         expr = *alias.expr;
     }

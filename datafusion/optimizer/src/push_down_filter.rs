@@ -20,7 +20,7 @@
 //! # Precedence: pure extraction projections win
 //!
 //! [`PushDownLeafProjections`] moves a *pure extraction projection* towards the
-//! leaves. Such a projection has only `__datafusion_extracted_N` aliases and
+//! leaves. Such a projection has only aliases marked as `LeafExtraction` and
 //! pass-through columns. [`PushDownFilter`] moves filters towards the leaves
 //! too. For an adjacent filter and pure extraction projection the two rules
 //! want the opposite order, so they undo each other on every optimizer pass.
@@ -4818,7 +4818,14 @@ mod tests {
         // plus pass-through columns.
         let proj = LogicalPlanBuilder::from(table_scan)
             .project(vec![
-                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                Expr::Alias(
+                    datafusion_expr::expr::Alias::new(
+                        leaf_udf_expr(col("a")),
+                        None::<&str>,
+                        "__datafusion_extracted_1",
+                    )
+                    .with_origin(datafusion_expr::AliasOrigin::LeafExtraction),
+                ),
                 col("b"),
                 col("c"),
             ])?
@@ -4922,7 +4929,14 @@ mod tests {
 
         let proj = LogicalPlanBuilder::from(table_scan)
             .project(vec![
-                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                Expr::Alias(
+                    datafusion_expr::expr::Alias::new(
+                        leaf_udf_expr(col("a")),
+                        None::<&str>,
+                        "__datafusion_extracted_1",
+                    )
+                    .with_origin(datafusion_expr::AliasOrigin::LeafExtraction),
+                ),
                 (col("b") + lit(1i64)).alias("b_plus"),
                 col("c"),
             ])?

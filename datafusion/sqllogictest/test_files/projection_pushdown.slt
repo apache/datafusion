@@ -1981,13 +1981,14 @@ FROM t
 WHERE COALESCE(get_field(s, 'f1'), get_field(s, 'f2')) = 1;
 ----
 logical_plan
-01)Projection: __datafusion_extracted_2
+01)Projection: __datafusion_extracted_5 AS __datafusion_extracted_2
 02)--Filter: CASE WHEN __datafusion_extracted_3 IS NOT NULL THEN __datafusion_extracted_3 ELSE __datafusion_extracted_4 END = Int64(1)
-03)----Projection: get_field(t.s, Utf8("f1")) AS __datafusion_extracted_3, get_field(t.s, Utf8("f2")) AS __datafusion_extracted_4, get_field(t.s, Utf8("f1")) AS __datafusion_extracted_2
+03)----Projection: get_field(t.s, Utf8("f1")) AS __datafusion_extracted_3, get_field(t.s, Utf8("f2")) AS __datafusion_extracted_4, get_field(t.s, Utf8("f1")) AS __datafusion_extracted_5
 04)------TableScan: t projection=[s], partial_filters=[CASE WHEN get_field(t.s, Utf8("f1")) IS NOT NULL THEN get_field(t.s, Utf8("f1")) ELSE get_field(t.s, Utf8("f2")) END = Int64(1)]
 physical_plan
-01)FilterExec: CASE WHEN __datafusion_extracted_3@0 IS NOT NULL THEN __datafusion_extracted_3@0 ELSE __datafusion_extracted_4@1 END = 1, projection=[__datafusion_extracted_2@2]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/test.parquet]]}, projection=[get_field(s@0, f1) as __datafusion_extracted_3, get_field(s@0, f2) as __datafusion_extracted_4, get_field(s@0, f1) as __datafusion_extracted_2], file_type=parquet, predicate=CASE WHEN get_field(s@0, f1) IS NOT NULL THEN get_field(s@0, f1) ELSE get_field(s@0, f2) END = 1
+01)ProjectionExec: expr=[__datafusion_extracted_5@0 as __datafusion_extracted_2]
+02)--FilterExec: CASE WHEN __datafusion_extracted_3@0 IS NOT NULL THEN __datafusion_extracted_3@0 ELSE __datafusion_extracted_4@1 END = 1, projection=[__datafusion_extracted_5@2]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/test.parquet]]}, projection=[get_field(s@0, f1) as __datafusion_extracted_3, get_field(s@0, f2) as __datafusion_extracted_4, get_field(s@0, f1) as __datafusion_extracted_5], file_type=parquet, predicate=CASE WHEN get_field(s@0, f1) IS NOT NULL THEN get_field(s@0, f1) ELSE get_field(s@0, f2) END = 1
 
 query I
 SELECT
@@ -2268,9 +2269,9 @@ SET datafusion.execution.target_partitions = 4;
 # `extract_leaf_expressions.rs`.
 #
 # `ExtractLeafExpressions` names the columns it extracts
-# `__datafusion_extracted_N`, handing out N from a shared `AliasGenerator`. That
-# prefix is reserved for the optimizer, but nothing stops a user from writing it,
-# so before extracting the rule scans the plan for existing
+# `__datafusion_extracted_N`, handing out N from a shared `AliasGenerator`. An
+# origin marker distinguishes extracted aliases from user aliases, but column
+# resolution still uses names. Before extracting, the rule scans for existing
 # `__datafusion_extracted_N` aliases and bumps the generator past the highest one.
 #
 # The bug: that scan used `apply`, which walks plan nodes but does *not* descend
@@ -2327,12 +2328,12 @@ logical_plan
 01)Projection: outer_t.id, outer_t.id IN (<subquery>) AS has_matching_label
 02)--Subquery:
 03)----Projection: inner_t.id
-04)------Projection: inner_t.id, __datafusion_extracted_1
+04)------Projection: inner_t.id, __datafusion_extracted_3 AS __datafusion_extracted_1
 05)--------SubqueryAlias: inner_t
-06)----------Projection: simple_struct.id, simple_struct.s, __datafusion_extracted_1
+06)----------Projection: simple_struct.id, simple_struct.s, __datafusion_extracted_3
 07)------------Limit: skip=0, fetch=1
-08)--------------Filter: simple_struct.id = outer_ref(outer_t.id) AND __datafusion_extracted_2 > Int64(120) AND __datafusion_extracted_1 != Utf8("delta")
-09)----------------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_2, simple_struct.id, simple_struct.s, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_1
+08)--------------Filter: simple_struct.id = outer_ref(outer_t.id) AND __datafusion_extracted_2 > Int64(120) AND __datafusion_extracted_3 != Utf8("delta")
+09)----------------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_2, simple_struct.id, simple_struct.s, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_3
 10)------------------TableScan: simple_struct, partial_filters=[simple_struct.id = outer_ref(outer_t.id), get_field(simple_struct.s, Utf8("value")) > Int64(120)]
 11)--SubqueryAlias: outer_t
 12)----TableScan: simple_struct projection=[id]

@@ -182,6 +182,42 @@ async fn roundtrip_logical_plan() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_optimized_extraction_aliases() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new(
+            "s",
+            DataType::Struct(
+                vec![
+                    Field::new("value", DataType::Int32, false),
+                    Field::new("label", DataType::Utf8, false),
+                ]
+                .into(),
+            ),
+            false,
+        ),
+    ]);
+    ctx.register_table("t", Arc::new(EmptyTable::new(Arc::new(schema))))?;
+    let plan = ctx
+        .sql(
+            "SELECT s['label'] AS __datafusion_extracted_1 FROM t WHERE s['value'] > 150",
+        )
+        .await?
+        .into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{restored:?}"));
+
+    // A new context has a fresh alias generator. Re-optimization must neither
+    // lose the markers nor generate a duplicate column name.
+    let optimized = SessionContext::new().state().optimize(&restored)?;
+    assert_eq!(plan.schema(), optimized.schema());
+    assert_eq!(format!("{plan}"), format!("{optimized}"));
+    Ok(())
+}
+
 #[derive(Clone, PartialEq, Eq, ::prost::Message)]
 pub struct TestTableProto {
     /// URL of the table root
