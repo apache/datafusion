@@ -299,12 +299,11 @@ pub fn propagate_arithmetic(
 /// Compare two scalars the way runtime `Eq` does, instead of with
 /// `ScalarValue`'s bit-wise equality. `ScalarValue::PartialEq` is bit-wise for
 /// floats (`to_bits`), under which `-0.0 != +0.0`; runtime `Eq` normalizes
-/// them via `normalize_float_zero_scalar` (see
+/// them via `normalize_float_scalar` (see
 /// `physical-expr-common/src/datum.rs`).
 fn singleton_values_equal(left: &ScalarValue, right: &ScalarValue) -> bool {
-    use datafusion_common::utils::normalize_float_zero_scalar;
-    normalize_float_zero_scalar(left.clone())
-        == normalize_float_zero_scalar(right.clone())
+    use datafusion_common::float_semantics::normalize_float_scalar;
+    normalize_float_scalar(left.clone()) == normalize_float_scalar(right.clone())
 }
 
 /// This function refines intervals `left_child` and `right_child` by applying
@@ -533,7 +532,7 @@ impl ExprIntervalGraph {
     /// Returns the set of node indices reachable from the root node via a
     /// simple depth-first search.
     fn connected_nodes(&self) -> HashSet<NodeIndex> {
-        let mut nodes = HashSet::new();
+        let mut nodes = HashSet::with_capacity(self.graph.node_count());
         let mut dfs = Dfs::new(&self.graph, self.root);
         while let Some(node) = dfs.next(&self.graph) {
             nodes.insert(node);
@@ -661,10 +660,12 @@ impl ExprIntervalGraph {
         }
 
         let mut bfs = Bfs::new(&self.graph, self.root);
+        let mut children = Vec::new();
 
         while let Some(node) = bfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
-            let mut children = neighbors.collect::<Vec<_>>();
+            children.clear();
+            children.extend(neighbors);
             // If the current expression is a leaf, its range is now final.
             // So, just continue with the propagation procedure:
             if children.is_empty() {
@@ -691,8 +692,8 @@ impl ExprIntervalGraph {
                 .expr
                 .propagate_constraints(node_interval, &children_intervals)?;
             if let Some(propagated_intervals) = propagated_intervals {
-                for (child, interval) in children.into_iter().zip(propagated_intervals) {
-                    self.graph[child].interval = interval;
+                for (child, interval) in children.iter().zip(propagated_intervals) {
+                    self.graph[*child].interval = interval;
                 }
             } else {
                 // The constraint is infeasible, report:

@@ -142,7 +142,7 @@ fn from_function(
     output_nullability: bool,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    let mut arguments: Vec<FunctionArgument> = vec![];
+    let mut arguments: Vec<FunctionArgument> = Vec::with_capacity(args.len());
     for arg in args {
         arguments.push(FunctionArgument {
             arg_type: Some(ArgType::Value(producer.handle_expr(arg, schema)?)),

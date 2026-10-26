@@ -130,7 +130,9 @@ use crate::metrics::{
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
-use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch, RecordBatchOptions,
+};
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch, not};
 use arrow::datatypes::SchemaRef;
 use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
@@ -1306,7 +1308,11 @@ fn evaluate_filter_for_inner_row(
         }
     }
 
-    let filter_batch = RecordBatch::try_new(Arc::clone(filter.schema()), columns)?;
+    let filter_batch = RecordBatch::try_new_with_options(
+        Arc::clone(filter.schema()),
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(num_outer_rows)),
+    )?;
     let result = filter
         .expression()
         .evaluate(&filter_batch)?

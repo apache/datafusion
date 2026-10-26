@@ -668,7 +668,7 @@ explain select unnest(unnest(unnest(column3)['c1'])), column3 from recursive_unn
 logical_plan
 01)Projection: __unnest_placeholder(UNNEST(recursive_unnest_table.column3)[c1],depth=2) AS UNNEST(UNNEST(UNNEST(recursive_unnest_table.column3)[c1])), recursive_unnest_table.column3
 02)--Unnest: lists[__unnest_placeholder(UNNEST(recursive_unnest_table.column3)[c1])|depth=2] structs[]
-03)----Projection: get_field(__unnest_placeholder(recursive_unnest_table.column3,depth=1), Utf8("c1")) AS __unnest_placeholder(UNNEST(recursive_unnest_table.column3)[c1]), recursive_unnest_table.column3
+03)----Projection: get_field(__unnest_placeholder(recursive_unnest_table.column3,depth=1) AS UNNEST(recursive_unnest_table.column3), Utf8("c1")) AS __unnest_placeholder(UNNEST(recursive_unnest_table.column3)[c1]), recursive_unnest_table.column3
 04)------Unnest: lists[__unnest_placeholder(recursive_unnest_table.column3)|depth=1] structs[]
 05)--------Projection: recursive_unnest_table.column3 AS __unnest_placeholder(recursive_unnest_table.column3), recursive_unnest_table.column3
 06)----------TableScan: recursive_unnest_table projection=[column3]
@@ -988,9 +988,9 @@ logical_plan
 08)--------------TableScan: range() projection=[value]
 physical_plan
 01)ProjectionExec: expr=[array_agg(unnested.ar)@1 as array_agg(unnested.ar)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[generated_id@0 as generated_id], aggr=[array_agg(unnested.ar)], ordering_mode=Sorted
+02)--AggregateExec: mode=FinalPartitioned, gby=[generated_id@0 as generated_id], aggr=[array_agg(unnested.ar)], group_clustering_mode=Full
 03)----RepartitionExec: partitioning=Hash([generated_id@0], 4), input_partitions=4, preserve_order=true, sort_exprs=generated_id@0 ASC NULLS LAST
-04)------AggregateExec: mode=Partial, gby=[generated_id@0 as generated_id], aggr=[array_agg(unnested.ar)], ordering_mode=Sorted
+04)------AggregateExec: mode=Partial, gby=[generated_id@0 as generated_id], aggr=[array_agg(unnested.ar)], group_clustering_mode=Full
 05)--------ProjectionExec: expr=[generated_id@0 as generated_id, __unnest_placeholder(make_array(range().value),depth=1)@1 as ar]
 06)----------UnnestExec
 07)------------ProjectionExec: expr=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as generated_id, make_array(value@0) as __unnest_placeholder(make_array(range().value))]
