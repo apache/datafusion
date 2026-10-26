@@ -910,15 +910,12 @@ mod tests {
     use arrow::array::{
         Array, IntervalDayTimeArray, PrimitiveArray, TimestampNanosecondArray,
     };
-    use arrow::compute::SortOptions;
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion_common::{DataFusionError, ScalarValue};
-    use datafusion_expr::interval_arithmetic::Interval;
-    use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use chrono::TimeDelta;
     use datafusion_common::config::ConfigOptions;
@@ -1018,29 +1015,6 @@ mod tests {
             ordering(ExprProperties::new_unknown().with_order(ordered)),
             SortProperties::Unordered
         );
-    }
-
-    #[test]
-    fn date_bin_does_not_propagate_grouping() -> Result<(), DataFusionError> {
-        let udf = ScalarUDF::from(DateBinFunc::new());
-        let step = ExprProperties::new_unknown().with_order(SortProperties::Singleton);
-        let timestamp = ExprProperties::new_unknown().with_range(
-            Interval::make_unbounded(&DataType::Timestamp(TimeUnit::Nanosecond, None))?,
-        );
-        let grouped = timestamp.clone().with_order(SortProperties::Grouped);
-
-        assert_eq!(
-            udf.output_ordering(&[step.clone(), grouped])?,
-            SortProperties::Unordered
-        );
-
-        let ordered =
-            timestamp.with_order(SortProperties::Ordered(SortOptions::default()));
-        assert_eq!(
-            udf.output_ordering(&[step, ordered])?,
-            SortProperties::Ordered(SortOptions::default())
-        );
-        Ok(())
     }
 
     #[test]

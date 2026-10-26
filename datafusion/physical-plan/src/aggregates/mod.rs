@@ -1445,6 +1445,9 @@ impl AggregateExec {
             .equivalence_properties()
             .project(group_expr_mapping, schema);
 
+        // Aggregation can reorder groups, including during spill replay.
+        eq_properties.clear_groupings();
+
         // Only the clustered paths preserve existing ordering on group keys.
         // Project the input's actual sort expressions; clustering alone does
         // not establish an output ordering. Keep this consistent with
@@ -5325,6 +5328,40 @@ mod tests {
         let stream = single.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::SingleHash(_)));
 
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    fn aggregate_clears_explicit_grouping(
+        #[values(AggregateMode::Partial, AggregateMode::Single)] mode: AggregateMode,
+    ) -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("value", DataType::Int64, true),
+        ]));
+        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+            .try_with_grouping_information(vec![vec![col("a", &schema)?]])?;
+        let aggregate = AggregateExec::try_new(
+            mode,
+            PhysicalGroupBy::new_single(vec![
+                (col("b", &schema)?, "group_b".to_string()),
+                (col("a", &schema)?, "group_a".to_string()),
+            ]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(value)")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(input),
+            schema,
+        )?;
+
+        let properties = aggregate.properties().equivalence_properties();
+        assert!(properties.geq_class().is_empty());
+        assert!(!properties.grouping_satisfy([col("group_a", &aggregate.schema())?])?);
         Ok(())
     }
 

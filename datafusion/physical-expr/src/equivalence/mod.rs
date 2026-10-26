@@ -46,12 +46,11 @@ pub fn convert_to_orderings<T: Borrow<Arc<dyn PhysicalExpr>>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{BinaryExpr, Column, cast, col, lit};
+    use crate::expressions::{Column, cast, col};
     use crate::{LexRequirement, PhysicalSortExpr};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::Result;
-    use datafusion_expr::Operator;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
 
     /// Converts a string to a physical sort expression
@@ -377,32 +376,18 @@ mod tests {
     }
 
     #[test]
-    fn project_grouped_expression_requires_an_injective_mapping() -> Result<()> {
+    fn project_grouping_preserves_explicit_derived_expression() -> Result<()> {
         let schema = create_test_schema()?;
         let a = col("a", &schema)?;
+        let widened = cast(a, &schema, DataType::Int64)?;
         let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
-        properties.add_grouping([Arc::clone(&a)]);
+        properties.add_grouping([Arc::clone(&widened)]);
 
-        let widened = cast(Arc::clone(&a), &schema, DataType::Int64)?;
         let output_schema =
             Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)]));
         let mapping = ProjectionMapping::try_new([(widened, "x".to_string())], &schema)?;
         let projected = properties.project(&mapping, Arc::clone(&output_schema));
         assert!(projected.grouping_satisfy([col("x", &output_schema)?])?);
-
-        let greater_than_one = Arc::new(BinaryExpr::new(a, Operator::Gt, lit(1_i32)))
-            as Arc<dyn PhysicalExpr>;
-        let output_schema = Arc::new(Schema::new(vec![Field::new(
-            "is_greater",
-            DataType::Boolean,
-            true,
-        )]));
-        let mapping = ProjectionMapping::try_new(
-            [(greater_than_one, "is_greater".to_string())],
-            &schema,
-        )?;
-        let projected = properties.project(&mapping, Arc::clone(&output_schema));
-        assert!(projected.geq_class().is_empty());
         Ok(())
     }
 }

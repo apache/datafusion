@@ -8,7 +8,7 @@ use arrow_schema::DataType;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
     AggregateUDF, ColumnarValue, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility, WindowUDF,
@@ -160,11 +160,6 @@ impl ScalarUDFImpl for PlacementUDF {
         &self,
         inputs: &[ExprProperties],
     ) -> datafusion_common::Result<bool> {
-        // This test-only sentinel verifies that the new `Grouped` variant
-        // survives the cross-library `ExprProperties` conversion.
-        if matches!(inputs, [input] if input.sort_properties == SortProperties::Grouped) {
-            return Ok(true);
-        }
         Ok(inputs.iter().all(|input| input.preserves_lex_ordering))
     }
 }

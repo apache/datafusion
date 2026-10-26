@@ -766,7 +766,7 @@ impl EquivalenceProperties {
                 }),
                 // Singleton expressions satisfy any requirement.
                 SortProperties::Singleton => true,
-                SortProperties::Grouped | SortProperties::Unordered => false,
+                SortProperties::Unordered => false,
             };
             if !satisfy {
                 return Ok(false);
@@ -855,7 +855,7 @@ impl EquivalenceProperties {
                 ),
                 // Singleton expressions satisfy any ordering.
                 SortProperties::Singleton => true,
-                SortProperties::Grouped | SortProperties::Unordered => false,
+                SortProperties::Unordered => false,
             };
             if !satisfy {
                 // As soon as one sort expression is unsatisfied, return how
@@ -1298,26 +1298,13 @@ impl EquivalenceProperties {
         &self,
         mapping: &ProjectionMapping,
     ) -> Vec<Vec<Arc<dyn PhysicalExpr>>> {
-        let mut groupings = self
-            .geq_cache
+        self.geq_cache
             .iter()
             .filter_map(|grouping| {
                 self.project_expressions(grouping.iter(), mapping)
                     .collect::<Option<Vec<_>>>()
             })
-            .collect::<Vec<_>>();
-
-        // A projection expression that safely preserves a one-expression
-        // grouping establishes the same property for its output column.
-        for (source, targets) in mapping.iter() {
-            if self.get_expr_properties(Arc::clone(source)).sort_properties
-                == SortProperties::Grouped
-            {
-                groupings
-                    .extend(targets.iter().map(|(target, _)| vec![Arc::clone(target)]));
-            }
-        }
-        groupings
+            .collect()
     }
 
     /// Projects constraints according to the given projection mapping.
@@ -1478,7 +1465,7 @@ impl EquivalenceProperties {
                             let expr = Arc::clone(&exprs[idx]);
                             Some((PhysicalSortExpr::new_default(expr), idx))
                         }
-                        SortProperties::Grouped | SortProperties::Unordered => None,
+                        SortProperties::Unordered => None,
                     }
                 })
                 .collect::<Vec<_>>();
@@ -1734,11 +1721,6 @@ fn update_properties(
         node.data.sort_properties = SortProperties::Singleton;
     } else if let Some(options) = oeq_class.get_options(&normal_expr) {
         node.data.sort_properties = SortProperties::Ordered(options);
-    } else if eq_properties
-        .geq_cache
-        .contains(std::slice::from_ref(&normal_expr))
-    {
-        node.data.sort_properties = SortProperties::Grouped;
     }
     Ok(Transformed::yes(node))
 }
