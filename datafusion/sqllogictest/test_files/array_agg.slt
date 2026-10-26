@@ -473,6 +473,19 @@ select array_agg(DISTINCT column2 order by column2) from array_agg_order_list_ta
 [1, 2]
 [1, 2]
 
+# array_agg(DISTINCT .. ORDER BY ..) keeps its own order when another aggregate
+# needs the input sorted the opposite way
+query ??
+select array_agg(x order by x desc), array_agg(DISTINCT x order by x) from (values (2), (null), (1), (2)) t(x);
+----
+[NULL, 2, 2, 1] [1, 2, NULL]
+
+query T?? rowsort
+select column1, array_agg(column2 order by column2 desc), array_agg(DISTINCT column2 order by column2) from array_agg_order_list_table group by column1;
+----
+b [2, 1] [1, 2]
+w [2, 1, 1] [1, 2]
+
 statement error In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
 select array_agg(DISTINCT column2 order by column1) from array_agg_order_list_table;
 
@@ -574,19 +587,19 @@ logical_plan
 15)------------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[array_length(array_agg(DISTINCT a.foo)@1) as array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))]
 03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))]
 05)--------UnionExec
-06)----------ProjectionExec: expr=[1 as id, CAST(2 AS Int64) as foo]
+06)----------ProjectionExec: expr=[1 as id, CAST(2 AS Int64;N) as foo]
 07)------------PlaceholderRowExec
 08)----------ProjectionExec: expr=[1 as id, NULL as foo]
 09)------------PlaceholderRowExec
 10)----------ProjectionExec: expr=[1 as id, NULL as foo]
 11)------------PlaceholderRowExec
-12)----------ProjectionExec: expr=[1 as id, CAST(3 AS Int64) as foo]
+12)----------ProjectionExec: expr=[1 as id, CAST(3 AS Int64;N) as foo]
 13)------------PlaceholderRowExec
-14)----------ProjectionExec: expr=[1 as id, CAST(2 AS Int64) as foo]
+14)----------ProjectionExec: expr=[1 as id, CAST(2 AS Int64;N) as foo]
 15)------------PlaceholderRowExec
 
 #######
@@ -595,6 +608,9 @@ physical_plan
 
 statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
+
+statement error This feature is not implemented: Calling array_agg: WHERE not supported in function arguments: c2 > 1
+SELECT array_agg(c13 WHERE c2 > 1) FROM aggregate_test_100
 
 query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
 SELECT array_agg(a_varchar) WITHIN GROUP (ORDER BY a_varchar)
@@ -662,3 +678,40 @@ List(Dictionary(Int32, Utf8))
 
 statement ok
 drop table array_agg_distinct_dict_table;
+
+# array_agg(DISTINCT) per group, mixed with other aggregates and a FILTER
+statement ok
+create table array_agg_distinct_groups(g int, v varchar) as values
+  (1, 'b'), (1, 'a'), (1, 'b'), (1, null),
+  (2, 'a'), (2, 'a'),
+  (3, null),
+  (4, 'c');
+
+query II??
+select
+  g,
+  count(*),
+  array_sort(array_agg(DISTINCT v) FILTER (WHERE v <> 'c')),
+  array_sort(array_agg(DISTINCT v))
+from array_agg_distinct_groups
+group by g
+order by g;
+----
+1 4 [a, b] [NULL, a, b]
+2 2 [a] [a]
+3 1 NULL [NULL]
+4 1 NULL [c]
+
+query I?
+select g, array_agg(DISTINCT v ORDER BY v DESC) ignore nulls
+from array_agg_distinct_groups
+group by g
+order by g;
+----
+1 [b, a]
+2 [a]
+3 NULL
+4 [c]
+
+statement ok
+drop table array_agg_distinct_groups;

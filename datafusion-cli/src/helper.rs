@@ -161,7 +161,7 @@ impl Completer for CliHelper {
         if is_open_quote_for_location(line, pos) {
             self.completer.complete(line, pos, ctx)
         } else {
-            Ok((0, Vec::with_capacity(0)))
+            Ok((0, Vec::new()))
         }
     }
 }
@@ -180,7 +180,7 @@ impl Helper for CliHelper {}
 /// Splits a string which consists of multiple queries.
 pub(crate) fn split_from_semicolon(sql: &str) -> Vec<String> {
     let mut commands = Vec::new();
-    let mut current_command = String::new();
+    let mut current_command = String::with_capacity(sql.len());
     let mut in_single_quote = false;
     let mut in_double_quote = false;
 

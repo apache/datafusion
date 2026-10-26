@@ -22,13 +22,13 @@ use std::sync::Arc;
 use crate::{
     _internal_datafusion_err, DataFusionError, Result,
     config::{ParquetCdcOptions, ParquetOptions, TableParquetOptions},
+    parquet_config::{DFParquetCompression, DFParquetEncoding},
 };
 
 use arrow::datatypes::Schema;
 use parquet::arrow::encode_arrow_schema;
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
-    basic::{BrotliLevel, GzipLevel, ZstdLevel},
     file::{
         metadata::KeyValue,
         properties::{
@@ -228,6 +228,7 @@ impl ParquetOptions {
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
+            write_row_group_number_distinct_values,
             content_defined_chunking,
 
             // not in WriterProperties
@@ -249,6 +250,8 @@ impl ParquetOptions {
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
             max_in_list_size: _,
+            enable_rle_to_dictionary: _,
+            row_group_range_assignment: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -267,7 +270,10 @@ impl ParquetOptions {
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_statistics_truncate_length(*statistics_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
-            .set_bloom_filter_enabled(*bloom_filter_on_write);
+            .set_bloom_filter_enabled(*bloom_filter_on_write)
+            .set_write_row_group_number_distinct_values(
+                *write_row_group_number_distinct_values,
+            );
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
@@ -282,10 +288,10 @@ impl ParquetOptions {
         // We do not have access to default ColumnProperties set in Arrow.
         // Therefore, only overwrite if these settings exist.
         if let Some(compression) = compression {
-            builder = builder.set_compression(parse_compression_string(compression)?);
+            builder = builder.set_compression((*compression).into());
         }
         if let Some(encoding) = encoding {
-            builder = builder.set_encoding(parse_encoding_string(encoding)?);
+            builder = builder.set_encoding((*encoding).into());
         }
         builder = builder.set_content_defined_chunking(content_defined_chunking.into());
 
@@ -293,121 +299,18 @@ impl ParquetOptions {
     }
 }
 
-/// Parses datafusion.execution.parquet.encoding String to a parquet::basic::Encoding
+/// Parses a column-specific parquet encoding string.
 pub(crate) fn parse_encoding_string(
     str_setting: &str,
 ) -> Result<parquet::basic::Encoding> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-    match str_setting_lower {
-        "plain" => Ok(parquet::basic::Encoding::PLAIN),
-        "plain_dictionary" => Ok(parquet::basic::Encoding::PLAIN_DICTIONARY),
-        "rle" => Ok(parquet::basic::Encoding::RLE),
-        #[expect(deprecated)]
-        "bit_packed" => Ok(parquet::basic::Encoding::BIT_PACKED),
-        "delta_binary_packed" => Ok(parquet::basic::Encoding::DELTA_BINARY_PACKED),
-        "delta_length_byte_array" => {
-            Ok(parquet::basic::Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        }
-        "delta_byte_array" => Ok(parquet::basic::Encoding::DELTA_BYTE_ARRAY),
-        "rle_dictionary" => Ok(parquet::basic::Encoding::RLE_DICTIONARY),
-        "byte_stream_split" => Ok(parquet::basic::Encoding::BYTE_STREAM_SPLIT),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet encoding: \
-        {str_setting}. Valid values are: plain, plain_dictionary, rle, \
-        bit_packed, delta_binary_packed, delta_length_byte_array, \
-        delta_byte_array, rle_dictionary, and byte_stream_split."
-        ))),
-    }
-}
-
-/// Splits compression string into compression codec and optional compression_level
-/// I.e. gzip(2) -> gzip, 2
-fn split_compression_string(str_setting: &str) -> Result<(String, Option<u32>)> {
-    // ignore string literal chars passed from sqlparser i.e. remove single quotes
-    let str_setting = str_setting.replace('\'', "");
-    let split_setting = str_setting.split_once('(');
-
-    match split_setting {
-        Some((codec, rh)) => {
-            let level = &rh[..rh.len() - 1].parse::<u32>().map_err(|_| {
-                DataFusionError::Configuration(format!(
-                    "Could not parse compression string. \
-                    Got codec: {codec} and unknown level from {str_setting}"
-                ))
-            })?;
-            Ok((codec.to_owned(), Some(*level)))
-        }
-        None => Ok((str_setting.to_owned(), None)),
-    }
-}
-
-/// Helper to ensure compression codecs which don't support levels
-/// don't have one set. E.g. snappy(2) is invalid.
-fn check_level_is_none(codec: &str, level: Option<&u32>) -> Result<()> {
-    if level.is_some() {
-        return Err(DataFusionError::Configuration(format!(
-            "Compression {codec} does not support specifying a level"
-        )));
-    }
-    Ok(())
-}
-
-/// Helper to ensure compression codecs which require a level
-/// do have one set. E.g. zstd is invalid, zstd(3) is valid
-fn require_level(codec: &str, level: Option<u32>) -> Result<u32> {
-    level.ok_or(DataFusionError::Configuration(format!(
-        "{codec} compression requires specifying a level such as {codec}(4)"
-    )))
+    str_setting.parse::<DFParquetEncoding>().map(Into::into)
 }
 
 /// Parses datafusion.execution.parquet.compression String to a parquet::basic::Compression
 pub fn parse_compression_string(
     str_setting: &str,
 ) -> Result<parquet::basic::Compression> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-    let (codec, level) = split_compression_string(str_setting_lower)?;
-    let codec = codec.as_str();
-    match codec {
-        "uncompressed" => {
-            check_level_is_none(codec, level.as_ref())?;
-            Ok(parquet::basic::Compression::UNCOMPRESSED)
-        }
-        "snappy" => {
-            check_level_is_none(codec, level.as_ref())?;
-            Ok(parquet::basic::Compression::SNAPPY)
-        }
-        "gzip" => {
-            let level = require_level(codec, level)?;
-            Ok(parquet::basic::Compression::GZIP(GzipLevel::try_new(
-                level,
-            )?))
-        }
-        "brotli" => {
-            let level = require_level(codec, level)?;
-            Ok(parquet::basic::Compression::BROTLI(BrotliLevel::try_new(
-                level,
-            )?))
-        }
-        "lz4" => {
-            check_level_is_none(codec, level.as_ref())?;
-            Ok(parquet::basic::Compression::LZ4)
-        }
-        "zstd" => {
-            let level = require_level(codec, level)?;
-            Ok(parquet::basic::Compression::ZSTD(ZstdLevel::try_new(
-                level as i32,
-            )?))
-        }
-        "lz4_raw" => {
-            check_level_is_none(codec, level.as_ref())?;
-            Ok(parquet::basic::Compression::LZ4_RAW)
-        }
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet compression: \
-        {str_setting}. Valid values are: uncompressed, snappy, gzip(level), \
-        brotli(level), lz4, zstd(level), and lz4_raw."
-        ))),
-    }
+    Ok(str_setting.parse::<DFParquetCompression>()?.into())
 }
 
 pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatistics> {
@@ -433,7 +336,10 @@ mod tests {
         MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions,
         ParquetEncryptionOptions, ParquetOptions,
     };
-    use crate::parquet_config::{DFParquetStatistics, DFParquetWriterVersion};
+    use crate::parquet_config::{
+        DFParquetCompression, DFParquetEncoding, DFParquetStatistics,
+        DFParquetWriterVersion,
+    };
     use parquet::basic::Compression;
     use parquet::file::properties::{
         BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
@@ -471,7 +377,7 @@ mod tests {
             data_pagesize_limit: 42,
             write_batch_size: 42,
             writer_version,
-            compression: Some("zstd(22)".into()),
+            compression: Some(DFParquetCompression::Zstd(22)),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
             dictionary_page_size_limit: 43,
             statistics_enabled: Some(DFParquetStatistics::Chunk),
@@ -481,15 +387,18 @@ mod tests {
             column_index_truncate_length: Some(42),
             statistics_truncate_length: Some(42),
             data_page_row_count_limit: 42,
-            encoding: Some("BYTE_STREAM_SPLIT".into()),
+            encoding: Some(DFParquetEncoding::ByteStreamSplit),
             bloom_filter_on_write: !defaults.bloom_filter_on_write,
             bloom_filter_fpp: Some(0.42),
             bloom_filter_ndv: Some(42),
+            write_row_group_number_distinct_values: !defaults
+                .write_row_group_number_distinct_values,
 
             // not in WriterProperties, but itemizing here to not skip newly added props
             enable_page_index: defaults.enable_page_index,
             pruning: defaults.pruning,
             max_in_list_size: defaults.max_in_list_size,
+            row_group_range_assignment: defaults.row_group_range_assignment,
             skip_metadata: defaults.skip_metadata,
             metadata_size_hint: defaults.metadata_size_hint,
             pushdown_filters: defaults.pushdown_filters,
@@ -508,6 +417,7 @@ mod tests {
             coerce_int96_tz: None,
             max_predicate_cache_size: defaults.max_predicate_cache_size,
             content_defined_chunking: defaults.content_defined_chunking.clone(),
+            enable_rle_to_dictionary: defaults.enable_rle_to_dictionary,
         }
     }
 
@@ -596,8 +506,16 @@ mod tests {
                 data_page_row_count_limit: props.data_page_row_count_limit(),
 
                 // global options which set the default column props
-                encoding: default_col_props.encoding,
-                compression: default_col_props.compression,
+                encoding: default_col_props
+                    .encoding
+                    .as_deref()
+                    .map(|encoding| encoding.parse().expect("valid parquet encoding")),
+                compression: match props.compression(&default_col) {
+                    Compression::ZSTD(level) => {
+                        Some(DFParquetCompression::Zstd(level.compression_level() as u32))
+                    }
+                    _ => None,
+                },
                 dictionary_enabled: default_col_props.dictionary_enabled,
                 statistics_enabled: Some(props.statistics_enabled(&default_col).into()),
                 bloom_filter_on_write: default_col_props
@@ -610,6 +528,8 @@ mod tests {
                 enable_page_index: global_options_defaults.enable_page_index,
                 pruning: global_options_defaults.pruning,
                 max_in_list_size: global_options_defaults.max_in_list_size,
+                row_group_range_assignment: global_options_defaults
+                    .row_group_range_assignment,
                 skip_metadata: global_options_defaults.skip_metadata,
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,
@@ -627,9 +547,13 @@ mod tests {
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
+                write_row_group_number_distinct_values: props
+                    .write_row_group_number_distinct_values(),
                 coerce_int96: None,
                 coerce_int96_tz: None,
                 content_defined_chunking: props.content_defined_chunking().into(),
+                enable_rle_to_dictionary: global_options_defaults
+                    .enable_rle_to_dictionary,
             },
             column_specific_options,
             key_value_metadata,
@@ -770,7 +694,7 @@ mod tests {
         let mut from_extern_parquet =
             session_config_from_writer_props(&default_writer_props);
         from_extern_parquet.global.created_by = same_created_by;
-        from_extern_parquet.global.compression = Some("zstd(3)".into());
+        from_extern_parquet.global.compression = Some(DFParquetCompression::Zstd(3));
         from_extern_parquet.global.skip_arrow_metadata = true;
 
         assert_eq!(

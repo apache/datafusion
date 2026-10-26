@@ -31,7 +31,7 @@ EXPLAIN SELECT file_row_index(), column1 FROM parquet_table
 logical_plan
 01)Projection: file_row_index(), parquet_table.column1
 02)--TableScan: parquet_table projection=[column1]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as file_row_index(), column1], file_type=parquet
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as file_row_index(), column1], file_type=parquet
 
 
 query II
@@ -78,7 +78,7 @@ logical_plan
 physical_plan
 01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--FilterExec: __datafusion_extracted_1@0 > 2, projection=[column1@1]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as __datafusion_extracted_1, column1], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as __datafusion_extracted_1, column1], file_type=parquet
 
 query I
 SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
@@ -103,7 +103,7 @@ logical_plan
 physical_plan
 01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--FilterExec: __datafusion_extracted_1@0 > 2, projection=[column1@1]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as __datafusion_extracted_1, column1], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as __datafusion_extracted_1, column1], file_type=parquet
 
 query I
 SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1

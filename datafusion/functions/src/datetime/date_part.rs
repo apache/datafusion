@@ -15,35 +15,47 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::iter::repeat_n;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use arrow::array::temporal_conversions::{
+    MICROSECONDS, MILLISECONDS, NANOSECONDS, SECONDS_IN_DAY, as_datetime_with_timezone,
+    timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
+    timestamp_us_to_datetime,
+};
 use arrow::array::timezone::Tz;
-use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array};
-use arrow::compute::{DatePart, binary, date_part};
+use arrow::array::{
+    Array, ArrayRef, Float64Array, Int32Array, Int64Array, PrimitiveArray,
+};
+use arrow::compute::{DatePart, cast, date_part};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    ArrowTimestampType, DataType, Date32Type, Date64Type, Field, FieldRef,
-    IntervalUnit as ArrowIntervalUnit, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    ArrowPrimitiveType, ArrowTimestampType, DataType, Field, FieldRef, Int32Type,
+    Int64Type, IntervalUnit as ArrowIntervalUnit, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType,
 };
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Offset, TimeZone, Timelike, Utc};
 use datafusion_common::types::{NativeType, logical_date};
+use num_traits::AsPrimitive;
 
+use crate::datetime::common::parse_tz;
 use datafusion_common::{
     Result, ScalarValue,
     cast::{
-        as_date32_array, as_date64_array, as_int32_array, as_interval_dt_array,
-        as_interval_mdn_array, as_interval_ym_array, as_time32_millisecond_array,
+        as_date32_array, as_date64_array, as_duration_microsecond_array,
+        as_duration_millisecond_array, as_duration_nanosecond_array,
+        as_duration_second_array, as_interval_dt_array, as_interval_mdn_array,
+        as_interval_ym_array, as_primitive_array, as_time32_millisecond_array,
         as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
         as_timestamp_microsecond_array, as_timestamp_millisecond_array,
         as_timestamp_nanosecond_array, as_timestamp_second_array,
     },
-    exec_err, internal_err, not_impl_err,
+    exec_err, internal_err,
     types::logical_string,
     utils::take_function_args,
 };
@@ -81,6 +93,11 @@ use datafusion_macros::user_doc;
     - doy (day of the year)
     - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
     - isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)
+    - timezone (UTC offset in seconds)
+    - timezone_hour (whole hours of the UTC offset)
+    - timezone_minute (whole minutes of the UTC offset, excluding the hours)
+
+    The `timezone`, `timezone_hour` and `timezone_minute` parts are only defined for timestamps that carry a timezone; extracting them from a timezone-naive timestamp, a date, a time or an interval is an error. They report the offset that applies at that instant, so they follow daylight saving time: `Europe/Brussels` yields `3600` in January and `7200` in July. For a negative offset each non-zero part carries the sign, so `America/St_Johns` in January yields `-3` hours and `-30` minutes. An offset smaller than one hour has a zero hour part, which cannot show a sign: `Africa/Monrovia` before 1972 yields `0` hours and `-43` minutes.
 "#
     ),
     argument(
@@ -100,6 +117,12 @@ use datafusion_macros::user_doc;
 +----------------------------------------------------+
 | 1                                                  |
 +----------------------------------------------------+
+> SELECT date_part('timezone', TIMESTAMP '2024-07-01T12:00:00' AT TIME ZONE 'Europe/Brussels') AS utc_offset_seconds;
++--------------------+
+| utc_offset_seconds |
++--------------------+
+| 7200               |
++--------------------+
 ```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -175,13 +198,16 @@ impl ScalarUDFImpl for DatePartFunc {
                     .flatten()
                     .filter(|s| !s.is_empty())
                     .map(|part| {
+                        // The integer parts are NULL for values arrow can't
+                        // convert or that overflow, even when the input is
+                        // not NULL
                         if is_epoch(part) {
                             Field::new(self.name(), DataType::Float64, nullable)
                         } else if is_nanosecond(part) {
-                            // See notes on [seconds_ns] for rationale
-                            Field::new(self.name(), DataType::Int64, nullable)
+                            // See notes on [subsecond_part] for rationale
+                            Field::new(self.name(), DataType::Int64, true)
                         } else {
-                            Field::new(self.name(), DataType::Int32, nullable)
+                            Field::new(self.name(), DataType::Int32, true)
                         }
                     })
             })
@@ -216,13 +242,20 @@ impl ScalarUDFImpl for DatePartFunc {
         let part_trim = part_normalization(&part);
 
         let arr = match DatePart::from_str(part_trim) {
-            Ok(DatePart::Second) => seconds_as_i32(array.as_ref(), Second)?,
-            Ok(DatePart::Millisecond) => seconds_as_i32(array.as_ref(), Millisecond)?,
-            Ok(DatePart::Microsecond) => seconds_as_i32(array.as_ref(), Microsecond)?,
-            Ok(DatePart::Nanosecond) => seconds_ns(array.as_ref())?,
+            Ok(
+                part @ (DatePart::Millisecond
+                | DatePart::Microsecond
+                | DatePart::Nanosecond),
+            ) => subsecond_part(array.as_ref(), part)?,
             Ok(part) => date_part(array.as_ref(), part)?,
             Err(_) if is_epoch(part_trim) => epoch(array.as_ref())?,
-            Err(_) => return exec_err!("Date part '{part}' not supported"),
+            // `timezone`, `timezone_hour` and `timezone_minute` have no
+            // `DatePart` equivalent, so they are resolved once `DatePart::from_str`
+            // has failed. `TimezonePart::parse` matches lowercase spellings only.
+            Err(_) => match TimezonePart::parse(&part_trim.to_lowercase()) {
+                Some(tz_part) => timezone_part(array.as_ref(), tz_part)?,
+                None => return exec_err!("Date part '{part}' not supported"),
+            },
         };
 
         Ok(if is_scalar {
@@ -284,8 +317,8 @@ impl ScalarUDFImpl for DatePartFunc {
 
         // Convert to ScalarValues
         let (Some(lower), Some(upper)) = (
-            date_to_scalar(start_time, target_type),
-            date_to_scalar(end_time, target_type),
+            ScalarValue::try_from_date(start_time, target_type),
+            ScalarValue::try_from_date(end_time, target_type),
         ) else {
             return Ok(PreimageResult::None);
         };
@@ -317,52 +350,98 @@ fn is_nanosecond(part: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
-    Some(match target_type {
-        Date32 => ScalarValue::Date32(Some(Date32Type::from_naive_date(date))),
-        Date64 => ScalarValue::Date64(Some(Date64Type::from_naive_date(date))),
+/// The `timezone`, `timezone_hour` and `timezone_minute` fields, which report
+/// the UTC offset that applies to a timezone-aware timestamp *at that instant*.
+///
+/// Because the offset of a named timezone changes with daylight saving time,
+/// these are per-row values, not a property of the type alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimezonePart {
+    /// `timezone`: the whole UTC offset, in seconds
+    Offset,
+    /// `timezone_hour`: whole hours of the UTC offset
+    Hour,
+    /// `timezone_minute`: whole minutes of the UTC offset, excluding the hours.
+    /// The sign follows the sign of the offset (PostgreSQL behaviour), so
+    /// `-03:30` yields `-3` hours and `-30` minutes.
+    Minute,
+}
 
-        Timestamp(unit, tz_opt) => {
-            let naive_midnight = date.and_hms_opt(0, 0, 0)?;
-            let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
-
-            // Midnight has no representation when the date falls outside the
-            // unit's range, or when the zone skips it. Reporting no bound keeps
-            // the caller on the original predicate; a NULL bound here would make
-            // the rewritten comparison NULL on every row.
-            match unit {
-                Second => ScalarValue::TimestampSecond(
-                    Some(TimestampSecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    )?),
-                    tz_opt.clone(),
-                ),
-                Millisecond => ScalarValue::TimestampMillisecond(
-                    Some(TimestampMillisecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    )?),
-                    tz_opt.clone(),
-                ),
-                Microsecond => ScalarValue::TimestampMicrosecond(
-                    Some(TimestampMicrosecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    )?),
-                    tz_opt.clone(),
-                ),
-                Nanosecond => ScalarValue::TimestampNanosecond(
-                    Some(TimestampNanosecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    )?),
-                    tz_opt.clone(),
-                ),
-            }
+impl TimezonePart {
+    fn parse(part: &str) -> Option<Self> {
+        match part {
+            "timezone" => Some(Self::Offset),
+            "timezone_hour" => Some(Self::Hour),
+            "timezone_minute" => Some(Self::Minute),
+            _ => None,
         }
-        _ => return None,
-    })
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Offset => "timezone",
+            Self::Hour => "timezone_hour",
+            Self::Minute => "timezone_minute",
+        }
+    }
+
+    /// Extract this field from a UTC offset expressed in seconds.
+    ///
+    /// Rust integer division truncates towards zero, which is what makes the
+    /// sign of `timezone_minute` follow the sign of the offset, matching
+    /// PostgreSQL.
+    fn project(&self, offset_seconds: i32) -> i32 {
+        match self {
+            Self::Offset => offset_seconds,
+            Self::Hour => offset_seconds / 3_600,
+            Self::Minute => (offset_seconds % 3_600) / 60,
+        }
+    }
+}
+
+/// Compute a [`TimezonePart`] for every element of a timezone-aware timestamp
+/// array.
+///
+/// Errors for any other input type, including timezone-naive timestamps, which
+/// carry no offset at all. This matches PostgreSQL, which rejects
+/// `date_part('timezone', <timestamp without time zone>)`.
+fn timezone_part(array: &dyn Array, part: TimezonePart) -> Result<ArrayRef> {
+    let Timestamp(unit, tz_opt) = array.data_type() else {
+        return exec_err!(
+            "Date part '{}' is only supported for timestamps with a timezone, got {}",
+            part.name(),
+            array.data_type()
+        );
+    };
+    let Some(tz) = parse_tz(tz_opt.as_ref())? else {
+        return exec_err!(
+            "Date part '{}' is not supported for timezone-naive timestamps, got {}",
+            part.name(),
+            array.data_type()
+        );
+    };
+
+    match unit {
+        Second => timezone_part_typed::<TimestampSecondType>(array, tz, part),
+        Millisecond => timezone_part_typed::<TimestampMillisecondType>(array, tz, part),
+        Microsecond => timezone_part_typed::<TimestampMicrosecondType>(array, tz, part),
+        Nanosecond => timezone_part_typed::<TimestampNanosecondType>(array, tz, part),
+    }
+}
+
+fn timezone_part_typed<T: ArrowTimestampType>(
+    array: &dyn Array,
+    tz: Tz,
+    part: TimezonePart,
+) -> Result<ArrayRef> {
+    let array = as_primitive_array::<T>(array)?;
+    // `unary_opt` keeps the input nulls and additionally nulls out any value
+    // that cannot be represented as a `DateTime` (out of chrono's range).
+    let result: Int32Array = array.unary_opt(|value| {
+        as_datetime_with_timezone::<T>(value, tz)
+            .map(|dt| part.project(dt.offset().fix().local_minus_utc()))
+    });
+    Ok(Arc::new(result))
 }
 
 // Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error
@@ -370,114 +449,6 @@ fn part_normalization(part: &str) -> &str {
     part.strip_prefix(|c| c == '\'' || c == '\"')
         .and_then(|s| s.strip_suffix(|c| c == '\'' || c == '\"'))
         .unwrap_or(part)
-}
-
-/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
-/// result to a total number of seconds, milliseconds, microseconds or
-/// nanoseconds as an `Int32Array`
-fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
-    // Nanosecond is neither supported in Postgres nor DuckDB, to avoid dealing
-    // with overflow and precision issue we don't support nanosecond
-    if unit == Nanosecond {
-        return not_impl_err!("Date part {unit:?} not supported");
-    }
-
-    // Fast path with seconds - no need to compute nanoseconds
-    if unit == Second {
-        return Ok(date_part(array, DatePart::Second)?);
-    }
-
-    // Fast path for Date32 and Date64 - no seconds
-    if array.data_type() == &Date32 || array.data_type() == &Date64 {
-        return Ok(Arc::new(Int32Array::from_iter_values_with_nulls(
-            repeat_n(0, array.len()),
-            array.nulls().cloned(),
-        )));
-    }
-
-    let conversion_factor = match unit {
-        Second => 1_000_000_000,
-        Millisecond => 1_000_000,
-        Microsecond => 1_000,
-        Nanosecond => 1,
-    };
-
-    let second_factor = match unit {
-        Second => 1,
-        Millisecond => 1_000,
-        Microsecond => 1_000_000,
-        Nanosecond => 1_000_000_000,
-    };
-
-    let secs = date_part(array, DatePart::Second)?;
-    // This assumes array is primitive and not a dictionary
-    let secs = as_int32_array(secs.as_ref())?;
-    let subsecs = date_part(array, DatePart::Nanosecond)?;
-    let subsecs = as_int32_array(subsecs.as_ref())?;
-
-    // Special case where there are no nulls.
-    if subsecs.null_count() == 0 {
-        let r: Int32Array = binary(secs, subsecs, |secs, subsecs| {
-            secs * second_factor + (subsecs % 1_000_000_000) / conversion_factor
-        })?;
-        Ok(Arc::new(r))
-    } else {
-        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
-        // where the number of nanoseconds overflows.
-        let r: Int32Array = secs
-            .iter()
-            .zip(subsecs)
-            .map(|(secs, subsecs)| {
-                secs.map(|secs| {
-                    let subsecs = subsecs.unwrap_or(0);
-                    secs * second_factor + (subsecs % 1_000_000_000) / conversion_factor
-                })
-            })
-            .collect();
-        Ok(Arc::new(r))
-    }
-}
-
-/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
-/// result to a total number of seconds, milliseconds, microseconds or
-/// nanoseconds
-///
-/// Given epoch return f64, this is a duplicated function to optimize for f64 type
-fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
-    let sf = match unit {
-        Second => 1_f64,
-        Millisecond => 1_000_f64,
-        Microsecond => 1_000_000_f64,
-        Nanosecond => 1_000_000_000_f64,
-    };
-    let secs = date_part(array, DatePart::Second)?;
-    // This assumes array is primitive and not a dictionary
-    let secs = as_int32_array(secs.as_ref())?;
-    let subsecs = date_part(array, DatePart::Nanosecond)?;
-    let subsecs = as_int32_array(subsecs.as_ref())?;
-
-    // Special case where there are no nulls.
-    if subsecs.null_count() == 0 {
-        let r: Float64Array = binary(secs, subsecs, |secs, subsecs| {
-            (secs as f64 + ((subsecs % 1_000_000_000) as f64 / 1_000_000_000_f64)) * sf
-        })?;
-        Ok(Arc::new(r))
-    } else {
-        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
-        // where the number of nanoseconds overflows.
-        let r: Float64Array = secs
-            .iter()
-            .zip(subsecs)
-            .map(|(secs, subsecs)| {
-                secs.map(|secs| {
-                    let subsecs = subsecs.unwrap_or(0);
-                    (secs as f64 + ((subsecs % 1_000_000_000) as f64 / 1_000_000_000_f64))
-                        * sf
-                })
-            })
-            .collect();
-        Ok(Arc::new(r))
-    }
 }
 
 fn epoch(array: &dyn Array) -> Result<ArrayRef> {
@@ -523,52 +494,510 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
                     + x.nanoseconds as f64 / 1_000_000_000_f64
             })
         }
-        Duration(_) => return seconds(array, Second),
+        Duration(Second) => as_duration_second_array(array)?.unary(|x| x as f64),
+        Duration(Millisecond) => {
+            as_duration_millisecond_array(array)?.unary(|x| x as f64 / 1_000_f64)
+        }
+        Duration(Microsecond) => {
+            as_duration_microsecond_array(array)?.unary(|x| x as f64 / 1_000_000_f64)
+        }
+        Duration(Nanosecond) => {
+            as_duration_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
+        }
         d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))
 }
 
-/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
-/// result to a total number of nanoseconds as an Int64 array.
+/// Return the seconds of `array`, with their fraction, as a number of
+/// milliseconds, microseconds or nanoseconds (`part`): the seconds of the
+/// minute for timestamps, times and intervals, and the total length for
+/// durations.
 ///
-/// This returns an Int64 rather than Int32 because  there 1 billion
-/// `nanosecond`s in each second, so representing up to 60 seconds as
-/// nanoseconds can be values up to 60 billion, which does not fit in Int32.
-fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
-    // Fast path for Date32 and Date64 - no nanoseconds
-    if array.data_type() == &Date32 || array.data_type() == &Date64 {
-        return Ok(Arc::new(Int64Array::from_iter_values_with_nulls(
-            repeat_n(0, array.len()),
-            array.nulls().cloned(),
-        )));
+/// `nanosecond` returns Int64, because 60 seconds are 60 billion nanoseconds
+/// and a duration can be up to `i64::MAX` nanoseconds long. `millisecond` and
+/// `microsecond` return Int32. A duration whose length overflows the return
+/// type is NULL.
+fn subsecond_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef> {
+    let len = array.len();
+    let nulls = array.nulls().cloned();
+    Ok(match (array.data_type(), part) {
+        // Fast path for Date32 and Date64 - no seconds
+        (Date32 | Date64, DatePart::Nanosecond) => {
+            Arc::new(Int64Array::new(vec![0; len].into(), nulls))
+        }
+        (Date32 | Date64, _) => Arc::new(Int32Array::new(vec![0; len].into(), nulls)),
+        // arrow's `date_part(Nanosecond)` computes these, but returns Int32,
+        // which overflows past about 2.1 seconds
+        (Interval(ArrowIntervalUnit::DayTime), DatePart::Nanosecond) => Arc::new(
+            as_interval_dt_array(array)?
+                .unary::<_, Int64Type>(|x| (x.milliseconds % 60_000) as i64 * 1_000_000),
+        ),
+        (Interval(ArrowIntervalUnit::MonthDayNano), DatePart::Nanosecond) => Arc::new(
+            as_interval_mdn_array(array)?
+                .unary::<_, Int64Type>(|x| x.nanoseconds % 60_000_000_000),
+        ),
+        // arrow's cast returns NULL on overflow, like its `date_part`, and
+        // reinterprets `Duration(Nanosecond)` as Int64 without copying
+        (Duration(_), DatePart::Nanosecond) => {
+            cast(&cast(array, &Duration(Nanosecond))?, &DataType::Int64)?
+        }
+        // arrow's sub-second parts of intervals and durations already include
+        // the whole seconds, and it rejects them for `Interval(YearMonth)`
+        (Interval(_) | Duration(_), _) => date_part(array, part)?,
+        (_, DatePart::Millisecond) => {
+            seconds_with_fraction::<Int32Type, MILLISECONDS>(array, part)?
+        }
+        (_, DatePart::Microsecond) => {
+            seconds_with_fraction::<Int32Type, MICROSECONDS>(array, part)?
+        }
+        (_, DatePart::Nanosecond) => {
+            seconds_with_fraction::<Int64Type, NANOSECONDS>(array, part)?
+        }
+        (_, part) => return internal_err!("{part} is not a sub-second part"),
+    })
+}
+
+/// Return the seconds of the minute of timestamps (in their timezone) and
+/// times, with their fraction, in units of `1 / PER_SECOND` seconds.
+fn seconds_with_fraction<O, const PER_SECOND: i64>(
+    array: &dyn Array,
+    part: DatePart,
+) -> Result<ArrayRef>
+where
+    O: ArrowPrimitiveType,
+    i64: AsPrimitive<O::Native>,
+{
+    Ok(match array.data_type() {
+        Timestamp(unit, tz) => {
+            let tz = parse_tz(tz.as_ref())?;
+            match unit {
+                Second => timestamp_seconds_with_fraction::<
+                    TimestampSecondType,
+                    O,
+                    PER_SECOND,
+                >(array, tz, timestamp_s_to_datetime)?,
+                Millisecond => timestamp_seconds_with_fraction::<
+                    TimestampMillisecondType,
+                    O,
+                    PER_SECOND,
+                >(array, tz, timestamp_ms_to_datetime)?,
+                Microsecond => timestamp_seconds_with_fraction::<
+                    TimestampMicrosecondType,
+                    O,
+                    PER_SECOND,
+                >(array, tz, timestamp_us_to_datetime)?,
+                Nanosecond => timestamp_seconds_with_fraction::<
+                    TimestampNanosecondType,
+                    O,
+                    PER_SECOND,
+                >(array, tz, timestamp_ns_to_datetime)?,
+            }
+        }
+        Time32(Second) => {
+            time_seconds_with_fraction::<Time32SecondType, O, 1, PER_SECOND>(array)?
+        }
+        Time32(Millisecond) => time_seconds_with_fraction::<
+            Time32MillisecondType,
+            O,
+            MILLISECONDS,
+            PER_SECOND,
+        >(array)?,
+        Time64(Microsecond) => time_seconds_with_fraction::<
+            Time64MicrosecondType,
+            O,
+            MICROSECONDS,
+            PER_SECOND,
+        >(array)?,
+        Time64(Nanosecond) => {
+            time_seconds_with_fraction::<Time64NanosecondType, O, NANOSECONDS, PER_SECOND>(
+                array,
+            )?
+        }
+        other => return internal_err!("{part} does not support {other}"),
+    })
+}
+
+fn timestamp_seconds_with_fraction<T, O, const PER_SECOND: i64>(
+    array: &dyn Array,
+    tz: Option<Tz>,
+    // arrow's converter for `T`, as its `date_part` uses. The generic
+    // `as_datetime::<T>` measured about 1.5x slower.
+    to_datetime: impl Fn(i64) -> Option<NaiveDateTime>,
+) -> Result<ArrayRef>
+where
+    T: ArrowTimestampType,
+    O: ArrowPrimitiveType,
+    i64: AsPrimitive<O::Native>,
+{
+    let array = as_primitive_array::<T>(array)?;
+    // One chrono conversion per row, where arrow's `date_part` needs one each
+    // for the seconds and the fraction. `unary_opt` keeps the input nulls and additionally nulls out any value
+    // that cannot be represented as a `DateTime` (out of chrono's range).
+    let r: PrimitiveArray<O> = match tz {
+        Some(tz) => array.unary_opt(|v| {
+            to_datetime(v).map(|naive| {
+                seconds_of_minute::<O, PER_SECOND>(
+                    &Utc.from_utc_datetime(&naive).with_timezone(&tz),
+                )
+            })
+        }),
+        None => array.unary_opt(|v| {
+            to_datetime(v).map(|naive| seconds_of_minute::<O, PER_SECOND>(&naive))
+        }),
+    };
+    Ok(Arc::new(r))
+}
+
+/// The seconds of the minute of `t`, with their fraction, in units of
+/// `1 / PER_SECOND` seconds
+fn seconds_of_minute<O: ArrowPrimitiveType, const PER_SECOND: i64>(
+    t: &impl Timelike,
+) -> O::Native
+where
+    i64: AsPrimitive<O::Native>,
+{
+    // At most 60 seconds, which fits in Int32 for milliseconds and
+    // microseconds, so the narrowing `as_` never truncates
+    (t.second() as i64 * PER_SECOND + t.nanosecond() as i64 / (NANOSECONDS / PER_SECOND))
+        .as_()
+}
+
+/// Like [`timestamp_seconds_with_fraction`] for times, which count
+/// `1 / UNITS_PER_SECOND` seconds since midnight.
+fn time_seconds_with_fraction<T, O, const UNITS_PER_SECOND: i64, const PER_SECOND: i64>(
+    array: &dyn Array,
+) -> Result<ArrayRef>
+where
+    T: ArrowPrimitiveType,
+    T::Native: AsPrimitive<i64>,
+    O: ArrowPrimitiveType,
+    i64: AsPrimitive<O::Native>,
+{
+    let array = as_primitive_array::<T>(array)?;
+    // Values outside one day are NULL, as in arrow's `date_part`. `as_time`
+    // wraps some to a valid time: https://github.com/apache/arrow-rs/issues/11893
+    let r: PrimitiveArray<O> = array.unary_opt(|v| {
+        let v: i64 = v.as_();
+        (0..SECONDS_IN_DAY * UNITS_PER_SECOND)
+            .contains(&v)
+            .then(|| {
+                let v = v % (60 * UNITS_PER_SECOND);
+                if PER_SECOND >= UNITS_PER_SECOND {
+                    v * (PER_SECOND / UNITS_PER_SECOND)
+                } else {
+                    v / (UNITS_PER_SECOND / PER_SECOND)
+                }
+                .as_()
+            })
+    });
+    Ok(Arc::new(r))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::DatePartFunc;
+    use arrow::array::{
+        Array, Int32Array, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray,
+    };
+    use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
+    use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+    use datafusion_common::ScalarValue;
+    use datafusion_common::cast::as_int32_array;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::{
+        ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    };
+
+    /// Invoke `date_part(part, value)` with a single (already typed) argument.
+    fn invoke_date_part(
+        part: &str,
+        value: ColumnarValue,
+        number_rows: usize,
+    ) -> datafusion_common::Result<ColumnarValue> {
+        let value_field: FieldRef = Field::new("b", value.data_type(), true).into();
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(ScalarValue::from(part)), value],
+            arg_fields: vec![Field::new("a", DataType::Utf8, false).into(), value_field],
+            number_rows,
+            return_field: Field::new("f", DataType::Int32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        DatePartFunc::new().invoke_with_args(args)
     }
 
-    let secs = date_part(array, DatePart::Second)?;
-    // This assumes array is primitive and not a dictionary
-    let secs = as_int32_array(secs.as_ref())?;
-    let subsecs = date_part(array, DatePart::Nanosecond)?;
-    let subsecs = as_int32_array(subsecs.as_ref())?;
+    fn ts_nanos(s: &str) -> i64 {
+        string_to_timestamp_nanos(s).unwrap()
+    }
 
-    // Special case where there are no nulls.
-    if subsecs.null_count() == 0 {
-        let r: Int64Array = binary(secs, subsecs, |secs, subsecs| {
-            (secs as i64) * 1_000_000_000 + (subsecs as i64)
-        })?;
-        Ok(Arc::new(r))
-    } else {
-        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
-        // where the number of nanoseconds overflows.
-        let r: Int64Array = secs
-            .iter()
-            .zip(subsecs)
-            .map(|(secs, subsecs)| {
-                secs.map(|secs| {
-                    let subsecs = subsecs.unwrap_or(0);
-                    (secs as i64) * 1_000_000_000 + (subsecs as i64)
+    /// `date_part(part, <ts with tz>)` over a single-element array.
+    fn tz_part(part: &str, tz: &str, utc_instant: &str) -> Option<i32> {
+        let array = TimestampNanosecondArray::from(vec![Some(ts_nanos(utc_instant))])
+            .with_timezone(tz);
+        let result = invoke_date_part(part, ColumnarValue::Array(Arc::new(array)), 1)
+            .unwrap()
+            .to_array(1)
+            .unwrap();
+        assert_eq!(result.data_type(), &DataType::Int32);
+        let result = as_int32_array(&result).unwrap();
+        result.is_valid(0).then(|| result.value(0))
+    }
+
+    /// Expected values were cross-checked against PostgreSQL 17:
+    /// `SET TimeZone TO '<tz>'; SELECT date_part('timezone', '<instant>'::timestamptz);`
+    #[test]
+    fn timezone_parts_match_postgres() {
+        // (timezone, UTC instant, offset seconds, offset hours, offset minutes)
+        let cases = [
+            // Fixed offsets carried directly by the Arrow type
+            ("+05:30", "2024-07-01T12:00:00Z", 19_800, 5, 30),
+            ("-03:30", "2024-07-01T12:00:00Z", -12_600, -3, -30),
+            ("+00:00", "2024-07-01T12:00:00Z", 0, 0, 0),
+            ("UTC", "2024-07-01T12:00:00Z", 0, 0, 0),
+            // Named timezone, standard time vs daylight saving time
+            ("Europe/Brussels", "2024-01-01T12:00:00Z", 3_600, 1, 0),
+            ("Europe/Brussels", "2024-07-01T12:00:00Z", 7_200, 2, 0),
+            ("America/Denver", "2024-01-01T12:00:00Z", -25_200, -7, 0),
+            ("America/Denver", "2024-07-01T12:00:00Z", -21_600, -6, 0),
+            // 45 minute offsets (southern hemisphere: January is DST)
+            ("Pacific/Chatham", "2024-01-01T12:00:00Z", 49_500, 13, 45),
+            ("Pacific/Chatham", "2024-07-01T12:00:00Z", 45_900, 12, 45),
+            // Negative offsets keep the sign on both hour and minute
+            ("America/St_Johns", "2024-01-01T12:00:00Z", -12_600, -3, -30),
+            ("America/St_Johns", "2024-07-01T12:00:00Z", -9_000, -2, -30),
+            (
+                "Pacific/Marquesas",
+                "2024-07-01T12:00:00Z",
+                -34_200,
+                -9,
+                -30,
+            ),
+            ("Asia/Kolkata", "2024-07-01T12:00:00Z", 19_800, 5, 30),
+            // A sub-hour offset: the hour part is zero and so cannot show the
+            // sign, while the minute part still carries it. PostgreSQL 17
+            // gives -2588 / 0 / -43 for this instant.
+            ("Africa/Monrovia", "1900-01-01T12:00:00Z", -2_588, 0, -43),
+            ("Asia/Kathmandu", "2024-07-01T12:00:00Z", 20_700, 5, 45),
+        ];
+
+        for (tz, instant, secs, hours, minutes) in cases {
+            assert_eq!(
+                tz_part("timezone", tz, instant),
+                Some(secs),
+                "timezone for {tz} at {instant}"
+            );
+            assert_eq!(
+                tz_part("timezone_hour", tz, instant),
+                Some(hours),
+                "timezone_hour for {tz} at {instant}"
+            );
+            assert_eq!(
+                tz_part("timezone_minute", tz, instant),
+                Some(minutes),
+                "timezone_minute for {tz} at {instant}"
+            );
+        }
+    }
+
+    #[test]
+    fn timezone_parts_are_case_insensitive() {
+        assert_eq!(
+            tz_part("TIMEZONE", "Europe/Brussels", "2024-07-01T12:00:00Z"),
+            Some(7_200)
+        );
+        // The spelling produced by `EXTRACT(TIMEZONE_HOUR FROM ..)`
+        assert_eq!(
+            tz_part("TIMEZONE_HOUR", "Asia/Kolkata", "2024-07-01T12:00:00Z"),
+            Some(5)
+        );
+        assert_eq!(
+            tz_part("Timezone_Minute", "Asia/Kolkata", "2024-07-01T12:00:00Z"),
+            Some(30)
+        );
+    }
+
+    #[test]
+    fn timezone_parts_over_array_with_dst_transition_and_nulls() {
+        // Two instants either side of the Brussels DST switch, plus a null
+        let array = TimestampNanosecondArray::from(vec![
+            Some(ts_nanos("2024-01-15T00:00:00Z")),
+            Some(ts_nanos("2024-07-15T00:00:00Z")),
+            None,
+            Some(ts_nanos("2024-11-15T00:00:00Z")),
+        ])
+        .with_timezone("Europe/Brussels");
+
+        let result = invoke_date_part(
+            "timezone",
+            ColumnarValue::Array(Arc::new(array.clone())),
+            4,
+        )
+        .unwrap()
+        .to_array(4)
+        .unwrap();
+        assert_eq!(
+            as_int32_array(&result).unwrap(),
+            &Int32Array::from(vec![Some(3_600), Some(7_200), None, Some(3_600)])
+        );
+
+        let result =
+            invoke_date_part("timezone_hour", ColumnarValue::Array(Arc::new(array)), 4)
+                .unwrap()
+                .to_array(4)
+                .unwrap();
+        assert_eq!(
+            as_int32_array(&result).unwrap(),
+            &Int32Array::from(vec![Some(1), Some(2), None, Some(1)])
+        );
+    }
+
+    #[test]
+    fn timezone_parts_for_all_time_units() {
+        // 2024-07-01T12:00:00Z in Kolkata (+05:30) regardless of precision
+        let second =
+            TimestampSecondArray::from(vec![1_719_835_200]).with_timezone("Asia/Kolkata");
+        let milli = TimestampMillisecondArray::from(vec![1_719_835_200_000])
+            .with_timezone("Asia/Kolkata");
+        let micro = TimestampMicrosecondArray::from(vec![1_719_835_200_000_000])
+            .with_timezone("Asia/Kolkata");
+        let nano = TimestampNanosecondArray::from(vec![1_719_835_200_000_000_000])
+            .with_timezone("Asia/Kolkata");
+
+        for array in [
+            Arc::new(second) as Arc<dyn Array>,
+            Arc::new(milli),
+            Arc::new(micro),
+            Arc::new(nano),
+        ] {
+            let dt = array.data_type().clone();
+            let result = invoke_date_part("timezone", ColumnarValue::Array(array), 1)
+                .unwrap()
+                .to_array(1)
+                .unwrap();
+            assert_eq!(
+                as_int32_array(&result).unwrap(),
+                &Int32Array::from(vec![19_800]),
+                "unexpected offset for {dt}"
+            );
+        }
+    }
+
+    #[test]
+    fn timezone_parts_on_scalar_input() {
+        let scalar = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+            Some(ts_nanos("2024-07-01T12:00:00Z")),
+            Some("Europe/Brussels".into()),
+        ));
+        let ColumnarValue::Scalar(result) =
+            invoke_date_part("timezone", scalar, 1).unwrap()
+        else {
+            panic!("expected a scalar result for a scalar input");
+        };
+        assert_eq!(result, ScalarValue::Int32(Some(7_200)));
+    }
+
+    #[test]
+    fn timezone_parts_on_null_input() {
+        for part in ["timezone", "timezone_hour", "timezone_minute"] {
+            let scalar = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                None,
+                Some("Europe/Brussels".into()),
+            ));
+            let ColumnarValue::Scalar(result) =
+                invoke_date_part(part, scalar, 1).unwrap()
+            else {
+                panic!("expected a scalar result for a scalar input");
+            };
+            assert_eq!(result, ScalarValue::Int32(None));
+        }
+    }
+
+    #[test]
+    fn timezone_parts_reject_timezone_naive_timestamps() {
+        for part in ["timezone", "timezone_hour", "timezone_minute"] {
+            let scalar = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                Some(ts_nanos("2024-07-01T12:00:00Z")),
+                None,
+            ));
+            let err = invoke_date_part(part, scalar, 1).unwrap_err().to_string();
+            assert!(
+                err.contains(&format!(
+                    "Date part '{part}' is not supported for timezone-naive timestamps"
+                )),
+                "unexpected error for {part}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn timezone_parts_reject_non_timestamp_input() {
+        let scalar = ColumnarValue::Scalar(ScalarValue::Date32(Some(19_875)));
+        let err = invoke_date_part("timezone", scalar, 1)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(
+                "Date part 'timezone' is only supported for timestamps with a timezone"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// An Arrow timestamp type can carry any string as its timezone, because
+    /// nothing validates it at construction time. SQL cannot produce such an
+    /// array, but an externally built Arrow schema can, so the invalid value
+    /// must surface as an execution error that names the offending timezone.
+    #[test]
+    fn timezone_parts_reject_invalid_arrow_timezone() {
+        for part in ["timezone", "timezone_hour", "timezone_minute"] {
+            let array = TimestampNanosecondArray::from(vec![Some(ts_nanos(
+                "2024-07-01T12:00:00Z",
+            ))])
+            .with_timezone("Not/A_Timezone");
+
+            let err = invoke_date_part(part, ColumnarValue::Array(Arc::new(array)), 1)
+                .unwrap_err()
+                .to_string();
+
+            assert!(
+                err.contains("Execution error"),
+                "expected an execution error for {part}: {err}"
+            );
+            assert!(
+                err.contains("Not/A_Timezone"),
+                "error for {part} must name the offending timezone: {err}"
+            );
+            assert!(
+                err.contains("failed on timezone"),
+                "error for {part} must keep the parse context: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn timezone_parts_return_int32() {
+        let arg_fields: Vec<FieldRef> = vec![
+            Field::new("a", DataType::Utf8, false).into(),
+            Field::new(
+                "b",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("Europe/Brussels".into())),
+                true,
+            )
+            .into(),
+        ];
+        for part in ["timezone", "timezone_hour", "timezone_minute"] {
+            let part = ScalarValue::from(part);
+            let field = DatePartFunc::new()
+                .return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &arg_fields,
+                    scalar_arguments: &[Some(&part), None],
                 })
-            })
-            .collect();
-        Ok(Arc::new(r))
+                .unwrap();
+            assert_eq!(field.data_type(), &DataType::Int32);
+            assert!(field.is_nullable());
+        }
     }
 }

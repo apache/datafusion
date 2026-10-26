@@ -27,15 +27,18 @@ use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Statistics};
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, SplitPoint, exec_err};
 use datafusion_expr::{Expr, TableType, col, lit};
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{
+    LexOrdering, PhysicalExpr, PhysicalSortExpr, RangePartitioning,
+};
+use datafusion_physical_plan::{ExecutionPlan, Partitioning};
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
-    create_ffi_abs_func, create_ffi_first_value_func, create_ffi_random_func,
-    create_ffi_rank_func, create_ffi_stddev_func, create_ffi_sum_func,
-    create_ffi_table_func,
+    create_ffi_abs_func, create_ffi_first_value_func, create_ffi_min_func,
+    create_ffi_random_func, create_ffi_rank_func, create_ffi_stddev_func,
+    create_ffi_sum_func, create_ffi_table_func,
 };
 
 use crate::catalog_provider::FFI_CatalogProvider;
@@ -139,6 +142,9 @@ pub struct ForeignLibraryModule {
 
     /// Create an aggregate UDAF using first_value
     pub create_first_value_udaf: extern "C" fn() -> FFI_AggregateUDF,
+
+    /// Create an aggregate UDAF using min
+    pub create_min_udaf: extern "C" fn() -> FFI_AggregateUDF,
 }
 
 pub fn create_test_schema() -> Arc<Schema> {
@@ -228,7 +234,22 @@ pub fn make_test_statistics() -> Statistics {
 
 pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
     let schema = create_test_schema();
-    let plan = Arc::new(EmptyExec::new(schema).with_statistics(make_test_statistics()));
+    let ordering =
+        LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))])
+            .expect("non-empty ordering");
+    let samples = [10, 20, 30, 40, 50]
+        .into_iter()
+        .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+        .collect();
+    let partitioning = Partitioning::Range(
+        RangePartitioning::try_new_with_samples(ordering, samples, 3)
+            .expect("valid sampled range partitioning"),
+    );
+    let plan = Arc::new(
+        EmptyExec::new(schema)
+            .with_statistics(make_test_statistics())
+            .with_partitioning(partitioning),
+    );
     FFI_ExecutionPlan::new(plan, None)
 }
 
@@ -411,5 +432,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_query_planner: query_planner::create_query_planner,
         version: super::version,
         create_first_value_udaf: create_ffi_first_value_func,
+        create_min_udaf: create_ffi_min_func,
     }
 }

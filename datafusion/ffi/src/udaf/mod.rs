@@ -24,7 +24,8 @@ use datafusion_common::{DataFusionError, Result, ffi_datafusion_err};
 use datafusion_expr::function::AggregateFunctionSimplification;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
-    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
+    Accumulator, AggregateUDF, AggregateUDFImpl, DistinctHandling, GroupsAccumulator,
+    Signature,
 };
 use datafusion_functions_aggregate_common::accumulator::{
     AccumulatorArgs, StateFieldsArgs,
@@ -149,6 +150,10 @@ pub struct FFI_AggregateUDF {
     /// FFI equivalent to [`AggregateUDF::supports_null_handling_clause`]
     pub supports_null_handling_clause:
         unsafe extern "C" fn(udaf: &FFI_AggregateUDF) -> bool,
+
+    /// FFI equivalent to [`AggregateUDF::distinct_handling`]
+    pub distinct_handling:
+        unsafe extern "C" fn(udaf: &FFI_AggregateUDF) -> FFI_DistinctHandling,
 }
 
 unsafe impl Send for FFI_AggregateUDF {}
@@ -337,6 +342,12 @@ unsafe extern "C" fn supports_null_handling_clause_fn_wrapper(
     unsafe { udaf.inner().supports_null_handling_clause() }
 }
 
+unsafe extern "C" fn distinct_handling_fn_wrapper(
+    udaf: &FFI_AggregateUDF,
+) -> FFI_DistinctHandling {
+    unsafe { udaf.inner().distinct_handling().into() }
+}
+
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     arg_types: SVec<WrappedSchema>,
@@ -412,6 +423,7 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
             supports_null_handling_clause: supports_null_handling_clause_fn_wrapper,
+            distinct_handling: distinct_handling_fn_wrapper,
         }
     }
 }
@@ -610,6 +622,10 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         unsafe { (self.udaf.supports_null_handling_clause)(&self.udaf) }
     }
 
+    fn distinct_handling(&self) -> DistinctHandling {
+        unsafe { (self.udaf.distinct_handling)(&self.udaf).into() }
+    }
+
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         None
     }
@@ -655,11 +671,41 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
     }
 }
 
+#[repr(C)]
+#[derive(Debug)]
+pub enum FFI_DistinctHandling {
+    Insensitive,
+    Sensitive,
+    Unsupported,
+}
+
+impl From<FFI_DistinctHandling> for DistinctHandling {
+    fn from(value: FFI_DistinctHandling) -> Self {
+        match value {
+            FFI_DistinctHandling::Insensitive => Self::Insensitive,
+            FFI_DistinctHandling::Sensitive => Self::Sensitive,
+            FFI_DistinctHandling::Unsupported => Self::Unsupported,
+        }
+    }
+}
+
+impl From<DistinctHandling> for FFI_DistinctHandling {
+    fn from(value: DistinctHandling) -> Self {
+        match value {
+            DistinctHandling::Insensitive => Self::Insensitive,
+            DistinctHandling::Sensitive => Self::Sensitive,
+            DistinctHandling::Unsupported => Self::Unsupported,
+            // `DistinctHandling` is non_exhaustive, so map any variant added
+            // later to the default.
+            _ => Self::Sensitive,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
-    use arrow::datatypes::Schema;
+    use arrow::datatypes::{Metadata, Schema};
     use datafusion::common::create_array;
     use datafusion::functions_aggregate::sum::Sum;
     use datafusion::physical_expr::PhysicalSortExpr;
@@ -776,8 +822,7 @@ mod tests {
         let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).into();
         let foreign_udaf = AggregateUDF::new_from_shared_impl(foreign_udaf);
 
-        let metadata: HashMap<String, String> =
-            std::iter::once(("a_key".to_string(), "a_value".to_string())).collect();
+        let metadata = Metadata::new().with("a_key", "a_value");
         let input_field = Arc::new(
             Field::new("a", DataType::Float64, false).with_metadata(metadata.clone()),
         );
@@ -801,6 +846,24 @@ mod tests {
     }
 
     #[test]
+    fn test_distinct_handling() -> Result<()> {
+        let min = create_test_foreign_udaf(
+            datafusion::functions_aggregate::min_max::Min::new(),
+        )?;
+        assert_eq!(min.distinct_handling(), DistinctHandling::Insensitive);
+
+        let sum = create_test_foreign_udaf(Sum::new())?;
+        assert_eq!(sum.distinct_handling(), DistinctHandling::Sensitive);
+
+        let stddev = create_test_foreign_udaf(
+            datafusion::functions_aggregate::stddev::Stddev::new(),
+        )?;
+        assert_eq!(stddev.distinct_handling(), DistinctHandling::Unsupported);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_beneficial_ordering() -> Result<()> {
         let foreign_udaf = create_test_foreign_udaf(
             datafusion::functions_aggregate::first_last::FirstValue::new(),
@@ -814,6 +877,9 @@ mod tests {
         );
 
         let a_field = Arc::new(Field::new("a", DataType::Float64, true));
+
+        let expected_ordering_field =
+            Arc::new(a_field.as_ref().clone().with_name("a[ordering_0]"));
         let state_fields = foreign_udaf.state_fields(StateFieldsArgs {
             name: "a",
             input_fields: &[Field::new("f", DataType::Float64, true).into()],
@@ -823,7 +889,7 @@ mod tests {
         })?;
 
         assert_eq!(state_fields.len(), 3);
-        assert_eq!(state_fields[1], a_field);
+        assert_eq!(state_fields[1], expected_ordering_field);
         Ok(())
     }
 
@@ -867,6 +933,18 @@ mod tests {
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::HardRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::SoftRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::Beneficial);
+    }
+
+    #[test]
+    fn test_round_trip_all_distinct_handlings() {
+        for handling in [
+            DistinctHandling::Insensitive,
+            DistinctHandling::Sensitive,
+            DistinctHandling::Unsupported,
+        ] {
+            let ffi_handling: FFI_DistinctHandling = handling.into();
+            assert_eq!(DistinctHandling::from(ffi_handling), handling);
+        }
     }
 
     #[test]
