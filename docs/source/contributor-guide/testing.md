@@ -436,26 +436,6 @@ an agreed resource budget. Runtime-only breakage may remain unnoticed until an
 on-demand run. When changing benchmark fixtures, setup, or APIs, run the affected
 benchmarks and include the commands and results in your PR.
 
-#### Compilation coverage retained in CI
-
-The existing `clippy` job in `.github/workflows/rust.yml` invokes
-`ci/scripts/rust_clippy.sh`, which checks `--workspace --all-targets` twice: with
-`avro,integration-tests,extended_tests`, then with `--all-features`. All bench
-targets selected by the microbenchmark command are workspace members and therefore
-remain covered by the all-features pass, including these `required-features` gates:
-
-- `datafusion`: `parquet`, `nested_expressions`.
-- `datafusion-functions`: `crypto_expressions`, `datetime_expressions`,
-  `encoding_expressions`, `math_expressions`, `regex_expressions`,
-  `string_expressions`, `unicode_expressions`.
-- `datafusion-physical-plan`: `test_utils`.
-
-The other selected bench targets have no `required-features` gates. This retains
-bench-target compilation, not compilation under every feature combination or the
-exact `ci-bench` profile; that profile and benchmark execution are checked on
-demand. No replacement compilation job is added. Existing TPC-H plan/result checks
-in `verify benchmark results (amd64)` remain separate and unchanged.
-
 ### Parquet SQL Benchmarks
 
 The parquet SQL benchmarks can be run with
