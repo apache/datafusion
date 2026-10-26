@@ -385,22 +385,10 @@ impl DynamicFilterPhysicalExpr {
     /// during a later execution of the same plan.
     pub fn reset(&self) {
         let mut current = self.inner.write();
-        // Keep the generation increasing: `current()` caches by generation, so going
-        // back would let a later update hit the previous run's cached expression.
-        let new_generation = current.generation + 1;
-        *current = Inner {
-            expression_id: current.expression_id,
-            generation: new_generation,
-            expr: lit(true),
-            is_complete: false,
-        };
-        drop(current);
-
-        // The channel still holds `Complete` from the previous run; publish
-        // `InProgress` so `wait_complete()` waits for this run's filter.
-        let _ = self.state_watch.send(FilterState::InProgress {
-            generation: new_generation,
-        });
+        current.generation += 1;
+        current.expr = lit(true);
+        current.is_complete = false;
+        self.state_watch.send_replace(current.state());
     }
 
     /// Mark this dynamic filter as complete and broadcast to all waiters.
@@ -1172,6 +1160,23 @@ mod test {
             assert!(!receiver.has_changed().unwrap());
         }
         Ok(())
+    }
+
+    #[test]
+    fn reset_after_complete_without_receivers() {
+        use std::pin::pin;
+        use std::task::{Context, Waker};
+
+        let f = DynamicFilterPhysicalExpr::new(vec![], lit(true));
+        f.update(lit(false)).unwrap();
+        f.mark_complete();
+        f.reset();
+        let mut cx = Context::from_waker(Waker::noop());
+        let mut w = pin!(f.wait_complete());
+        assert!(w.as_mut().poll(&mut cx).is_pending());
+
+        f.mark_complete();
+        assert!(w.as_mut().poll(&mut cx).is_ready());
     }
 
     #[test]
