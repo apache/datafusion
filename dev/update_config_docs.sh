@@ -212,6 +212,7 @@ For point lookups, the following techniques also help:
 - Reuse prepared statements to avoid re-planning each query.
 
 Here is how to enable pushdown filters:
+
 ```sql
 SET datafusion.execution.parquet.pushdown_filters = true;
 ```
