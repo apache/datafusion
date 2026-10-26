@@ -48,6 +48,7 @@ use object_store::local::LocalFileSystem;
 use rstest::rstest;
 use std::collections::HashMap;
 use std::fs;
+use std::ops::Rem;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -139,6 +140,36 @@ async fn assert_logical_expr_schema_eq_physical_expr_schema(df: DataFrame) -> Re
     let physical_expr_schema = batches[0].schema();
     assert_eq!(logical_expr_schema, physical_expr_schema);
     Ok(())
+}
+
+/// n rows with id = 0..n, split into batches of batch_size rows.
+fn id_batches(n: i32, batch_size: usize) -> Result<Vec<RecordBatch>> {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    (0..n)
+        .step_by(batch_size)
+        .map(|start| {
+            let end = (start + batch_size as i32).min(n);
+            let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(start..end));
+            Ok(RecordBatch::try_new(Arc::clone(&schema), vec![ids])?)
+        })
+        .collect()
+}
+
+/// All values of an Int32 column across batches, in output order.
+fn column_values(batches: &[RecordBatch], name: &str) -> Vec<i32> {
+    batches
+        .iter()
+        .flat_map(|b| {
+            b.column_by_name(name)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .iter()
+                .copied()
+        })
+        .collect()
 }
 
 #[tokio::test]
@@ -7487,6 +7518,127 @@ async fn test_dataframe_with_column_array_col_length_mismatch() -> Result<()> {
     let df = df.with_column("extra", array_col(too_short))?;
     let err = df.collect().await.unwrap_err();
     assert!(err.to_string().contains("rows"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_with_column_array_col_row_order_multi_partition() -> Result<()> {
+    const ROWS: i32 = 32_000;
+    // Pin parallelism so the test does not depend on the CI machine's core count.
+    let config = SessionConfig::new()
+        .with_target_partitions(8)
+        .with_batch_size(1_000);
+    let ctx = SessionContext::new_with_config(config);
+    let batches = id_batches(ROWS, 1_000)?;
+
+    // Scheduling is nondeterministic, so repeat: one scrambled run is enough to fail.
+    for _ in 0..10 {
+        let tag: ArrayRef = Arc::new(Int32Array::from_iter_values(0..ROWS));
+        let df = ctx
+            .read_batches(batches.clone())? // ONE MemTable partition...
+            .filter(col("id").gt_eq(lit(0)))? // ...that the optimizer splits into 8
+            .with_column("tag", array_col(tag))?;
+
+        let mismatched = df.filter(col("id").not_eq(col("tag")))?.count().await?;
+        assert_eq!(
+            mismatched, 0,
+            "rows were paired with the wrong array values"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_with_column_array_col_reads_partitions_in_order() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    // 4 partitions x 2 batches x 3 rows, ids 0..24 laid out partition-major:
+    // partition 0 = [0,1,2],[3,4,5]; partition 1 = [6,7,8],[9,10,11]; ...
+    let partitions: Vec<Vec<RecordBatch>> = (0..4)
+        .map(|p| {
+            (0..2)
+                .map(|b| {
+                    let start = p * 6 + b * 3;
+                    let ids: ArrayRef =
+                        Arc::new(Int32Array::from_iter_values(start..start + 3));
+                    Ok(RecordBatch::try_new(Arc::clone(&schema), vec![ids])?)
+                })
+                .collect::<Result<_>>()
+        })
+        .collect::<Result<_>>()?;
+    let table = MemTable::try_new(Arc::clone(&schema), partitions)?;
+
+    let ctx = SessionContext::new();
+    let tag: ArrayRef = Arc::new(Int32Array::from_iter_values((0..24).map(|i| i * 100)));
+    let df = ctx
+        .read_table(Arc::new(table))?
+        .with_column("tag", array_col(tag))?;
+
+    let batches = df.collect().await?;
+    let ids = column_values(&batches, "id");
+    let tags = column_values(&batches, "tag");
+    // Partition 0 first, then 1, 2, 3 — same order as collect_partitioned() flattened.
+    assert_eq!(ids, (0..24).collect::<Vec<_>>());
+    assert_eq!(tags, ids.iter().map(|i| i * 100).collect::<Vec<_>>());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_column_array_col_across_batch_boundaries() -> Result<()> {
+    let ctx = SessionContext::new_with_config(SessionConfig::new().with_batch_size(7));
+    let df = ctx
+        .read_batches(id_batches(100, 13)?)? // 13-row input batches, 7-row output batches
+        .filter(col("id").rem(lit(3)).eq(lit(0)))?; // ragged batches: 0,3,6,...,99 -> 34 rows
+
+    let expected: Vec<i32> = (0..100).filter(|i| i % 3 == 0).collect();
+    let tag: ArrayRef = Arc::new(Int32Array::from(expected.clone()));
+    let batches = df.with_column("tag", array_col(tag))?.collect().await?;
+
+    assert_eq!(column_values(&batches, "id"), expected);
+    assert_eq!(column_values(&batches, "tag"), expected);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_with_column_array_col_after_sort() -> Result<()> {
+    const ROWS: i32 = 10_000;
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(8));
+    // Reverse-aligned array: row with id = k (sorted desc) should get tag = ROWS - 1 - k.
+    let tag: ArrayRef = Arc::new(Int32Array::from_iter_values(0..ROWS));
+    let df = ctx
+        .read_batches(id_batches(ROWS, 500)?)?
+        .sort(vec![col("id").sort(false, false)])?
+        .with_column("tag", array_col(tag))?;
+
+    let mismatched = df
+        .filter((col("id") + col("tag")).not_eq(lit(ROWS - 1)))?
+        .count()
+        .await?;
+    assert_eq!(mismatched, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_column_array_col_physical_plan() -> Result<()> {
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(8));
+    let tag: ArrayRef = Arc::new(Int32Array::from_iter_values(0..1_000));
+    let df = ctx
+        .read_batches(id_batches(1_000, 100)?)?
+        .filter(col("id").gt_eq(lit(0)))?
+        .with_column("tag", array_col(tag))?;
+
+    let plan = df.create_physical_plan().await?;
+    let displayed = displayable(plan.as_ref()).indent(true).to_string();
+    // The subtree feeding the positional pairing is planned single-partition...
+    assert!(
+        displayed.contains("AddColumnExec: tag, input_partitions=1"),
+        "{displayed}"
+    );
+    assert!(displayed.contains("partitions=1"), "{displayed}");
+    // ...and the merge is not smuggled in at execute() time.
+    assert!(!displayed.contains("RepartitionExec"), "{displayed}");
+    assert!(!displayed.contains("CoalescePartitionsExec"), "{displayed}");
     Ok(())
 }
 

@@ -31,6 +31,7 @@ use crate::error::Result;
 use crate::execution::{
     FunctionRegistry,
     context::{SessionState, TaskContext},
+    session_state::SessionStateBuilder,
 };
 use crate::logical_expr::{
     Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
@@ -40,9 +41,9 @@ use crate::physical_expr::EquivalenceProperties;
 use crate::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, Partitioning as PhysicalPartitioning, PhysicalExpr,
-    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream,
-    coalesce_partitions::CoalescePartitionsExec, collect, collect_partitioned,
-    execute_stream, execute_stream_partitioned, stream::RecordBatchStreamAdapter,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, collect,
+    collect_partitioned, displayable, execute_stream, execute_stream_partitioned,
+    stream::RecordBatchStreamAdapter,
 };
 use crate::prelude::SessionContext;
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
@@ -55,8 +56,8 @@ use datafusion_common::{
     Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
     TableReference, UnnestOptions,
     config::{CsvOptions, JsonOptions},
-    exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    project_schema,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
+    plan_err, project_schema,
     tree_node::TreeNodeRecursion,
     unqualified_field_not_found,
 };
@@ -72,8 +73,8 @@ use datafusion_functions_aggregate::expr_fn::{
 };
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use futures::future::BoxFuture;
+use futures::{StreamExt, TryStreamExt};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Formatter};
@@ -2988,7 +2989,24 @@ impl TableProvider for AddColumnProvider {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = state.create_physical_plan(&self.input).await?;
+        // Positional pairing is only defined on a stream that has not been
+        // repartitioned: row `i` of the input must meet element `i` of the
+        // array. Plan the input as a single-partition sub-plan so the optimizer
+        // does not split the source or insert `RepartitionExec` below us.
+        let state = state
+            .as_any()
+            .downcast_ref::<SessionState>()
+            .ok_or_else(|| {
+                internal_datafusion_err!("AddColumnProvider requires a SessionState")
+            })?;
+        let config = state.config().clone().with_target_partitions(1);
+        let single_partition_state =
+            SessionStateBuilder::new_from_existing(state.clone())
+                .with_config(config)
+                .build();
+        let input = single_partition_state
+            .create_physical_plan(&self.input)
+            .await?;
         Ok(Arc::new(AddColumnExec::new(
             input,
             self.name.clone(),
@@ -2999,6 +3017,17 @@ impl TableProvider for AddColumnProvider {
     }
 }
 
+/// Appends a pre-materialized array as a column, pairing array element `i`
+/// with the `i`-th row produced by `input`.
+///
+/// Positional pairing is only defined on a stream that has not been
+/// repartitioned. `input` is therefore a fully planned, single-partition
+/// sub-plan (see [`AddColumnProvider::scan`]) that is deliberately *not*
+/// exposed through [`ExecutionPlan::children`]: the physical optimizer would
+/// otherwise repartition it to increase parallelism, and the merged stream
+/// would no longer be in input order. Any partitions the input still has are
+/// inherent to its source (for example a multi-partition `MemTable`) and are
+/// read one after another, in partition order.
 #[derive(Debug)]
 struct AddColumnExec {
     input: Arc<dyn ExecutionPlan>,
@@ -3039,11 +3068,36 @@ impl AddColumnExec {
             input.boundedness(),
         )
     }
+
+    fn input_partitions(&self) -> usize {
+        self.input.output_partitioning().partition_count()
+    }
 }
 
 impl DisplayAs for AddColumnExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
-        write!(f, "AddColumnExec: {}", self.name)
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "AddColumnExec: {}, input_partitions={}",
+                    self.name,
+                    self.input_partitions()
+                )?;
+                // The input is not a child, so the plan printer will not
+                // descend into it. Render it here so EXPLAIN shows what runs.
+                let verbose = matches!(t, DisplayFormatType::Verbose);
+                let input = displayable(self.input.as_ref()).indent(verbose).to_string();
+                for line in input.lines() {
+                    write!(f, "\n  {line}")?;
+                }
+                Ok(())
+            }
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "column={}", self.name)?;
+                write!(f, "input_partitions={}", self.input_partitions())
+            }
+        }
     }
 }
 
@@ -3056,41 +3110,20 @@ impl ExecutionPlan for AddColumnExec {
         &self.cache
     }
 
+    /// The input is intentionally not reported as a child; see the type docs.
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
-    }
-
-    fn maintains_input_order(&self) -> Vec<bool> {
-        vec![true]
+        vec![]
     }
 
     fn replace_children(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-        options: ReplaceChildrenOptions,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.len() != 1 {
-            return plan_err!("AddColumnExec expects exactly one child");
+        if !children.is_empty() {
+            return internal_err!("AddColumnExec has no children");
         }
-
-        let input = children.swap_remove(0);
-        match options.children_properties {
-            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
-                input,
-                name: self.name.clone(),
-                array: Arc::clone(&self.array),
-                full_schema: Arc::clone(&self.full_schema),
-                projection: self.projection.clone(),
-                cache: Arc::clone(&self.cache),
-            })),
-            ChildrenPropertiesMode::Recompute => Ok(Arc::new(Self::new(
-                input,
-                self.name.clone(),
-                Arc::clone(&self.array),
-                Arc::clone(&self.full_schema),
-                self.projection.as_deref(),
-            )?)),
-        }
+        Ok(self)
     }
 
     fn with_new_children(
@@ -3112,14 +3145,16 @@ impl ExecutionPlan for AddColumnExec {
             return exec_err!("AddColumnExec only produces partition 0");
         }
 
-        // A single ArrayRef is one global vector, so the input must be one stream.
-        let input = if self.input.output_partitioning().partition_count() == 1 {
-            Arc::clone(&self.input)
-        } else {
-            Arc::new(CoalescePartitionsExec::new(Arc::clone(&self.input)))
-        };
+        // Read the input partitions one after another, in partition order.
+        // Reading them concurrently (e.g. through `CoalescePartitionsExec`)
+        // would interleave batches in arrival order and pair rows with the
+        // wrong array elements.
+        let input = Arc::clone(&self.input);
+        let stream = futures::stream::iter(0..self.input_partitions())
+            .map(move |p| input.execute(p, Arc::clone(&context)))
+            .try_flatten()
+            .boxed();
 
-        let stream = input.execute(0, context)?;
         let array = Arc::clone(&self.array);
         let full_schema = Arc::clone(&self.full_schema);
         let projection = self.projection.clone();
