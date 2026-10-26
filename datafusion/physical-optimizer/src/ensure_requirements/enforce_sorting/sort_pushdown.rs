@@ -1062,8 +1062,8 @@ fn handle_custom_pushdown(
     Ok(Some(child_requirements))
 }
 
-/// Checks that proposed child orderings respect fetch boundaries, satisfy the
-/// node's input requirements, and produce the requested output ordering.
+/// Rebuild with temporary [`SortExec`] inputs to recompute the node's properties.
+/// Validate input requirements and output ordering without executing these plans.
 fn is_custom_sort_pushdown_valid(
     plan: &Arc<dyn ExecutionPlan>,
     child_requirements: &[Option<OrderingRequirements>],
@@ -1072,9 +1072,8 @@ fn is_custom_sort_pushdown_valid(
     let plan_children = plan.children();
 
     let selecting_sort = if plan.fetch().is_some() {
-        // Pushing a sort below an unordered fetch changes which rows it keeps.
-        // Even an ordered fetch can select different rows if its input is reordered.
-        // As for native limits, only refine a sort directly below this boundary.
+        // Sorting below a fetch can change which rows it selects. Only refine
+        // a SortExec directly below this boundary, as for native limits.
         let ([child], [Some(_)]) = (plan_children.as_slice(), child_requirements) else {
             return Ok(false);
         };
@@ -1086,95 +1085,75 @@ fn is_custom_sort_pushdown_valid(
         None
     };
 
-    // Test the proposed child orderings without moving the real sorts yet.
     let mut probe_children = Vec::with_capacity(plan_children.len());
     for (child, required) in plan_children.iter().zip(child_requirements) {
-        let child = if let Some(required) = required {
-            // Other order-maintaining inputs may have narrower schemas.
-            if required.first().iter().any(|sort| {
-                collect_columns(&sort.expr)
-                    .iter()
-                    .any(|column| column.index() >= child.schema().fields().len())
-            }) {
-                return Ok(false);
-            }
-            let ordering: LexOrdering = required.first().clone().into();
-            if let Some(sort) = selecting_sort {
-                // Preserve every key that selected the fetched rows, including
-                // keys hidden by the node's output. Prove this from the concrete
-                // proposed ordering, without relying on the old sort's ordering.
-                let mut proposed_properties = child.equivalence_properties().clone();
-                proposed_properties.clear_orderings();
-                proposed_properties.add_ordering(ordering.clone());
-                if !proposed_properties.ordering_satisfy(sort.expr().clone())? {
-                    return Ok(false);
-                }
-            }
-            // A bounded operator can stop an unbounded input; a new blocking
-            // sort below it cannot. An already ordered input needs no new sort.
-            if child.boundedness().is_unbounded()
-                && !child
-                    .equivalence_properties()
-                    .ordering_satisfy_requirement(required.first().clone())?
-            {
-                return Ok(false);
-            }
-            Arc::new(
-                SortExec::new(ordering, Arc::clone(child))
-                    .with_preserve_partitioning(true),
-            ) as Arc<dyn ExecutionPlan>
-        } else {
-            Arc::clone(child)
+        let Some(required) = required else {
+            probe_children.push(Arc::clone(child));
+            continue;
         };
-        probe_children.push(child);
+        // Other order-maintaining inputs may have narrower schemas.
+        let input_width = child.schema().fields().len();
+        if required.first().iter().any(|sort| {
+            collect_columns(&sort.expr)
+                .iter()
+                .any(|column| column.index() >= input_width)
+        }) {
+            return Ok(false);
+        }
+        let ordering: LexOrdering = required.first().clone().into();
+        let child_properties = child.equivalence_properties();
+        if let Some(sort) = selecting_sort {
+            // Preserve every key that selected the fetched rows, including hidden keys.
+            // Clear old ordering metadata so the proposal must prove this on its own.
+            let mut proposed_properties = child_properties.clone();
+            proposed_properties.clear_orderings();
+            proposed_properties.add_ordering(ordering.clone());
+            if !proposed_properties.ordering_satisfy(sort.expr().clone())? {
+                return Ok(false);
+            }
+        }
+        // A new blocking sort would prevent a bounded node from stopping an
+        // unbounded input. Already ordered inputs need no new sort.
+        if child.boundedness().is_unbounded()
+            && !child_properties.ordering_satisfy_requirement(required.first().clone())?
+        {
+            return Ok(false);
+        }
+        probe_children.push(Arc::new(
+            SortExec::new(ordering, Arc::clone(child)).with_preserve_partitioning(true),
+        ));
     }
 
-    // The proposed sorts must not break the node's own input requirements.
-    let children = probe_children
-        .iter()
-        .map(|child| child.as_ref())
-        .collect::<Vec<_>>();
-    if !sort_pushdown_inputs_satisfied(plan.as_ref(), &children)? {
+    // The input plan already satisfies distribution, which these sorts preserve.
+    // Check ordering before rebuilding: the node may reject incompatible children.
+    let children = probe_children.iter().map(Arc::as_ref).collect::<Vec<_>>();
+    if !sort_pushdown_input_orderings_satisfied(plan.as_ref(), &children)? {
         return Ok(false);
     }
 
-    // Recompute properties from the proposed inputs: the old properties cannot
-    // tell us how these new orderings pass through the node.
+    // Rebuild with fresh properties to see how the proposed orderings pass through.
     let probe = Arc::clone(plan).replace_children(
         probe_children,
         ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
     )?;
 
-    // Rebuilding can change the node's input requirements. Check them again,
-    // then verify that the output has the requested ordering.
-    let children = probe
-        .children()
-        .into_iter()
-        .map(|child| child.as_ref())
-        .collect::<Vec<_>>();
-    if !sort_pushdown_inputs_satisfied(probe.as_ref(), &children)?
-        || !probe
+    // Rebuilding may change input requirements. Prove those and the output ordering.
+    Ok(sort_pushdown_inputs_satisfied(probe.as_ref())?
+        && probe
             .equivalence_properties()
-            .ordering_satisfy_requirement(output_requirement)?
-    {
-        return Ok(false);
-    }
-    Ok(true)
+            .ordering_satisfy_requirement(output_requirement)?)
 }
 
-/// A sort probe must satisfy the node's input requirements as well as its output order.
-fn sort_pushdown_inputs_satisfied(
+/// Validate ordering separately so it can be checked before rebuilding a node.
+fn sort_pushdown_input_orderings_satisfied(
     plan: &dyn ExecutionPlan,
     children: &[&dyn ExecutionPlan],
 ) -> Result<bool> {
     let ordering = plan.required_input_ordering();
-    let distribution = plan.input_distribution_requirements();
-    if ordering.len() != children.len()
-        || distribution.per_child_distributions().len() != children.len()
-    {
+    if ordering.len() != children.len() {
         return Ok(false);
     }
-    for (index, (child, required)) in children.iter().zip(ordering).enumerate() {
+    for (child, required) in children.iter().zip(ordering) {
         if let Some(required) = required
             && !child
                 .equivalence_properties()
@@ -1182,19 +1161,32 @@ fn sort_pushdown_inputs_satisfied(
         {
             return Ok(false);
         }
-        if !distribution
-            .child_satisfaction(
-                index,
-                *child,
-                ChildSatisfactionOptions::new().with_allow_subset(true),
-            )?
-            .is_satisfied()
-        {
+    }
+    Ok(true)
+}
+
+/// Checks input ordering, per-child distribution, and co-partitioning.
+fn sort_pushdown_inputs_satisfied(plan: &dyn ExecutionPlan) -> Result<bool> {
+    let children = plan
+        .children()
+        .into_iter()
+        .map(Arc::as_ref)
+        .collect::<Vec<_>>();
+    let distribution = plan.input_distribution_requirements();
+    if distribution.per_child_distributions().len() != children.len()
+        || !sort_pushdown_input_orderings_satisfied(plan, &children)?
+    {
+        return Ok(false);
+    }
+    let options = ChildSatisfactionOptions::new().with_allow_subset(true);
+    for (index, child) in children.iter().enumerate() {
+        let satisfaction = distribution.child_satisfaction(index, *child, options)?;
+        if !satisfaction.is_satisfied() {
             return Ok(false);
         }
     }
     Ok(distribution
-        .unsatisfied_co_partitioned_children(plan.name(), children)?
+        .unsatisfied_co_partitioned_children(plan.name(), &children)?
         .is_empty())
 }
 
