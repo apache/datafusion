@@ -59,9 +59,13 @@ fn serialize_on_two_mib_stack(alias_depth: usize) {
 }
 
 fn run_in_child(test_name: &str, alias_depth: usize) {
+    run_in_child_with(test_name, alias_depth, serialize_on_two_mib_stack);
+}
+
+fn run_in_child_with(test_name: &str, alias_depth: usize, run: fn(usize)) {
     if std::env::var_os(CHILD_ENV).is_some() {
         let alias_depth = std::env::var(ALIAS_DEPTH_ENV).unwrap().parse().unwrap();
-        serialize_on_two_mib_stack(alias_depth);
+        run(alias_depth);
         return;
     }
 
@@ -96,4 +100,46 @@ fn deeply_nested_logical_plan_serialization_uses_a_growable_stack() {
     // This depth exceeds the 2 MiB thread stack without recursive protection,
     // exercising the `recursive` stack-growth checkpoint.
     run_in_child(GROWABLE_STACK_TEST_NAME, 2_000);
+}
+
+// Logical plan deserialization (#26737): nested nodes go through
+// `try_into_logical_plan` recursively, so a deep plan needs the same
+// stack-growth checkpoint as serialization.
+#[cfg(feature = "recursive_protection")]
+mod deserialization {
+    use datafusion_execution::TaskContext;
+    use datafusion_proto::logical_plan::{AsLogicalPlan, DefaultLogicalExtensionCodec};
+    use datafusion_proto::protobuf::LogicalPlanNode;
+
+    use super::{deeply_aliased_plan, run_in_child_with};
+
+    const TEST_NAME: &str = "cases::stack_safety::deserialization::deeply_nested_logical_plan_deserialization_uses_a_growable_stack";
+
+    fn deserialize_on_two_mib_stack(alias_depth: usize) {
+        let plan = deeply_aliased_plan(alias_depth);
+        std::thread::Builder::new()
+            .name("two-megabyte-stack".into())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                // Convert to and from the proto struct directly, skipping the
+                // byte encoding, so prost's decode recursion limit (100 levels)
+                // does not cap the depth.
+                let codec = DefaultLogicalExtensionCodec {};
+                let proto =
+                    LogicalPlanNode::try_from_logical_plan(&plan, &codec).unwrap();
+                proto
+                    .try_into_logical_plan(&TaskContext::default(), &codec)
+                    .unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn deeply_nested_logical_plan_deserialization_uses_a_growable_stack() {
+        // This depth exceeds the 2 MiB thread stack without recursive protection,
+        // exercising the `recursive` stack-growth checkpoint.
+        run_in_child_with(TEST_NAME, 2_000, deserialize_on_two_mib_stack);
+    }
 }
