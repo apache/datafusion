@@ -27,6 +27,61 @@ physical_plan
 03)----CooperativeExec
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Reordering columns must not make the generic path sort the wrong input column.
+query II
+SELECT a, b FROM custom_reordered_projection ORDER BY a;
+----
+10 2
+20 3
+30 1
+
+query TT
+EXPLAIN SELECT a, b FROM custom_reordered_projection ORDER BY a;
+----
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--CustomProjectionExec: expr=[b@1 as a, a@0 as b]
+03)----CooperativeExec
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Sorting before the custom filter would evaluate 1 / x on the rejected row
+# where x = 0, failing the query with an integer division-by-zero error.
+query II
+SELECT t, x FROM custom_filtered_input ORDER BY t, 1 / x;
+----
+2 2
+3 4
+
+query TT
+EXPLAIN SELECT t, x FROM custom_filtered_input ORDER BY t, 1 / x;
+----
+physical_plan
+01)SortExec: expr=[t@0 ASC NULLS LAST, 1 / CAST(x@1 AS Int64) ASC NULLS LAST], preserve_partitioning=[false]
+02)--CustomFilterExec: x@1 != 0
+03)----CooperativeExec
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The inner ORDER BY determines which rows LIMIT selects. The outer sort
+# must keep those rows, even when LIMIT is implemented by a custom node.
+query II
+SELECT a, b
+FROM (SELECT a, b FROM custom_ordered_input ORDER BY a LIMIT 2) s
+ORDER BY b;
+----
+2 20
+1 30
+
+query TT
+EXPLAIN SELECT a, b
+FROM (SELECT a, b FROM custom_ordered_input ORDER BY a LIMIT 2) s
+ORDER BY b;
+----
+physical_plan
+01)SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--CustomLocalLimitExec: fetch=2
+03)----CooperativeExec
+04)------CustomDataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+
 statement ok
 SET datafusion.explain.physical_plan_only = false;
 
