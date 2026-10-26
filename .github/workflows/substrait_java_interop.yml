@@ -1,0 +1,83 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Runs a plan the Substrait crate produces through substrait-java and Spark.
+# A DataFusion round trip cannot check a field the consumer never reads, so
+# this is what catches a wrong `AggregationPhase`.
+#
+# It pulls a Spark sized dependency set, so it lives in its own workflow and
+# the `paths` filters below keep it to changes that can affect it. A job
+# filtered that way cannot be a required status check, so this workflow is
+# deliberately absent from `required_status_checks` in `.asf.yaml`, and it
+# has no `merge_group` trigger: it would pay the Rust build and the Spark
+# download on every merge queue entry without gating anything.
+
+name: Substrait java interop
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+on:
+  # `rust.yml` runs on a push to any branch, which is what makes a fork PR run
+  # on the fork; this workflow follows it so its fork clause works the same way.
+  # The merge queue's own branches are left out: the job gates nothing there.
+  push:
+    branches-ignore:
+      - "gh-readonly-queue/**"
+      - "dependabot/**"
+    paths:
+      - "datafusion/substrait/**"
+      - ".github/workflows/substrait_java_interop.yml"
+
+  pull_request:
+    paths:
+      - "datafusion/substrait/**"
+      - ".github/workflows/substrait_java_interop.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  substrait-java-interop:
+    name: Run the Substrait java interop test
+    # A PR from a fork runs this on the fork, as the jobs in `rust.yml` do, so
+    # upstream does not pay for a Rust build and a Spark download on every
+    # contributor PR that touches the crate.
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # The `substrait` crate's build script runs protoc, which is not
+      # preinstalled on ubuntu-latest runners.
+      - name: Install protoc
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2.87.29
+        with:
+          tool: protoc@3.21.12
+      # The build script also runs rustfmt over the generated code.
+      - name: Setup Rust toolchain
+        run: rustup component add rustfmt
+      - name: Setup Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Write the plan
+        run: cargo test -p datafusion-substrait --test substrait_integration -- --ignored write_java_interop_plan
+      - name: Convert it with substrait-java and run it in Spark
+        run: mvn -B -f datafusion/substrait/java-interop/pom.xml test
