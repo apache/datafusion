@@ -315,7 +315,7 @@ git push apache 55.2.0
 
 #### Publish the versioned documentation
 
-**1. Build the documentation from the release tag using the a configuration
+**1. Build the documentation from the release tag** using the configuration
 overlay (`docs/scripts/release/conf.py`) from the main checkout. For example,
 for `55.0.0`, from the repository root:
 
@@ -331,12 +331,14 @@ cd -
 ```
 
 Notes:
-1. You need ot use an absolute path to the overlay in your current checkout. 
+
+1. You need to use an absolute path to the overlay in your current checkout.
 2. The `--with sphinx-sitemap` option supplies the sitemap extension for older tags.
 
-prepare a PR targeting `asf-site` that contains the
-documentation for this release. (For example
-[#25881](https://github.com/apache/datafusion/pull/25881)).
+To preview the result, build the docs from your main checkout
+(`uv run --package datafusion-docs ./build.sh` in `docs/`), copy the release
+build in under `versions/<version>/`, and serve the tree over HTTP (the version
+picker does not work when the pages are opened directly as files):
 
 ```shell
 mkdir -p docs/build/html/versions/55.0.0
@@ -344,8 +346,12 @@ rsync -a /tmp/datafusion-55.0.0/docs/build/html/ docs/build/html/versions/55.0.0
 python3 -m http.server --directory docs/build/html 8000
 ```
 
+Then open http://localhost:8000/ and http://localhost:8000/versions/55.0.0/
+and check the version picker in the navigation bar.
+
 **2. Add the built site to the `asf-site` branch.** Open a PR against
-`asf-site` that adds the release under `versions/<version>/`:
+`asf-site` that adds the release under `versions/<version>/` (for example
+[#25881](https://github.com/apache/datafusion/pull/25881)):
 
 ```shell
 git fetch apache asf-site
@@ -364,9 +370,9 @@ the PR is merged.
 
 **3. Add the release to the version picker.** Open a PR against `main` that
 adds the release to `docs/source/_static/versions.json`. Put the new release
-first and move `"preferred": true` to it, so that it is the default shown.
-Only add releases that are already published, since the picker links to them
-directly.
+directly after the `Development (main)` entry and move `"preferred": true` to it, so that
+it is treated as the current stable release. Only add releases that are already
+published, since the picker links to them directly.
 
 Finally, remove the temporary worktrees:
 

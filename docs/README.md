@@ -58,8 +58,9 @@ open build/html/index.html
 firefox build/html/index.html
 ```
 
-Note that some features of the site, such as the "Version Picker" do not work
-when read from files. To preview such features, you can use the sphinx like this:
+Note that some features of the site, such as the version picker, do not work
+when the pages are opened directly as files. To preview such features, serve
+the site over HTTP with sphinx-autobuild:
 
 ```bash
 uv run --with sphinx-autobuild sphinx-autobuild source build/html --port 8000
