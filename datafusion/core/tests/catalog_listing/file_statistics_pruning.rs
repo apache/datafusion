@@ -27,7 +27,7 @@ use datafusion_datasource::{
 use datafusion_datasource_parquet::ParquetFormat;
 use datafusion_expr::{Expr, Partitioning, col, lit};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
-use datafusion_physical_plan::{ExecutionPlan, displayable, empty::EmptyExec};
+use datafusion_physical_plan::{ExecutionPlan, empty::EmptyExec};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::fs::File;
@@ -110,6 +110,7 @@ fn context(statistics: bool) -> SessionContext {
             .with_collect_statistics(statistics),
     )
 }
+
 fn scan_config(plan: &Arc<dyn ExecutionPlan>) -> &FileScanConfig {
     plan.downcast_ref::<DataSourceExec>()
         .unwrap()
@@ -117,6 +118,7 @@ fn scan_config(plan: &Arc<dyn ExecutionPlan>) -> &FileScanConfig {
         .downcast_ref::<FileScanConfig>()
         .unwrap()
 }
+
 fn names(config: &FileScanConfig) -> Vec<Vec<String>> {
     config
         .file_groups
@@ -128,9 +130,11 @@ fn names(config: &FileScanConfig) -> Vec<Vec<String>> {
         })
         .collect()
 }
+
 fn predicate() -> Expr {
     col("d").gt_eq(lit(20_i64)).and(col("d").lt(lit(40_i64)))
 }
+
 async fn rows(ctx: &SessionContext, query: &str) -> Result<usize> {
     Ok(ctx
         .sql(query)
@@ -159,11 +163,6 @@ async fn prunes_before_grouping_and_aggregates_survivor_statistics() -> Result<(
         config.statistics().column_statistics[0].max_value,
         Precision::Exact(39_i64.into())
     );
-    println!(
-        "AFTER raw scan: {}",
-        displayable(plan.as_ref()).indent(true)
-    );
-    println!("AFTER raw statistics: {:?}", config.statistics());
     ctx.register_table("t", Arc::new(table))?;
     let optimized = ctx
         .sql("select * from t where d >= 20 and d < 40")
@@ -179,10 +178,6 @@ async fn prunes_before_grouping_and_aggregates_survivor_statistics() -> Result<(
         matches!(filtered_statistics.num_rows, Precision::Inexact(20)),
         "{filtered_statistics:?}"
     );
-    println!(
-        "AFTER optimized plan: {}",
-        displayable(optimized.as_ref()).indent(true)
-    );
     assert_eq!(
         rows(&ctx, "select * from t where d >= 20 and d < 40").await?,
         20
@@ -193,6 +188,7 @@ async fn prunes_before_grouping_and_aggregates_survivor_statistics() -> Result<(
     );
     Ok(())
 }
+
 #[tokio::test]
 async fn disabled_statistics_keep_all_files() -> Result<()> {
     let dir = eight_files();
@@ -214,6 +210,7 @@ async fn disabled_statistics_keep_all_files() -> Result<()> {
     );
     Ok(())
 }
+
 #[tokio::test]
 async fn missing_statistics_keep_files() -> Result<()> {
     let dir = fixture(vec![vec![Some(1)], vec![Some(25)]], false, false);
@@ -235,6 +232,7 @@ async fn missing_statistics_keep_files() -> Result<()> {
     );
     Ok(())
 }
+
 #[tokio::test]
 async fn null_semantics_and_empty_scan() -> Result<()> {
     let dir = fixture(
@@ -265,6 +263,7 @@ async fn null_semantics_and_empty_scan() -> Result<()> {
     );
     Ok(())
 }
+
 #[tokio::test]
 async fn declared_partitioning_keeps_groups_and_empty_trailing_groups() -> Result<()> {
     let dir = fixture(vec![vec![Some(1)], vec![Some(25)]], false, true);
@@ -282,6 +281,7 @@ async fn declared_partitioning_keeps_groups_and_empty_trailing_groups() -> Resul
     );
     Ok(())
 }
+
 #[tokio::test]
 async fn limits_offsets_and_projection_keep_row_filter() -> Result<()> {
     let dir = eight_files();
@@ -316,6 +316,7 @@ async fn limits_offsets_and_projection_keep_row_filter() -> Result<()> {
     assert_eq!(values, [27, 28, 29]);
     Ok(())
 }
+
 #[tokio::test]
 async fn custom_adapter_disables_statistics_pruning() -> Result<()> {
     let dir = eight_files();
@@ -332,6 +333,7 @@ async fn custom_adapter_disables_statistics_pruning() -> Result<()> {
     );
     Ok(())
 }
+
 #[tokio::test]
 async fn hive_and_data_predicates_preserve_partition_groups() -> Result<()> {
     let dir = fixture(
