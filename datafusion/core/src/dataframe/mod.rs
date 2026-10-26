@@ -52,19 +52,15 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::FieldRef;
 use datafusion_catalog::Session;
-use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
     TableReference, UnnestOptions,
     config::{CsvOptions, JsonOptions},
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
-    plan_err, project_schema,
-    tree_node::TreeNodeRecursion,
-    unqualified_field_not_found,
+    plan_err, project_schema, unqualified_field_not_found,
 };
 use datafusion_expr::expr_rewriter::{normalize_col, normalize_cols};
-use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{columnize_expr, find_aggregate_exprs};
 use datafusion_expr::{
     ColumnarValue, ExplainOption, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
