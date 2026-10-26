@@ -1,0 +1,330 @@
+{
+  "version": {
+    "minorNumber": 85,
+    "producer": "datafusion"
+  },
+  "extensions": [
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 4294967295,
+        "name": "bitwise_and"
+      }
+    },
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 4294967295,
+        "functionAnchor": 1,
+        "name": "bitwise_shift_right"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "project": {
+            "common": {
+              "emit": {
+                "outputMapping": [
+                  3,
+                  4,
+                  5,
+                  6
+                ]
+              }
+            },
+            "input": {
+              "aggregate": {
+                "common": {
+                  "emit": {
+                    "outputMapping": [
+                      0,
+                      1,
+                      2
+                    ]
+                  }
+                },
+                "input": {
+                  "project": {
+                    "common": {
+                      "emit": {
+                        "outputMapping": [
+                          2,
+                          3
+                        ]
+                      }
+                    },
+                    "input": {
+                      "read": {
+                        "baseSchema": {
+                          "names": [
+                            "column1",
+                            "column2"
+                          ],
+                          "struct": {
+                            "types": [
+                              {
+                                "i64": {
+                                  "nullability": "NULLABILITY_REQUIRED"
+                                }
+                              },
+                              {
+                                "i64": {
+                                  "nullability": "NULLABILITY_REQUIRED"
+                                }
+                              }
+                            ],
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                        "virtualTable": {
+                          "expressions": [
+                            {
+                              "fields": [
+                                {
+                                  "literal": {
+                                    "i64": "1"
+                                  }
+                                },
+                                {
+                                  "literal": {
+                                    "i64": "10"
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "fields": [
+                                {
+                                  "literal": {
+                                    "i64": "2"
+                                  }
+                                },
+                                {
+                                  "literal": {
+                                    "i64": "20"
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "expressions": [
+                      {
+                        "selection": {
+                          "directReference": {
+                            "structField": {}
+                          },
+                          "rootReference": {}
+                        }
+                      },
+                      {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 1
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    ]
+                  }
+                },
+                "groupings": [
+                  {
+                    "groupingExpressions": [
+                      {
+                        "selection": {
+                          "directReference": {
+                            "structField": {}
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    ],
+                    "expressionReferences": [
+                      0
+                    ]
+                  },
+                  {
+                    "groupingExpressions": [
+                      {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 1
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    ],
+                    "expressionReferences": [
+                      1
+                    ]
+                  }
+                ],
+                "groupingExpressions": [
+                  {
+                    "selection": {
+                      "directReference": {
+                        "structField": {}
+                      },
+                      "rootReference": {}
+                    }
+                  },
+                  {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 1
+                        }
+                      },
+                      "rootReference": {}
+                    }
+                  }
+                ]
+              }
+            },
+            "expressions": [
+              {
+                "selection": {
+                  "directReference": {
+                    "structField": {}
+                  },
+                  "rootReference": {}
+                }
+              },
+              {
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                      "field": 1
+                    }
+                  },
+                  "rootReference": {}
+                }
+              },
+              {
+                "cast": {
+                  "type": {
+                    "i32": {
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  },
+                  "input": {
+                    "scalarFunction": {
+                      "functionReference": 1,
+                      "arguments": [
+                        {
+                          "value": {
+                            "scalarFunction": {
+                              "arguments": [
+                                {
+                                  "value": {
+                                    "selection": {
+                                      "directReference": {
+                                        "structField": {
+                                          "field": 2
+                                        }
+                                      },
+                                      "rootReference": {}
+                                    }
+                                  }
+                                },
+                                {
+                                  "value": {
+                                    "literal": {
+                                      "typeVariationReference": 1,
+                                      "i8": 2
+                                    }
+                                  }
+                                }
+                              ],
+                              "outputType": {
+                                "i8": {
+                                  "typeVariationReference": 1,
+                                  "nullability": "NULLABILITY_REQUIRED"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "value": {
+                            "literal": {
+                              "typeVariationReference": 1,
+                              "i8": 1
+                            }
+                          }
+                        }
+                      ],
+                      "outputType": {
+                        "i8": {
+                          "typeVariationReference": 1,
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      }
+                    }
+                  },
+                  "failureBehavior": "FAILURE_BEHAVIOR_THROW_EXCEPTION"
+                }
+              },
+              {
+                "cast": {
+                  "type": {
+                    "i32": {
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  },
+                  "input": {
+                    "scalarFunction": {
+                      "arguments": [
+                        {
+                          "value": {
+                            "selection": {
+                              "directReference": {
+                                "structField": {
+                                  "field": 2
+                                }
+                              },
+                              "rootReference": {}
+                            }
+                          }
+                        },
+                        {
+                          "value": {
+                            "literal": {
+                              "typeVariationReference": 1,
+                              "i8": 1
+                            }
+                          }
+                        }
+                      ],
+                      "outputType": {
+                        "i8": {
+                          "typeVariationReference": 1,
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      }
+                    }
+                  },
+                  "failureBehavior": "FAILURE_BEHAVIOR_THROW_EXCEPTION"
+                }
+              }
+            ]
+          }
+        },
+        "names": [
+          "a",
+          "b",
+          "ga",
+          "gb"
+        ]
+      }
+    }
+  ]
+}

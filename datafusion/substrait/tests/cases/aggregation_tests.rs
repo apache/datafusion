@@ -361,4 +361,42 @@ mod tests {
 
         Ok(())
     }
+
+    /// A plan DataFusion itself exported before it emitted the set index.
+    ///
+    /// Its aggregate ends in `__grouping_id`, and the `GROUPING(a)`/`GROUPING(b)`
+    /// expressions saved above it unpack that bitmask directly. Read as the set
+    /// index the spec asks for, the same bits mean something else, so the two
+    /// `GROUPING` columns come back as `(0, 0)` and `(0, 1)` where the exporter
+    /// produced `(0, 1)` and `(1, 0)`.
+    ///
+    /// Nothing in the plan says which of the two the trailing column holds, so a
+    /// consumer cannot keep both readings; honouring the old one is the bug this
+    /// fixes. The test pins the break so it stays deliberate and visible.
+    #[tokio::test]
+    async fn grouping_id_from_an_older_datafusion_is_read_as_the_set_index() -> Result<()>
+    {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/aggregate_groupings/datafusion_grouping_id_bitmask.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        let results = DataFrame::new(ctx.state(), plan).collect().await?;
+        assert_batches_sorted_eq!(
+            [
+                "+---+----+----+----+",
+                "| a | b  | ga | gb |",
+                "+---+----+----+----+",
+                "|   | 10 | 0  | 1  |",
+                "|   | 20 | 0  | 1  |",
+                "| 1 |    | 0  | 0  |",
+                "| 2 |    | 0  | 0  |",
+                "+---+----+----+----+",
+            ],
+            &results
+        );
+
+        Ok(())
+    }
 }
