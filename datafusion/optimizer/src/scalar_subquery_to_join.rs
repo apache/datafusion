@@ -362,41 +362,37 @@ fn build_join(
         .alias(subquery_alias.to_string())?
         .build()?;
 
-    // A HAVING-like condition recorded from a filter above the aggregate can
-    // leave the join ON only when every empty-input default gets a
-    // compensation CASE below: an aggregate whose default is NULL has no CASE
-    // to check such a condition in, so for those it keeps filtering in the
-    // ON as before.
-    let having_in_compensation = match &collected_count_expr_map {
-        Some(expr_map) if !expr_map.is_empty() => expr_map.values().try_fold(
-            true,
-            |all_compensated, default_expr| -> Result<bool> {
-                Ok(all_compensated
-                    && !evaluates_to_null(
-                        default_expr.clone(),
-                        default_expr.column_refs(),
-                    )?)
-            },
-        )?,
-        _ => false,
+    // A HAVING or outer-only filter recorded from above the aggregate cannot
+    // be rewritten into the join when the output column gets a compensation
+    // CASE below. Kept in the ON, a row the condition rejects looks unmatched
+    // and falls back to the empty-input default, which is the issue's wrong 0. Checked
+    // in the compensation CASE instead, the condition would have to be
+    // evaluated twice, against the defaults for an unmatched row and against
+    // the actual output for a matched one, and neither evaluation is right
+    // for the rows the other one covers. The gate looks at the output column
+    // alone because the map also holds aggregates that appear only in the
+    // HAVING, whose NULL defaults need no CASE; an output whose own default
+    // is NULL (the subquery projects `max`, say) keeps filtering in the ON as
+    // before, which is correct there because an unmatched row is NULL either
+    // way. Rather than guess, reject the query.
+    let output_name = subquery_plan.schema().field(0).name();
+    let output_needs_compensation = match collected_count_expr_map
+        .as_ref()
+        .and_then(|expr_map| expr_map.get(output_name))
+    {
+        Some(default_expr) => {
+            !evaluates_to_null(default_expr.clone(), default_expr.column_refs())?
+        }
+        None => false,
     };
-
-    // With the HAVING-like conditions out of the ON, an unmatched row means
-    // the correlation matched no group, and the compensation CASE checks the
-    // conditions in both directions instead.
-    let join_filters = if having_in_compensation {
-        pull_up
-            .join_filters
-            .iter()
-            .filter(|join_filter| !pull_up.having_like_join_filters.contains(join_filter))
-            .cloned()
-            .collect()
-    } else {
-        pull_up.join_filters
-    };
+    if output_needs_compensation && !pull_up.having_like_join_filters.is_empty() {
+        return plan_err!(
+            "Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns, and this rewrite cannot evaluate it against both the group and the empty input without risking wrong results. Move the condition outside the subquery"
+        );
+    }
 
     let join_filter_opt = build_join_filter(
-        join_filters,
+        pull_up.join_filters,
         pull_up.correlated_subquery_cols_map.values().flatten(),
         subquery_alias,
     )?;
@@ -425,45 +421,6 @@ fn build_join(
         // introduced is the untyped `Null` of the HAVING arm. The expressions
         // themselves come from a plan `TypeCoercion` has already coerced.
         let mut expr_rewrite = TypeCoercionRewriter::new(new_plan.schema());
-        // When the HAVING-like conditions are checked here instead of in the
-        // join ON, evaluate them twice: against the empty-input defaults for
-        // an unmatched row, where the group does not exist, and against the
-        // actual aggregate output for a matched one. Only columns qualified
-        // with the subquery alias are replaced by the defaults, so an outer
-        // column that happens to share the aggregate's output name is left
-        // alone.
-        let (having_on_default, having_actual) =
-            if having_in_compensation && !pull_up.having_like_join_filters.is_empty() {
-                let having_actual = build_join_filter(
-                    pull_up.having_like_join_filters.clone(),
-                    pull_up.correlated_subquery_cols_map.values().flatten(),
-                    subquery_alias,
-                )?;
-                let having_on_default = having_actual
-                    .clone()
-                    .map(|requalified| -> Result<Expr> {
-                        let substituted = requalified
-                            .transform_up(|e| {
-                                if let Expr::Column(Column {
-                                    relation: Some(relation),
-                                    name,
-                                    ..
-                                }) = &e
-                                    && relation.table() == subquery_alias
-                                    && let Some(default_val) = expr_map.get(name)
-                                {
-                                    return Ok(Transformed::yes(default_val.clone()));
-                                }
-                                Ok(Transformed::no(e))
-                            })
-                            .data()?;
-                        substituted.rewrite(&mut expr_rewrite).data()
-                    })
-                    .transpose()?;
-                (having_on_default, having_actual)
-            } else {
-                (None, None)
-            };
         let having_arm = pull_up
             .pull_up_having_expr
             .as_ref()
@@ -482,25 +439,9 @@ fn build_join(
             // outer table has a column with the same name as the aggregate.
             let value_col = Column::new(Some(subquery_alias), name);
 
-            // An unmatched row means the correlation matched no group, so
-            // return the empty-input default only when the HAVING-like
-            // conditions also hold on the defaults; otherwise the subquery
-            // produced no row and the result is NULL.
-            let unmatched_value = match &having_on_default {
-                Some(having_default) => when(having_default.clone(), result.clone())
-                    .otherwise(lit(ScalarValue::Null))?,
-                None => result,
-            };
-            let mut builder =
-                when(Expr::Column(indicator_col).is_null(), unmatched_value);
+            let mut builder = when(Expr::Column(indicator_col).is_null(), result);
             if let Some((when_expr, then_expr)) = &having_arm {
                 builder = builder.when(when_expr.clone(), then_expr.clone());
-            }
-            // A matched group the HAVING-like conditions reject gives no row
-            // either.
-            if let Some(having_actual) = &having_actual {
-                builder = builder
-                    .when(having_actual.clone().is_not_true(), lit(ScalarValue::Null));
             }
             let compensation_expr = builder.otherwise(Expr::Column(value_col.clone()))?;
             compensation_exprs.insert(

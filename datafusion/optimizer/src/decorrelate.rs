@@ -82,11 +82,12 @@ pub struct PullUpCorrelatedExpr {
     /// pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
     /// Outer-reference conditions from a `Filter` that sits directly above a
-    /// count-bug `Aggregate` — i.e. a `HAVING` clause (or an outer-only
-    /// filter) that filters the aggregate *output*. Unlike `join_filters`,
-    /// these do not merely correlate the two sides: when the LEFT JOIN is
-    /// unmatched because one of them failed, the subquery produced no row and
-    /// a scalar subquery must yield NULL rather than the empty-input default.
+    /// count-bug `Aggregate`: a `HAVING` clause (or an outer-only filter)
+    /// that filters the aggregate *output*. Unlike `join_filters`, these do
+    /// not merely correlate the two sides: an unmatched LEFT JOIN row may
+    /// mean one of them rejected the group rather than that no group
+    /// matched, and a scalar subquery must yield NULL for a rejected group.
+    /// `build_join` uses them to reject such queries up front.
     pub having_like_join_filters: Vec<Expr>,
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
@@ -417,10 +418,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 // its outer-reference conditions filter the aggregate *output*,
                 // so a LEFT JOIN row can be unmatched either because the
                 // correlation matched no group or because one of them rejected
-                // the group. Record them for the scalar count-bug
-                // compensation, which re-checks them itself so that both cases
-                // give the subquery's real answer: the empty-input default
-                // when they hold on it, NULL otherwise. A `Filter` below the
+                // the group. Record them so the scalar rewrite can tell the
+                // two apart; where the output needs count-bug compensation it
+                // rejects the query instead of guessing. A `Filter` below the
                 // aggregate only prunes input rows and is left out.
                 if self
                     .collected_count_expr_map
