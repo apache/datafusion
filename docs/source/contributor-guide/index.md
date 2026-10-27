@@ -205,8 +205,22 @@ The good thing about open code and open development is that any issues in one ch
 
 ## Stale PRs
 
+Open, non-draft PRs with no activity for 14 days are automatically marked as
+draft if they have merge conflicts, failing CI checks, or an outstanding
+changes-requested review on the latest push. PRs awaiting review with none of
+these conditions remain ready for review. Cancelled, pending, skipped, or missing
+CI checks do not trigger drafting. PRs in the merge queue are excluded.
+
+The automation leaves a comment explaining why the PR was drafted. After
+addressing the listed items, mark the PR **Ready for review**. If you need help
+or a CI failure is unrelated to your changes, leave a comment on the PR.
+
+Maintainers can preview eligible PRs by running the **Draft inactive PRs**
+workflow manually with its default `dry_run` input enabled.
+
 Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
 Commenting on the PR will remove the `stale` label.
+The automatic draft notification also counts as activity and restarts this timer.
 
 ## CI Runners
 

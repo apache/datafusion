@@ -1450,32 +1450,37 @@ fn range_join_key_alignment_sort_merge_join() -> Result<()> {
 }
 
 /// Four unbounded partitions declared as `Range([a, b])` whose rows are
-/// ordered by `ordered_by` within each partition: partition membership and
-/// row order are independent.
-fn unbounded_range_stream(ordered_by: [&str; 2]) -> Result<Arc<dyn ExecutionPlan>> {
+/// ordered by each of `orderings` within each partition: partition membership
+/// and row order are independent.
+fn unbounded_range_stream(orderings: &[[&str; 2]]) -> Result<Arc<dyn ExecutionPlan>> {
     ordered_stream(
         range_partitioning_multi(
             &[("a", SortOptions::default()), ("b", SortOptions::default())],
             &[&[10, 0], &[20, 0], &[30, 0]],
         )?,
-        ordered_by,
+        orderings,
         true,
     )
 }
 
-/// A stream table with `partitioning` whose rows are ordered by `ordered_by`
-/// within each partition.
+/// A stream table with `partitioning` whose rows are ordered by each of
+/// `orderings` within each partition.
 fn ordered_stream(
     partitioning: Partitioning,
-    ordered_by: [&str; 2],
+    orderings: &[[&str; 2]],
     infinite: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let schema = schema();
-    let ordering: LexOrdering = [
-        PhysicalSortExpr::new(col(ordered_by[0], &schema)?, SortOptions::default()),
-        PhysicalSortExpr::new(col(ordered_by[1], &schema)?, SortOptions::default()),
-    ]
-    .into();
+    let orderings = orderings
+        .iter()
+        .map(|[first, second]| {
+            Ok([
+                PhysicalSortExpr::new(col(first, &schema)?, SortOptions::default()),
+                PhysicalSortExpr::new(col(second, &schema)?, SortOptions::default()),
+            ]
+            .into())
+        })
+        .collect::<Result<Vec<LexOrdering>>>()?;
     let partitions = (0..partitioning.partition_count())
         .map(|_| {
             Arc::new(TestStreamPartition {
@@ -1487,7 +1492,7 @@ fn ordered_stream(
         Arc::clone(&schema),
         partitions,
         None,
-        vec![ordering],
+        orderings,
         infinite,
         None,
     )?
@@ -1604,8 +1609,8 @@ fn range_join_key_alignment_keeps_streamable_sort_merge_join_keys() -> Result<()
     // A sort-merge join on (b, a) over unbounded Range([a, b]) inputs whose
     // rows are ordered by `ordered_by`.
     let smj_on_b_a = |ordered_by: [&str; 2]| -> Result<Arc<dyn ExecutionPlan>> {
-        let left = unbounded_range_stream(ordered_by)?;
-        let right = unbounded_range_stream(ordered_by)?;
+        let left = unbounded_range_stream(&[ordered_by])?;
+        let right = unbounded_range_stream(&[ordered_by])?;
         let on = vec![
             (col("b", &left.schema())?, col("b", &right.schema())?),
             (col("a", &left.schema())?, col("a", &right.schema())?),
@@ -1667,11 +1672,11 @@ fn range_join_key_alignment_ignores_per_partition_constants() -> Result<()> {
             &[("a", SortOptions::default()), ("b", SortOptions::default())],
             &[&[10, 0], &[20, 0], &[30, 0]],
         )?,
-        ["b", "a"],
+        &[["b", "a"]],
         false,
     )?;
     let right: Arc<dyn ExecutionPlan> = Arc::new(PerPartitionConstantExec::try_new(
-        ordered_stream(Partitioning::UnknownPartitioning(4), ["b", "a"], true)?,
+        ordered_stream(Partitioning::UnknownPartitioning(4), &[["b", "a"]], true)?,
         "a",
     )?);
     let join_on: JoinOn = vec![
@@ -1698,6 +1703,33 @@ fn range_join_key_alignment_ignores_per_partition_constants() -> Result<()> {
 }
 
 #[test]
+fn range_join_key_alignment_sees_every_ordering_of_an_unbounded_input() -> Result<()> {
+    // Unbounded Range([a, b]) inputs sorted by (c, d) and, separately, by
+    // (a, b). The second ordering satisfies the range order, so realigning
+    // the keys from (b, a) to (a, b) adds no sort and needs no exchange.
+    let left = unbounded_range_stream(&[["c", "d"], ["a", "b"]])?;
+    let right = unbounded_range_stream(&[["c", "d"], ["a", "b"]])?;
+    let join_on: JoinOn = vec![
+        (col("b", &left.schema())?, col("b", &right.schema())?),
+        (col("a", &left.schema())?, col("a", &right.schema())?),
+    ];
+    let join = sort_merge_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    check_range_join_key_alignment(join, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+              StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_orderings=[[c@2 ASC, d@3 ASC], [a@0 ASC, b@1 ASC]]
+              StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_orderings=[[c@2 ASC, d@3 ASC], [a@0 ASC, b@1 ASC]]
+            "
+            );
+        }
+    })
+}
+
+#[test]
 fn range_join_key_alignment_skips_single_partition_range() -> Result<()> {
     // A single-partition Range layout has nothing to co-partition with, so
     // realigning the keys would only replace the existing (b, a) order with
@@ -1708,7 +1740,7 @@ fn range_join_key_alignment_skips_single_partition_range() -> Result<()> {
                 &[("a", SortOptions::default()), ("b", SortOptions::default())],
                 &[],
             )?,
-            ["b", "a"],
+            &[["b", "a"]],
             false,
         )
     };

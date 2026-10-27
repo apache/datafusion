@@ -85,8 +85,9 @@ use crate::{SendableRecordBatchStream, metrics};
 /// only the current group remains active after completed groups are emitted, and
 /// memory usage does not grow with the total number of groups.
 ///
-/// If a memory reservation nevertheless fails, the stream returns the error
-/// directly, indicating an unexpected behavior.
+/// If the reservation after an input batch fails, `ClusteredPartialAggregateStream`
+/// still emits the completed groups, and returns the error only when no group is
+/// complete.
 ///
 /// ## Partial group clustering
 ///
@@ -321,12 +322,10 @@ impl Aggregating {
                     // Partial group clustering may have an unbounded active key range.
                     // The final stage can merge incomplete states emitted here.
                     if matches!(self.table.group_clustering(), GroupClustering::Full(_)) {
-                        return Err(oom);
+                        Some(self.table.take_completed_state_batch()?.ok_or(oom)?)
+                    } else {
+                        Some(self.table.take_state_batch()?.ok_or(oom)?)
                     }
-                    let Some(batch) = self.table.take_state_batch()? else {
-                        return Err(oom);
-                    };
-                    Some(batch)
                 }
                 Err(e) => return Err(e),
             };
@@ -417,5 +416,21 @@ impl Outputting {
         timer.done();
         emitter.emit(batch).await;
         Ok(next_stage)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aggregates::GroupClusteringMode;
+    use crate::aggregates::clustered_test_util::{
+        assert_completed_groups_emitted_under_limit, full_batches, sum_over_sorted_input,
+    };
+
+    #[tokio::test]
+    async fn fully_clustered_completed_groups_under_memory_pressure() -> Result<()> {
+        let plan = sum_over_sorted_input(AggregateMode::Partial, &["k"], full_batches())?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_completed_groups_emitted_under_limit(&plan).await
     }
 }

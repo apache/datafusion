@@ -20,54 +20,57 @@
 # Validates the retract_batch implementation on ArrayAggAccumulator.
 #######
 
+# Note: `ORDER BY` in window SQL controls frame evaluation, not output order.
+# Use rowsort to compare results independently of output row order.
+
 # Setup test data
 statement ok
 CREATE TABLE t(ts INT, val TEXT) AS VALUES
   (1, 'A'), (2, 'B'), (3, 'C'), (4, 'D'), (5, 'E');
 
 # Basic ROWS sliding window
-query ?
+query ? rowsort
 SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
 FROM t;
 ----
-[A]
 [A, B]
+[A]
 [B, C]
 [C, D]
 [D, E]
 
 # Wider ROWS frame
-query ?
+query ? rowsort
 SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
 FROM t;
 ----
-[A]
-[A, B]
 [A, B, C]
+[A, B]
+[A]
 [B, C, D]
 [C, D, E]
 
 # ROWS with FOLLOWING
-query ?
+query ? rowsort
 SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
 FROM t;
 ----
-[A, B]
 [A, B, C]
+[A, B]
 [B, C, D]
 [C, D, E]
 [D, E]
 
 # Regression: unbounded frame still works
-query ?
+query ? rowsort
 SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 FROM t;
 ----
-[A]
-[A, B]
-[A, B, C]
-[A, B, C, D]
 [A, B, C, D, E]
+[A, B, C, D]
+[A, B, C]
+[A, B]
+[A]
 
 # Setup data with NULLs
 statement ok
@@ -75,14 +78,14 @@ CREATE TABLE t_nulls(ts INT, val TEXT) AS VALUES
   (1, 'A'), (2, NULL), (3, 'C'), (4, NULL), (5, 'E');
 
 # Sliding window with NULLs (nulls preserved)
-query ?
+query ? rowsort
 SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
 FROM t_nulls;
 ----
-[A]
 [A, NULL]
-[NULL, C]
+[A]
 [C, NULL]
+[NULL, C]
 [NULL, E]
 
 # Setup data with value gaps for RANGE frame
@@ -91,18 +94,18 @@ CREATE TABLE t_range(ts INT, val TEXT) AS VALUES
   (1, 'A'), (2, 'B'), (3, 'C'), (4, 'D'), (100, 'E');
 
 # RANGE frame with value gap causes multi-element retract
-query ?
+query ? rowsort
 SELECT array_agg(val) OVER (ORDER BY ts RANGE BETWEEN 2 PRECEDING AND 2 FOLLOWING)
 FROM t_range;
 ----
+[A, B, C, D]
+[A, B, C, D]
 [A, B, C]
-[A, B, C, D]
-[A, B, C, D]
 [B, C, D]
 [E]
 
 # Single-row frame
-query ?
+query ? rowsort
 SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
 FROM t;
 ----
@@ -117,12 +120,12 @@ statement ok
 CREATE TABLE t_int(ts INT, val INT) AS VALUES
   (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
 
-query ?
+query ? rowsort
 SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
 FROM t_int;
 ----
-[10]
 [10, 20]
+[10]
 [20, 30]
 [30, 40]
 [40, 50]
@@ -135,19 +138,19 @@ CREATE TABLE t_groups(ts INT, val TEXT) AS VALUES
 # GROUPS frame: each "group" = rows with same ORDER BY value
 # Group 0: ts=1 (A,B), Group 1: ts=2 (C,D), Group 2: ts=3 (E)
 # Frame: 1 PRECEDING group + CURRENT group
-query ?
-SELECT array_agg(val) OVER (ORDER BY ts GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW)
+query ? rowsort
+SELECT array_sort(array_agg(val) OVER (ORDER BY ts GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW))
 FROM t_groups;
 ----
-[A, B]
-[A, B]
 [A, B, C, D]
 [A, B, C, D]
+[A, B]
+[A, B]
 [C, D, E]
 
 # IGNORE NULLS: nulls are filtered out before storage and retract
 # t_nulls has: (1,'A'), (2,NULL), (3,'C'), (4,NULL), (5,'E')
-query ?
+query ? rowsort
 SELECT array_agg(val) IGNORE NULLS OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
 FROM t_nulls;
 ----
@@ -158,15 +161,15 @@ FROM t_nulls;
 [E]
 
 # IGNORE NULLS with wider frame
-query ?
+query ? rowsort
 SELECT array_agg(val) IGNORE NULLS OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
 FROM t_nulls;
 ----
-[A]
-[A]
 [A, C]
-[C]
+[A]
+[A]
 [C, E]
+[C]
 
 #######
 # DISTINCT sliding window tests
@@ -187,71 +190,71 @@ CREATE TABLE t_dist(ts INT, val TEXT) AS VALUES
 #   [A,A,B]   -> {A,B}
 #   [A,B,C]   -> {A,B,C}        (one A retracted, one A remains)
 #   [B,C,B]   -> {B,C}          (last A retracted, B duplicate stays)
-query ?
+query ? rowsort
 SELECT array_sort(array_agg(DISTINCT val)
   OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW))
 FROM t_dist;
 ----
-[A]
-[A]
-[A, B]
 [A, B, C]
+[A, B]
+[A]
+[A]
 [B, C]
 
 # Narrower ROWS frame
-query ?
+query ? rowsort
 SELECT array_sort(array_agg(DISTINCT val)
   OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
 FROM t_dist;
 ----
-[A]
-[A]
 [A, B]
+[A]
+[A]
 [B, C]
 [B, C]
 
 # DESC window ORDER BY: frame walks input in reverse temporal order, so
 # update/retract are called against the reversed row stream. Validates
 # retract still tracks duplicates correctly when rows arrive in DESC order.
-# Output rows are emitted in ts DESC order (ts=5,4,3,2,1).
+# The frame follows ts DESC order (ts=5,4,3,2,1).
 #   ts=5 (B): frame [B]        -> {B}
 #   ts=4 (C): frame [B,C]      -> {B,C}     (1 preceding in DESC = ts=5)
 #   ts=3 (B): frame [C,B]      -> {B,C}
 #   ts=2 (A): frame [B,A]      -> {A,B}
 #   ts=1 (A): frame [A,A]      -> {A}       (duplicate A in frame)
-query ?
+query ? rowsort
 SELECT array_sort(array_agg(DISTINCT val)
   OVER (ORDER BY ts DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
 FROM t_dist;
 ----
-[B]
-[B, C]
-[B, C]
 [A, B]
 [A]
+[B, C]
+[B, C]
+[B]
 
 # RANGE frame with value gaps -> multi-row retract on shift
 statement ok
 CREATE TABLE t_dist_range(ts INT, val TEXT) AS VALUES
   (1,'A'),(2,'A'),(3,'B'),(10,'A'),(11,'C');
 
-query ?
+query ? rowsort
 SELECT array_sort(array_agg(DISTINCT val)
   OVER (ORDER BY ts RANGE BETWEEN 2 PRECEDING AND CURRENT ROW))
 FROM t_dist_range;
 ----
-[A]
-[A]
 [A, B]
-[A]
 [A, C]
+[A]
+[A]
+[A]
 
 # DISTINCT + IGNORE NULLS in sliding frame: nulls never enter state.
 statement ok
 CREATE TABLE t_dist_nulls(ts INT, val TEXT) AS VALUES
   (1,'A'),(2,NULL),(3,'A'),(4,NULL),(5,'B');
 
-query ?
+query ? rowsort
 SELECT array_sort(array_agg(DISTINCT val) IGNORE NULLS
   OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
 FROM t_dist_nulls;
@@ -272,7 +275,7 @@ FROM t_dist_nulls;
 #   ts=4 (NULL): frame [A,NULL]     -> {A,NULL}   sorted [NULL, A]
 #                (the ts=2 NULL retracts but the ts=4 NULL is still present)
 #   ts=5 (B):    frame [NULL,B]     -> {B,NULL}   sorted [NULL, B]
-query ?
+query ? rowsort
 SELECT array_sort(array_agg(DISTINCT val)
   OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
 FROM t_dist_nulls;
@@ -290,17 +293,17 @@ statement ok
 CREATE TABLE t_dist_groups(ts INT, val TEXT) AS VALUES
   (1,'A'),(1,'A'),(2,'B'),(2,'C'),(3,'A'),(3,'D');
 
-query ?
+query ? rowsort
 SELECT array_sort(array_agg(DISTINCT val)
   OVER (ORDER BY ts GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW))
 FROM t_dist_groups;
 ----
-[A]
-[A]
-[A, B, C]
-[A, B, C]
 [A, B, C, D]
 [A, B, C, D]
+[A, B, C]
+[A, B, C]
+[A]
+[A]
 
 # PARTITION BY: each partition retracts against its own state only. A leak of
 # one partition's state into the next would surface as the next partition's
@@ -339,15 +342,15 @@ statement ok
 CREATE TABLE t_dist_int(ts INT, val INT) AS VALUES
   (1,10),(2,10),(3,20),(4,30),(5,20);
 
-query ?
+query ? rowsort
 SELECT array_sort(array_agg(DISTINCT val)
   OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW))
 FROM t_dist_int;
 ----
-[10]
-[10]
-[10, 20]
 [10, 20, 30]
+[10, 20]
+[10]
+[10]
 [20, 30]
 
 # ORDER BY interaction — window context.

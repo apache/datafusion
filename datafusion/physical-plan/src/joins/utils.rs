@@ -68,11 +68,11 @@ use arrow::datatypes::{
 use arrow_ord::ord::{DynComparator, make_comparator};
 use arrow_schema::{DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
-use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
     internal_datafusion_err, not_impl_err, plan_err,
@@ -1551,70 +1551,6 @@ pub(crate) fn build_batch_from_indices(
     Ok(RecordBatch::try_new(Arc::clone(schema), columns)?)
 }
 
-/// Builds the nullable mark column for a null-aware `LeftMark` join.
-///
-/// This follows the left mark hash join described in Neumann, Leis, and Kemper,
-/// "The Complete Story of Joins (in HyPer)", Section 5.6:
-/// <https://www.cs.cmu.edu/~15721-f24/papers/Story_of_Joins.pdf>
-///
-/// `build_indices` and `probe_indices` are the final aligned indices derived from the
-/// visited bitmap. At this point:
-/// - valid `probe_indices` mean the build row matched at least one probe row, so the mark is `TRUE`
-/// - null `probe_indices` mean the build row was unmatched, so the result depends on SQL
-///   three-valued logic
-///
-/// For the uncorrelated single-key implementation, unmatched rows are classified as follows:
-/// 1. if the build key is `NULL` and the probe side is non-empty, the mark is `NULL`
-/// 2. if the build key is `NULL` and the probe side is empty, the mark is `FALSE`
-/// 3. if the build key is non-null and the probe side contained a `NULL`, the mark is `NULL`
-/// 4. otherwise, the mark is `FALSE`
-///
-/// For correlated scalar `NOT IN`, `null_indices_bitmap` carries the same UNKNOWN
-/// decision per build row, scoped by the correlated equality keys.
-///
-/// When present, `build_key_nulls` is indexed by the original build row number.
-///
-/// This is the helper equivalent of the paper's "null bucket" and `hadNull` handling.
-/// It is intentionally scoped to scalar null-aware mark joins.
-pub(crate) fn build_null_aware_left_mark_column(
-    build_indices: &UInt64Array,
-    probe_indices: &UInt32Array,
-    build_key_nulls: Option<&NullBuffer>,
-    null_indices_bitmap: Option<&BooleanBufferBuilder>,
-    probe_side_has_null: bool,
-    probe_side_non_empty: bool,
-) -> ArrayRef {
-    // Whether an unmatched build row's mark is NULL (UNKNOWN) instead of FALSE:
-    // correlated joins precomputed this per row in `null_indices_bitmap`; the
-    // uncorrelated rules are cases 1-4 in the doc above.
-    let unmatched_mark_is_null = |build_idx: usize| match null_indices_bitmap {
-        Some(bitmap) => bitmap.get_bit(build_idx),
-        None if build_key_nulls.is_some_and(|nulls| nulls.is_null(build_idx)) => {
-            probe_side_non_empty
-        }
-        None => probe_side_has_null,
-    };
-
-    let marks: BooleanArray = build_indices
-        .iter()
-        .zip(probe_indices.iter())
-        .map(|(build_idx, probe_idx)| {
-            if probe_idx.is_some() {
-                return Some(true);
-            }
-            let build_idx = build_idx
-                .expect("LeftMark final indices should always contain build-side rows")
-                as usize;
-            if unmatched_mark_is_null(build_idx) {
-                None
-            } else {
-                Some(false)
-            }
-        })
-        .collect();
-    Arc::new(marks)
-}
-
 /// Returns a new [RecordBatch] for a probe batch when no probe row can find a
 /// match: the build-side map is empty, either because the build side has no
 /// rows or because none of its rows has a matchable (non-NULL) join key.
@@ -2508,7 +2444,7 @@ pub(super) fn equal_rows_arr(
 }
 
 /// Same as [`equal_rows_arr`], but `left_arrays` must already have float
-/// `-0.0` rewritten to `+0.0` (see `normalize_float_zero`), so a comparator
+/// `-0.0` rewritten to `+0.0` (see `normalize_floats`), so a comparator
 /// built here skips that scan on the left side. Hash join keeps its build
 /// keys in that form, which saves rescanning the whole build side for every
 /// probe batch.
@@ -2778,15 +2714,15 @@ impl JoinKeyComparator {
                 // treats `-0.0` / `+0.0` as distinct. Normalize float arrays
                 // so SMJ / piecewise-merge equi-keys honor SQL equality;
                 // no-op (Arc::clone) for non-floats and for float arrays
-                // that contain no `-0.0`. `normalize_float_zero` preserves
+                // that contain no `-0.0`. `normalize_floats` preserves
                 // null positions, so the original null masks below remain
                 // valid. A left side that is already normalized is used as is.
                 let l_norm = if normalize_left {
-                    normalize_float_zero(l)
+                    normalize_floats(l)
                 } else {
                     Arc::clone(l)
                 };
-                let r_norm = normalize_float_zero(r);
+                let r_norm = normalize_floats(r);
                 let inner = make_comparator(l_norm.as_ref(), r_norm.as_ref(), *opts)?;
                 if null_equality == NullEquality::NullEqualsNothing {
                     let ln = l.logical_nulls().filter(|n| n.null_count() > 0);

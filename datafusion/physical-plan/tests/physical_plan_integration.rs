@@ -15,15 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Run all tests that are found in the `fuzz_cases` directory.
-/// Fuzz tests are slow and gated behind the `extended_tests` feature.
-/// Run with: cargo test --features extended_tests
-#[cfg(feature = "extended_tests")]
-mod fuzz_cases;
-
-#[cfg(test)]
-#[ctor::ctor(unsafe)]
-fn init() {
-    // Enable RUST_LOG logging configuration for test
-    let _ = env_logger::try_init();
-}
+mod cases;
