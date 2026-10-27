@@ -901,7 +901,9 @@ message TableReference {
 // PhysicalPlanNode is a nested type
 message PhysicalPlanNode {
   oneof PhysicalPlanType {
+    // Deprecated: encoders emit `data_source`; decoders still accept this.
     ParquetScanExecNode parquet_scan = 1;
+    // Deprecated: encoders emit `data_source`; decoders still accept this.
     CsvScanExecNode csv_scan = 2;
     EmptyExecNode empty = 3;
     ProjectionExecNode projection = 4;
@@ -916,6 +918,7 @@ message PhysicalPlanNode {
     RepartitionExecNode repartition = 14;
     WindowAggExecNode window = 15;
     CrossJoinExecNode cross_join = 16;
+    // Deprecated: encoders emit `data_source`; decoders still accept this.
     AvroScanExecNode avro_scan = 17;
     PhysicalExtensionNode extension = 18;
     UnionExecNode union = 19;
@@ -923,24 +926,32 @@ message PhysicalPlanNode {
     SortPreservingMergeExecNode sort_preserving_merge = 21;
     NestedLoopJoinExecNode nested_loop_join = 22;
     AnalyzeExecNode analyze = 23;
+    // Deprecated: encoders emit `data_sink`; decoders still accept this.
     JsonSinkExecNode json_sink = 24;
     SymmetricHashJoinExecNode symmetric_hash_join = 25;
     InterleaveExecNode interleave = 26;
     PlaceholderRowExecNode placeholder_row = 27;
+    // Deprecated: encoders emit `data_sink`; decoders still accept this.
     CsvSinkExecNode csv_sink = 28;
+    // Deprecated: encoders emit `data_sink`; decoders still accept this.
     ParquetSinkExecNode parquet_sink = 29;
     UnnestExecNode unnest = 30;
+    // Deprecated: encoders emit `data_source`; decoders still accept this.
     JsonScanExecNode json_scan = 31;
     CooperativeExecNode cooperative = 32;
     GenerateSeriesNode generate_series = 33;
     SortMergeJoinExecNode sort_merge_join = 34;
+    // Deprecated: encoders emit `data_source`; decoders still accept this.
     MemoryScanExecNode memory_scan = 35;
     AsyncFuncExecNode async_func = 36;
     BufferExecNode buffer = 37;
+    // Deprecated: encoders emit `data_source`; decoders still accept this.
     ArrowScanExecNode arrow_scan = 38;
     ScalarSubqueryExecNode scalar_subquery = 39;
     PiecewiseMergeJoinExecNode piecewise_merge_join = 40;
     AsOfJoinExecNode as_of_join = 41;
+    DataSourceExecNode data_source = 42;
+    DataSinkExecNode data_sink = 43;
   }
 }
 
@@ -1881,4 +1892,111 @@ message PhysicalScalarSubqueryExprNode {
   uint32 index = 3;
   // Serialized separately from data_type to keep older wire formats valid.
   map<string, string> metadata = 4;
+}
+
+// A `DataSourceExec`: the plan-level wrapper around a `DataSource`.
+message DataSourceExecNode {
+  DataSourceNode source = 1;
+}
+
+// A `DataSource` implementation.
+message DataSourceNode {
+  oneof source_type {
+    FileScanNode file = 1;
+    MemoryScanExecNode memory = 2;
+    ExtensionDataSourceNode extension = 15;
+  }
+}
+
+// A `FileScanConfig`: the format-agnostic base plus its `FileSource`.
+message FileScanNode {
+  FileScanExecConf base = 1;
+  FileSourceNode source = 2;
+}
+
+// A `FileSource` implementation.
+message FileSourceNode {
+  oneof file_source_type {
+    ParquetSourceNode parquet = 1;
+    CsvSourceNode csv = 2;
+    JsonSourceNode json = 3;
+    AvroSourceNode avro = 4;
+    ArrowSourceNode arrow = 5;
+    ExtensionFileSourceNode extension = 15;
+  }
+}
+
+// Field tags mirror `ParquetScanExecNode` (minus `base_conf`).
+message ParquetSourceNode {
+  reserved 1, 2;
+  PhysicalExprNode predicate = 3;
+  datafusion_common.TableParquetOptions parquet_options = 4;
+  PhysicalSortExprNodeCollection sort_order_for_reorder = 5;
+  bool reverse_row_groups = 6;
+  optional uint64 metadata_size_hint = 7;
+}
+
+// Field tags mirror `CsvScanExecNode` (minus `base_conf`).
+message CsvSourceNode {
+  reserved 1;
+  bool has_header = 2;
+  string delimiter = 3;
+  string quote = 4;
+  oneof optional_escape {
+    string escape = 5;
+  }
+  oneof optional_comment {
+    string comment = 6;
+  }
+  bool newlines_in_values = 7;
+  bool truncate_rows = 8;
+  optional bytes terminator = 9;
+}
+
+// Field tags mirror `JsonScanExecNode` (minus `base_conf`).
+message JsonSourceNode {
+  reserved 1;
+  optional bool newline_delimited = 2;
+}
+
+message AvroSourceNode {
+  reserved 1;
+}
+
+// Field tags mirror `ArrowScanExecNode` (minus `base_conf`).
+message ArrowSourceNode {
+  reserved 1;
+  ArrowIpcFormat format = 2;
+}
+
+message ExtensionDataSourceNode {
+  string name = 1;
+  bytes payload = 2;
+}
+
+message ExtensionFileSourceNode {
+  string name = 1;
+  bytes payload = 2;
+}
+
+// A `DataSinkExec`: the plan-level wrapper around a `DataSink`.
+message DataSinkExecNode {
+  PhysicalPlanNode input = 1;
+  DataSinkNode sink = 2;
+  PhysicalSortExprNodeCollection sort_order = 3;
+}
+
+// A `DataSink` implementation.
+message DataSinkNode {
+  oneof sink_type {
+    JsonSink json = 1;
+    CsvSink csv = 2;
+    ParquetSink parquet = 3;
+    ExtensionDataSinkNode extension = 15;
+  }
+}
+
+message ExtensionDataSinkNode {
+  string name = 1;
+  bytes payload = 2;
 }
