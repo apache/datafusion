@@ -35,6 +35,24 @@ fn get_cte_for_table_reference<'a>(
     planner_context.get_cte(&name.to_string())
 }
 
+/// Expands a relation into the relations it exposes to its enclosing `FROM`
+/// scope. An unaliased parenthesized join exposes everything inside it; any
+/// other relation, including an aliased join, is exposed as itself.
+fn visible_relations<'a>(relation: &'a TableFactor, out: &mut Vec<&'a TableFactor>) {
+    match relation {
+        TableFactor::NestedJoin {
+            table_with_joins,
+            alias: None,
+        } => {
+            visible_relations(&table_with_joins.relation, out);
+            for join in &table_with_joins.joins {
+                visible_relations(&join.relation, out);
+            }
+        }
+        other => out.push(other),
+    }
+}
+
 // Implement RelationPlannerContext
 impl<S: ContextProvider> RelationPlannerContext for SqlToRelRelationContext<'_, '_, S> {
     fn context_provider(&self) -> &dyn ContextProvider {
@@ -109,7 +127,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Vec<DuplicateRelationName> {
         let mut seen: HashMap<TableReference, Option<Span>> = HashMap::new();
         let mut duplicates = vec![];
+        let mut visible = vec![];
         for relation in relations {
+            visible_relations(relation, &mut visible);
+        }
+        for relation in visible {
             let Some((qualifier, span)) = self.extract_relation_name(relation) else {
                 continue;
             };
@@ -343,10 +365,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             TableFactor::NestedJoin {
                 table_with_joins,
                 alias,
-            } => (
-                self.plan_table_with_joins(*table_with_joins, planner_context)?,
-                alias,
-            ),
+            } => {
+                let plan = if alias.is_none() {
+                    self.plan_table_with_joins_inner(*table_with_joins, planner_context)?
+                } else {
+                    self.plan_table_with_joins(*table_with_joins, planner_context)?
+                };
+                (plan, alias)
+            }
             TableFactor::UNNEST {
                 alias,
                 array_exprs,

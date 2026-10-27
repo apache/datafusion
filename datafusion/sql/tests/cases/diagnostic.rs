@@ -937,6 +937,16 @@ fn test_duplicate_table_name() {
             "SELECT 1 FROM j1 AS /*a*/T/*a*/ JOIN j2 AS /*b*/t/*b*/ ON true",
             "t",
         ),
+        (
+            "comma_unaliased_nested_join",
+            "SELECT 1 FROM (j1 AS /*a*/t/*a*/ CROSS JOIN j2), j3 AS /*b*/t/*b*/",
+            "t",
+        ),
+        (
+            "explicit_join_unaliased_nested_join",
+            "SELECT 1 FROM j3 AS /*a*/t/*a*/ JOIN (j1 AS /*b*/t/*b*/ CROSS JOIN j2) ON true",
+            "t",
+        ),
     ];
 
     for &(label, query, name) in cases {
@@ -1026,4 +1036,22 @@ fn test_same_table_name_in_different_scopes() {
         do_query_warnings("SELECT 1 FROM j1 AS t, (SELECT 1 FROM j2 AS t) AS s")
             .is_empty()
     );
+}
+
+#[test]
+fn test_aliased_nested_join_hides_its_names() {
+    // The alias `n` seals the inside, so `j1`'s t is not visible outside.
+    assert!(
+        do_query_warnings("SELECT 1 FROM (j1 AS t CROSS JOIN j2) AS n, j3 AS t")
+            .is_empty()
+    );
+}
+
+#[test]
+fn test_unaliased_nested_join_reports_inner_duplicate_once() {
+    let query = "SELECT 1 FROM (j1 AS /*a*/t/*a*/ CROSS JOIN j2 AS /*b*/t/*b*/), j3";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].span, Some(spans["b"]));
 }
