@@ -239,6 +239,30 @@ FROM (
 08)--------------AggregateExec: mode=Partial, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>early_emit_count=<slt:ignore>]
 <slt:ignore>
 
+# --- Case H: DISTINCT ON with nested FIRST_VALUE state after spilling ---
+# Merged list states must not retain the entire replay batch for every group.
+# Check the complete nested payload as well as row count.
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+query II
+SELECT count(*), count(*) FILTER (
+  WHERE contents = [named_struct('key', k, 'value', repeat('v', 224))]
+)
+FROM (
+  SELECT DISTINCT ON (k) k,
+    [named_struct('key', k, 'value', repeat('v', 224))] AS contents
+  FROM (
+    SELECT (v * 7) % 8192 AS k
+    FROM generate_series(0, 8191) AS t(v)
+  )
+)
+----
+8192 8192
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
 # Restore settings to slt runner defaults
 statement ok
 RESET datafusion.runtime.memory_limit
