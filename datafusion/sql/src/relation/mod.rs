@@ -139,10 +139,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// If `err` is a duplicate qualified field error for one of `duplicates`,
     /// attaches a [`Diagnostic`] pointing at both relations. The error message
     /// is unchanged.
+    ///
+    /// An error that already carries a diagnostic is returned as is: the
+    /// innermost failing scope attaches first, so an enclosing scope that
+    /// repeats the same name must not replace it.
     pub(crate) fn with_duplicate_diagnostic(
         err: DataFusionError,
         duplicates: &[DuplicateRelationName],
     ) -> DataFusionError {
+        if err.diagnostic().is_some() {
+            return err;
+        }
         let diagnostic = match err.find_root() {
             DataFusionError::SchemaError(schema_err, _) => match &**schema_err {
                 SchemaError::DuplicateQualifiedField { qualifier, .. } => duplicates

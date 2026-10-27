@@ -985,6 +985,28 @@ fn test_duplicate_table_name() {
 }
 
 #[test]
+fn test_duplicate_table_name_inner_scope_diagnostic_not_shadowed() {
+    // `x` is repeated in both scopes. Planning fails in the inner one
+    // (`a`/`b`), so an outer duplicate (`c`/`d`) must not replace its diagnostic.
+    const QUERIES: &[&str] = &[
+        "SELECT * FROM (SELECT * FROM person AS /*a*/x/*a*/, person AS /*b*/x/*b*/) AS n, j1 AS /*c*/x/*c*/, j2 AS /*d*/x/*d*/",
+        // aliased parenthesized JOIN as the failing inner scope
+        "SELECT * FROM (person AS /*a*/x/*a*/ CROSS JOIN person AS /*b*/x/*b*/) AS n, j1 AS /*c*/x/*c*/, j2 AS /*d*/x/*d*/",
+    ];
+    for query in QUERIES {
+        let spans = get_spans(query);
+        let diag = do_query(query);
+        assert_eq!(diag.span, Some(spans["b"]), "span mismatch in {query}");
+        assert_eq!(diag.notes.len(), 1, "expected 1 note in {query}");
+        assert_eq!(
+            diag.notes[0].span,
+            Some(spans["a"]),
+            "note mismatch in {query}"
+        );
+    }
+}
+
+#[test]
 fn test_duplicate_table_name_single_warning_in_multi_entry_from() {
     // Only `t` is repeated; `x` and `y` are not.
     let query = "SELECT * FROM j1 AS x, j2 AS /*a*/t/*a*/, j3 AS y JOIN j1 AS /*b*/t/*b*/ ON true";
