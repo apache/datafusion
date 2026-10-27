@@ -1025,34 +1025,34 @@ fn handle_custom_pushdown(
         .iter()
         .all(|col| (start_idx..end_idx).contains(&col.index()));
 
-    let child_requirements = if fits_maintained_input {
-        // Remap the columns into the maintained child's schema.
-        let child_schema = plan_children[maintained_child_idx].schema();
-        let mapped_requirement = columns
-            .iter()
-            .zip(output_requirement.iter())
-            .map(|(col, req)| {
-                let index = col.index() - start_idx;
-                let col = Column::new(child_schema.field(index).name(), index);
-                PhysicalSortRequirement::new(Arc::new(col), req.options)
-            })
-            .collect::<Vec<_>>();
-
-        // Propose the same ordering for every order-maintaining input.
-        maintains_input_order
-            .iter()
-            .map(|&maintains_order| {
-                if maintains_order {
-                    LexRequirement::new(mapped_requirement.clone())
-                        .map(OrderingRequirements::new)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-    } else {
+    if !fits_maintained_input {
         return Ok(None);
-    };
+    }
+
+    // Remap the columns into the maintained child's schema.
+    let child_schema = plan_children[maintained_child_idx].schema();
+    let mapped_requirement = columns
+        .iter()
+        .zip(output_requirement.iter())
+        .map(|(col, req)| {
+            let index = col.index() - start_idx;
+            let col = Column::new(child_schema.field(index).name(), index);
+            PhysicalSortRequirement::new(Arc::new(col), req.options)
+        })
+        .collect::<Vec<_>>();
+
+    // Propose the same ordering for every order-maintaining input.
+    let child_requirements = maintains_input_order
+        .iter()
+        .map(|&maintains_order| {
+            if maintains_order {
+                LexRequirement::new(mapped_requirement.clone())
+                    .map(OrderingRequirements::new)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
 
     // Row positions can stay unchanged while value order reverses (`-a AS a`).
     // Prove that the candidate satisfies both input and output requirements.
