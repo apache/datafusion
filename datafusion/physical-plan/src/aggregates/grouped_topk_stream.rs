@@ -244,6 +244,9 @@ impl Stream for GroupedTopKAggregateStream {
         if let Some(batch) = self.next_output_batch()? {
             return Poll::Ready(Some(Ok(batch)));
         }
+        if self.done {
+            return Poll::Ready(None);
+        }
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         while let Poll::Ready(res) = self.input.poll_next_unpin(cx) {
             let _timer = elapsed_compute.timer();
