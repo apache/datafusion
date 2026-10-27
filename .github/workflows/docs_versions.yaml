@@ -1,0 +1,87 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Publishes the documentation for released versions to
+# https://datafusion.apache.org/versions/<version>/
+#
+# The list of versions is in docs/source/_static/versions.json
+#
+# The current development docs are published from `main` by docs.yaml.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/docs_versions.yaml
+      - docs/scripts/build_versions.sh
+      - docs/scripts/release/conf.py
+      - docs/source/_static/versions.json
+      - docs/pyproject.toml
+      - uv.lock
+
+name: Deploy DataFusion versioned docs
+
+# run the publishing workflows one at a time.
+concurrency:
+  group: publish-asf-site
+  cancel-in-progress: false
+
+jobs:
+  build-versions:
+    permissions:
+      contents: write
+    name: Build versioned docs
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout docs sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Checkout asf-site branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: asf-site
+          path: asf-site
+
+      - name: Setup docs builder
+        uses: ./.github/actions/setup-docs-builder
+
+      - name: Build versioned docs
+        env:
+          # See docs.yaml
+          DATAFUSION_DOCS_BASE_PATH: ${{ vars.DATAFUSION_DOCS_BASE_PATH }}
+        run: |
+          set -x
+          docs/scripts/build_versions.sh --output docs/build/versions
+
+      - name: Copy & push the generated HTML
+        run: |
+          set -x
+          cd asf-site/
+          # versions/ mirrors the releases in versions.json; the current docs
+          # at the site root are published by docs.yaml
+          mkdir -p versions
+          # remove any old versions and replace with newly built ones
+          rsync -a --delete ../docs/build/versions/ versions/
+          git status --porcelain
+          if [ "$(git status --porcelain)" != "" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add --all
+            git commit -m 'Publish versioned docs triggered by ${{ github.sha }}'
+            git push
+          fi

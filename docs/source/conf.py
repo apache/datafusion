@@ -26,7 +26,9 @@
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
+import json
 import os
+from pathlib import Path
 import sys
 
 # To pickup rustdoc_trim.py
@@ -38,6 +40,15 @@ project = "Apache DataFusion"
 copyright = "2019-2025, Apache Software Foundation"
 author = "Apache Software Foundation"
 version = release = "main"
+
+# Path under which the site is served: "/" for https://datafusion.apache.org/,
+# or e.g. "/datafusion/" when a fork publishes to GitHub Pages at
+# https://<user>.github.io/datafusion/. The version picker links with absolute
+# paths, so the manifest and its URLs are prefixed with this path (see
+# `write_versions_json` below).
+docs_base_path = os.environ.get("DATAFUSION_DOCS_BASE_PATH") or "/"
+if not docs_base_path.endswith("/"):
+    docs_base_path += "/"
 
 
 # -- General configuration ---------------------------------------------------
@@ -100,7 +111,7 @@ html_theme_options = {
     # Release docs are published separately; the manifest may not be live yet.
     "check_switcher": False,
     "switcher": {
-        "json_url": "/_static/versions.json",
+        "json_url": f"{docs_base_path}_static/versions.json",
         "version_match": version,
     },
 }
@@ -145,6 +156,29 @@ html_favicon = '_static/favicon.svg'
 
 # tell myst_parser to auto-generate anchor links for headers h1, h2, h3
 myst_heading_anchors = 3
+
+
+def write_versions_json(app, exception):
+    """Write `_static/versions.json` to the build with `docs_base_path` applied.
+
+    The source manifest lists site-root-relative URLs ("/", "/versions/55.1.0/");
+    this prefixes each with the base path the site is served under.
+    """
+    if exception is not None or app.builder.name != "html":
+        return
+    manifest = Path(app.srcdir) / "_static" / "versions.json"
+    if not manifest.is_file():
+        return
+    entries = json.loads(manifest.read_text())
+    for entry in entries:
+        entry["url"] = docs_base_path.rstrip("/") + entry["url"]
+    out = Path(app.outdir) / "_static" / "versions.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(entries, indent=2) + "\n")
+
+
+def setup(app):
+    app.connect("build-finished", write_versions_json)
 
 # enable nice rendering of checkboxes for the task lists
 myst_enable_extensions = ["colon_fence", "deflist", "tasklist"]
