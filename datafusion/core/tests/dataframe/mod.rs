@@ -7849,6 +7849,59 @@ async fn test_with_column_array_col_physical_plan() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_array_col_rejected_in_select() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let err = df.select(vec![array_col(a).alias("x")]).unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "can only be used as the expression passed to DataFrame::with_column"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_array_col_rejected_in_expression() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let err = df.with_column("x", array_col(a) + lit(1)).unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "can only be used as the expression passed to DataFrame::with_column"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_array_col_rejected_in_filter_at_execution() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    // `is_null` does not type-check its argument, so the builder accepts this;
+    // the planner rejects it before anything runs.
+    let err = df
+        .filter(array_col(a).is_null())?
+        .collect()
+        .await
+        .unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "can only be used as the expression passed to DataFrame::with_column"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_array_col_with_alias() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+    // The alias is unwrapped; the column takes the name given to with_column.
+    let df = df.with_column("extra", array_col(a).alias("ignored"))?;
+    assert!(df.schema().field_with_unqualified_name("extra").is_ok());
+    assert!(df.schema().field_with_unqualified_name("ignored").is_err());
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_copy_schema() -> Result<()> {
     let tmp_dir = TempDir::new()?;

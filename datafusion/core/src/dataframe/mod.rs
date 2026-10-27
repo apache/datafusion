@@ -2455,8 +2455,9 @@ impl DataFrame {
 
     /// Add or replace a column in the DataFrame.
     ///
-    /// The column can be created from a DataFusion expression or from a
-    /// pre-materialized in-memory Arrow array.
+    /// The column can be created from a DataFusion expression or, by passing
+    /// [`array_col`], from a pre-materialized in-memory Arrow array; see
+    /// [`array_col`] for the positional-pairing rules.
     ///
     /// # Example
     /// ```
@@ -2944,44 +2945,9 @@ impl DataFrame {
         Ok(df)
     }
 
-    /// Append an Arrow array as a column to this [`DataFrame`].
-    ///
-    /// This does not execute the current plan. The array is attached when the
-    /// returned DataFrame is collected. The array must have the same length as
-    /// the number of rows this DataFrame produces.
-    ///
-    /// Called from [`Self::with_column`] when the expression is [`array_col`].
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use arrow::array::{ArrayRef, Int32Array, StringArray};
-    /// use datafusion::prelude::*;
-    /// # use datafusion::error::Result;
-    /// # use datafusion_common::assert_batches_sorted_eq;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
-    /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-    /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-    /// let df = DataFrame::from_columns([("id", id), ("name", name)])?;
-    ///
-    /// let extra: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
-    /// let df = df.with_column("extra", array_col(extra))?;
-    ///
-    /// let expected = vec![
-    ///     "+----+------+-------+",
-    ///     "| id | name | extra |",
-    ///     "+----+------+-------+",
-    ///     "| 1  | foo  | 10    |",
-    ///     "| 2  | bar  | 20    |",
-    ///     "| 3  | baz  | 30    |",
-    ///     "+----+------+-------+",
-    /// ];
-    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Lazy implementation behind [`array_col`]: wraps the current plan in an
+    /// [`AddColumnProvider`] that zips `array` onto the rows at execution time.
+    /// See [`array_col`] for the contract.
     fn with_array_column(self, name: &str, array: ArrayRef) -> Result<DataFrame> {
         let (state, plan) = self.into_parts();
         let provider = Arc::new(AddColumnProvider::try_new(plan, name, array)?);
@@ -2994,9 +2960,29 @@ impl DataFrame {
 
 /// Create an [`Expr`] that attaches an Arrow [`ArrayRef`] as a DataFrame column.
 ///
-/// Pass the result to [`DataFrame::with_column`]. Unlike [`lit`] or nested
-/// constructors such as make_array, values are zipped onto existing rows
-/// positionally.
+/// Pass the result to [`DataFrame::with_column`]. Unlike [`lit`], which repeats
+/// one value on every row, the array is zipped onto the rows positionally:
+/// element `i` of the array becomes the value of row `i`.
+///
+/// # Rules
+///
+/// * `array_col` is only valid as the expression passed to `with_column`,
+///   optionally wrapped in an alias. Using it anywhere else — in `select`,
+///   `filter`, or combined with other expressions — is rejected during
+///   planning: by the builder where the expression's type is needed, otherwise
+///   when the DataFrame is executed. It is never evaluated. To transform the
+///   values, add the column first and then use a second `with_column` call on
+///   the new column.
+/// * The array must have exactly as many elements as the DataFrame produces
+///   rows; a mismatch is an error at execution time.
+/// * Rows are paired in the order the input DataFrame produces them when
+///   executed as a single partition: in-memory sources (`from_columns`,
+///   `read_batch`, `read_batches`) keep insertion order, and `filter`,
+///   `select`, `sort` and `limit` preserve it. A multi-partition `MemTable`
+///   is read partition by partition. Inputs without an inherent row order —
+///   joins, aggregations, multi-file scans — should be sorted first. The
+///   input is executed with a single partition; operations after
+///   `with_column` are parallelized as usual.
 ///
 /// # Example
 ///
@@ -3076,11 +3062,14 @@ impl ScalarUDFImpl for ArrayCol {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(self.array.data_type().clone())
+        plan_err!(
+            "array_col() can only be used as the expression passed to DataFrame::with_column. \
+             To transform the values, add the column first and use a second with_column call"
+        )
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        exec_err!("array_col() can only be used with DataFrame::with_column")
+        internal_err!("array_col() was not intercepted by DataFrame::with_column")
     }
 
     fn should_evaluate_const(&self, _args: &[&ScalarValue]) -> bool {
