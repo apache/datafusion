@@ -35,7 +35,6 @@ function workflow(id = 1, overrides = {}) {
     head_branch: branch,
     head_sha: sha,
     run_attempt: 1,
-    created_at: "2026-10-20T00:00:00Z",
     ...overrides,
   };
 }
@@ -70,13 +69,8 @@ async function execute({
       calls.push(`list:${params.status}`);
       if (params.status === listError) throw apiError(503);
       if (listResponse) return { data: await listResponse(params) };
-      const [start, end] = params.created.split("..").map(Date.parse);
-      const filtered = runs.filter(
-        (r) =>
-          r.status === params.status &&
-          Date.parse(r.created_at) >= start &&
-          Date.parse(r.created_at) <= end
-      );
+      assert.equal(params.created, undefined);
+      const filtered = runs.filter((r) => r.status === params.status);
       return {
         data: {
           total_count: filtered.length,
@@ -101,7 +95,6 @@ async function execute({
       assert.equal(`${owner}/${repo}`, fullName);
       calls.push(`cancel:${run_id}`);
       if (cancelErrors[run_id]) throw cancelErrors[run_id];
-      calls.push(`cancel:${run_id}`);
       cancellations.push(run_id);
     },
   };
@@ -458,30 +451,28 @@ test("an unresolved 409 is retried by later scans and is never reported as cance
   assert.deepEqual(next.cancellations, [1]);
 });
 
-test("splits capped listings and collects all results before cancelling", async () => {
-  const runs = Array.from({ length: 1001 }, (_, i) =>
-    workflow(i + 10000, {
-      created_at: new Date(
-        Date.parse("2026-10-20T00:00:00Z") + i * 1000
-      ).toISOString(),
-    })
-  );
-  const result = await execute({ runs });
-  assert.equal(result.cancellations.length, 1001);
-  assert.ok(
-    result.calls.findLastIndex((c) => c.startsWith("list:")) <
-      result.calls.findIndex((c) => c.startsWith("cancel:"))
-  );
-  assert.ok(result.calls.filter((c) => c.startsWith("list:")).length > 10);
-});
-
-test("cannot cancel from a truncated single-second window", async () => {
+test("a capped listing aborts without cancelling", async () => {
   const result = await execute({
     runs: Array.from({ length: 1000 }, (_, i) => workflow(i + 1)),
   });
   assert.deepEqual(result.cancellations, []);
+  assert.deepEqual(
+    result.calls.filter((c) => !c.startsWith("list:")),
+    []
+  );
   assert.equal(result.failures.length, 1);
-  assert.match(result.warnings[0], /within one second/);
+  assert.match(result.warnings[0], /exceed the listing cap/);
+});
+
+test("workflows of one group share the target-branch comparison", async () => {
+  const result = await execute({
+    runs: [
+      workflow(1),
+      workflow(2, { path: ".github/workflows/extended.yml" }),
+    ],
+  });
+  assert.deepEqual(result.cancellations, [1, 2]);
+  assert.equal(result.calls.filter((c) => c.startsWith("compare:")).length, 1);
 });
 
 test("malformed listing metadata aborts without cancelling", async () => {

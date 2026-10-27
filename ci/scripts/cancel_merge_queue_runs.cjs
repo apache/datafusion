@@ -63,17 +63,9 @@ async function refSha(github, repo, branch) {
 }
 
 // Filtered Actions listings are capped at 1,000 results even with pagination.
-// Split full windows by creation time before trusting the result set.
-async function listRuns(github, repo, status, start, end) {
-  const params = {
-    ...repo,
-    event: "merge_group",
-    status,
-    per_page: 100,
-    created: `${new Date(start * 1000).toISOString()}..${new Date(
-      end * 1000
-    ).toISOString()}`,
-  };
+// Active merge-group runs stay far below the cap, so a full listing is an error.
+async function listRuns(github, repo, status) {
+  const params = { ...repo, event: "merge_group", status, per_page: 100 };
   const runs = [];
   for (let page = 1; ; page++) {
     const { data } = await github.rest.actions.listWorkflowRunsForRepo({
@@ -87,16 +79,10 @@ async function listRuns(github, repo, status, start, end) {
     ) {
       throw new Error("Invalid workflow run listing");
     }
-    if (
-      data.total_count >= 1000 ||
-      runs.length + data.workflow_runs.length >= 1000
-    ) {
-      if (start === end)
-        throw new Error("Cannot fully list merge-group runs within one second");
-      const middle = Math.floor((start + end) / 2);
-      const older = await listRuns(github, repo, status, start, middle);
-      const newer = await listRuns(github, repo, status, middle + 1, end);
-      return [...older, ...newer];
+    if (data.total_count >= 1000) {
+      throw new Error(
+        `${data.total_count} ${status} runs exceed the listing cap`
+      );
     }
     runs.push(...data.workflow_runs);
     if (data.workflow_runs.length < 100) return runs;
@@ -118,10 +104,9 @@ async function run({ github, context, core, dryRun = true }) {
   // Finish pagination before cancelling: otherwise mutations shrink the active
   // result sets and can cause later pages to skip runs.
   const listed = new Map();
-  const end = Math.floor(Date.now() / 1000);
   try {
     for (const status of ACTIVE) {
-      const runs = await listRuns(github, repo, status, 0, end);
+      const runs = await listRuns(github, repo, status);
       for (const candidate of runs) listed.set(candidate.id, candidate);
     }
   } catch (error) {
@@ -134,6 +119,7 @@ async function run({ github, context, core, dryRun = true }) {
   }
 
   const refs = new Map();
+  const comparisons = new Map();
   const results = [];
   const errors = [];
   for (const candidate of listed.values()) {
@@ -177,13 +163,20 @@ async function run({ github, context, core, dryRun = true }) {
       if (head === current.head_sha) continue;
       // A successful merge removes the queue ref too. Preserve checks on
       // commits already in the target branch, including optional checks.
+      // Workflows of one group share the comparison, failures included.
       const base = QUEUE_REF.exec(current.head_branch)[1];
-      const { data: comparison } =
-        await github.rest.repos.compareCommitsWithBasehead({
-          ...repo,
-          basehead: `${base}...${current.head_sha}`,
-          per_page: 1,
-        });
+      const basehead = `${base}...${current.head_sha}`;
+      if (!comparisons.has(basehead)) {
+        comparisons.set(
+          basehead,
+          github.rest.repos.compareCommitsWithBasehead({
+            ...repo,
+            basehead,
+            per_page: 1,
+          })
+        );
+      }
+      const { data: comparison } = await comparisons.get(basehead);
       if (["identical", "behind"].includes(comparison.status)) continue;
       if (!["ahead", "diverged"].includes(comparison.status)) {
         throw new Error(`Invalid comparison status for ${current.head_sha}`);

@@ -35,10 +35,12 @@ permissions:
   contents: read
   actions: write
 
-# A dry run must not replace a pending cancellation scan. Within each mode,
-# a newer pending scan can replace an older one. Do not interrupt running scans.
+# Merge-group scans attach checks to commits that can land on main, so each
+# group SHA gets its own group: a replaced pending scan would show as cancelled.
+# Scheduled and manual scans share one group per mode, so a dry run cannot
+# replace a pending cancellation scan. Do not interrupt running scans.
 concurrency:
-  group: merge-queue-cleanup-${{ vars.MERGE_QUEUE_CLEANUP_ENABLED != 'true' || (github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+  group: merge-queue-cleanup-${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || (vars.MERGE_QUEUE_CLEANUP_ENABLED != 'true' || (github.event_name == 'workflow_dispatch' && inputs.dry_run)) }}
   cancel-in-progress: false
 
 jobs:
