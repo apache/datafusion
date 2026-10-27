@@ -291,11 +291,8 @@ For point lookups, the following techniques also help:
 
 - Sort the data by the lookup key so the data that is fetched is physically nearby (clustered).
   This makes techniques such as Parquet min/max metadata pruning more effective.
-- Write Parquet files with smaller row groups and data pages than the defaults
-  (1M rows per row group and 20k rows per page) so that less data needs to be
-  read and decoded for each lookup. For example, use `datafusion.execution.parquet.max_row_group_size`
-  and `datafusion.execution.parquet.data_page_row_count_limit` to target around
-  128k rows per row group and 2k-4k rows per page.
+- Write Parquet files with smaller row groups and data pages than the default
+  so that less data needs to be read and decoded for each lookup.
 - Enable `datafusion.execution.parquet.pushdown_filters` so filters are
   evaluated while decoding Parquet.
 - Set the Parquet metadata cache size via
@@ -303,7 +300,8 @@ For point lookups, the following techniques also help:
   files you query repeatedly.
 - Reuse physical plans to avoid re-planning each query.
 
-Here is how to write Parquet files with smaller row groups and data pages:
+Here is an example of how to write Parquet files with smaller row groups and
+data pages:
 
 ```sql
 COPY (SELECT * FROM t) TO 't.parquet'
