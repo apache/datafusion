@@ -70,10 +70,11 @@ impl CliHelper {
         }
     }
 
-    /// Sets the recursion limit used when validating input, see
-    /// `datafusion.sql_parser.recursion_limit`.
-    pub fn set_recursion_limit(&mut self, recursion_limit: usize) {
-        self.recursion_limit = recursion_limit;
+    /// Sets the parser options (dialect and recursion limit) used when
+    /// validating input, see `datafusion.sql_parser.*`.
+    pub fn set_parser_options(&mut self, options: &SqlParserOptions) {
+        self.set_dialect(&options.dialect);
+        self.recursion_limit = options.recursion_limit.get();
     }
 
     /// Re-enable the default hint for the next prompt.
@@ -227,6 +228,8 @@ mod tests {
 
     use super::*;
 
+    use datafusion_common::config::ConfigNonZeroUsize;
+
     fn readline_direct(
         mut reader: impl BufRead,
         validator: &CliHelper,
@@ -337,6 +340,10 @@ mod tests {
         let nested = |depth: usize| {
             format!("select {}1{};", "abs(".repeat(depth), ")".repeat(depth))
         };
+        let with_limit = |limit: usize| SqlParserOptions {
+            recursion_limit: ConfigNonZeroUsize::try_new(limit).unwrap(),
+            ..Default::default()
+        };
 
         // exceeds the default recursion limit
         let result = readline_direct(Cursor::new(nested(60)), &validator)?;
@@ -344,11 +351,11 @@ mod tests {
             matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("RecursionLimitExceeded"))
         );
 
-        validator.set_recursion_limit(100);
+        validator.set_parser_options(&with_limit(100));
         let result = readline_direct(Cursor::new(nested(60)), &validator)?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
-        validator.set_recursion_limit(5);
+        validator.set_parser_options(&with_limit(5));
         let result = readline_direct(Cursor::new(nested(10)), &validator)?;
         assert!(
             matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("RecursionLimitExceeded"))

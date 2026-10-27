@@ -126,23 +126,18 @@ pub async fn exec_from_repl(
     print_options: &mut PrintOptions,
 ) -> rustyline::Result<()> {
     let mut rl = Editor::new()?;
-    {
-        let task_ctx = ctx.task_ctx();
-        let sql_parser = &task_ctx.session_config().options().sql_parser;
-        let mut helper = CliHelper::new(&sql_parser.dialect, print_options.color);
-        helper.set_recursion_limit(sql_parser.recursion_limit.get());
-        rl.set_helper(Some(helper));
-    }
+    rl.set_helper(Some(CliHelper::new(
+        &ctx.task_ctx().session_config().options().sql_parser.dialect,
+        print_options.color,
+    )));
     rl.load_history(".history").ok();
 
     loop {
-        // The dialect and recursion limit can change through any input,
-        // including `\i` files, so sync the validator before every read.
-        let task_ctx = ctx.task_ctx();
-        let sql_parser = &task_ctx.session_config().options().sql_parser;
-        let helper = rl.helper_mut().unwrap();
-        helper.set_dialect(&sql_parser.dialect);
-        helper.set_recursion_limit(sql_parser.recursion_limit.get());
+        // Parser options can change through any input, including `\i` files,
+        // so sync the validator before every read.
+        rl.helper_mut()
+            .unwrap()
+            .set_parser_options(&ctx.task_ctx().session_config().options().sql_parser);
 
         match rl.readline("> ") {
             Ok(line) if line.starts_with('\\') => {
