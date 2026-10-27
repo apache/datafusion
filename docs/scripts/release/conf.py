@@ -54,10 +54,6 @@ html_logo = str(source / html_logo)
 html_favicon = str(source / html_favicon)
 
 version = release = os.environ["DATAFUSION_DOCS_VERSION"]
-# Older tags do not define this (see docs/source/conf.py on main).
-docs_base_path = os.environ.get("DATAFUSION_DOCS_BASE_PATH") or "/"
-if not docs_base_path.endswith("/"):
-    docs_base_path += "/"
 html_baseurl = f"https://datafusion.apache.org/versions/{version}/"
 sitemap_url_scheme = "{link}"
 if "sphinx_sitemap" not in extensions:
@@ -68,7 +64,7 @@ html_theme_options = {
     "navbar_end": ["version-switcher", "theme-switcher"],
     "check_switcher": False,
     "switcher": {
-        "json_url": f"{docs_base_path}_static/versions.json",
+        "json_url": "/_static/versions.json",
         "version_match": version,
     },
 }
