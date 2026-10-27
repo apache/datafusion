@@ -489,7 +489,7 @@ async fn csv_explain_plans() {
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
-    // Since the plan contains path that are environmentally dependant (e.g. full path of the test file), only verify important content
+    // Since the plan contains path that are environmentally dependent (e.g. full path of the test file), only verify important content
     assert_contains!(&actual, "logical_plan");
     assert_contains!(&actual, "Projection: aggregate_test_100.c1");
     assert_contains!(actual, "Filter: aggregate_test_100.c2 > Int8(10)");
@@ -707,7 +707,7 @@ async fn csv_explain_verbose_plans() {
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
     // Since the plan contains path that are environmentally
-    // dependant(e.g. full path of the test file), only verify
+    // dependent (e.g. full path of the test file), only verify
     // important content
     assert_contains!(&actual, "logical_plan after optimize_projections");
     assert_contains!(&actual, "physical_plan");

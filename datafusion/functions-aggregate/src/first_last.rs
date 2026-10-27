@@ -977,6 +977,7 @@ impl Accumulator for TrivialFirstValueAccumulator {
                 && !first.is_empty()
             {
                 self.first = ScalarValue::try_from_array(first, 0)?;
+                self.first.compact();
                 self.is_set = true;
             }
         }
@@ -2970,6 +2971,28 @@ mod tests {
         acc.update_batch(&vo_batch(&[Some(500)], &[5], &[1]), &[0], None, 1)?;
         let out = acc.evaluate(EmitTo::All)?;
         assert_eq!(int64_values(&out), vec![Some(500)]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_value_merge_compacts_list_state() -> Result<()> {
+        let values: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+                repeat_with(|| Some(vec![Some(1)])).take(10_000),
+            ));
+
+        let mut updated =
+            TrivialFirstValueAccumulator::try_new(values.data_type(), false)?;
+        let mut merged =
+            TrivialFirstValueAccumulator::try_new(values.data_type(), false)?;
+
+        updated.update_batch(&[Arc::clone(&values)])?;
+
+        let flags: ArrayRef = Arc::new(BooleanArray::from(vec![true; values.len()]));
+        merged.merge_batch(&[values, flags])?;
+
+        assert_eq!(merged.evaluate()?, updated.evaluate()?);
+        assert_eq!(merged.size(), updated.size());
         Ok(())
     }
 }
