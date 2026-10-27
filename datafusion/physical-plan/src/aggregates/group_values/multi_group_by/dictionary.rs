@@ -182,14 +182,27 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     /// array; without this the per-batch cost is O(dictionary cardinality)
     /// rather than O(rows). `take_n` remaps `inner` and clears
     /// `cached_values`, forcing a rebuild.
-    fn sync_value_cache(&mut self, dict_values: &ArrayRef) {
+    fn sync_value_cache_with_hashes(
+        &mut self,
+        dict_values: &ArrayRef,
+        hashes: Option<&[u64]>,
+    ) {
         if self.is_cached(dict_values) {
             return;
         }
-        self.hash_values(dict_values);
+        if let Some(hashes) = hashes.filter(|hashes| hashes.len() == dict_values.len()) {
+            self.val_hashes.clear();
+            self.val_hashes.extend_from_slice(hashes);
+        } else {
+            self.hash_values(dict_values);
+        }
         self.val_to_inner.clear();
         self.val_to_inner.resize(dict_values.len(), usize::MAX);
         self.cached_values = Some(Arc::downgrade(dict_values));
+    }
+
+    fn sync_value_cache(&mut self, dict_values: &ArrayRef) {
+        self.sync_value_cache_with_hashes(dict_values, None);
     }
 
     fn find_or_insert_value(
@@ -336,6 +349,10 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         };
         self.group_to_inner.push(inner_slot);
         self.check_key_overflow()
+    }
+
+    fn set_dictionary_hashes(&mut self, values: &ArrayRef, hashes: &[u64]) {
+        self.sync_value_cache_with_hashes(values, Some(hashes));
     }
 
     fn vectorized_equal_to(
