@@ -413,28 +413,16 @@ _[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used
 
 ### Microbenchmark health checks (local-only)
 
-To execute each Criterion case once without collecting performance measurements:
+Runs each microbenchmark case once to catch runtime panics, without measuring performance:
 
 ```shell
 cargo xtask ci step test microbenchmarks
 ```
 
-This command selects workspace bench targets, excluding `datafusion-examples`,
-`datafusion-benchmarks` (the SQL benchmark harness), and `datafusion-cli`. It enables
-`datafusion-physical-plan/test_utils`, uses the `ci-bench` profile to retain debug
-assertions and overflow checks, and supplies the small checked-in ClickBench
-fixture. It catches runtime failures such as panics; it does not detect performance
-regressions or establish result correctness unless a case asserts its results.
-
-Run this command locally from the checkout you want to test. No dedicated GitHub
-Actions workflow is provided. Full microbenchmark execution is not a required
-merge check and does not run on PR updates, pushes (including release branches),
-merge groups, or a schedule.
-Daily runs are not configured because there is no designated owner to triage
-failures and drive fixes. Reconsider a daily tier only with explicit ownership and
-an agreed resource budget. Runtime-only breakage may remain unnoticed until an
-on-demand run. When changing benchmark fixtures, setup, or APIs, run the affected
-benchmarks and include the commands and results in your PR.
+The suite took about 10 minutes in CI, so execution is local-only, including on
+release branches; no hosted workflow or required check is provided. Runtime failures
+may go unnoticed until a local run. When changing benchmark fixtures, setup, or APIs,
+run the affected benchmarks and include the commands and results in your PR.
 
 ### Parquet SQL Benchmarks
 
