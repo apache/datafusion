@@ -307,6 +307,7 @@ impl ExecutionPlan for WindowAggExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, context)?;
         let stream = Box::pin(WindowAggStream::new(
             Arc::clone(&self.schema),
@@ -315,6 +316,7 @@ impl ExecutionPlan for WindowAggExec {
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
             self.ordered_partition_by_indices.clone(),
+            batch_size,
         )?);
         Ok(stream)
     }
@@ -508,6 +510,11 @@ pub struct WindowAggStream {
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
+    /// Maximum number of rows emitted in a single output batch.
+    batch_size: usize,
+    /// Materialized result being emitted in zero-copy slices.
+    output: Option<RecordBatch>,
+    output_offset: usize,
 }
 
 impl WindowAggStream {
@@ -519,6 +526,7 @@ impl WindowAggStream {
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
         ordered_partition_by_indices: Vec<usize>,
+        batch_size: usize,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
         assert_eq_or_internal_err!(
@@ -535,6 +543,9 @@ impl WindowAggStream {
             baseline_metrics,
             partition_by_sort_keys,
             ordered_partition_by_indices,
+            batch_size,
+            output: None,
+            output_offset: 0,
         })
     }
 
@@ -604,6 +615,13 @@ impl WindowAggStream {
             return Poll::Ready(None);
         }
 
+        if let Some(batch) = self.next_output_batch() {
+            return Poll::Ready(Some(Ok(batch)));
+        }
+        if self.finished {
+            return Poll::Ready(None);
+        }
+
         loop {
             return Poll::Ready(Some(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
@@ -617,16 +635,32 @@ impl WindowAggStream {
                     let input_schema = self.input.schema();
                     self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                     let Some(result) = self.compute_aggregates()? else {
+                        self.finished = true;
                         return Poll::Ready(None);
                     };
-                    self.finished = true;
+                    self.batches.clear();
                     // Empty record batches should not be emitted.
                     // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
                     debug_assert!(result.num_rows() > 0);
-                    Ok(result)
+                    self.output = Some(result);
+                    Ok(self.next_output_batch().expect("non-empty output"))
                 }
             }));
         }
+    }
+
+    fn next_output_batch(&mut self) -> Option<RecordBatch> {
+        let output = self.output.as_ref()?;
+        let remaining = output.num_rows() - self.output_offset;
+        if remaining == 0 {
+            self.finished = true;
+            self.output = None;
+            return None;
+        }
+        let len = remaining.min(self.batch_size);
+        let batch = output.slice(self.output_offset, len);
+        self.output_offset += len;
+        Some(batch)
     }
 }
 
@@ -648,6 +682,63 @@ mod tests {
         WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::count::count_udaf;
+
+    #[tokio::test]
+    async fn output_respects_batch_size() -> Result<()> {
+        use crate::collect;
+        use arrow::array::{ArrayRef, AsArray, Int64Array};
+        use datafusion_execution::config::SessionConfig;
+        use datafusion_physical_expr_common::metrics::MetricValue;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let values: ArrayRef = Arc::new(Int64Array::from_iter_values(0..10));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values])?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let args = vec![crate::expressions::col("a", &schema)?];
+        let window_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count(a)".to_string(),
+            &args,
+            &[],
+            &[],
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let window = Arc::new(WindowAggExec::try_new(vec![window_expr], input, true)?);
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(4)),
+        );
+
+        let batches = collect(Arc::clone(&window) as _, context).await?;
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![4, 4, 2]
+        );
+        let combined = concat_batches(&window.schema(), &batches)?;
+        let counts = combined
+            .column(1)
+            .as_primitive::<arrow::datatypes::Int64Type>();
+        assert_eq!(counts.values(), &(1..=10).collect::<Vec<_>>());
+        let metrics = window.metrics().expect("window metrics");
+        assert_eq!(metrics.output_rows(), Some(10));
+        let output_batches = metrics
+            .sum(|m| matches!(m.value(), MetricValue::OutputBatches(_)))
+            .expect("output batch metric");
+        assert_eq!(output_batches.as_usize(), 3);
+        Ok(())
+    }
 
     #[test]
     fn test_window_agg_cardinality_effect() -> Result<()> {

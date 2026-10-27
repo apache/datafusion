@@ -58,6 +58,11 @@ pub struct GroupedTopKAggregateStream {
     priority_map: PriorityMap,
     /// Whether a NULL group key has been seen for a group-by-only aggregation.
     null_group_seen: bool,
+    /// Maximum number of rows emitted in a single output batch.
+    batch_size: usize,
+    /// Materialized result being emitted in zero-copy slices.
+    output: Option<RecordBatch>,
+    output_offset: usize,
 }
 
 impl GroupedTopKAggregateStream {
@@ -71,6 +76,7 @@ impl GroupedTopKAggregateStream {
         let agg_schema = Arc::clone(&aggr.schema);
         let group_by = Arc::clone(aggr.group_by());
         let input = aggr.input.execute(partition, Arc::clone(context))?;
+        let batch_size = context.session_config().batch_size();
         let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
         let group_by_metrics = GroupByMetrics::new_topk(&aggr.metrics, partition);
         let aggregate_argument_metrics = AggregateArgumentMetrics::new(
@@ -112,6 +118,9 @@ impl GroupedTopKAggregateStream {
             group_by,
             priority_map,
             null_group_seen: false,
+            batch_size,
+            output: None,
+            output_offset: 0,
         })
     }
 }
@@ -196,6 +205,30 @@ impl GroupedTopKAggregateStream {
         }
         Ok(())
     }
+
+    fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let Some(output) = self.output.as_ref() else {
+            return Ok(None);
+        };
+        let remaining = output.num_rows() - self.output_offset;
+        if remaining == 0 {
+            self.done = true;
+            self.output = None;
+            return Ok(None);
+        }
+        let len = remaining.min(self.batch_size);
+        let batch = output.slice(self.output_offset, len);
+        self.output_offset += len;
+        trace!(
+            "partition {} emit batch with {} rows",
+            self.partition,
+            batch.num_rows()
+        );
+        if log::log_enabled!(Level::Trace) {
+            print_batches(std::slice::from_ref(&batch))?;
+        }
+        Ok(Some(batch.record_output(&self.baseline_metrics)))
+    }
 }
 
 impl Stream for GroupedTopKAggregateStream {
@@ -207,6 +240,9 @@ impl Stream for GroupedTopKAggregateStream {
     ) -> Poll<Option<Self::Item>> {
         if self.done {
             return Poll::Ready(None);
+        }
+        if let Some(batch) = self.next_output_batch()? {
+            return Poll::Ready(Some(Ok(batch)));
         }
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         while let Poll::Ready(res) = self.input.poll_next_unpin(cx) {
@@ -280,17 +316,8 @@ impl Stream for GroupedTopKAggregateStream {
                         let cols = self.emit_columns()?;
                         RecordBatch::try_new(Arc::clone(&self.schema), cols)
                     })?;
-                    let batch = batch.record_output(&self.baseline_metrics);
-                    trace!(
-                        "partition {} emit batch with {} rows",
-                        self.partition,
-                        batch.num_rows()
-                    );
-                    if log::log_enabled!(Level::Trace) {
-                        print_batches(std::slice::from_ref(&batch))?;
-                    }
-                    self.done = true;
-                    return Poll::Ready(Some(Ok(batch)));
+                    self.output = Some(batch);
+                    return Poll::Ready(self.next_output_batch()?.map(Ok));
                 }
                 // inner had error, return to caller
                 Some(Err(e)) => {
@@ -318,6 +345,66 @@ mod tests {
     use datafusion_functions_aggregate::min_max::min_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
+
+    #[tokio::test]
+    async fn output_respects_batch_size() -> Result<()> {
+        use datafusion_execution::config::SessionConfig;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::UInt32, false),
+            Field::new("a", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6])),
+                Arc::new(Float64Array::from(vec![6.0, 5.0, 4.0, 3.0, 2.0, 1.0])),
+            ],
+        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]);
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("MIN(a)")
+                .build()?,
+        );
+        let aggregate_exec = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Single,
+                group_by,
+                vec![aggregate],
+                vec![None],
+                input,
+                schema,
+            )?
+            .try_optimize_topk(5, "MIN(a)", SortOptions::new(false, false))
+            .unwrap()
+            .data,
+        );
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(2)),
+        );
+
+        let batches = collect(Arc::clone(&aggregate_exec) as _, context).await?;
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![2, 2, 1]
+        );
+        let metrics = aggregate_exec.metrics().expect("aggregate metrics");
+        assert_eq!(metrics.output_rows(), Some(5));
+        let output_batches = metrics
+            .sum(|m| matches!(m.value(), MetricValue::OutputBatches(_)))
+            .expect("output batch metric");
+        assert_eq!(output_batches.as_usize(), 3);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_topk_aggregate_argument_metrics() -> Result<()> {
