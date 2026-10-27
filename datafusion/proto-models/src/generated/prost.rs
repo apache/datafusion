@@ -1202,6 +1202,8 @@ pub struct SimilarToNode {
     pub pattern: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(string, tag = "4")]
     pub escape_char: ::prost::alloc::string::String,
+    #[prost(bool, tag = "5")]
+    pub case_insensitive: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CaseNode {

@@ -760,6 +760,7 @@ message SimilarToNode {
   LogicalExprNode expr = 2;
   LogicalExprNode pattern = 3;
   string escape_char = 4;
+  bool case_insensitive = 5;
 }
 
 message CaseNode {
