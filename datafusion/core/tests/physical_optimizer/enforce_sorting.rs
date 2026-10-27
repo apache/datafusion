@@ -3635,3 +3635,96 @@ async fn test_passthrough_wrapper_projection_keeps_ordering() -> Result<()> {
 
     Ok(())
 }
+
+/// A parent needs `Hash(k)` and `[k, sum]` within each partition, above a
+/// Partial aggregate over input sorted on `k`. With `prefer_existing_sort`, the
+/// optimizer replaces the sort with an order-preserving repartition only when
+/// the repartitioned output satisfies `[k, sum]`. Partial aggregate output is
+/// not unique on `k` across input partitions, so the sort must stay.
+#[tokio::test]
+async fn test_keep_sort_above_repartitioned_partial_aggregate() -> Result<()> {
+    use arrow::array::AsArray;
+    use arrow::datatypes::{Int32Type, Int64Type};
+    use datafusion_functions_aggregate::sum::sum_udaf;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr_common::sort_expr::LexRequirement;
+    use datafusion_physical_optimizer::output_requirements::OutputRequirements;
+    use datafusion_physical_plan::aggregates::{
+        AggregateExec, AggregateMode, PhysicalGroupBy,
+    };
+    use datafusion_physical_plan::common::collect;
+    use datafusion_physical_plan::test::TestMemoryExec;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int64, false),
+    ]));
+    // Both partitions are sorted on `k` and contain keys 1 and 2.
+    let partitions = [
+        vec![record_batch!(("k", Int32, [1, 2]), ("v", Int64, [9, 5]))?],
+        vec![record_batch!(("k", Int32, [1, 2]), ("v", Int64, [1, 7]))?],
+    ];
+    let input = TestMemoryExec::try_new(&partitions, Arc::clone(&schema), None)?
+        .try_with_sort_information(vec![[sort_expr("k", &schema)].into()])?;
+    let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+    let partial: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]),
+        vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum_v")
+                .build()?,
+        )],
+        vec![None],
+        input,
+        Arc::clone(&schema),
+    )?);
+
+    let k: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
+    let sum: Arc<dyn PhysicalExpr> =
+        Arc::new(Column::new(partial.schema().field(1).name(), 1));
+    let requirement = LexRequirement::new([
+        PhysicalSortRequirement::new(Arc::clone(&k), Some(SortOptions::default())),
+        PhysicalSortRequirement::new(sum, Some(SortOptions::default())),
+    ])
+    .unwrap();
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
+        partial,
+        Some(OrderingRequirements::new(requirement)),
+        Distribution::KeyPartitioned(vec![k]),
+        None,
+    ));
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 2;
+    config.optimizer.prefer_existing_sort = true;
+    let optimized = EnsureRequirements::new().optimize(plan, &config)?;
+    let optimized = OutputRequirements::new_remove_mode().optimize(optimized, &config)?;
+    assert_snapshot!(displayable(optimized.as_ref()).indent(true), @r"
+    SortExec: expr=[k@0 ASC, sum_v[sum]@1 ASC], preserve_partitioning=[true]
+      RepartitionExec: partitioning=Hash([k@0], 2), input_partitions=2
+        AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum_v], group_clustering_mode=Full
+          DataSourceExec: partitions=2, partition_sizes=[1, 1], output_ordering=k@0 ASC
+    ");
+
+    let task_ctx = Arc::new(TaskContext::default());
+    for partition in 0..optimized.output_partitioning().partition_count() {
+        let batches =
+            collect(optimized.execute(partition, Arc::clone(&task_ctx))?).await?;
+        let rows: Vec<(i32, i64)> = batches
+            .iter()
+            .flat_map(|batch| {
+                let k = batch.column(0).as_primitive::<Int32Type>();
+                let sum = batch.column(1).as_primitive::<Int64Type>();
+                (0..batch.num_rows()).map(move |i| (k.value(i), sum.value(i)))
+            })
+            .collect();
+        assert!(
+            rows.is_sorted(),
+            "partition {partition} is not sorted: {rows:?}"
+        );
+    }
+
+    Ok(())
+}

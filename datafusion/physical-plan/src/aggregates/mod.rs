@@ -1481,20 +1481,30 @@ impl AggregateExec {
 
         // Group by expression will be a distinct value after the aggregation.
         // Add it into the constraint set.
-        let mut constraints = eq_properties.constraints().to_vec();
-        let new_constraint = Constraint::Unique(
-            group_expr_mapping
-                .iter()
-                .flat_map(|(_, target_cols)| {
-                    target_cols.iter().filter_map(|(expr, _)| {
-                        expr.downcast_ref::<Column>().map(|c| c.index())
+        //
+        // Only do this for modes that produce final values. Partial state is
+        // not unique on the group keys: a partial stage can emit the same group
+        // more than once (early emission under memory pressure, skipping partial
+        // aggregation), and operators that merge partitions (e.g.
+        // `RepartitionExec`, `SortPreservingMergeExec`) keep constraints. A stale
+        // `Unique` lets an ordering on the group keys wrongly satisfy a longer
+        // ordering, which removes a required sort.
+        if mode.output_mode() == AggregateOutputMode::Final {
+            let mut constraints = eq_properties.constraints().to_vec();
+            let new_constraint = Constraint::Unique(
+                group_expr_mapping
+                    .iter()
+                    .flat_map(|(_, target_cols)| {
+                        target_cols.iter().filter_map(|(expr, _)| {
+                            expr.downcast_ref::<Column>().map(|c| c.index())
+                        })
                     })
-                })
-                .collect(),
-        );
-        constraints.push(new_constraint);
-        eq_properties =
-            eq_properties.with_constraints(Constraints::new_unverified(constraints));
+                    .collect(),
+            );
+            constraints.push(new_constraint);
+            eq_properties =
+                eq_properties.with_constraints(Constraints::new_unverified(constraints));
+        }
 
         // Get output partitioning:
         let input_partitioning = input.output_partitioning().clone();
@@ -3416,6 +3426,8 @@ mod tests {
 
     use crate::projection::ProjectionExec;
     use crate::repartition::RepartitionExec;
+    use crate::sorts::sort::SortExec;
+    use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use datafusion_physical_expr::projection::ProjectionExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
@@ -5565,6 +5577,114 @@ mod tests {
             partial_reduce.properties().output_ordering().is_none(),
             "partial reduce advertised an ordering it does not maintain: {:?}",
             partial_reduce.properties().output_ordering()
+        );
+
+        Ok(())
+    }
+
+    /// Partial aggregation output is not unique on the group keys across
+    /// partitions, so it must not declare `Unique(group keys)`. Otherwise an
+    /// ordering on the group keys alone satisfies `[k, sum]` after a merge, and
+    /// `SortExec` skips sorting rows that share a key.
+    #[tokio::test]
+    async fn partial_aggregate_does_not_declare_unique_group_keys() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let batch = |k: Vec<i32>, v: Vec<i64>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(k)), Arc::new(Int64Array::from(v))],
+            )
+        };
+        // Both partitions are sorted on `k` and contain keys 1 and 2.
+        let partitions = [
+            vec![batch(vec![1, 2], vec![9, 5])?],
+            vec![batch(vec![1, 2], vec![1, 7])?],
+        ];
+        let k_ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("k", &schema)?)])
+                .unwrap();
+        let input = TestMemoryExec::try_new(&partitions, Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![k_ordering])?;
+        let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]);
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum_v")
+                .build()?,
+        )];
+        let partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregates.clone(),
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        assert_eq!(partial.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert!(
+            partial
+                .properties()
+                .equivalence_properties()
+                .constraints()
+                .is_empty(),
+            "partial aggregate declared {:?}",
+            partial.properties().equivalence_properties().constraints()
+        );
+
+        let k_sum_ordering = LexOrdering::new([
+            PhysicalSortExpr::new_default(Arc::new(Column::new("k", 0))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new(
+                partial.schema().field(1).name(),
+                1,
+            ))),
+        ])
+        .unwrap();
+        let merged: Arc<dyn ExecutionPlan> = Arc::new(SortPreservingMergeExec::new(
+            LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(Column::new(
+                "k", 0,
+            )))])
+            .unwrap(),
+            Arc::clone(&partial) as _,
+        ));
+        assert!(
+            !merged
+                .equivalence_properties()
+                .ordering_satisfy(k_sum_ordering.clone())?
+        );
+        let sort = Arc::new(SortExec::new(k_sum_ordering, merged));
+        let task_ctx = Arc::new(TaskContext::default());
+        let output = collect(sort.execute(0, task_ctx)?).await?;
+        assert_snapshot!(batches_to_string(&output), @r"
++---+------------+
+| k | sum_v[sum] |
++---+------------+
+| 1 | 1          |
+| 1 | 9          |
+| 2 | 5          |
+| 2 | 7          |
++---+------------+
+");
+
+        // The final aggregate's output is unique on the group keys.
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            aggregates,
+            vec![None],
+            Arc::new(CoalescePartitionsExec::new(partial)),
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(
+            final_agg
+                .properties()
+                .equivalence_properties()
+                .constraints(),
+            &Constraints::new_unverified(vec![Constraint::Unique(vec![0])])
         );
 
         Ok(())
