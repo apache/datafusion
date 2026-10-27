@@ -751,6 +751,9 @@ const VIEW_SIZE_BYTES: usize = 16;
 
 /// Performs garbage collection on StringView and BinaryView arrays before spilling to reduce memory usage.
 ///
+/// Also used before writing Arrow IPC files, as the IPC writer writes every data
+/// buffer of a view array in full, like the spill writer.
+///
 /// # Why GC is needed
 ///
 /// StringView and BinaryView arrays can accumulate significant memory waste when sliced.
@@ -784,7 +787,7 @@ const VIEW_SIZE_BYTES: usize = 16;
 /// - Nested container types are traversed recursively so view arrays inside
 ///   `List`, `Map`, `Union`, `Dictionary`, and other child-bearing arrays are compacted too
 /// - The Arrow `gc()` method itself is optimized and only copies referenced data
-pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
+pub fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     let mut mutated = false;
     let mut new_columns: Vec<Arc<dyn Array>> = Vec::with_capacity(batch.num_columns());
 
