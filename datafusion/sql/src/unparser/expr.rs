@@ -356,16 +356,24 @@ impl Unparser<'_> {
                 expr,
                 pattern,
                 escape_char,
-                case_insensitive: _,
-            }) => Ok(ast::Expr::Like {
-                negated: *negated,
-                expr: Box::new(self.expr_to_sql_inner(expr)?),
-                pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                escape_char: escape_char.map(|c| {
-                    Box::new(ast::Expr::Value(SingleQuotedString(c.to_string()).into()))
-                }),
-                any: false,
-            }),
+                case_insensitive,
+            }) => {
+                if *case_insensitive {
+                    return not_impl_err!(
+                        "Unsupported expression: case-insensitive SIMILAR TO has no SQL syntax"
+                    );
+                }
+                Ok(ast::Expr::SimilarTo {
+                    negated: *negated,
+                    expr: Box::new(self.expr_to_sql_inner(expr)?),
+                    pattern: Box::new(self.expr_to_sql_inner(pattern)?),
+                    escape_char: escape_char.map(|c| {
+                        Box::new(ast::Expr::Value(
+                            SingleQuotedString(c.to_string()).into(),
+                        ))
+                    }),
+                })
+            }
             Expr::Like(Like {
                 negated,
                 expr,
@@ -2177,9 +2185,19 @@ mod tests {
                     expr: Box::new(col("a")),
                     pattern: Box::new(lit("foo")),
                     escape_char: Some('o'),
-                    case_insensitive: true,
+                    case_insensitive: false,
                 }),
-                r#"a LIKE 'foo' ESCAPE 'o'"#,
+                r#"a SIMILAR TO 'foo' ESCAPE 'o'"#,
+            ),
+            (
+                Expr::SimilarTo(Like {
+                    negated: true,
+                    expr: Box::new(col("a")),
+                    pattern: Box::new(lit("foo")),
+                    escape_char: None,
+                    case_insensitive: false,
+                }),
+                r#"a NOT SIMILAR TO 'foo'"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(0)), None),
@@ -3485,6 +3503,25 @@ mod tests {
             let error = expr_to_sql(&expr).expect_err("unsupported CASE child");
             assert!(error.to_string().contains("Unsupported scalar"));
         }
+    }
+
+    #[test]
+    fn case_insensitive_similar_to_is_not_supported() {
+        let expr = Expr::SimilarTo(Like {
+            negated: false,
+            expr: Box::new(col("a")),
+            pattern: Box::new(lit("foo")),
+            escape_char: None,
+            case_insensitive: true,
+        });
+
+        let error = expr_to_sql(&expr).expect_err("case-insensitive SIMILAR TO");
+        assert!(
+            error
+                .to_string()
+                .contains("case-insensitive SIMILAR TO has no SQL syntax"),
+            "{error}"
+        );
     }
 
     #[test]
