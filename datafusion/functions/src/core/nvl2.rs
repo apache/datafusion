@@ -157,32 +157,35 @@ mod tests {
 
     const EXTENSION_KEY: &str = "ARROW:extension:name";
 
-    fn ext_field(name: &str, dt: DataType, extension_name: &str) -> FieldRef {
-        Arc::new(Field::new(name, dt, true).with_metadata(HashMap::from([(
-            EXTENSION_KEY.to_string(),
-            extension_name.to_string(),
-        )])))
-    }
-
-    fn return_field(arg_fields: &[FieldRef]) -> FieldRef {
-        let scalars = vec![None; arg_fields.len()];
-        NVL2Func::new()
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields,
-                scalar_arguments: &scalars,
-            })
-            .unwrap()
-    }
-
     #[test]
     fn propagates_metadata_from_value_arguments() {
         // The first argument is only tested for NULL; its metadata must not
         // leak into the result even when the value arguments agree.
-        let ret = return_field(&[
-            ext_field("test", DataType::Binary, "unrelated.type"),
-            ext_field("if_non_null", DataType::Binary, "geoarrow.wkb"),
-            ext_field("if_null", DataType::Binary, "geoarrow.wkb"),
-        ]);
+        let fields = [
+            Arc::new(Field::new("test", DataType::Binary, true).with_metadata(
+                HashMap::from([(
+                    EXTENSION_KEY.to_string(),
+                    "unrelated.type".to_string(),
+                )]),
+            )),
+            Arc::new(
+                Field::new("if_non_null", DataType::Binary, true).with_metadata(
+                    HashMap::from([(
+                        EXTENSION_KEY.to_string(),
+                        "geoarrow.wkb".to_string(),
+                    )]),
+                ),
+            ),
+            Arc::new(Field::new("if_null", DataType::Binary, true).with_metadata(
+                HashMap::from([(EXTENSION_KEY.to_string(), "geoarrow.wkb".to_string())]),
+            )),
+        ];
+        let ret = NVL2Func::new()
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &fields,
+                scalar_arguments: &[None, None, None],
+            })
+            .unwrap();
         assert_eq!(ret.data_type(), &DataType::Binary);
         assert_eq!(
             ret.metadata().get(EXTENSION_KEY).map(String::as_str),
@@ -192,16 +195,27 @@ mod tests {
 
     #[test]
     fn errors_when_value_arguments_have_conflicting_extension_types() {
-        let arg_fields = [
+        let fields = [
             Arc::new(Field::new("test", DataType::Boolean, true)),
-            ext_field("if_non_null", DataType::Binary, "geoarrow.wkb"),
-            ext_field("if_null", DataType::Binary, "unrelated.type"),
+            Arc::new(
+                Field::new("if_non_null", DataType::Binary, true).with_metadata(
+                    HashMap::from([(
+                        EXTENSION_KEY.to_string(),
+                        "geoarrow.wkb".to_string(),
+                    )]),
+                ),
+            ),
+            Arc::new(Field::new("if_null", DataType::Binary, true).with_metadata(
+                HashMap::from([(
+                    EXTENSION_KEY.to_string(),
+                    "unrelated.type".to_string(),
+                )]),
+            )),
         ];
-        let scalars = vec![None; arg_fields.len()];
         let err = NVL2Func::new()
             .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &arg_fields,
-                scalar_arguments: &scalars,
+                arg_fields: &fields,
+                scalar_arguments: &[None, None, None],
             })
             .unwrap_err();
         assert!(err.to_string().contains("geoarrow.wkb"), "{err}");

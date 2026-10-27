@@ -163,33 +163,22 @@ mod tests {
 
     const EXTENSION_KEY: &str = "ARROW:extension:name";
 
-    fn field(name: &str, dt: DataType, nullable: bool) -> FieldRef {
-        Arc::new(Field::new(name, dt, nullable))
-    }
-
-    fn ext_field(name: &str, dt: DataType, extension_name: &str) -> FieldRef {
-        Arc::new(Field::new(name, dt, true).with_metadata(HashMap::from([(
-            EXTENSION_KEY.to_string(),
-            extension_name.to_string(),
-        )])))
-    }
-
-    fn return_field(arg_fields: &[FieldRef]) -> FieldRef {
-        let scalars = vec![None; arg_fields.len()];
-        CoalesceFunc::new()
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields,
-                scalar_arguments: &scalars,
-            })
-            .unwrap()
-    }
-
     #[test]
     fn propagates_metadata_when_arguments_agree() {
-        let ret = return_field(&[
-            ext_field("a", DataType::Binary, "geoarrow.wkb"),
-            ext_field("b", DataType::Binary, "geoarrow.wkb"),
-        ]);
+        let fields = [
+            Arc::new(Field::new("a", DataType::Binary, true).with_metadata(
+                HashMap::from([(EXTENSION_KEY.to_string(), "geoarrow.wkb".to_string())]),
+            )),
+            Arc::new(Field::new("b", DataType::Binary, true).with_metadata(
+                HashMap::from([(EXTENSION_KEY.to_string(), "geoarrow.wkb".to_string())]),
+            )),
+        ];
+        let ret = CoalesceFunc::new()
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &fields,
+                scalar_arguments: &[None, None],
+            })
+            .unwrap();
         assert_eq!(ret.data_type(), &DataType::Binary);
         assert!(ret.is_nullable());
         assert_eq!(
@@ -202,10 +191,18 @@ mod tests {
     fn null_literal_argument_does_not_block_metadata() {
         // An untyped NULL argument carries no metadata but cannot contribute
         // a typed value either, so it is skipped when picking the metadata.
-        let ret = return_field(&[
-            field("null", DataType::Null, true),
-            ext_field("b", DataType::Binary, "geoarrow.wkb"),
-        ]);
+        let fields = [
+            Arc::new(Field::new("null", DataType::Null, true)),
+            Arc::new(Field::new("b", DataType::Binary, true).with_metadata(
+                HashMap::from([(EXTENSION_KEY.to_string(), "geoarrow.wkb".to_string())]),
+            )),
+        ];
+        let ret = CoalesceFunc::new()
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &fields,
+                scalar_arguments: &[None, None],
+            })
+            .unwrap();
         assert_eq!(ret.data_type(), &DataType::Binary);
         assert_eq!(
             ret.metadata().get(EXTENSION_KEY).map(String::as_str),
@@ -215,15 +212,21 @@ mod tests {
 
     #[test]
     fn errors_on_conflicting_extension_types() {
-        let arg_fields = [
-            ext_field("a", DataType::Binary, "geoarrow.wkb"),
-            ext_field("b", DataType::Binary, "unrelated.type"),
+        let fields = [
+            Arc::new(Field::new("a", DataType::Binary, true).with_metadata(
+                HashMap::from([(EXTENSION_KEY.to_string(), "geoarrow.wkb".to_string())]),
+            )),
+            Arc::new(Field::new("b", DataType::Binary, true).with_metadata(
+                HashMap::from([(
+                    EXTENSION_KEY.to_string(),
+                    "unrelated.type".to_string(),
+                )]),
+            )),
         ];
-        let scalars = vec![None; arg_fields.len()];
         let err = CoalesceFunc::new()
             .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &arg_fields,
-                scalar_arguments: &scalars,
+                arg_fields: &fields,
+                scalar_arguments: &[None, None],
             })
             .unwrap_err();
         assert!(err.to_string().contains("geoarrow.wkb"), "{err}");
@@ -232,10 +235,18 @@ mod tests {
 
     #[test]
     fn plain_argument_does_not_block_later_metadata() {
-        let ret = return_field(&[
-            field("plain", DataType::Binary, true),
-            ext_field("b", DataType::Binary, "geoarrow.wkb"),
-        ]);
+        let fields = [
+            Arc::new(Field::new("plain", DataType::Binary, true)),
+            Arc::new(Field::new("b", DataType::Binary, true).with_metadata(
+                HashMap::from([(EXTENSION_KEY.to_string(), "geoarrow.wkb".to_string())]),
+            )),
+        ];
+        let ret = CoalesceFunc::new()
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &fields,
+                scalar_arguments: &[None, None],
+            })
+            .unwrap();
         assert_eq!(ret.data_type(), &DataType::Binary);
         assert_eq!(
             ret.metadata().get(EXTENSION_KEY).map(String::as_str),
@@ -245,22 +256,36 @@ mod tests {
 
     #[test]
     fn no_metadata_when_all_arguments_are_null() {
-        let ret = return_field(&[
-            field("a", DataType::Null, true),
-            field("b", DataType::Null, true),
-        ]);
+        let fields = [
+            Arc::new(Field::new("a", DataType::Null, true)),
+            Arc::new(Field::new("b", DataType::Null, true)),
+        ];
+        let ret = CoalesceFunc::new()
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &fields,
+                scalar_arguments: &[None, None],
+            })
+            .unwrap();
         assert_eq!(ret.data_type(), &DataType::Null);
         assert!(ret.metadata().is_empty());
     }
 
     #[test]
     fn nullability_is_unchanged_by_metadata_propagation() {
-        let ret = return_field(&[
-            ext_field("a", DataType::Binary, "geoarrow.wkb"),
+        let fields = [
+            Arc::new(Field::new("a", DataType::Binary, true).with_metadata(
+                HashMap::from([(EXTENSION_KEY.to_string(), "geoarrow.wkb".to_string())]),
+            )),
             Arc::new(Field::new("b", DataType::Binary, false).with_metadata(
                 HashMap::from([(EXTENSION_KEY.to_string(), "geoarrow.wkb".to_string())]),
             )),
-        ]);
+        ];
+        let ret = CoalesceFunc::new()
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &fields,
+                scalar_arguments: &[None, None],
+            })
+            .unwrap();
         assert!(!ret.is_nullable());
         assert_eq!(
             ret.metadata().get(EXTENSION_KEY).map(String::as_str),
