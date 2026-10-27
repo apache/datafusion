@@ -111,7 +111,6 @@ pub fn plan_with_order_preserving_variants(
         sort_input.data = false;
         return Ok(sort_input);
     }
-    // Only pass the limit to this operation's inputs if doing so is safe.
     let child_fetch = fetch.filter(|_| sort_input.plan.supports_limit_pushdown());
     sort_input.children = sort_input
         .children
@@ -288,7 +287,6 @@ pub fn replace_with_order_preserving_variants(
     for child in alternate_plan.children.iter_mut() {
         child.data = false;
     }
-    // Keep the original limit above the replacement plan when removing the sort.
     if let Some(fetch) = requirements.plan.fetch() {
         let plan = if requirements.plan.output_partitioning().partition_count() == 1 {
             let limit =
