@@ -1191,12 +1191,16 @@ pub fn find_valid_equijoin_key_pair(
         return Ok(None);
     }
 
-    if check_all_columns_from_schema(&left_using_columns, left_schema)?
-        && check_all_columns_from_schema(&right_using_columns, right_schema)?
+    // Check `right_schema` first: when building a left-deep join tree,
+    // `left_schema` is the accumulated schema of all previous inputs, which is
+    // much more expensive to search, and most candidate keys do not reference
+    // the right input at all.
+    if check_all_columns_from_schema(&right_using_columns, right_schema)?
+        && check_all_columns_from_schema(&left_using_columns, left_schema)?
     {
         return Ok(Some((left_key.clone(), right_key.clone())));
-    } else if check_all_columns_from_schema(&right_using_columns, left_schema)?
-        && check_all_columns_from_schema(&left_using_columns, right_schema)?
+    } else if check_all_columns_from_schema(&left_using_columns, right_schema)?
+        && check_all_columns_from_schema(&right_using_columns, left_schema)?
     {
         return Ok(Some((right_key.clone(), left_key.clone())));
     }
