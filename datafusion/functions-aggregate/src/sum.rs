@@ -842,11 +842,8 @@ impl SlidingDistinctSumAccumulator {
         }
     }
 
-    fn apply_valid_values<F>(
-        &mut self,
-        arr: &PrimitiveArray<Int64Type>,
-        mut op: F,
-    ) where
+    fn apply_valid_values<F>(&mut self, arr: &PrimitiveArray<Int64Type>, mut op: F)
+    where
         F: FnMut(&mut Self, i64),
     {
         if arr.null_count() == 0 {
