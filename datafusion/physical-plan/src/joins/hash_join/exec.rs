@@ -4814,9 +4814,13 @@ mod tests {
         Ok(())
     }
 
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_inner_one_two_parts_left_randomly_ordered() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_inner_one_two_parts_left_randomly_ordered(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let batch1 = build_table_i32(
             ("a1", &vec![0, 3]),
             ("b1", &vec![4, 5]),
@@ -4870,6 +4874,7 @@ mod tests {
         }
 
         assert_join_metrics!(metrics, 4);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         Ok(())
     }
@@ -4998,8 +5003,9 @@ mod tests {
         TestMemoryExec::try_new_exec(&[vec![batch.clone(), batch]], schema, None).unwrap()
     }
 
-    /// Unmatched build rows of a `LeftAnti` join are emitted in build index
-    /// order, so the concatenated build batch must keep the input batch order.
+    /// The hash map and array map paths must emit unmatched build rows of a
+    /// `LeftAnti` join in the same order. Build order is not a plan-level
+    /// guarantee (see #26235).
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn join_left_anti_keeps_build_order_across_batches(
@@ -5047,67 +5053,6 @@ mod tests {
             | 3  | 3000 | 9  |
             | 4  | 4000 | 10 |
             +----+------+----+
-            ");
-        }
-        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
-
-        Ok(())
-    }
-
-    /// Build rows sharing a key across build batches are matched in build
-    /// order, which relies on the hash map chains putting smaller build
-    /// indices first.
-    #[apply(hash_join_exec_configs)]
-    #[tokio::test]
-    async fn join_inner_keeps_build_order_for_duplicate_keys_across_batches(
-        batch_size: usize,
-        use_perfect_hash_join_as_possible: bool,
-    ) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
-        let batch1 = build_table_i32(
-            ("a1", &vec![1, 2]),
-            ("b1", &vec![5, 6]),
-            ("c1", &vec![7, 8]),
-        );
-        let batch2 = build_table_i32(
-            ("a1", &vec![3, 4]),
-            ("b1", &vec![5, 6]),
-            ("c1", &vec![9, 10]),
-        );
-        let schema = batch1.schema();
-        let left =
-            TestMemoryExec::try_new_exec(&[vec![batch1, batch2]], schema, None).unwrap();
-        let right = build_table(
-            ("a2", &vec![10, 20]),
-            ("b1", &vec![5, 6]),
-            ("c2", &vec![70, 80]),
-        );
-        let on = vec![(
-            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
-            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
-        )];
-
-        let (columns, batches, metrics) = join_collect(
-            left,
-            right,
-            on,
-            &JoinType::Inner,
-            NullEquality::NullEqualsNothing,
-            task_ctx,
-        )
-        .await?;
-
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
-        allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r"
-            +----+----+----+----+----+----+
-            | a1 | b1 | c1 | a2 | b1 | c2 |
-            +----+----+----+----+----+----+
-            | 1  | 5  | 7  | 10 | 5  | 70 |
-            | 3  | 5  | 9  | 10 | 5  | 70 |
-            | 2  | 6  | 8  | 20 | 6  | 80 |
-            | 4  | 6  | 10 | 20 | 6  | 80 |
-            +----+----+----+----+----+----+
             ");
         }
         assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
