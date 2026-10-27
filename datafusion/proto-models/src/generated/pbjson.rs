@@ -20282,6 +20282,137 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
         deserializer.deserialize_struct("datafusion.PhysicalExprNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PhysicalExtensionDataSinkNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.node.is_empty() {
+            len += 1;
+        }
+        if self.sink_name.is_some() {
+            len += 1;
+        }
+        if self.sort_order.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalExtensionDataSinkNode", len)?;
+        if !self.node.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("node", pbjson::private::base64::encode(&self.node).as_str())?;
+        }
+        if let Some(v) = self.sink_name.as_ref() {
+            struct_ser.serialize_field("sinkName", v)?;
+        }
+        if let Some(v) = self.sort_order.as_ref() {
+            struct_ser.serialize_field("sortOrder", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalExtensionDataSinkNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "node",
+            "sink_name",
+            "sinkName",
+            "sort_order",
+            "sortOrder",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Node,
+            SinkName,
+            SortOrder,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "node" => Ok(GeneratedField::Node),
+                            "sinkName" | "sink_name" => Ok(GeneratedField::SinkName),
+                            "sortOrder" | "sort_order" => Ok(GeneratedField::SortOrder),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalExtensionDataSinkNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalExtensionDataSinkNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalExtensionDataSinkNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut node__ = None;
+                let mut sink_name__ = None;
+                let mut sort_order__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Node => {
+                            if node__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("node"));
+                            }
+                            node__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::SinkName => {
+                            if sink_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sinkName"));
+                            }
+                            sink_name__ = map_.next_value()?;
+                        }
+                        GeneratedField::SortOrder => {
+                            if sort_order__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sortOrder"));
+                            }
+                            sort_order__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(PhysicalExtensionDataSinkNode {
+                    node: node__.unwrap_or_default(),
+                    sink_name: sink_name__,
+                    sort_order: sort_order__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalExtensionDataSinkNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PhysicalExtensionDataSourceNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>

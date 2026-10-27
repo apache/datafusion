@@ -1645,6 +1645,19 @@ pub struct PhysicalExtensionDataSourceNode {
     #[prost(string, optional, tag = "2")]
     pub source_name: ::core::option::Option<::prost::alloc::string::String>,
 }
+/// Payload of a DataSinkExec encoded as a PhysicalExtensionNode. The outer
+/// plan carries the input; sink names use a separate registry kind.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalExtensionDataSinkNode {
+    #[prost(bytes = "vec", tag = "1")]
+    pub node: ::prost::alloc::vec::Vec<u8>,
+    /// Namespaced sink type name. Once the DataSinkExec wrapper decoder is
+    /// registered, sink lookup and decoding errors do not fall back to a plan codec.
+    #[prost(string, optional, tag = "2")]
+    pub sink_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "3")]
+    pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
+}
 /// physical expressions
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalExprNode {
