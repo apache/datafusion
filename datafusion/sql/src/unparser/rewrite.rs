@@ -194,7 +194,7 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         return None;
     };
 
-    let mut map = HashMap::new();
+    let mut map = HashMap::with_capacity(inner_p.expr.len());
     let inner_exprs = inner_p
         .expr
         .iter()

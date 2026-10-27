@@ -147,6 +147,93 @@ DROP TABLE parquet_table;
 statement ok
 DROP TABLE parquet_table_with_order;
 
+## An ordered scan gets size-balanced groups when statistics prove that
+## every new group is still sorted
+
+statement ok
+COPY (VALUES (1), (2), (3), (4), (5))
+TO 'test_files/scratch/repartition_scan/ordered_files/1.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (VALUES (100), (200))
+TO 'test_files/scratch/repartition_scan/ordered_files/2.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE ordered_files(column1 bigint)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/repartition_scan/ordered_files'
+WITH ORDER (column1 ASC);
+
+query I
+SELECT column1 FROM ordered_files WHERE column1 <> 42 ORDER BY column1;
+----
+1
+2
+3
+4
+5
+100
+200
+
+# A group may span files when reading them in order keeps the declared
+# ordering: all of 1.parquet's values are below 2.parquet's
+query TT
+EXPLAIN SELECT column1 FROM ordered_files WHERE column1 <> 42 ORDER BY column1;
+----
+logical_plan
+01)Sort: ordered_files.column1 ASC NULLS LAST
+02)--Filter: ordered_files.column1 != Int64(42)
+03)----TableScan: ordered_files projection=[column1], partial_filters=[ordered_files.column1 != Int64(42)]
+physical_plan
+01)SortPreservingMergeExec: [column1@0 ASC NULLS LAST]
+02)--FilterExec: column1@0 != 42
+03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/ordered_files/1.parquet:0..258], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/ordered_files/1.parquet:258..516], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/ordered_files/1.parquet:516..521, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/ordered_files/2.parquet:0..253], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/ordered_files/2.parquet:253..510]]}, projection=[column1], output_ordering=[column1@0 ASC NULLS LAST], file_type=parquet, predicate=column1@0 != 42, pruning_predicate=column1_null_count@2 != row_count@3 AND (column1_min@0 != 42 OR 42 != column1_max@1), required_guarantees=[column1 not in (42)]
+
+statement ok
+DROP TABLE ordered_files;
+
+## Either row group range assignment reads each row of a split file once
+
+statement ok
+COPY (SELECT v FROM generate_series(1, 4000) AS t(v))
+TO 'test_files/scratch/repartition_scan/multi_row_group/data.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '1000');
+
+statement ok
+CREATE EXTERNAL TABLE multi_row_group(v bigint)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/repartition_scan/multi_row_group/';
+
+query IIII
+SELECT count(*), sum(v), min(v), max(v) FROM multi_row_group WHERE v <> 0;
+----
+4000 8002000 1 4000
+
+statement ok
+set datafusion.execution.parquet.row_group_range_assignment = 'midpoint';
+
+query IIII
+SELECT count(*), sum(v), min(v), max(v) FROM multi_row_group WHERE v <> 0;
+----
+4000 8002000 1 4000
+
+query error
+set datafusion.execution.parquet.row_group_range_assignment = 'middle';
+----
+DataFusion error: Error setting config datafusion.execution.parquet.row_group_range_assignment
+caused by
+Invalid or Unsupported Configuration: Invalid parquet row group range assignment: middle. Expected one of: start_offset, midpoint
+
+
+statement ok
+RESET datafusion.execution.parquet.row_group_range_assignment;
+
+statement ok
+DROP TABLE multi_row_group;
+
 
 ###################
 ### CSV tests

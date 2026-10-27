@@ -23,14 +23,14 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
-    DFSchema, DataFusionError, HashSet, Result, assert_eq_or_internal_err,
+    DFSchema, DataFusionError, HashSet, Result, assert_or_internal_err,
     tree_node::Transformed,
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::expr_schema::ExprSchemable;
 use datafusion_expr::{
-    AggregateUDF, Expr, col,
+    AggregateUDF, Expr, cast, col,
     expr::AggregateFunction,
     lit,
     logical_plan::{Aggregate, LogicalPlan},
@@ -224,10 +224,6 @@ impl OptimizerRule for SingleDistinctToGroupBy {
         Some(ApplyOrder::TopDown)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -314,11 +310,18 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 },
                         }) => {
                             if distinct {
-                                assert_eq_or_internal_err!(
-                                    args.len(),
-                                    1,
-                                    "DISTINCT aggregate should have exactly one argument"
+                                // `is_single_distinct_agg` checked that every
+                                // distinct argument in the plan is the same
+                                // expression. A call may still take it more than
+                                // once, as `corr(DISTINCT x, x)` does, and keeps
+                                // its arity here: its distinct argument tuples
+                                // are the distinct values of that expression.
+                                assert_or_internal_err!(
+                                    args.first()
+                                        .is_some_and(|f| args.iter().all(|a| a == f)),
+                                    "DISTINCT aggregate arguments should be the same expression"
                                 );
+                                let arity = args.len();
                                 let arg = args.swap_remove(0);
 
                                 if group_fields_set.insert(arg.schema_name().to_string())
@@ -329,7 +332,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 let outer =
                                     Expr::AggregateFunction(AggregateFunction::new_udf(
                                         func,
-                                        vec![col(SINGLE_DISTINCT_ALIAS)],
+                                        vec![col(SINGLE_DISTINCT_ALIAS); arity],
                                         false, // intentional to remove distinct here
                                         filter,
                                         order_by,
@@ -399,6 +402,12 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .map(|(expr, _)| expr.clone())
                     .collect();
 
+                let outer_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
+                    Arc::new(inner_agg),
+                    outer_group_exprs,
+                    outer_aggr_exprs,
+                )?);
+
                 // so the aggregates are displayed in the same way even after the rewrite
                 // this optimizer has two kinds of alias:
                 // - group_by aggr
@@ -414,15 +423,16 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .chain(outer_proj_exprs.into_iter().enumerate().map(|(idx, expr)| {
                         let idx = idx + group_size;
                         let (qualifier, field) = schema.qualified_field(idx);
+                        let current_type = outer_aggr.schema().field(idx).data_type();
+                        let expr = if current_type != field.data_type() {
+                            cast(expr, field.data_type().clone())
+                        } else {
+                            expr
+                        };
                         expr.alias_qualified(qualifier.cloned(), field.name())
                     }))
                     .collect();
 
-                let outer_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
-                    Arc::new(inner_agg),
-                    outer_group_exprs,
-                    outer_aggr_exprs,
-                )?);
                 Ok(Transformed::yes(project(outer_aggr, alias_expr)?))
             }
             _ => Ok(Transformed::no(plan)),
@@ -449,6 +459,7 @@ mod tests {
         lit,
         logical_plan::builder::{LogicalPlanBuilder, table_scan},
     };
+    use datafusion_functions_aggregate::correlation::corr_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};
     use datafusion_functions_aggregate::min_max::max_udaf;
@@ -458,6 +469,17 @@ mod tests {
         Expr::AggregateFunction(AggregateFunction::new_udf(
             max_udaf(),
             vec![expr],
+            true,
+            None,
+            vec![],
+            None,
+        ))
+    }
+
+    fn corr_distinct(y: Expr, x: Expr) -> Expr {
+        Expr::AggregateFunction(AggregateFunction::new_udf(
+            corr_udaf(),
+            vec![y, x],
             true,
             None,
             vec![],
@@ -765,6 +787,46 @@ mod tests {
             plan,
             @r"
         Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), count(DISTINCT test.c)]] [a:UInt32, count(DISTINCT test.b):Int64, count(DISTINCT test.c):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn single_distinct_repeated_arg_and_groupby() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![corr_distinct(col("b"), col("b"))])?
+            .build()?;
+
+        // Should work: the call takes the distinct argument twice, so it keeps
+        // both arguments after the rewrite.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, corr(alias1,alias1) AS corr(DISTINCT test.b,test.b) [a:UInt32, corr(DISTINCT test.b,test.b):Float64;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[corr(alias1, alias1)]] [a:UInt32, corr(alias1,alias1):Float64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn single_distinct_two_args_and_groupby() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![corr_distinct(col("b"), col("c"))])?
+            .build()?;
+
+        // Do nothing: the arguments are different expressions, so there is no
+        // single field to group by.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[corr(DISTINCT test.b, test.c)]] [a:UInt32, corr(DISTINCT test.b,test.c):Float64;N]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
@@ -1254,5 +1316,31 @@ mod tests {
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         ",
         )
+    }
+
+    #[test]
+    fn sum_decimal_with_distinct_preserves_declared_type() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("d", DataType::Decimal128(5, 2), false),
+            Field::new("x", DataType::Int32, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![sum(col("d")), count_distinct(col("x"))],
+            )?
+            .build()?;
+
+        let rule: Arc<dyn OptimizerRule + Send + Sync> =
+            Arc::new(SingleDistinctToGroupBy::new());
+        let optimizer = Optimizer::with_rules(vec![rule]);
+        let optimized_plan = optimizer
+            .optimize(plan.clone(), &RegistryOptimizerContext::new(), |_, _| {})
+            .expect("failed to optimize plan");
+
+        assert_eq!(plan.schema().as_ref(), optimized_plan.schema().as_ref());
+        Ok(())
     }
 }

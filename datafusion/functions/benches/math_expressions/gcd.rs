@@ -29,8 +29,7 @@ use rand::prelude::*;
 use std::hint::black_box;
 use std::sync::Arc;
 
-fn generate_i64_array(n_rows: usize) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(0);
+fn generate_i64_array(rng: &mut StdRng, n_rows: usize) -> ArrayRef {
     let values = (0..n_rows)
         .map(|_| rng.random_range(0..1000))
         .collect::<Vec<_>>();
@@ -39,8 +38,9 @@ fn generate_i64_array(n_rows: usize) -> ArrayRef {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let n_rows = 100000;
-    let array_a = ColumnarValue::Array(generate_i64_array(n_rows));
-    let array_b = ColumnarValue::Array(generate_i64_array(n_rows));
+    let mut rng = StdRng::seed_from_u64(0);
+    let array_a = ColumnarValue::Array(generate_i64_array(&mut rng, n_rows));
+    let array_b = ColumnarValue::Array(generate_i64_array(&mut rng, n_rows));
     let udf = gcd();
     let config_options = Arc::new(ConfigOptions::default());
 
@@ -53,11 +53,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new("a", array_a.data_type(), true).into(),
                         Field::new("b", array_b.data_type(), true).into(),
                     ],
-                    number_rows: 0,
+                    number_rows: n_rows,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
                 })
-                .expect("date_bin should work on valid values"),
+                .expect("gcd should work on valid values"),
             )
         })
     });
@@ -74,11 +74,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new("a", array_a.data_type(), true).into(),
                         Field::new("b", scalar_b.data_type(), true).into(),
                     ],
-                    number_rows: 0,
+                    number_rows: n_rows,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
                 })
-                .expect("date_bin should work on valid values"),
+                .expect("gcd should work on valid values"),
             )
         })
     });
@@ -95,11 +95,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new("a", scalar_a.data_type(), true).into(),
                         Field::new("b", scalar_b.data_type(), true).into(),
                     ],
-                    number_rows: 0,
+                    number_rows: 1,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
                 })
-                .expect("date_bin should work on valid values"),
+                .expect("gcd should work on valid values"),
             )
         })
     });

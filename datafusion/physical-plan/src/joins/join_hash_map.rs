@@ -28,6 +28,27 @@ use arrow::datatypes::ArrowNativeType;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
+/// Resume point of a chunked lookup, see
+/// [`JoinHashMapType::get_matched_indices_with_limit_offset`].
+///
+/// A lookup emits at most `limit` matches. If the limit is reached before
+/// the probe batch is exhausted, it returns the position to resume from;
+/// once the batch is exhausted it returns `None`.
+///
+/// Each position has a single encoding: once a probe row's chain has been
+/// fully traversed, the next offset is the following row, `AtRow { row: row + 1 }`.
+/// Given `limit > 0`, a returned offset is therefore never `AtRow { row: 0 }`,
+/// which marks the first lookup of a probe batch.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ProbeOffset {
+    /// Resume at probe row `row`, from the head of its chain.
+    AtRow { row: usize },
+    /// Resume in the middle of probe row `row`'s chain, where `next` is the
+    /// 1-based index of the next build row in the chain. `next` is never `0`,
+    /// the end-of-chain marker.
+    MidChain { row: usize, next: u64 },
+}
+
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 ///
 /// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
@@ -97,11 +118,16 @@ use hashbrown::hash_table::Entry::{Occupied, Vacant};
 /// At runtime we choose between using `JoinHashMapU32` and `JoinHashMapU64` which oth implement
 /// `JoinHashMapType`.
 ///
-/// ## Note on use of this trait as a public API
-/// This is currently a public trait but is mainly intended for internal use within DataFusion.
 /// For example, we may compare references to `JoinHashMapType` implementations by pointer equality
 /// rather than deep equality of contents, as deep equality would be expensive and in our usage
 /// patterns it is impossible for two different hash maps to have identical contents in a practical sense.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub trait JoinHashMapType: Send + Sync {
     fn extend_zero(&mut self, len: usize);
 
@@ -126,10 +152,10 @@ pub trait JoinHashMapType: Send + Sync {
         hash_values: &[u64],
         valid_keys: Option<&NullBuffer>,
         limit: usize,
-        offset: MapOffset,
+        offset: ProbeOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<MapOffset>;
+    ) -> Option<ProbeOffset>;
 
     /// Returns a BooleanArray indicating which of the provided hashes exist in the map.
     fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray;
@@ -146,18 +172,22 @@ pub struct JoinHashMapU32 {
     map: HashTable<(u64, u32)>,
     // Stores indices in chained list data structure
     next: Vec<u32>,
+    // Whether any hash value maps to more than one row
+    chained: bool,
 }
 
 impl JoinHashMapU32 {
     #[cfg(test)]
     pub(crate) fn new(map: HashTable<(u64, u32)>, next: Vec<u32>) -> Self {
-        Self { map, next }
+        let chained = map.len() != next.len();
+        Self { map, next, chained }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             map: HashTable::with_capacity(cap),
             next: vec![0; cap],
+            chained: false,
         }
     }
 }
@@ -176,7 +206,8 @@ impl JoinHashMapType for JoinHashMapU32 {
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
         deleted_offset: usize,
     ) {
-        update_from_iter::<u32>(&mut self.map, &mut self.next, iter, deleted_offset);
+        self.chained |=
+            update_from_iter::<u32>(&mut self.map, &mut self.next, iter, deleted_offset);
     }
 
     fn get_matched_indices<'a>(
@@ -192,13 +223,14 @@ impl JoinHashMapType for JoinHashMapU32 {
         hash_values: &[u64],
         valid_keys: Option<&NullBuffer>,
         limit: usize,
-        offset: MapOffset,
+        offset: ProbeOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<MapOffset> {
+    ) -> Option<ProbeOffset> {
         get_matched_indices_with_limit_offset::<u32>(
             &self.map,
             &self.next,
+            !self.chained,
             hash_values,
             valid_keys,
             limit,
@@ -226,18 +258,22 @@ pub struct JoinHashMapU64 {
     map: HashTable<(u64, u64)>,
     // Stores indices in chained list data structure
     next: Vec<u64>,
+    // Whether any hash value maps to more than one row
+    chained: bool,
 }
 
 impl JoinHashMapU64 {
     #[cfg(test)]
     pub(crate) fn new(map: HashTable<(u64, u64)>, next: Vec<u64>) -> Self {
-        Self { map, next }
+        let chained = map.len() != next.len();
+        Self { map, next, chained }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             map: HashTable::with_capacity(cap),
             next: vec![0; cap],
+            chained: false,
         }
     }
 }
@@ -256,7 +292,8 @@ impl JoinHashMapType for JoinHashMapU64 {
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
         deleted_offset: usize,
     ) {
-        update_from_iter::<u64>(&mut self.map, &mut self.next, iter, deleted_offset);
+        self.chained |=
+            update_from_iter::<u64>(&mut self.map, &mut self.next, iter, deleted_offset);
     }
 
     fn get_matched_indices<'a>(
@@ -272,13 +309,14 @@ impl JoinHashMapType for JoinHashMapU64 {
         hash_values: &[u64],
         valid_keys: Option<&NullBuffer>,
         limit: usize,
-        offset: MapOffset,
+        offset: ProbeOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<MapOffset> {
+    ) -> Option<ProbeOffset> {
         get_matched_indices_with_limit_offset::<u64>(
             &self.map,
             &self.next,
+            !self.chained,
             hash_values,
             valid_keys,
             limit,
@@ -301,18 +339,22 @@ impl JoinHashMapType for JoinHashMapU64 {
     }
 }
 
-use crate::joins::MapOffset;
 use crate::joins::chain::traverse_chain;
+use crate::joins::join_hash_map::ProbeOffset::{AtRow, MidChain};
 
+/// Inserts the rows of `iter` into `map` and `next`. Returns `true` if any row
+/// was chained onto an existing hash value.
 pub fn update_from_iter<'a, T>(
     map: &mut HashTable<(u64, T)>,
     next: &mut [T],
     iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
     deleted_offset: usize,
-) where
+) -> bool
+where
     T: Copy + TryFrom<usize> + PartialOrd,
     <T as TryFrom<usize>>::Error: Debug,
 {
+    let mut chained = false;
     for (row, &hash_value) in iter {
         let entry = map.entry(
             hash_value,
@@ -329,12 +371,14 @@ pub fn update_from_iter<'a, T>(
                 *index = T::try_from(row + 1).unwrap();
                 // Update chained Vec at `row` with previous value
                 next[row - deleted_offset] = prev_index;
+                chained = true;
             }
             Vacant(vacant_entry) => {
                 vacant_entry.insert((hash_value, T::try_from(row + 1).unwrap()));
             }
         }
     }
+    chained
 }
 
 pub fn get_matched_indices<'a, T>(
@@ -385,17 +429,20 @@ where
     (input_indices, match_indices)
 }
 
+/// `unique` must be `true` only if every hash value in `map` maps to a single
+/// row; the chain in `next_chain` is then not traversed.
 #[expect(clippy::too_many_arguments)]
 pub fn get_matched_indices_with_limit_offset<T>(
     map: &HashTable<(u64, T)>,
     next_chain: &[T],
+    unique: bool,
     hash_values: &[u64],
     valid_keys: Option<&NullBuffer>,
     limit: usize,
-    offset: MapOffset,
+    offset: ProbeOffset,
     input_indices: &mut Vec<u32>,
     match_indices: &mut Vec<u64>,
-) -> Option<MapOffset>
+) -> Option<ProbeOffset>
 where
     T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
     <T as TryFrom<usize>>::Error: Debug,
@@ -408,8 +455,15 @@ where
 
     // Check if hashmap consists of unique values
     // If so, we can skip the chain traversal
-    if map.len() == next_chain.len() {
-        let start = offset.0;
+    if unique {
+        debug_assert!(
+            matches!(offset, AtRow { .. }),
+            "unique keys cannot have mid-chain"
+        );
+        let start = match offset {
+            AtRow { row } => row,
+            MidChain { row, .. } => row,
+        };
         let end = (start + limit).min(hash_values.len());
         for (i, &hash) in hash_values[start..end].iter().enumerate() {
             // NULL keys cannot match any build row
@@ -424,7 +478,7 @@ where
         return if end == hash_values.len() {
             None
         } else {
-            Some((end, None))
+            Some(AtRow { row: end })
         };
     }
 
@@ -432,14 +486,14 @@ where
 
     // Calculate initial `hash_values` index before iterating
     let to_skip = match offset {
-        // None `initial_next_idx` indicates that `initial_idx` processing hasn't been started
-        (idx, None) => idx,
-        // Zero `initial_next_idx` indicates that `initial_idx` has been processed during
-        // previous iteration, and it should be skipped
-        (idx, Some(0)) => idx + 1,
-        // Otherwise, process remaining `initial_idx` matches by traversing `next_chain`,
+        // `AtRow` indicates that `idx` processing hasn't been started
+        AtRow { row: idx } => idx,
+        // Otherwise, process remaining `idx` matches by traversing `next_chain`,
         // to start with the next index
-        (idx, Some(next_idx)) => {
+        MidChain {
+            row: idx,
+            next: next_idx,
+        } => {
             let next_idx: T = T::usize_as(next_idx as usize);
             let is_last = idx == hash_values.len() - 1;
             if let Some(next_offset) = traverse_chain(
@@ -529,7 +583,7 @@ mod tests {
             &probe_hashes,
             Some(&valid_keys),
             8192,
-            (0, None),
+            AtRow { row: 0 },
             &mut input_indices,
             &mut match_indices,
         );
@@ -560,7 +614,7 @@ mod tests {
             &probe_hashes,
             Some(&valid_keys),
             8192,
-            (0, None),
+            AtRow { row: 0 },
             &mut input_indices,
             &mut match_indices,
         );
@@ -568,5 +622,112 @@ mod tests {
         assert_eq!(next_offset, None);
         assert_eq!(input_indices, vec![1, 1]);
         assert_eq!(match_indices, vec![3, 1]);
+    }
+
+    #[test]
+    fn test_unique_fast_path_with_uninserted_row() {
+        // Row 1 is left out, as `update_hash` does for a NULL key under
+        // `NullEquality::NullEqualsNothing`. Every hash value still maps to a
+        // single row, so the probe takes the unique-key fast path.
+        let build_hashes = [10u64, 99, 20, 30];
+        let mut hash_map = JoinHashMapU32::with_capacity(build_hashes.len());
+        hash_map.update_from_iter(
+            Box::new(build_hashes.iter().enumerate().filter(|(row, _)| *row != 1)),
+            0,
+        );
+
+        // Probe row 1 has no match.
+        let probe_hashes = vec![10, 40, 20, 30];
+        let mut input_indices = vec![];
+        let mut match_indices = vec![];
+        let next_offset = hash_map.get_matched_indices_with_limit_offset(
+            &probe_hashes,
+            None,
+            2,
+            AtRow { row: 0 },
+            &mut input_indices,
+            &mut match_indices,
+        );
+        // The fast path limits by probe rows and resumes at probe row 2 after a
+        // single match; the chain walk limits by matches and would also emit
+        // probe row 2's match, resuming at probe row 3.
+        assert_eq!(next_offset, Some(AtRow { row: 2 }));
+        assert_eq!(input_indices, vec![0]);
+        assert_eq!(match_indices, vec![0]);
+
+        let next_offset = hash_map.get_matched_indices_with_limit_offset(
+            &probe_hashes,
+            None,
+            2,
+            AtRow { row: 2 },
+            &mut input_indices,
+            &mut match_indices,
+        );
+        assert_eq!(next_offset, None);
+        assert_eq!(input_indices, vec![2, 3]);
+        assert_eq!(match_indices, vec![2, 3]);
+    }
+
+    #[test]
+    fn test_chain_from_earlier_update_disables_fast_path() {
+        // Rows 0 and 1 share a hash value; a later update without a chain must
+        // not re-enable the unique-key fast path.
+        let mut hash_map = JoinHashMapU32::with_capacity(3);
+        hash_map.update_from_iter(Box::new([10u64, 10u64].iter().enumerate()), 0);
+        hash_map.update_from_iter(Box::new([(2, &20u64)].into_iter()), 0);
+
+        let mut input_indices = vec![];
+        let mut match_indices = vec![];
+        let next_offset = hash_map.get_matched_indices_with_limit_offset(
+            &[10],
+            None,
+            8192,
+            AtRow { row: 0 },
+            &mut input_indices,
+            &mut match_indices,
+        );
+
+        assert_eq!(next_offset, None);
+        assert_eq!(input_indices, vec![0, 0]);
+        assert_eq!(match_indices, vec![1, 0]);
+    }
+
+    #[test]
+    fn test_chain_created_by_later_update_disables_fast_path() {
+        assert_chain_created_by_later_update(JoinHashMapU32::with_capacity(3));
+        assert_chain_created_by_later_update(JoinHashMapU64::with_capacity(3));
+    }
+
+    /// Rows 0 and 2 share a hash value but arrive in separate updates, and row
+    /// 1 is left out as a NULL key would be. The first update alone is unique;
+    /// the second creates the chain. Probing with `limit = 1` must resume
+    /// through the chain and return each build row exactly once.
+    fn assert_chain_created_by_later_update(mut hash_map: impl JoinHashMapType) {
+        hash_map.update_from_iter(Box::new([(0, &10u64)].into_iter()), 0);
+        hash_map.update_from_iter(Box::new([(2, &10u64)].into_iter()), 0);
+
+        let mut input_indices = vec![];
+        let mut match_indices = vec![];
+        let mut matched = vec![];
+        let mut offset = AtRow { row: 0 };
+        for _ in 0..3 {
+            let next_offset = hash_map.get_matched_indices_with_limit_offset(
+                &[10],
+                None,
+                1,
+                offset,
+                &mut input_indices,
+                &mut match_indices,
+            );
+            assert_eq!(input_indices, vec![0]);
+            matched.extend_from_slice(&match_indices);
+            match next_offset {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+
+        matched.sort_unstable();
+        assert_eq!(matched, vec![0, 2]);
     }
 }

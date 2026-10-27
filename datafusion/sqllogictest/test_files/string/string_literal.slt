@@ -377,6 +377,39 @@ true true true
 true true true
 true true true
 
+# lpad array path where only part of a multi-character fill fits
+query TT
+SELECT lpad(column1, column2, column3), lpad(arrow_cast(column1, 'Utf8View'), column2, arrow_cast(column3, 'Utf8View'))
+FROM (VALUES ('josé', 6, 'ñéx'), ('josé', 9, 'ñéx')) AS t(column1, column2, column3);
+----
+ñéjosé ñéjosé
+ñéxñéjosé ñéxñéjosé
+
+# lpad array path with a Unicode string, a zero length and a NULL length
+query T
+SELECT lpad(column1, column2) FROM (VALUES ('josé', 6), ('hi', 0), ('hello', 3), ('hi', NULL)) AS t(column1, column2);
+----
+  josé
+(empty)
+hel
+NULL
+
+# lpad array path with different string widths for the input and the fill
+query BBB
+SELECT
+  lpad(arrow_cast(column1, 'Utf8View'), column2, arrow_cast(column3, 'LargeUtf8')) IS NOT DISTINCT FROM column4,
+  lpad(arrow_cast(column1, 'LargeUtf8'), column2, arrow_cast(column3, 'Utf8View')) IS NOT DISTINCT FROM column4,
+  lpad(arrow_cast(column1, 'Utf8'), column2, arrow_cast(column3, 'Utf8View')) IS NOT DISTINCT FROM column4
+FROM (VALUES ('hi', 5, 'xy', 'xyxhi'), ('josé', 5, 'ñ', 'ñjosé'), (NULL, 4, 'ab', NULL)) AS t(column1, column2, column3, column4);
+----
+true true true
+true true true
+true true true
+
+# a length column above i32::MAX is an error on the array path
+query error lpad requested length 2147483648 too large
+SELECT lpad('hi', column1) FROM (VALUES (2147483648), (1)) AS t(column1);
+
 # a large scalar target length skips the scalar fast path
 query I
 SELECT character_length(lpad('x', 16385, 'a'));
@@ -762,6 +795,40 @@ FROM (VALUES ('hi', 5, 'hi   '), ('abcdef', 3, 'abc'), (NULL, 5, NULL)) AS t(col
 true true true
 true true true
 true true true
+
+# rpad array path where only part of a multi-character fill fits
+query TT
+SELECT rpad(column1, column2, column3), rpad(arrow_cast(column1, 'Utf8View'), column2, arrow_cast(column3, 'Utf8View'))
+FROM (VALUES ('josé', 6, 'ñéx'), ('josé', 9, 'ñéx')) AS t(column1, column2, column3);
+----
+joséñé joséñé
+joséñéxñé joséñéxñé
+
+# rpad array path with a Unicode string, a zero length and a NULL length; the
+# trailing '|' keeps the padding visible, since trailing whitespace is trimmed
+query T
+SELECT rpad(column1, column2) || '|' FROM (VALUES ('josé', 6), ('hi', 0), ('hello', 3), ('hi', NULL)) AS t(column1, column2);
+----
+josé  |
+|
+hel|
+NULL
+
+# rpad array path with different string widths for the input and the fill
+query BBB
+SELECT
+  rpad(arrow_cast(column1, 'Utf8View'), column2, arrow_cast(column3, 'LargeUtf8')) IS NOT DISTINCT FROM column4,
+  rpad(arrow_cast(column1, 'LargeUtf8'), column2, arrow_cast(column3, 'Utf8View')) IS NOT DISTINCT FROM column4,
+  rpad(arrow_cast(column1, 'Utf8'), column2, arrow_cast(column3, 'Utf8View')) IS NOT DISTINCT FROM column4
+FROM (VALUES ('hi', 4, 'ab', 'hiab'), ('josé', 5, 'ñ', 'joséñ'), (NULL, 4, 'ab', NULL)) AS t(column1, column2, column3, column4);
+----
+true true true
+true true true
+true true true
+
+# a length column above i32::MAX is an error on the array path
+query error rpad requested length 2147483648 too large
+SELECT rpad('hi', column1) FROM (VALUES (2147483648), (1)) AS t(column1);
 
 # a large scalar target length skips the scalar fast path
 query I

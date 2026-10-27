@@ -177,7 +177,10 @@ fn grow_limit(window: &BoundedWindowAggExec, ctx: &mut TraverseState) -> bool {
     }
 
     // finish grow
-    ctx.max_lookahead(ctx.lookahead + max_rel);
+    // Frame bounds come straight from the query and can be as large as
+    // `u64::MAX`, so saturate instead of overflowing. A saturated lookahead
+    // makes the `checked_add` in `apply_limit` fail, which skips the pushdown.
+    ctx.max_lookahead(ctx.lookahead.saturating_add(max_rel));
     true
 }
 
@@ -194,16 +197,26 @@ fn apply_limit(
         ctx.lookahead = 0;
         return Some(Transformed::no(Arc::clone(node)));
     };
+    // A fetch that overflows can't drop any rows, so skip the pushdown rather
+    // than turning the sort into a TopK that holds every row and can't spill.
+    let Some(fetch) = fetch.checked_add(ctx.lookahead) else {
+        ctx.lookahead = 0;
+        return Some(Transformed::no(Arc::clone(node)));
+    };
     let fetch = match node.fetch() {
-        None => fetch + ctx.lookahead,
-        Some(existing) => cmp::min(existing, fetch + ctx.lookahead),
+        None => fetch,
+        Some(existing) => cmp::min(existing, fetch),
     };
     Some(Transformed::complete(node.with_fetch(Some(fetch)).unwrap()))
 }
 
 fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
     if let Some(limit) = node.downcast_ref::<GlobalLimitExec>() {
-        ctx.reset_limit(limit.fetch().map(|fetch| fetch + limit.skip()));
+        ctx.reset_limit(
+            limit
+                .fetch()
+                .map(|fetch| fetch.saturating_add(limit.skip())),
+        );
         return true;
     }
     // In distributed execution, GlobalLimitExec becomes LocalLimitExec

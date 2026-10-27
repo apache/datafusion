@@ -364,6 +364,15 @@ impl ScalarUDF {
         self.inner.output_ordering(inputs)
     }
 
+    /// See [`ScalarUDFImpl::supports_range_key_locality_analysis`] for more details.
+    pub fn supports_range_key_locality_analysis(
+        &self,
+        argument_types: &[DataType],
+    ) -> bool {
+        self.inner
+            .supports_range_key_locality_analysis(argument_types)
+    }
+
     pub fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         self.inner.preserves_lex_ordering(inputs)
     }
@@ -908,15 +917,18 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// # Output type
     ///
     /// The default implementation returns an unbounded [`DataType::Null`]
-    /// interval because the output type cannot be inferred generically.
-    /// Implementations should override this method when they can determine the
-    /// output type, even if they cannot compute precise bounds. Returning an
-    /// unbounded interval with the correct type preserves information used by
-    /// downstream physical property analysis.
+    /// interval because the output type cannot be inferred from input intervals
+    /// alone. During physical property analysis, `ScalarFunctionExpr` uses its
+    /// resolved return type to replace any unbounded [`DataType::Null`]
+    /// interval returned here with a typed unbounded interval when supported,
+    /// including intervals returned by overrides. If the resolved type is not
+    /// supported by [`Interval::make_unbounded`], the original interval is kept.
+    /// UDFs need not override this method solely to preserve their output type
+    /// for that analysis.
     ///
-    /// If the output type depends on argument values, only report it when those
-    /// values are known, such as from singleton input intervals. Otherwise,
-    /// keep the output type unknown.
+    /// Override this method to provide more precise bounds. All intervals other
+    /// than an unbounded [`DataType::Null`] interval are preserved. The fallback
+    /// does not apply to direct calls to `PhysicalExpr::evaluate_bounds`.
     fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
         // We cannot assume the input datatype is the same of output type.
         Interval::make_unbounded(&DataType::Null)
@@ -978,6 +990,29 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
             }
         }
         Ok(inner(inputs))
+    }
+
+    /// Returns whether this function and argument-type combination has been
+    /// audited for range-partitioning locality analysis.
+    ///
+    /// Range-boundary analysis has subtle correctness requirements, so the
+    /// policy is default-deny. Functions may opt in only after individual audit.
+    /// At minimum, an opted-in combination must:
+    ///
+    /// - have same-direction [`SortProperties::Ordered`] metadata over the
+    ///   admitted non-null domain when all other inputs are singleton;
+    /// - preserve nullness exactly, so successful evaluation returns null if and
+    ///   only if the range input is null.
+    ///
+    /// Callers may then prove key locality by evaluating values on both sides of
+    /// each concrete range split. Ordered metadata alone is insufficient because
+    /// a non-strict transform can collapse a split boundary.
+    ///
+    /// This does not claim a concrete partition layout or cross-input
+    /// co-partitioning compatibility. Boundary evaluation errors cause the
+    /// analysis to return `false`. This capability is not transported across FFI.
+    fn supports_range_key_locality_analysis(&self, _argument_types: &[DataType]) -> bool {
+        false
     }
 
     /// Returns true if the function preserves lexicographical ordering based on
@@ -1202,6 +1237,11 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.output_ordering(inputs)
     }
 
+    fn supports_range_key_locality_analysis(&self, argument_types: &[DataType]) -> bool {
+        self.inner
+            .supports_range_key_locality_analysis(argument_types)
+    }
+
     fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         self.inner.preserves_lex_ordering(inputs)
     }
@@ -1282,6 +1322,12 @@ mod tests {
         assert_ne!(b, o);
         assert_ne!(hash(&b), hash(&o)); // hash can collide for different values but does not collide in this test
         assert_eq!(b.partial_cmp(&o), Some(Ordering::Less));
+    }
+
+    #[test]
+    fn range_key_locality_analysis_is_disabled_by_default() {
+        let function = test_func("range_function", "a");
+        assert!(!function.supports_range_key_locality_analysis(&[DataType::Int64]));
     }
 
     fn test_func(name: &'static str, parameter: &'static str) -> ScalarUDF {

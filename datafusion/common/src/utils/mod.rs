@@ -43,7 +43,7 @@ use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
 use arrow::compute::{SortColumn, SortOptions, nullif, partition};
 use arrow::datatypes::{
-    ArrowNativeType, DataType, Field, Int32Type, Int64Type, SchemaRef,
+    ArrowNativeType, DataType, Field, Int32Type, Int64Type, Metadata, SchemaRef,
 };
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
@@ -184,9 +184,10 @@ pub fn find_bisect_point<F>(
 where
     F: Fn(&[ScalarValue], &[ScalarValue]) -> Result<bool>,
 {
+    let mut val = Vec::with_capacity(item_columns.len());
     while low < high {
         let mid = ((high - low) / 2) + low;
-        let val = get_row_at_idx(item_columns, mid)?;
+        extract_row_at_idx_to_buf(item_columns, mid, &mut val)?;
         if compare_fn(&val, target)? {
             low = mid + 1;
         } else {
@@ -231,8 +232,9 @@ pub fn search_in_slice<F>(
 where
     F: Fn(&[ScalarValue], &[ScalarValue]) -> Result<bool>,
 {
+    let mut val = Vec::new();
     while low < high {
-        let val = get_row_at_idx(item_columns, low)?;
+        extract_row_at_idx_to_buf(item_columns, low, &mut val)?;
         if !compare_fn(&val, target)? {
             break;
         }
@@ -356,7 +358,7 @@ pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<St
                 false
             };
             if is_double_quoted {
-                id[1..id.len() - 1].to_string().replace("\"\"", "\"")
+                id[1..id.len() - 1].replace("\"\"", "\"")
             } else if ignore_case {
                 id
             } else {
@@ -559,6 +561,7 @@ pub struct SingleRowListArrayBuilder {
     /// Specify the field name for the resulting array. Defaults to value used in
     /// [`Field::new_list_field`]
     field_name: Option<String>,
+    field_metadata: Metadata,
 }
 
 impl SingleRowListArrayBuilder {
@@ -568,6 +571,7 @@ impl SingleRowListArrayBuilder {
             arr,
             nullable: true,
             field_name: None,
+            field_metadata: Metadata::default(),
         }
     }
 
@@ -583,10 +587,12 @@ impl SingleRowListArrayBuilder {
         self
     }
 
-    /// Copies field name and nullable from the specified field
-    pub fn with_field(self, field: &Field) -> Self {
-        self.with_field_name(Some(field.name().to_owned()))
-            .with_nullable(field.is_nullable())
+    /// Copies field name, nullability, and metadata from the specified field
+    pub fn with_field(mut self, field: &Field) -> Self {
+        self.field_name = Some(field.name().to_owned());
+        self.nullable = field.is_nullable();
+        self.field_metadata = field.metadata().clone();
+        self
     }
 
     /// Build a single element [`ListArray`]
@@ -659,13 +665,14 @@ impl SingleRowListArrayBuilder {
             arr,
             nullable,
             field_name,
+            field_metadata,
         } = self;
         let data_type = arr.data_type().to_owned();
         let field = match field_name {
             Some(name) => Field::new(name, data_type, nullable),
             None => Field::new_list_field(data_type, nullable),
         };
-        (Arc::new(field), arr)
+        (Arc::new(field.with_metadata(field_metadata)), arr)
     }
 }
 
@@ -1070,7 +1077,9 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
     match original.as_slice() {
         [] => vec![],
         [first, ..] => {
-            let mut result = (0..first.len()).map(|_| vec![]).collect::<Vec<_>>();
+            let mut result = (0..first.len())
+                .map(|_| Vec::with_capacity(original.len()))
+                .collect::<Vec<_>>();
             for row in original {
                 for (item, transposed_row) in row.into_iter().zip(&mut result) {
                     transposed_row.push(item);
@@ -1347,14 +1356,8 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
             let offsets = OffsetBuffer::from_lengths(lengths);
             let values = make_array(mutable_array_data.freeze());
 
-            let field = match list.data_type() {
-                DataType::List(field) => field,
-                DataType::LargeList(field) => field,
-                _ => unreachable!(),
-            };
-
             return Ok(GenericListArray::try_new(
-                Arc::clone(field),
+                Arc::clone(list.value_field()),
                 offsets,
                 values,
                 list.nulls().cloned(),
@@ -1433,132 +1436,24 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
 }
 
 /// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array.
-/// For non-float arrays returns the input unchanged. NaN payloads are
-/// preserved.
-///
-/// Arrow's comparison kernels (`arrow::compute::kernels::cmp::eq` etc.) and
-/// row-encoding (`arrow::row::RowConverter`) use IEEE 754 totalOrder
-/// semantics, which treats `-0.0` and `+0.0` as distinct. SQL semantics
-/// (PostgreSQL / IEEE 754 equality) require them to compare equal, so
-/// callers normalize before invoking those kernels.
-///
-/// The common case - no `-0.0` present - is allocation-free: a single
-/// read-only scan of the underlying buffer (auto-vectorizable to an
-/// OR-reduction) decides whether to fall through to the rewriting path.
-/// Only arrays that actually contain `-0.0` pay for a new buffer.
+#[deprecated(
+    since = "56.0.0",
+    note = "use `datafusion_common::float_semantics::normalize_floats` instead"
+)]
 pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
-    use arrow::array::{Float16Array, Float32Array, Float64Array, make_array};
-    use arrow::datatypes::{Float16Type, Float32Type, Float64Type};
-    // -0.0 has only the sign bit set; no other finite or NaN value shares
-    // this bit pattern, so a strict-equality scan reliably gates the rewrite.
-    const NEG_ZERO_F16_BITS: u16 = half::f16::NEG_ZERO.to_bits();
-    const NEG_ZERO_F32_BITS: u32 = (-0.0_f32).to_bits();
-    const NEG_ZERO_F64_BITS: u64 = (-0.0_f64).to_bits();
-    match array.data_type() {
-        DataType::Float32 => {
-            let arr: &Float32Array = array.as_primitive::<Float32Type>();
-            if !arr
-                .values()
-                .iter()
-                .any(|v| v.to_bits() == NEG_ZERO_F32_BITS)
-            {
-                return Arc::clone(array);
-            }
-            let normalized: Float32Array =
-                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f32 } else { v });
-            Arc::new(normalized)
-        }
-        DataType::Float64 => {
-            let arr: &Float64Array = array.as_primitive::<Float64Type>();
-            if !arr
-                .values()
-                .iter()
-                .any(|v| v.to_bits() == NEG_ZERO_F64_BITS)
-            {
-                return Arc::clone(array);
-            }
-            let normalized: Float64Array =
-                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f64 } else { v });
-            Arc::new(normalized)
-        }
-        DataType::Float16 => {
-            let arr: &Float16Array = array.as_primitive::<Float16Type>();
-            if !arr
-                .values()
-                .iter()
-                .any(|v| v.to_bits() == NEG_ZERO_F16_BITS)
-            {
-                return Arc::clone(array);
-            }
-            let normalized: Float16Array = arr.unary(|v| {
-                if v.to_bits() << 1 == 0 {
-                    half::f16::from_bits(0)
-                } else {
-                    v
-                }
-            });
-            Arc::new(normalized)
-        }
-        dt if has_float_leaf(dt) => {
-            let data = array.to_data();
-            let children = data
-                .child_data()
-                .iter()
-                .map(|child| normalize_float_zero(&make_array(child.clone())).to_data())
-                .collect::<Vec<_>>();
-            if children
-                .iter()
-                .zip(data.child_data())
-                .all(|(new, old)| new.ptr_eq(old))
-            {
-                return Arc::clone(array);
-            }
-            make_array(
-                data.into_builder()
-                    .child_data(children)
-                    .build()
-                    .expect("rewriting float leaves preserves the array layout"),
-            )
-        }
-        _ => Arc::clone(array),
-    }
+    crate::float_semantics::normalize_floats(array)
 }
 
-pub fn has_float_leaf(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Float16 | DataType::Float32 | DataType::Float64 => true,
-        DataType::List(f)
-        | DataType::LargeList(f)
-        | DataType::ListView(f)
-        | DataType::LargeListView(f)
-        | DataType::FixedSizeList(f, _)
-        | DataType::Map(f, _)
-        | DataType::RunEndEncoded(_, f) => has_float_leaf(f.data_type()),
-        DataType::Struct(fields) => fields.iter().any(|f| has_float_leaf(f.data_type())),
-        DataType::Union(fields, _) => {
-            fields.iter().any(|(_, f)| has_float_leaf(f.data_type()))
-        }
-        DataType::Dictionary(_, values) => has_float_leaf(values),
-        _ => false,
-    }
-}
+pub use crate::float_semantics::has_float_leaf;
 
 /// Replace `-0.0` with `+0.0` in `Float16`, `Float32`, or `Float64` scalar
-/// values. Other variants are returned unchanged. See [`normalize_float_zero`]
-/// for context.
+/// values.
+#[deprecated(
+    since = "56.0.0",
+    note = "use `datafusion_common::float_semantics::normalize_float_scalar` instead"
+)]
 pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
-    match scalar {
-        ScalarValue::Float32(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float32(Some(0.0))
-        }
-        ScalarValue::Float64(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float64(Some(0.0))
-        }
-        ScalarValue::Float16(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float16(Some(half::f16::from_bits(0)))
-        }
-        other => other,
-    }
+    crate::float_semantics::normalize_float_scalar(scalar)
 }
 
 /// Apply a struct's nulls to one of its fields.
@@ -1606,6 +1501,7 @@ pub fn apply_parent_nulls(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
@@ -1616,6 +1512,20 @@ mod tests {
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
+
+    #[test]
+    fn test_list_scalar_cast_preserves_target_element_metadata() -> Result<()> {
+        let input =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(1)])]);
+        let item = Field::new("item", DataType::Int32, true)
+            .with_metadata(HashMap::from([("PARQUET:field_id".into(), "2".into())]));
+        let target = DataType::List(Arc::new(item));
+
+        let casted = ScalarValue::List(Arc::new(input)).cast_to(&target)?;
+        assert_eq!(casted.data_type(), target);
+        assert_eq!(casted.to_array_of_size(2)?.data_type(), &target);
+        Ok(())
+    }
 
     #[test]
     fn test_apply_parent_nulls_sliced() -> Result<()> {
