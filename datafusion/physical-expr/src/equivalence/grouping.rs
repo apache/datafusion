@@ -169,6 +169,8 @@ mod tests {
         ]);
 
         assert_eq!(lhs, rhs);
+        // The same expressions in different tuples describe different guarantees.
+        assert_ne!(lhs, GroupingEquivalenceClass::new([vec![a, c], vec![b]]));
     }
 
     #[test]

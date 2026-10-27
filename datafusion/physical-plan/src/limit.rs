@@ -764,27 +764,34 @@ mod tests {
     fn limits_preserve_grouping_without_merging_partitions() -> Result<()> {
         let input = test::mem_exec(2);
         let grouping = col("i", &input.schema())?;
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(input.try_with_grouping_information(vec![vec![grouping]])?);
+        let input: Arc<dyn ExecutionPlan> = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
+        );
+        assert!(
+            input
+                .equivalence_properties()
+                .grouping_satisfy([Arc::clone(&grouping)])?
+        );
 
         let local = LocalLimitExec::new(Arc::clone(&input), 10);
-        assert_eq!(
-            local
-                .properties()
-                .equivalence_properties()
-                .geq_class()
-                .len(),
-            1
-        );
+        let properties = local.properties().equivalence_properties();
+        assert_eq!(properties.geq_class().len(), 1);
+        assert!(properties.grouping_satisfy([Arc::clone(&grouping)])?);
 
         let global = GlobalLimitExec::new(input, 0, Some(10));
-        assert!(
-            global
-                .properties()
-                .equivalence_properties()
-                .geq_class()
-                .is_empty()
+        let properties = global.properties().equivalence_properties();
+        assert!(properties.geq_class().is_empty());
+        assert!(!properties.grouping_satisfy([grouping])?);
+
+        let input = test::mem_exec(1);
+        let grouping = col("i", &input.schema())?;
+        let input = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
         );
+        let global = GlobalLimitExec::new(input, 0, Some(10));
+        let properties = global.properties().equivalence_properties();
+        assert_eq!(properties.geq_class().len(), 1);
+        assert!(properties.grouping_satisfy([grouping])?);
         Ok(())
     }
 

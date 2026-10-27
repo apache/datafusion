@@ -474,28 +474,29 @@ mod tests {
     fn grouping_is_cleared_only_when_partitions_are_merged() -> Result<()> {
         let input = test::mem_exec(2);
         let grouping = col("i", &input.schema())?;
-        let input = Arc::new(input.try_with_grouping_information(vec![vec![grouping]])?);
-        let merge = CoalescePartitionsExec::new(input);
+        let input = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
+        );
         assert!(
-            merge
+            input
                 .properties()
                 .equivalence_properties()
-                .geq_class()
-                .is_empty()
+                .grouping_satisfy([Arc::clone(&grouping)])?
         );
+        let merge = CoalescePartitionsExec::new(input);
+        let properties = merge.properties().equivalence_properties();
+        assert!(properties.geq_class().is_empty());
+        assert!(!properties.grouping_satisfy([grouping])?);
 
         let input = test::mem_exec(1);
         let grouping = col("i", &input.schema())?;
-        let input = Arc::new(input.try_with_grouping_information(vec![vec![grouping]])?);
-        let merge = CoalescePartitionsExec::new(input);
-        assert_eq!(
-            merge
-                .properties()
-                .equivalence_properties()
-                .geq_class()
-                .len(),
-            1
+        let input = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
         );
+        let merge = CoalescePartitionsExec::new(input);
+        let properties = merge.properties().equivalence_properties();
+        assert_eq!(properties.geq_class().len(), 1);
+        assert!(properties.grouping_satisfy([grouping])?);
         Ok(())
     }
 
