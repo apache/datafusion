@@ -17,6 +17,10 @@ use foldhash::fast::FixedState;
 #[cfg(not(feature = "force_hash_collisions"))]
 use itertools::Itertools;
 use std::hash::{BuildHasher, Hash, Hasher};
+use std::mem::size_of;
+#[cfg(not(feature = "force_hash_collisions"))]
+use std::sync::Arc;
+use std::sync::Weak;
 
 /// [`RandomState`] is optimized for speed and suitable for hash tables and
 /// bloom filters. [`QualityRandomState`] is optimized for statistical quality
@@ -27,6 +31,101 @@ use std::hash::{BuildHasher, Hash, Hasher};
 /// See: <https://docs.rs/foldhash/0.2.0/src/foldhash/lib.rs.html#17-21>
 pub type RandomState = FixedState;
 pub type QualityRandomState = foldhash::quality::FixedState;
+
+type DictionaryHashEntry = (Weak<dyn Array>, Vec<u64>);
+
+/// Hashes one array at a time, reusing dictionary value hashes when possible.
+#[derive(Debug)]
+pub struct CachingArrayHasher {
+    /// Stored with the cache so value hashes cannot cross hash seeds.
+    random_state: RandomState,
+    /// Weak identity avoids retaining values; the hash allocation is reusable.
+    dictionary: Option<DictionaryHashEntry>,
+}
+
+impl CachingArrayHasher {
+    /// Creates an empty cache for `random_state`.
+    pub fn new(random_state: RandomState) -> Self {
+        Self {
+            random_state,
+            dictionary: None,
+        }
+    }
+
+    /// Hashes `array`, reusing dictionary value hashes while its values array
+    /// is unchanged.
+    ///
+    /// `hashes_buffer` must have the same length as `array`. If `rehash` is
+    /// `false`, this initializes each row hash; if `true`, it combines the
+    /// array hash with the existing row hash.
+    pub fn create_hashes<'a>(
+        &mut self,
+        array: &dyn Array,
+        hashes_buffer: &'a mut [u64],
+        rehash: bool,
+    ) -> Result<&'a mut [u64]> {
+        #[cfg(feature = "force_hash_collisions")]
+        {
+            hash_single_array(array, &self.random_state, hashes_buffer, rehash)?;
+        }
+
+        #[cfg(not(feature = "force_hash_collisions"))]
+        {
+            if !matches!(array.data_type(), DataType::Dictionary(_, _)) {
+                self.dictionary = None;
+                hash_single_array(array, &self.random_state, hashes_buffer, rehash)?;
+                return Ok(hashes_buffer);
+            }
+
+            downcast_dictionary_array! {
+                array => {
+                    let values = array.values();
+                    if !self.dictionary.as_ref().is_some_and(|(cached, _)| {
+                        std::ptr::addr_eq(cached.as_ptr(), Arc::as_ptr(values))
+                    }) {
+                        let mut hashes = self
+                            .dictionary
+                            .take()
+                            .map(|(_, hashes)| hashes)
+                            .unwrap_or_default();
+                        hashes.resize(values.len(), 0);
+                        // Fresh hashing leaves null value slots unchanged.
+                        hashes.fill(0);
+                        hash_single_array(
+                            values.as_ref(),
+                            &self.random_state,
+                            &mut hashes,
+                            false,
+                        )?;
+                        self.dictionary = Some((Arc::downgrade(values), hashes));
+                    }
+                    dispatch_dictionary_scatter(
+                        array,
+                        &self.dictionary.as_ref().unwrap().1,
+                        hashes_buffer,
+                        rehash,
+                    );
+                }
+                _ => unreachable!(),
+            };
+        }
+
+        Ok(hashes_buffer)
+    }
+
+    /// Returns the current dictionary values and hashes, if any.
+    pub fn dictionary_hashes(&self) -> Option<(ArrayRef, &[u64])> {
+        let (values, hashes) = self.dictionary.as_ref()?;
+        Some((values.upgrade()?, hashes))
+    }
+
+    /// Returns the allocated size of the cache.
+    pub fn size(&self) -> usize {
+        self.dictionary
+            .as_ref()
+            .map_or(0, |entry| entry.1.capacity() * size_of::<u64>())
+    }
+}
 
 /// Fixed quality hash state used by HyperLogLog sketches.
 ///
@@ -1355,6 +1454,79 @@ mod tests {
                 self.0 = self.0.wrapping_mul(37).wrapping_add(u64::from(*byte));
             }
         }
+    }
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    #[test]
+    fn caching_array_hasher_reuses_dictionary_allocation() -> Result<()> {
+        let random_state = RandomState::with_seed(0);
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let dictionary = DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![0, 1, 0]),
+            Arc::clone(&values),
+        );
+        let mut expected = vec![0; dictionary.len()];
+        create_hashes([&dictionary as &dyn Array], &random_state, &mut expected)?;
+
+        let mut cache = CachingArrayHasher::new(random_state.clone());
+        let mut actual = vec![0; dictionary.len()];
+        cache.create_hashes(&dictionary, &mut actual, false)?;
+        assert_eq!(actual, expected);
+
+        let (cached_values, value_hashes) = cache.dictionary_hashes().unwrap();
+        assert!(Arc::ptr_eq(&cached_values, &values));
+        let allocation = value_hashes.as_ptr();
+
+        let prefix = Int32Array::from(vec![10, 20]);
+        let dictionary = DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![1, 0]),
+            Arc::clone(&values),
+        );
+        let mut expected = vec![0; dictionary.len()];
+        create_hashes(
+            [&prefix as &dyn Array, &dictionary],
+            &random_state,
+            &mut expected,
+        )?;
+        let mut actual = vec![0; dictionary.len()];
+        create_hashes([&prefix as &dyn Array], &random_state, &mut actual)?;
+        cache.create_hashes(&dictionary, &mut actual, true)?;
+        assert_eq!(actual, expected);
+
+        let new_values: ArrayRef = Arc::new(StringArray::from(vec![Some("c"), None]));
+        let dictionary = DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![1, 0]),
+            Arc::clone(&new_values),
+        );
+        actual.clear();
+        actual.resize(dictionary.len(), 0);
+        expected.clear();
+        expected.resize(dictionary.len(), 0);
+        create_hashes([&dictionary as &dyn Array], &random_state, &mut expected)?;
+        cache.create_hashes(&dictionary, &mut actual, false)?;
+
+        let (cached_values, value_hashes) = cache.dictionary_hashes().unwrap();
+        assert_eq!(actual, expected);
+        assert!(Arc::ptr_eq(&cached_values, &new_values));
+        assert_eq!(value_hashes.as_ptr(), allocation);
+        assert_eq!(value_hashes[1], 0);
+        Ok(())
+    }
+
+    #[test]
+    fn caching_array_hasher_hashes_non_dictionary() -> Result<()> {
+        let random_state = RandomState::with_seed(0);
+        let array = Int32Array::from(vec![1, 2, 3]);
+        let mut expected = vec![0; array.len()];
+        create_hashes([&array as &dyn Array], &random_state, &mut expected)?;
+
+        let mut cache = CachingArrayHasher::new(random_state);
+        let mut actual = vec![0; array.len()];
+        cache.create_hashes(&array, &mut actual, false)?;
+
+        assert_eq!(actual, expected);
+        assert!(cache.dictionary_hashes().is_none());
+        Ok(())
     }
 
     #[test]
