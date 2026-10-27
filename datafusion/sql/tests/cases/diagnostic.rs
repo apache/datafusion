@@ -13,7 +13,7 @@ use datafusion_sql::{
     parser::{DFParser, DFParserBuilder, Statement as DFStatement},
     planner::{ParserOptions, SqlToRel},
     sqlparser::{
-        ast::{Expr as SQLExpr, visit_expressions_mut},
+        ast::{Expr as SQLExpr, Statement, visit_expressions_mut},
         tokenizer::Span as SQLParserSpan,
     },
 };
@@ -87,6 +87,20 @@ fn do_statement_warnings(statement: DFStatement) -> Vec<Diagnostic> {
     sql_to_rel.take_warnings()
 }
 
+fn do_statement_error(statement: DFStatement) -> Diagnostic {
+    let options = ParserOptions {
+        collect_spans: true,
+        ..ParserOptions::default()
+    };
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new_with_options(&context, options);
+    let err = sql_to_rel
+        .statement_to_plan(statement)
+        .expect_err("expected planning to fail");
+    err.diagnostic().expect("expected diagnostic").clone()
+}
+
 fn clear_value_spans(statement: &mut DFStatement) {
     let DFStatement::Statement(statement) = statement else {
         panic!("expected sqlparser statement");
@@ -97,6 +111,22 @@ fn clear_value_spans(statement: &mut DFStatement) {
         }
         ControlFlow::<()>::Continue(())
     });
+}
+
+/// Empties the span of every CTE name, as if the statement was built by hand.
+fn clear_cte_name_spans(statement: &mut DFStatement) {
+    let DFStatement::Statement(statement) = statement else {
+        panic!("expected sqlparser statement");
+    };
+    let Statement::Query(query) = statement.as_mut() else {
+        panic!("expected a query");
+    };
+    let Some(with) = &mut query.with else {
+        panic!("expected a WITH clause");
+    };
+    for cte in &mut with.cte_tables {
+        cte.alias.name.span = SQLParserSpan::empty();
+    }
 }
 
 /// Given a query that contains tag delimited spans, returns a mapping from the
@@ -809,6 +839,23 @@ fn test_duplicate_cte_name() -> Result<()> {
     assert_snapshot!(diag.notes[0].message, @"previously defined here");
     assert_eq!(diag.notes[0].span, Some(spans["a"]));
     Ok(())
+}
+
+#[test]
+fn test_duplicate_cte_name_without_spans() {
+    let query = "WITH cte AS (SELECT 1 AS col), cte AS (SELECT 2 AS col) SELECT 1";
+    let mut statement = DFParserBuilder::new(query)
+        .build()
+        .expect("unable to create parser")
+        .parse_statement()
+        .expect("unable to parse query");
+    clear_cte_name_spans(&mut statement);
+
+    let diag = do_statement_error(statement);
+    assert_eq!(diag.kind, DiagnosticKind::Error);
+    assert_snapshot!(diag.message, @r#"WITH query name "cte" specified more than once"#);
+    assert_eq!(diag.span, None);
+    assert!(diag.notes.is_empty());
 }
 
 #[test]
