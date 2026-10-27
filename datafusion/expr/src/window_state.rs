@@ -671,9 +671,7 @@ impl WindowFrameStateGroups {
                 .enumerate()
                 .map(|(i, values)| SortColumn {
                     values: Arc::clone(values),
-                    options: Some(
-                        self.sort_options.get(i).copied().unwrap_or_default(),
-                    ),
+                    options: Some(self.sort_options.get(i).copied().unwrap_or_default()),
                 })
                 .collect::<Vec<_>>();
             self.peer_comparator = Some(RangePeerComparator {
@@ -704,13 +702,7 @@ impl WindowFrameStateGroups {
             Ok(end)
         } else {
             let group_row = get_row_at_idx(range_columns, peer_idx)?;
-            search_in_slice(
-                range_columns,
-                &group_row,
-                check_equality,
-                start,
-                length,
-            )
+            search_in_slice(range_columns, &group_row, check_equality, start, length)
         }
     }
 

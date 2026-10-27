@@ -21,14 +21,14 @@
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::{Float64Array, UInt64Array};
+use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::compute::kernels::sort::{
     LexicographicalComparator, SortColumn,
 };
-use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::utils::get_row_at_idx;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_doc::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
     Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn nested_dictionary_null_peers_share_rank() -> Result<()> {
-        use arrow::array::{DictionaryArray, Int32Array, Int8Array, ListArray};
+        use arrow::array::{DictionaryArray, Int8Array, Int32Array, ListArray};
         use arrow::buffer::OffsetBuffer;
         use arrow::datatypes::{Field, Int8Type};
         use std::sync::Arc;

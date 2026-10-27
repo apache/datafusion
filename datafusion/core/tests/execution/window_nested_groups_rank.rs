@@ -20,8 +20,7 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, DictionaryArray, Int8Array, Int32Array, Int64Array, ListArray,
-    UInt64Array,
+    ArrayRef, DictionaryArray, Int8Array, Int32Array, Int64Array, ListArray, UInt64Array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{Field, Int8Type};
@@ -44,7 +43,8 @@ fn nested_dict_null_batch() -> Result<RecordBatch> {
 }
 
 async fn ctx_with_batch() -> Result<SessionContext> {
-    let ctx = SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
     ctx.register_batch("t", nested_dict_null_batch()?)?;
     Ok(ctx)
 }

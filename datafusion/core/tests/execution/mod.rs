@@ -19,5 +19,5 @@ mod coop;
 mod datasource_split;
 mod logical_plan;
 mod register_arrow;
-mod window_nested_range;
 mod window_nested_groups_rank;
+mod window_nested_range;
