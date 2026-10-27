@@ -1066,7 +1066,7 @@ async fn aligned_hour_groups_avoid_shuffle_through_partial_aggregate() -> Result
         .with_query_execution_partitions(2)
         .config;
     let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
 
     assert_plan!(
         optimized,
@@ -1102,7 +1102,7 @@ async fn crossing_day_groups_keep_shuffle_through_partial_aggregate() -> Result<
         .with_query_execution_partitions(2)
         .config;
     let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
 
     assert_plan!(
         optimized,
@@ -1139,10 +1139,10 @@ fn range_transform_aggregate_optimization_is_idempotent() -> Result<()> {
         let input = timestamp_range_input(hour)?;
         let aggregate = partial_final_date_trunc_count(input, precision)?;
         let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
-        SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+        check_plan_tree_sanity(&optimized, &config.optimizer)?;
         let reoptimized =
             EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
-        SanityCheckPlan::new().optimize(Arc::clone(&reoptimized), &config)?;
+        check_plan_tree_sanity(&reoptimized, &config.optimizer)?;
         assert_plan!(optimized, reoptimized);
     }
     Ok(())
@@ -1168,7 +1168,7 @@ async fn range_transform_locality_does_not_satisfy_join_distribution() -> Result
         .with_query_execution_partitions(2)
         .config;
     let optimized = EnsureRequirements::new().optimize(join, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
     assert_plan!(
         optimized,
         @r"
@@ -1288,7 +1288,7 @@ fn range_inner_hash_join_rehashes_incompatible_range_partitioning() -> Result<()
 
 /// Optimizes `plan` under both `top_down_join_key_reordering` settings with
 /// round-robin and file-scan repartitioning disabled. Checks the expected plan,
-/// validates it with [`SanityCheckPlan`], and verifies that a second
+/// validates it with [`check_plan_tree_sanity`], and verifies that a second
 /// [`EnsureRequirements`] pass leaves it unchanged.
 fn check_range_join_key_alignment(
     plan: Arc<dyn ExecutionPlan>,

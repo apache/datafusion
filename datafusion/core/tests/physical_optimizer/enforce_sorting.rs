@@ -387,7 +387,7 @@ fn test_do_not_remove_sort_with_limit_after_projection() -> Result<()> {
         ] {
             let optimized =
                 EnsureRequirements::new().optimize(Arc::clone(&plan), &config)?;
-            let optimized = SanityCheckPlan::new().optimize(optimized, &config)?;
+            check_plan_tree_sanity(&optimized, &config.optimizer)?;
             assert_eq!(get_plan_string(&optimized), get_plan_string(&plan));
         }
     }
@@ -422,7 +422,7 @@ fn test_required_sort_after_projection() -> Result<()> {
             input,
         );
         let optimized = EnsureRequirements::new().optimize(window, &config)?;
-        let optimized = SanityCheckPlan::new().optimize(optimized, &config)?;
+        check_plan_tree_sanity(&optimized, &config.optimizer)?;
         let twice =
             EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
         assert_eq!(get_plan_string(&twice), get_plan_string(&optimized));
@@ -480,7 +480,7 @@ async fn test_do_not_remove_sort_below_fetch_after_projection() -> Result<()> {
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 1;
     let optimized = EnsureRequirements::new().optimize(window, &config)?;
-    let optimized = SanityCheckPlan::new().optimize(optimized, &config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
     let twice = EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
     assert_eq!(get_plan_string(&twice), get_plan_string(&optimized));
 
