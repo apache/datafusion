@@ -211,15 +211,16 @@ pub struct FileScanConfig {
     /// Expression adapter used to adapt filters and projections that are pushed down into the scan
     /// from the logical schema to the physical schema of the file.
     pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
-    /// Statistics for the entire table (file schema + partition columns).
+    /// Statistics for the entire table (file schema + partition columns), before
+    /// projection or filtering.
     /// See [`FileScanConfigBuilder::with_statistics`] for more details.
     ///
     /// The effective statistics are computed on-demand via
     /// [`ProjectionExprs::project_statistics`].
     ///
-    /// Note that this field is pub(crate) because accessing it directly from outside
-    /// would be incorrect if there are filters being applied, thus this should be accessed
-    /// via [`FileScanConfig::statistics`].
+    /// Retained for serialization and conservative bounds used by ordering inference.
+    /// Use [`FileScanConfig::statistics`] for filter-adjusted statistics; these raw
+    /// values may no longer be exact for the scan output.
     pub(crate) statistics: Statistics,
     /// Declared physical output partitioning for this scan.
     ///

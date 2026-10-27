@@ -555,15 +555,14 @@ DROP TABLE nulls_first_bad;
 statement ok
 DROP TABLE nulls_first_ok;
 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
 # Exact integer bounds prove that these projections cannot wrap (#25220).
 statement ok
-SET datafusion.execution.target_partitions = 1;
-
-statement ok
 SET datafusion.explain.physical_plan_only = true;
-
-statement ok
-SET datafusion.optimizer.enable_sort_pushdown = false;
 
 statement ok
 CREATE TABLE arithmetic_bounds_source (a BIGINT, b BIGINT, u BIGINT UNSIGNED) AS VALUES
@@ -604,21 +603,22 @@ NULL
 query TT
 EXPLAIN SELECT a + 1 AS x, rn
 FROM (SELECT a, row_number() OVER (ORDER BY a) AS rn FROM arithmetic_bounds)
-WHERE rn <= 2 ORDER BY x;
+ORDER BY x;
 ----
 physical_plan
 01)ProjectionExec: expr=[a@0 + 1 as x, row_number() ORDER BY [arithmetic_bounds.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn]
-02)--FilterExec: row_number() ORDER BY [arithmetic_bounds.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 <= 2
-03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [arithmetic_bounds.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [arithmetic_bounds.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/arithmetic_bounds.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet
+02)--BoundedWindowAggExec: wdw=[row_number() ORDER BY [arithmetic_bounds.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [arithmetic_bounds.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/arithmetic_bounds.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet
 
 query II
 SELECT a + 1 AS x, rn
 FROM (SELECT a, row_number() OVER (ORDER BY a) AS rn FROM arithmetic_bounds)
-WHERE rn <= 2 ORDER BY x;
+ORDER BY x;
 ----
 2 1
 3 2
+4 3
+NULL 4
 
 # Computed bounds survive consecutive projections and column reordering.
 query TT
@@ -672,9 +672,12 @@ query TT
 EXPLAIN SELECT a + 1 AS x, count(*) FROM arithmetic_bounds GROUP BY x ORDER BY x;
 ----
 physical_plan
-01)ProjectionExec: expr=[arithmetic_bounds.a + Int64(1)@0 as x, count(Int64(1))@1 as count(*)]
-02)--AggregateExec: mode=Single, gby=[a@0 + 1 as arithmetic_bounds.a + Int64(1)], aggr=[count(Int64(1))], group_clustering_mode=Full
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/arithmetic_bounds.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet
+01)SortPreservingMergeExec: [x@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[arithmetic_bounds.a + Int64(1)@0 as x, count(Int64(1))@1 as count(*)]
+03)----AggregateExec: mode=FinalPartitioned, gby=[arithmetic_bounds.a + Int64(1)@0 as arithmetic_bounds.a + Int64(1)], aggr=[count(Int64(1))], group_clustering_mode=Full
+04)------RepartitionExec: partitioning=Hash([arithmetic_bounds.a + Int64(1)@0], 4), input_partitions=1, maintains_sort_order=true
+05)--------AggregateExec: mode=Partial, gby=[a@0 + 1 as arithmetic_bounds.a + Int64(1)], aggr=[count(Int64(1))], group_clustering_mode=Full
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/arithmetic_bounds.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet
 
 # Exact extrema do not justify removing a sort when the arithmetic wraps.
 query TT
@@ -697,56 +700,34 @@ query TT
 EXPLAIN SELECT a + 1 AS x FROM arithmetic_bounds WHERE a % 2 = 1 ORDER BY x;
 ----
 physical_plan
-01)ProjectionExec: expr=[a@0 + 1 as x]
-02)--FilterExec: a@0 % 2 = 1
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/arithmetic_bounds.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=a@0 % 2 = 1
+01)SortPreservingMergeExec: [x@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[a@0 + 1 as x]
+03)----FilterExec: a@0 % 2 = 1
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/arithmetic_bounds.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=a@0 % 2 = 1
 
 # Bounds alone do not establish an ordering.
-query I
-COPY (SELECT * FROM (VALUES (3), (1), (2)) AS t(a))
-TO 'test_files/scratch/parquet_sorted_statistics/arithmetic_unordered.parquet'
-STORED AS PARQUET;
-----
-3
-
 statement ok
 CREATE EXTERNAL TABLE arithmetic_unordered
 STORED AS PARQUET
-LOCATION 'test_files/scratch/parquet_sorted_statistics/arithmetic_unordered.parquet';
+LOCATION 'test_files/scratch/parquet_sorted_statistics/cast_bounds/2.parquet';
 
 query TT
 EXPLAIN SELECT a + 1 AS x FROM arithmetic_unordered ORDER BY x;
 ----
 physical_plan
 01)SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/arithmetic_unordered.parquet]]}, projection=[a@0 + 1 as x], file_type=parquet
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/cast_bounds/2.parquet]]}, projection=[a@0 + 1 as x], file_type=parquet
 
 statement ok
 DROP TABLE arithmetic_unordered;
 
 # Late dynamic filters must preserve ordering derived from file bounds.
 statement ok
-SET datafusion.execution.target_partitions = 2;
-
-query I
-COPY (SELECT * FROM (VALUES (1), (2), (3)) AS t(a) ORDER BY a)
-TO 'test_files/scratch/parquet_sorted_statistics/dynamic_bounds/1.parquet'
-STORED AS PARQUET;
-----
-3
-
-query I
-COPY (SELECT * FROM (VALUES (4), (5), (6)) AS t(a) ORDER BY a)
-TO 'test_files/scratch/parquet_sorted_statistics/dynamic_bounds/2.parquet'
-STORED AS PARQUET;
-----
-3
-
-statement ok
-CREATE EXTERNAL TABLE dynamic_bounds
+CREATE EXTERNAL TABLE dynamic_bounds (a BIGINT)
 STORED AS PARQUET
 WITH ORDER (a ASC NULLS LAST)
-LOCATION 'test_files/scratch/parquet_sorted_statistics/dynamic_bounds';
+LOCATION 'test_files/scratch/parquet_sorted_statistics/cast_bounds';
 
 query I
 SELECT p.x FROM (VALUES (2), (4)) AS s(b)
@@ -759,9 +740,6 @@ ORDER BY p.x;
 statement ok
 DROP TABLE dynamic_bounds;
 
-statement ok
-SET datafusion.execution.target_partitions = 1;
-
 # A known ordering without column statistics still needs the sort.
 statement ok
 SET datafusion.execution.collect_statistics = false;
@@ -770,8 +748,11 @@ query TT
 EXPLAIN SELECT a + 1 AS x FROM arithmetic_bounds ORDER BY x;
 ----
 physical_plan
-01)SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/arithmetic_bounds.parquet]]}, projection=[a@0 + 1 as x], file_type=parquet
+01)SortPreservingMergeExec: [x@0 ASC NULLS LAST]
+02)--SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[a@0 + 1 as x]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/arithmetic_bounds.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet
 
 statement ok
 SET datafusion.execution.collect_statistics = true;
@@ -854,15 +835,7 @@ DROP TABLE arithmetic_bounds_source;
 statement ok
 RESET datafusion.explain.physical_plan_only;
 
-statement ok
-RESET datafusion.optimizer.enable_sort_pushdown;
-
 # Config reset
-
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so
-# reset it explicitly.
-statement ok
-set datafusion.execution.target_partitions = 4;
 
 statement ok
 reset datafusion.execution.collect_statistics;

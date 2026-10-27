@@ -52,7 +52,9 @@ use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, internal_err};
+use datafusion_common::{
+    ColumnStatistics, DataFusionError, Result, internal_datafusion_err, internal_err,
+};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_expr::ColumnarValue;
@@ -108,12 +110,12 @@ fn parquet_schema_provider_requires_extension_codec() -> Result<()> {
 #[test]
 fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let file_schema =
-        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
 
     let predicate = Arc::new(BinaryExpr::new(
         Arc::new(Column::new("col", 0)),
         Operator::Eq,
-        lit("1"),
+        lit(1_i64),
     ));
 
     let mut options = TableParquetOptions::new();
@@ -138,9 +140,13 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             1024,
         )])])
         .with_statistics(Statistics {
-            num_rows: Precision::Inexact(100),
-            total_byte_size: Precision::Inexact(1024),
-            column_statistics: Statistics::unknown_column(&file_schema),
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(1024),
+            column_statistics: vec![
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::from(1_i64)))
+                    .with_max_value(Precision::Exact(ScalarValue::from(100_i64))),
+            ],
         })
         .build();
 

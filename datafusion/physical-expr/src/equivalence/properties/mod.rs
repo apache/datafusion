@@ -22,6 +22,7 @@ mod union; // Submodule containing calculate_union
 pub use joins::*;
 pub use union::*;
 
+use std::collections::BTreeMap;
 use std::fmt::{self, Display};
 use std::mem;
 use std::sync::Arc;
@@ -136,7 +137,7 @@ use itertools::Itertools;
 ///     "order: [[a@0 ASC, c@2 DESC]], eq: [{members: [b@1], constant: (heterogeneous)}]"
 /// );
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct EquivalenceProperties {
     /// Distinct equivalence classes (i.e. expressions with the same value).
     eq_group: EquivalenceGroup,
@@ -152,6 +153,24 @@ pub struct EquivalenceProperties {
     schema: SchemaRef,
     /// Trusted bounds for non-null integer values, independent of estimate precision.
     column_ranges: Option<Arc<HashMap<usize, Interval>>>,
+}
+
+impl fmt::Debug for EquivalenceProperties {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Keep range diagnostics stable when properties are reconstructed.
+        let column_ranges = self
+            .column_ranges
+            .as_ref()
+            .map(|ranges| ranges.iter().collect::<BTreeMap<_, _>>());
+        f.debug_struct("EquivalenceProperties")
+            .field("eq_group", &self.eq_group)
+            .field("oeq_class", &self.oeq_class)
+            .field("oeq_cache", &self.oeq_cache)
+            .field("constraints", &self.constraints)
+            .field("schema", &self.schema)
+            .field("column_ranges", &column_ranges)
+            .finish()
+    }
 }
 
 /// This object serves as a cache for storing equivalent sort expressions
@@ -1719,17 +1738,15 @@ fn get_expr_properties(
         let range = if expr.is::<Column>() || column_ranges.is_none() {
             column_range(expr, schema, column_ranges)?
         } else {
-            let children = expr
-                .children()
-                .iter()
-                .map(|child| {
-                    get_expr_properties(child, dependencies, schema, column_ranges)
-                })
-                .collect::<Result<Vec<_>>>();
-            let range = children
-                .and_then(|children| expr.get_properties(&children))
-                .map(|properties| properties.range)
-                .ok();
+            // Ordering is already known; infer bounds without matching dependencies.
+            let range = get_expr_properties(
+                expr,
+                &Dependencies::default(),
+                schema,
+                column_ranges,
+            )
+            .map(|properties| properties.range)
+            .ok();
             match range {
                 Some(range) if range.data_type() == expr.data_type(schema)? => range,
                 _ => Interval::make_unbounded(&expr.data_type(schema)?)?,

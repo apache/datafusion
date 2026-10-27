@@ -150,8 +150,8 @@ impl FileScanConfig {
                     (*file_compression_type.get_variant()).into();
                 compression as i32
             });
-        // Preserve original exact bounds used by ordering inference. The decoded
-        // scan applies the filter precision policy when statistics are requested.
+        // Serialize the original statistics so decoded scans retain trusted bounds.
+        // The decoded scan still applies the filter policy in `statistics()`.
         Ok(protobuf::FileScanExecConf {
             file_groups: proto_file_groups,
             statistics: Some(statistics.into()),
