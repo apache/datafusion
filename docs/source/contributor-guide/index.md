@@ -298,4 +298,3 @@ failure. A failed check alone does not cause cancellation.
 The workflow only reports candidates until a maintainer sets the repository
 Actions variable `MERGE_QUEUE_CLEANUP_ENABLED` to `true`. Manual runs default
 to `dry_run`. To stop cancellation, remove the variable or set it to `false`.
-The rollout plan is in [#25148](https://github.com/apache/datafusion/issues/25148).
