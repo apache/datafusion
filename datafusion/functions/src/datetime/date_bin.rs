@@ -1074,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn range_key_locality_requires_nanosecond_timestamp_and_default_origin() {
+    fn range_key_locality_rejects_unsupported_source_types() {
         use arrow::datatypes::DataType::{Time64, Timestamp};
         use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 
@@ -1087,22 +1087,52 @@ mod tests {
             Timestamp(Nanosecond, Some("UTC".into())),
             Time64(Nanosecond),
         ] {
-            assert!(!function.supports_range_key_locality_analysis_with_args(
-                &[stride.data_type(), source_type],
-                &[Some(&stride), None],
-            ));
+            assert!(
+                !function.supports_range_key_locality_analysis_with_args(
+                    &[stride.data_type(), source_type.clone()],
+                    &[Some(&stride), None],
+                ),
+                "source type {source_type:?}",
+            );
         }
-        let argument_types = [stride.data_type(), Timestamp(Nanosecond, None)];
+    }
+
+    #[test]
+    fn range_key_locality_requires_literal_argument_values() {
+        use arrow::datatypes::IntervalUnit::MonthDayNano;
+
+        let function = DateBinFunc::new();
+        let argument_types = [
+            DataType::Interval(MonthDayNano),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ];
         assert!(!function.supports_range_key_locality_analysis(&argument_types));
+    }
+
+    #[test]
+    fn range_key_locality_rejects_non_literal_stride() {
+        use arrow::datatypes::IntervalUnit::MonthDayNano;
+
+        let function = DateBinFunc::new();
+        let argument_types = [
+            DataType::Interval(MonthDayNano),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ];
         assert!(!function.supports_range_key_locality_analysis_with_args(
             &argument_types,
             &[None, None],
         ));
+    }
+
+    #[test]
+    fn range_key_locality_rejects_explicit_origin() {
+        let function = DateBinFunc::new();
+        let stride = ScalarValue::new_interval_mdn(0, 0, 3_600_000_000_000);
         let epoch = ScalarValue::TimestampNanosecond(Some(0), None);
         assert!(!function.supports_range_key_locality_analysis_with_args(
             &[
                 stride.data_type(),
-                Timestamp(Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
                 epoch.data_type(),
             ],
             &[Some(&stride), None, Some(&epoch)],
