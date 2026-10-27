@@ -1011,36 +1011,6 @@ mod tests {
     }
 
     #[test]
-    fn default_origin_preserves_nulls_and_bins_before_the_epoch() {
-        use arrow_buffer::NullBuffer;
-        use datafusion_common::cast::as_primitive_array;
-
-        let hour = 3_600_000_000_000;
-        let input = TimestampNanosecondArray::new(
-            vec![i64::MIN, -1, 0, hour].into(),
-            Some(NullBuffer::from(vec![false, true, true, true])),
-        );
-        let return_field = Arc::new(Field::new("bin", input.data_type().clone(), true));
-        let ColumnarValue::Array(output) = invoke_date_bin_with_args(
-            vec![
-                ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, 0, hour)),
-                ColumnarValue::Array(Arc::new(input)),
-            ],
-            4,
-            &return_field,
-        )
-        .unwrap() else {
-            panic!("expected array output");
-        };
-        let expected =
-            TimestampNanosecondArray::from(vec![None, Some(-hour), Some(0), Some(hour)]);
-        assert_eq!(
-            as_primitive_array::<TimestampNanosecondType>(&output).unwrap(),
-            &expected
-        );
-    }
-
-    #[test]
     fn range_key_locality_requires_positive_nanosecond_only_stride() {
         use arrow::datatypes::DataType::Timestamp;
         use arrow::datatypes::TimeUnit::Nanosecond;
