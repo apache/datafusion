@@ -432,6 +432,31 @@ GROUP BY g
 3 NULL
 4 NULL
 
+# With two different arguments there is no single field to group by, so
+# DISTINCT reaches the accumulator, which does not implement it.
+statement error DataFusion error: This feature is not implemented: CORR\(DISTINCT\) aggregations are not available
+SELECT corr(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
+statement error DataFusion error: This feature is not implemented: CORR\(DISTINCT\) aggregations are not available
+SELECT g, corr(DISTINCT x, y) FROM (VALUES (1, 1.0, 1.0), (1, 1.0, 1.0), (1, 2.0, 3.0)) t(g, x, y) GROUP BY g
+
+statement error DataFusion error: This feature is not implemented: COVAR_SAMP\(DISTINCT\) aggregations are not available
+SELECT covar_samp(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
+statement error DataFusion error: This feature is not implemented: COVAR_POP\(DISTINCT\) aggregations are not available
+SELECT covar_pop(x, y), covar_pop(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
+statement error DataFusion error: This feature is not implemented: REGR_COUNT\(DISTINCT\) aggregations are not available
+SELECT regr_count(x, y), regr_count(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
+# Window functions build the accumulator through `create_sliding_accumulator`,
+# which must reject DISTINCT too.
+statement error DataFusion error: This feature is not implemented: CORR\(DISTINCT\) aggregations are not available
+SELECT corr(DISTINCT x, y) OVER () FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
+statement error DataFusion error: This feature is not implemented: REGR_SLOPE\(DISTINCT\) aggregations are not available
+SELECT regr_slope(DISTINCT x, y) OVER () FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+
 # all_nulls_query_correlation
 query R
 with data as (
@@ -8344,6 +8369,11 @@ SELECT STRING_AGG(DISTINCT x,'|' ORDER BY x) FROM strings
 ----
 a|b|i|j|p|x|y|z
 
+query TT
+SELECT STRING_AGG(x,'|' ORDER BY x DESC), STRING_AGG(DISTINCT x,'|' ORDER BY x) FROM strings
+----
+z|y|x|p|j|i|b|a a|b|i|j|p|x|y|z
+
 query error This feature is not implemented: string_agg delimiter must be a string literal
 SELECT STRING_AGG(DISTINCT x,y) FROM strings
 
@@ -10599,3 +10629,17 @@ DROP TABLE a;
 
 statement ok
 DROP TABLE b;
+
+
+# Repro for issue #17699 / #26661: distinct count with sum(decimal) preserves declared type across rewrites
+statement ok
+CREATE TABLE s_decimal_distinct (g varchar, k varchar, x decimal(18,6)) AS VALUES ('a', 'u1', 1.5), ('a', 'u2', 2.5), ('b', 'u1', 3.0);
+
+query TRII
+SELECT g, nullif(sum(x), 0) AS s, count(*) AS n, count(DISTINCT k) AS d FROM s_decimal_distinct GROUP BY g ORDER BY g;
+----
+a 4.000000 2 2
+b 3.000000 1 1
+
+statement ok
+DROP TABLE s_decimal_distinct;
