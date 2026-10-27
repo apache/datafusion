@@ -23,6 +23,7 @@ mod extension;
 pub(crate) mod invariants;
 pub mod materialized_cte;
 pub use invariants::{InvariantLevel, assert_expected_schema, check_subquery_expr};
+pub mod information_schema;
 mod plan;
 mod statement;
 pub mod tree_node;

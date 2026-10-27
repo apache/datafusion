@@ -29,9 +29,9 @@ use crate::{
 };
 
 use crate::dml::CopyTo;
+use crate::logical_plan::information_schema::ColumnsDetail;
 use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
-use datafusion_common::information_schema::ColumnsDetail;
 use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{Column, DataFusionError, internal_datafusion_err};
 use serde::Serialize;

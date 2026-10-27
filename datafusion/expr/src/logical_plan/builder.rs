@@ -50,11 +50,11 @@ use crate::{
 };
 
 use super::dml::InsertOp;
+use crate::logical_plan::information_schema::ColumnsDetail;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::information_schema::ColumnsDetail;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, FunctionalDependencies, NullEquality,
@@ -269,18 +269,13 @@ impl LogicalPlanBuilder {
     pub fn describe(schema: Arc<Schema>) -> Result<Self> {
         Self::show(
             ShowKind::Describe { schema },
-            datafusion_common::information_schema::columns_schema(
-                ColumnsDetail::Describe,
-            ),
+            crate::information_schema::columns_schema(ColumnsDetail::Describe),
         )
     }
 
     /// Create a `SHOW TABLES` plan.
     pub fn show_tables() -> Result<Self> {
-        Self::show(
-            ShowKind::Tables,
-            datafusion_common::information_schema::tables_schema(),
-        )
+        Self::show(ShowKind::Tables, crate::information_schema::tables_schema())
     }
 
     /// Create a `DESCRIBE <table>` or `SHOW [FULL|EXTENDED] COLUMNS FROM <table>` plan.
@@ -290,7 +285,7 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         Self::show(
             ShowKind::Columns { table_ref, detail },
-            datafusion_common::information_schema::columns_schema(detail),
+            crate::information_schema::columns_schema(detail),
         )
     }
 
@@ -298,7 +293,7 @@ impl LogicalPlanBuilder {
     pub fn show_create_table(table_ref: TableReference) -> Result<Self> {
         Self::show(
             ShowKind::CreateTable { table_ref },
-            datafusion_common::information_schema::views_schema(),
+            crate::information_schema::views_schema(),
         )
     }
 
@@ -307,7 +302,7 @@ impl LogicalPlanBuilder {
     pub fn show_variables(name: Option<String>, verbose: bool) -> Result<Self> {
         Self::show(
             ShowKind::Variables { name, verbose },
-            datafusion_common::information_schema::df_settings_schema(verbose),
+            crate::information_schema::df_settings_schema(verbose),
         )
     }
 
@@ -315,7 +310,7 @@ impl LogicalPlanBuilder {
     pub fn show_functions(filter: Option<String>) -> Result<Self> {
         Self::show(
             ShowKind::Functions { filter },
-            datafusion_common::information_schema::show_functions_schema(),
+            crate::information_schema::show_functions_schema(),
         )
     }
 

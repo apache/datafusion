@@ -23,12 +23,12 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
 
-use super::DdlStatement;
 use super::dml::CopyTo;
 use super::invariants::{
     InvariantLevel, assert_always_invariants_at_current_node,
     assert_executable_invariants,
 };
+use super::{DdlStatement, information_schema};
 use crate::builder::{unique_field_aliases, unnest_with_options};
 use crate::expr::{
     Alias, Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams,
@@ -56,12 +56,12 @@ use crate::{
     requalify_sides_if_needed,
 };
 
+use crate::logical_plan::information_schema::ColumnsDetail;
 use crate::statistics::StatisticsRequest;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
-use datafusion_common::information_schema::ColumnsDetail;
 use datafusion_common::metadata::check_metadata_with_storage_equal;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -71,8 +71,7 @@ use datafusion_common::{
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
     ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
     aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
-    information_schema, internal_err, plan_datafusion_err, plan_err,
-    validate_range_split_points,
+    internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
 };
 use itertools::Itertools as _;
 

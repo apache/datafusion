@@ -18,13 +18,13 @@
 //! Schema and [`RecordBatch`] builders for the `information_schema` virtual
 //! tables and `SHOW` statements.
 
-use crate::Result;
 use crate::TableType;
-use crate::config::ConfigEntry;
 use arrow::array::ArrayRef;
 use arrow::array::builder::{BooleanBuilder, StringBuilder, UInt8Builder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
+use datafusion_common::config::ConfigEntry;
 use std::sync::Arc;
 
 /// Returns the Arrow schema of `information_schema.tables` rows.

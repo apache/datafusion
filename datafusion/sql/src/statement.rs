@@ -30,7 +30,6 @@ use crate::utils::normalize_ident;
 use arrow::datatypes::{Field, FieldRef, Fields, Metadata};
 use datafusion_common::error::_plan_err;
 use datafusion_common::format::ExplainStatementOptions;
-use datafusion_common::information_schema::ColumnsDetail;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
@@ -44,6 +43,7 @@ use datafusion_expr::dml::{
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::logical_plan::builder::project;
+use datafusion_expr::logical_plan::information_schema::ColumnsDetail;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     Analyze, Cast, CreateCatalog, CreateCatalogSchema,
