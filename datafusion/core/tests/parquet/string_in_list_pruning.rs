@@ -59,10 +59,14 @@ fn assert_file_layout(
     rows_per_group: usize,
 ) {
     assert_eq!(metadata.num_row_groups(), total_rows / rows_per_group);
-    let offsets = metadata.offset_index().unwrap();
-    for row_group in offsets {
+    let page_index = metadata.page_index().unwrap();
+    for row_group in 0..metadata.num_row_groups() {
         assert_eq!(
-            row_group[0].page_locations().len(),
+            page_index
+                .offset_index(row_group, 0)
+                .unwrap()
+                .page_locations()
+                .len(),
             rows_per_group / ROWS_PER_UNIT
         );
     }

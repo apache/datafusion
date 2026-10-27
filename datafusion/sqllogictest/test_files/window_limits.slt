@@ -112,6 +112,104 @@ physical_plan
 04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
 
+# Non-null offsets cannot be used as physical row counts for LIMIT pushdown.
+statement ok
+SET datafusion.optimizer.enable_window_limits = false;
+
+query III
+SELECT id,
+       LEAD(v) IGNORE NULLS OVER w,
+       LAG(v, -1, -1) IGNORE NULLS OVER w
+FROM (VALUES (1, 10), (2, NULL), (3, NULL), (4, 40)) AS t(id, v)
+WINDOW w AS (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+ORDER BY id
+LIMIT 1;
+----
+1 40 40
+
+statement ok
+SET datafusion.optimizer.enable_window_limits = true;
+
+query III
+SELECT id,
+       LEAD(v) IGNORE NULLS OVER w,
+       LAG(v, -1, -1) IGNORE NULLS OVER w
+FROM (VALUES (1, 10), (2, NULL), (3, NULL), (4, 40)) AS t(id, v)
+WINDOW w AS (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+ORDER BY id
+LIMIT 1;
+----
+1 40 40
+
+# Negative-offset LAG must also block pushdown when no LEAD is present.
+query II
+SELECT id, LAG(v, -1) IGNORE NULLS OVER (
+    ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+)
+FROM (VALUES (1, 10), (2, NULL), (3, NULL), (4, 40)) AS t(id, v)
+ORDER BY id
+LIMIT 1;
+----
+1 40
+
+# Negative-offset LAG needs lookahead even without IGNORE NULLS.
+query II
+SELECT id, LAG(v, -1) OVER (
+    ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+)
+FROM (VALUES (1, 10), (2, 20), (3, 30), (4, 40)) AS t(id, v)
+ORDER BY id
+LIMIT 1;
+----
+1 20
+
+# Causal IGNORE NULLS functions should retain TopK below the window.
+query IIIIIII
+SELECT id,
+       LAG(v) IGNORE NULLS OVER w,
+       LEAD(v, -1) IGNORE NULLS OVER w,
+       LEAD(v, 0) IGNORE NULLS OVER w,
+       FIRST_VALUE(v) IGNORE NULLS OVER w,
+       LAST_VALUE(v) IGNORE NULLS OVER w,
+       NTH_VALUE(v, 2) IGNORE NULLS OVER w
+FROM (VALUES (1, 10), (2, NULL), (3, 30), (4, 40)) AS t(id, v)
+WINDOW w AS (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+ORDER BY id
+LIMIT 3;
+----
+1 NULL NULL 10 10 10 NULL
+2 10 10 NULL 10 10 NULL
+3 10 10 30 10 30 30
+
+query TT
+EXPLAIN
+SELECT id,
+       LAG(v) IGNORE NULLS OVER w,
+       LEAD(v, -1) IGNORE NULLS OVER w,
+       LEAD(v, 0) IGNORE NULLS OVER w,
+       FIRST_VALUE(v) IGNORE NULLS OVER w,
+       LAST_VALUE(v) IGNORE NULLS OVER w,
+       NTH_VALUE(v, 2) IGNORE NULLS OVER w
+FROM (VALUES (1, 10), (2, NULL), (3, 30), (4, 40)) AS t(id, v)
+WINDOW w AS (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+ORDER BY id
+LIMIT 3;
+----
+logical_plan
+01)Sort: t.id ASC NULLS LAST, fetch=3
+02)--Projection: t.id, lag(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v,Int64(-1)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v,Int64(0)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, first_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(t.v,Int64(2)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+03)----WindowAggr: windowExpr=[[lag(t.v)IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v, Int64(-1))IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v, Int64(0))IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, first_value(t.v)IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(t.v)IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(t.v, Int64(2))IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------SubqueryAlias: t
+05)--------Projection: column1 AS id, column2 AS v
+06)----------Values: (Int64(1), Int64(10)), (Int64(2), Int64(NULL)), (Int64(3), Int64(30)), (Int64(4), Int64(40))
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, lag(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as lag(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v,Int64(-1)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as lead(t.v,Int64(-1)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v,Int64(0)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as lead(t.v,Int64(0)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, first_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as first_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as last_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(t.v,Int64(2)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as nth_value(t.v,Int64(2)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--GlobalLimitExec: skip=0, fetch=3
+03)----BoundedWindowAggExec: wdw=[lag(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lag(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v,Int64(-1)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(t.v,Int64(-1)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v,Int64(0)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(t.v,Int64(0)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, first_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "first_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "last_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(t.v,Int64(2)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "nth_value(t.v,Int64(2)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------ProjectionExec: expr=[column1@0 as id, column2@1 as v]
+05)--------SortExec: TopK(fetch=3), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Should use the max of leads
 statement ok
 set datafusion.optimizer.enable_window_limits = false;
@@ -764,3 +862,51 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
+
+# A huge FOLLOWING bound must not overflow when the limit is grown by the
+# window's lookahead (https://github.com/apache/datafusion/issues/26658)
+statement ok
+CREATE TABLE huge_frame_t(a INT, x INT) AS VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5);
+
+query II
+SELECT a, sum(x) OVER (ORDER BY a ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING) s
+FROM huge_frame_t ORDER BY a LIMIT 2;
+----
+1 15
+2 14
+
+# Same, with a window function that adds its own lookahead on top of the frame
+query II
+SELECT a, lead(x, 1) OVER (ORDER BY a ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING) l
+FROM huge_frame_t ORDER BY a LIMIT 2;
+----
+1 2
+2 3
+
+# A huge FOLLOWING start bound must not overflow either
+query II
+SELECT a, sum(x) OVER (ORDER BY a ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING) s
+FROM huge_frame_t ORDER BY a LIMIT 2;
+----
+1 NULL
+2 NULL
+
+# The pushdown is skipped, so the sort stays a full sort instead of a TopK
+query TT
+EXPLAIN SELECT a, sum(x) OVER (ORDER BY a ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING) s
+FROM huge_frame_t ORDER BY a LIMIT 2;
+----
+logical_plan
+01)Sort: huge_frame_t.a ASC NULLS LAST, fetch=2
+02)--Projection: huge_frame_t.a, sum(huge_frame_t.x) ORDER BY [huge_frame_t.a ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING AS s
+03)----WindowAggr: windowExpr=[[sum(CAST(huge_frame_t.x AS Int64)) ORDER BY [huge_frame_t.a ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING]]
+04)------TableScan: huge_frame_t projection=[a, x]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, sum(huge_frame_t.x) ORDER BY [huge_frame_t.a ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING@2 as s]
+02)--GlobalLimitExec: skip=0, fetch=2
+03)----BoundedWindowAggExec: wdw=[sum(huge_frame_t.x) ORDER BY [huge_frame_t.a ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING: Field { "sum(huge_frame_t.x) ORDER BY [huge_frame_t.a ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING], mode=[Sorted]
+04)------SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE huge_frame_t;

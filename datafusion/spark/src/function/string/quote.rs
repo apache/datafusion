@@ -19,7 +19,7 @@ use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::{NativeType, logical_string};
-use datafusion_common::utils::take_function_args;
+use datafusion_common::utils::{offset_span_len, take_function_args};
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -91,12 +91,7 @@ fn spark_quote_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn quote_array<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     let str_array = as_generic_string_array::<T>(array)?;
-    // Slicing an array keeps the whole value buffer and narrows only the
-    // offsets, so measure the data through the offsets rather than through
-    // `value_data()`. An offset buffer holds one more entry than the array has
-    // rows, so it is never empty.
-    let offsets = str_array.value_offsets();
-    let data_len = offsets.last().unwrap().as_usize() - offsets[0].as_usize();
+    let data_len = offset_span_len(str_array.offsets());
     Ok(quote_impl::<T, _>(str_array.iter(), data_len))
 }
 

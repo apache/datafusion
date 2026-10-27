@@ -200,3 +200,164 @@ SELECT * FROM test_delete_in;
 
 statement ok
 DROP TABLE test_delete_in;
+
+# Test that EXPLAIN DELETE prints the plan and deletes nothing.
+# Regression test for https://github.com/apache/datafusion/issues/24656:
+# the delete used to run while the physical plan was built.
+statement ok
+CREATE TABLE test_delete_explain AS VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+EXPLAIN DELETE FROM test_delete_explain WHERE column1 > 1;
+
+query IT rowsort
+SELECT * FROM test_delete_explain;
+----
+1 a
+2 b
+3 c
+
+# EXPLAIN ANALYZE runs the plan, so it does delete, and it deletes once.
+statement ok
+EXPLAIN ANALYZE DELETE FROM test_delete_explain WHERE column1 > 1;
+
+query IT rowsort
+SELECT * FROM test_delete_explain;
+----
+1 a
+
+statement ok
+DROP TABLE test_delete_explain;
+
+# Predicate errors belong to execution; EXPLAIN only plans the expression.
+statement ok
+CREATE TABLE test_delete_error AS VALUES (0), (2);
+
+statement ok
+EXPLAIN DELETE FROM test_delete_error WHERE 10 / column1 > 1;
+
+statement error Divide by zero
+DELETE FROM test_delete_error WHERE 10 / column1 > 1;
+
+query I rowsort
+SELECT * FROM test_delete_error;
+----
+0
+2
+
+statement ok
+DROP TABLE test_delete_error;
+
+# Test DELETE with an IN or an EXISTS subquery in the WHERE clause
+# The optimizer rewrites the subquery into a semi join, so the condition cannot
+# reach the table provider as a filter. DataFusion rejects the statement instead
+# of deleting every row.
+statement ok
+CREATE TABLE test_delete_subquery AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE test_delete_subquery_src AS VALUES (2);
+
+statement error DataFusion error: This feature is not implemented: DELETE on table 'test_delete_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+DELETE FROM test_delete_subquery WHERE column1 IN (SELECT column1 FROM test_delete_subquery_src);
+
+statement error DataFusion error: This feature is not implemented: DELETE on table 'test_delete_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+DELETE FROM test_delete_subquery WHERE EXISTS (SELECT 1 FROM test_delete_subquery_src WHERE test_delete_subquery_src.column1 = test_delete_subquery.column1);
+
+statement error DataFusion error: This feature is not implemented: DELETE on table 'test_delete_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+DELETE FROM test_delete_subquery WHERE column1 NOT IN (SELECT column1 FROM test_delete_subquery_src);
+
+# The ordinary predicate matches rows 2 and 3, but the full condition only matches 2.
+# Passing only the ordinary predicate to the provider would delete too many rows.
+statement error DataFusion error: This feature is not implemented: DELETE on table 'test_delete_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+DELETE FROM test_delete_subquery WHERE column1 > 1 AND column1 IN (SELECT column1 FROM test_delete_subquery_src);
+
+# Every row survives each rejected statement
+query I rowsort
+SELECT * FROM test_delete_subquery;
+----
+1
+2
+3
+
+statement ok
+DROP TABLE test_delete_subquery_src;
+
+statement ok
+DROP TABLE test_delete_subquery;
+
+# Test DELETE with an always-false WHERE clause
+# The optimizer folds the predicate into an empty relation, so no filter reaches
+# the table provider. The statement affects no rows.
+statement ok
+CREATE TABLE test_delete_false AS VALUES (1), (2), (3);
+
+query I
+DELETE FROM test_delete_false WHERE false;
+----
+0
+
+query I
+DELETE FROM test_delete_false WHERE 1 = 2;
+----
+0
+
+query I rowsort
+SELECT * FROM test_delete_false;
+----
+1
+2
+3
+
+statement ok
+DROP TABLE test_delete_false;
+
+# Test the same statements with the optimizer switched off
+# With `max_passes = 0` no rule rewrites the subquery into a semi join and no
+# rule folds an always-false predicate, so the whole WHERE clause reaches the
+# table provider. A subquery predicate is rejected there, when the provider
+# compiles it to a physical expression, so no path deletes every row.
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+statement ok
+CREATE TABLE test_delete_unopt AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE test_delete_unopt_src AS VALUES (2);
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+DELETE FROM test_delete_unopt WHERE column1 IN (SELECT column1 FROM test_delete_unopt_src);
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+DELETE FROM test_delete_unopt WHERE EXISTS (SELECT 1 FROM test_delete_unopt_src WHERE test_delete_unopt_src.column1 = test_delete_unopt.column1);
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+DELETE FROM test_delete_unopt WHERE column1 NOT IN (SELECT column1 FROM test_delete_unopt_src);
+
+# The always-false predicate reaches the provider, which matches no row with it
+query I
+DELETE FROM test_delete_unopt WHERE false;
+----
+0
+
+query I
+DELETE FROM test_delete_unopt WHERE 1 = 2;
+----
+0
+
+query I rowsort
+SELECT * FROM test_delete_unopt;
+----
+1
+2
+3
+
+statement ok
+DROP TABLE test_delete_unopt_src;
+
+statement ok
+DROP TABLE test_delete_unopt;
+
+statement ok
+RESET datafusion.optimizer.max_passes;

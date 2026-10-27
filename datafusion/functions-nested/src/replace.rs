@@ -24,7 +24,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::{ListCoercion, offset_span, offset_span_len};
 use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
@@ -445,7 +445,7 @@ fn general_replace<O: OffsetSizeTrait>(
     let values = list_array.values();
     let original_data = values.to_data();
     let to_data = to_array.to_data();
-    let capacity = Capacities::Array(original_data.len());
+    let capacity = Capacities::Array(offset_span_len(list_array.offsets()));
 
     // First array is the original array, second array is the element to replace with.
     let mut mutable = MutableArrayData::with_capacities(
@@ -582,11 +582,8 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         )?));
     }
 
-    let first_offset = list_array.offsets()[0].to_usize().unwrap();
-    let last_offset = list_array.offsets()[list_array.len()].to_usize().unwrap();
-    let visible_values = list_array
-        .values()
-        .slice(first_offset, last_offset - first_offset);
+    let (first_offset, values_len) = offset_span(list_array.offsets());
+    let visible_values = list_array.values().slice(first_offset, values_len);
 
     let to_array = scalar_to.to_array_of_size(1)?;
     let original_data = visible_values.to_data();
@@ -826,5 +823,23 @@ mod tests {
         assert_eq!(result.as_list::<i32>(), &expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            let from: ArrayRef =
+                Arc::new(arrow::array::Float64Array::from(vec![3.0; input.len()]));
+            let to: ArrayRef =
+                Arc::new(arrow::array::Float64Array::from(vec![7.0; input.len()]));
+            super::array_replace_internal(
+                "array_replace",
+                input,
+                &from,
+                &to,
+                &vec![Some(1); input.len()],
+                input.data_type(),
+            )
+        })
     }
 }

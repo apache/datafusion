@@ -286,12 +286,11 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 
     let result = builder.finish();
-    match args[0] {
-        ColumnarValue::Scalar(_) => {
-            let val = result.is_valid(0).then(|| result.value(0).to_string());
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(val)))
-        }
-        ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef)),
+    if result.len() == 1 {
+        let val = result.is_valid(0).then(|| result.value(0).to_string());
+        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(val)))
+    } else {
+        Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
     }
 }
 

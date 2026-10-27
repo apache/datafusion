@@ -31,17 +31,18 @@ use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
 };
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::{EmitTo, GroupSelection, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_multiple;
 use log::debug;
 
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
-    utils::format_state_name,
+    utils::{AggregateOrderSensitivity, format_state_name},
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
@@ -107,7 +108,10 @@ impl AggregateUDFImpl for Correlation {
         Ok(DataType::Float64)
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!("CORR(DISTINCT) aggregations are not available");
+        }
         Ok(Box::new(CorrelationAccumulator::try_new()?))
     }
 
@@ -130,12 +134,16 @@ impl AggregateUDFImpl for Correlation {
         .collect())
     }
 
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
 
-    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
-        true
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        !args.is_distinct
     }
 
     fn create_groups_accumulator(
@@ -144,6 +152,13 @@ impl AggregateUDFImpl for Correlation {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         debug!("GroupsAccumulator is created for aggregate function `corr(c1, c2)`");
         Ok(Box::new(CorrelationGroupsAccumulator::new()))
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`. It only
+        // works when the planner removes it first (`SingleDistinctToGroupBy`
+        // for a single distinct field, e.g. `corr(DISTINCT x, x)`).
+        DistinctHandling::Unsupported
     }
 }
 

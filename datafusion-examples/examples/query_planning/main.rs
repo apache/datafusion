@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example query_planning -- [all|analyzer_rule|expr_api|optimizer_rule|parse_sql_expr|plan_to_sql|planner_api|pruning|thread_pools]
+//! cargo run --example query_planning -- [all|analyzer_rule|expr_api|optimizer_rule|parse_sql_expr|plan_to_sql|plan_walk|planner_api|pruning|thread_pools]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -42,6 +42,9 @@
 //! - `plan_to_sql`
 //!   (file: plan_to_sql.rs, desc: Generate SQL from expressions or plans)
 //!
+//! - `plan_walk`
+//!   (file: plan_walk.rs, desc: Walk and rewrite LogicalPlans with TreeNode APIs)
+//!
 //! - `planner_api`
 //!   (file: planner_api.rs, desc: APIs for logical and physical plan manipulation)
 //!
@@ -56,6 +59,7 @@ mod expr_api;
 mod optimizer_rule;
 mod parse_sql_expr;
 mod plan_to_sql;
+mod plan_walk;
 mod planner_api;
 mod pruning;
 mod thread_pools;
@@ -73,6 +77,7 @@ enum ExampleKind {
     OptimizerRule,
     ParseSqlExpr,
     PlanToSql,
+    PlanWalk,
     PlannerApi,
     Pruning,
     ThreadPools,
@@ -98,6 +103,7 @@ impl ExampleKind {
             ExampleKind::OptimizerRule => optimizer_rule::optimizer_rule().await?,
             ExampleKind::ParseSqlExpr => parse_sql_expr::parse_sql_expr().await?,
             ExampleKind::PlanToSql => plan_to_sql::plan_to_sql_examples().await?,
+            ExampleKind::PlanWalk => plan_walk::plan_walk()?,
             ExampleKind::PlannerApi => planner_api::planner_api().await?,
             ExampleKind::Pruning => pruning::pruning()?,
             ExampleKind::ThreadPools => thread_pools::thread_pools().await?,

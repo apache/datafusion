@@ -160,7 +160,7 @@ pub fn set_nulls_dyn(input: &dyn Array, nulls: Option<NullBuffer>) -> Result<Arr
             unsafe {
                 Arc::new(StringViewArray::new_unchecked(
                     input.views().clone(),
-                    input.data_buffers().to_vec(),
+                    Arc::clone(input.data_buffers()),
                     nulls,
                 ))
             }
@@ -197,7 +197,7 @@ pub fn set_nulls_dyn(input: &dyn Array, nulls: Option<NullBuffer>) -> Result<Arr
             unsafe {
                 Arc::new(BinaryViewArray::new_unchecked(
                     input.views().clone(),
-                    input.data_buffers().to_vec(),
+                    Arc::clone(input.data_buffers()),
                     nulls,
                 ))
             }

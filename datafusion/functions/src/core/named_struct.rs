@@ -25,6 +25,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[user_doc(
@@ -141,10 +142,13 @@ impl ScalarUDFImpl for NamedStructFunc {
             .map(|(name, data_type)| Ok(Field::new(name, data_type.to_owned(), true)))
             .collect::<Result<Vec<Field>>>()?;
 
+        // The constructed struct row is never NULL: `invoke_with_args` builds
+        // the `StructArray` without a null buffer, so the output field is
+        // non-nullable and `named_struct(...) IS NOT NULL` folds to `true`.
         Ok(Field::new(
             self.name(),
             DataType::Struct(Fields::from(return_fields)),
-            true,
+            false,
         )
         .into())
     }
@@ -162,8 +166,10 @@ impl ScalarUDFImpl for NamedStructFunc {
 
         let values: Vec<ColumnarValue> = args
             .args
-            .chunks_exact(2)
-            .map(|chunk| chunk[1].clone())
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[_name, value]| value.clone())
             .collect();
         let arrays = ColumnarValue::values_to_arrays(&values)?;
         Ok(ColumnarValue::Array(Arc::new(StructArray::new(
@@ -186,9 +192,14 @@ impl ScalarUDFImpl for NamedStructFunc {
         }
 
         let mut fields = Vec::with_capacity(literal_args.len() / 2);
+        let mut names = HashSet::new();
         for (i, chunk) in literal_args.chunks(2).enumerate() {
             match chunk {
                 [Some(ScalarValue::Utf8(Some(name))), _] => {
+                    // Field access resolves only the first occurrence of a name.
+                    if !names.insert(name) {
+                        return None;
+                    }
                     fields.push((
                         vec![ScalarValue::Utf8(Some(name.clone()))],
                         i * 2 + 1, // index of the value argument

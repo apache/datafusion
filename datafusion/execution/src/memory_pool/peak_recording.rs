@@ -33,6 +33,10 @@
 //! This is measurement only: nothing here enforces a relationship between the
 //! two numbers.
 //!
+//! The same wrapper can also report every reservation change to a
+//! [`MemoryDriftTracker`] (see [`PeakRecordingPool::with_drift_tracker`]),
+//! which compares reservations with the bytes actually allocated.
+//!
 //! What lands in the peak is whatever the pool accounts for, so this follows
 //! the accounting rather than fixing it in place. Arrow-side reservations made
 //! through `ArrowMemoryPool` are included, because that adapter grows a
@@ -47,7 +51,9 @@ use std::{
     },
 };
 
-use super::{MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation};
+use super::{
+    MemoryConsumer, MemoryDriftTracker, MemoryLimit, MemoryPool, MemoryReservation,
+};
 use datafusion_common::Result;
 
 /// Wraps a [`MemoryPool`], recording the high-water mark of
@@ -92,6 +98,8 @@ pub struct PeakRecordingPool {
     peak: AtomicUsize,
     /// High-water mark since this pool was created. Never reset.
     max: AtomicUsize,
+    /// Tracker every reservation change is reported to, and this pool's label.
+    drift: Option<(Arc<MemoryDriftTracker>, String)>,
 }
 
 impl PeakRecordingPool {
@@ -105,7 +113,20 @@ impl PeakRecordingPool {
             reserved: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
             max: AtomicUsize::new(0),
+            drift: None,
         }
+    }
+
+    /// Also report every reservation change to `tracker`. `label` identifies
+    /// this pool in drift log lines, which matters when several pools share
+    /// one tracker.
+    pub fn with_drift_tracker(
+        mut self,
+        tracker: Arc<MemoryDriftTracker>,
+        label: impl Into<String>,
+    ) -> Self {
+        self.drift = Some((tracker, label.into()));
+        self
     }
 
     /// The recorder installed as `pool`, if there is one.
@@ -152,11 +173,14 @@ impl PeakRecordingPool {
     /// The total stays exact because the trait grants exactly what is asked
     /// for — `grow` is infallible and `try_grow` either grants `additional` or
     /// returns an error, leaving the reservation untouched.
-    fn record(&self, additional: usize) {
+    fn record(&self, reservation: &MemoryReservation, additional: usize) {
         let reserved =
             self.reserved.fetch_add(additional, Ordering::Relaxed) + additional;
         self.peak.fetch_max(reserved, Ordering::Relaxed);
         self.max.fetch_max(reserved, Ordering::Relaxed);
+        if let Some((tracker, label)) = &self.drift {
+            tracker.grew(label, reservation.consumer().name(), additional);
+        }
     }
 }
 
@@ -166,6 +190,7 @@ impl Debug for PeakRecordingPool {
             .field("inner", &self.inner)
             .field("peak", &self.peak_reserved())
             .field("max", &self.max_reserved())
+            .field("drift_label", &self.drift.as_ref().map(|(_, label)| label))
             .finish()
     }
 }
@@ -193,17 +218,20 @@ impl MemoryPool for PeakRecordingPool {
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         self.inner.grow(reservation, additional);
-        self.record(additional);
+        self.record(reservation, additional);
     }
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         self.inner.shrink(reservation, shrink);
         self.reserved.fetch_sub(shrink, Ordering::Relaxed);
+        if let Some((tracker, label)) = &self.drift {
+            tracker.shrank(label, reservation.consumer().name(), shrink);
+        }
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
         self.inner.try_grow(reservation, additional)?;
-        self.record(additional);
+        self.record(reservation, additional);
         Ok(())
     }
 

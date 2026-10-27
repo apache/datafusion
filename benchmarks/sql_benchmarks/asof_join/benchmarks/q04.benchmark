@@ -1,0 +1,18 @@
+name Q04
+group asof_join
+
+expect_plan AsOfJoinExec
+
+run
+-- Left and right: 500K rows each; no equality key; ascending source timestamps.
+-- Matches the earliest right row at or after each left timestamp (l.ts <= r.ts),
+-- so the measured query includes the required descending ordering.
+WITH left_input AS (
+    SELECT value AS ts, value AS payload FROM range(500000)
+),
+right_input AS (
+    SELECT value AS ts, value AS payload FROM range(500000)
+)
+SELECT l.ts, l.payload, r.payload AS right_payload
+FROM left_input l
+ASOF JOIN right_input r MATCH_CONDITION (l.ts <= r.ts);

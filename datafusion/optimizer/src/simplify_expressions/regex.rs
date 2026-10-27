@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{BinaryExpr, Expr, Like, Operator, lit};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
@@ -98,11 +98,11 @@ pub fn simplify_regex_expr(
             }
         }
         Err(e) => {
-            // error out early since the execution may fail anyways
-            return Err(DataFusionError::Context(
-                "Invalid regex".to_owned(),
-                Box::new(DataFusionError::External(Box::new(e))),
-            ));
+            // A literal pattern that does not compile is an error in the query
+            // text, and it is known here, before execution. Report it with the
+            // diagnosis of the `regex_syntax` crate, in the same shape as the
+            // error that the regexp functions report at execution time.
+            return plan_err!("Regular expression did not compile: {e}");
         }
     }
 

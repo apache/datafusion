@@ -27,7 +27,7 @@ use datafusion_common::{DataFusionError, ScalarValue};
 use itertools::Itertools;
 
 use crate::parquet::Unit::RowGroup;
-use crate::parquet::{ContextWithParquet, Scenario};
+use crate::parquet::{ContextWithParquet, Scenario, make_decimal_batch};
 use datafusion_expr::{col, lit};
 struct RowGroupPruningTest {
     scenario: Scenario,
@@ -245,7 +245,7 @@ async fn prune_timestamps_nanos() {
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -263,7 +263,7 @@ async fn prune_timestamps_micros() {
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -281,7 +281,7 @@ async fn prune_timestamps_millis() {
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -299,7 +299,7 @@ async fn prune_timestamps_seconds() {
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -315,7 +315,7 @@ async fn prune_date32() {
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(3))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -359,7 +359,7 @@ async fn prune_disabled() {
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -384,7 +384,7 @@ async fn prune_disabled() {
 
     // This should not prune any
     assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_matched(), Some(4));
+    assert_eq!(output.row_groups_matched(), Some(0));
     assert_eq!(output.row_groups_pruned(), Some(0));
     assert_eq!(
         output.result_rows,
@@ -409,7 +409,7 @@ macro_rules! int_tests {
                 .with_matched_by_stats(Some(3))
                 .with_pruned_by_stats(Some(1))
                 .with_pruned_files(Some(0))
-                .with_matched_by_bloom_filter(Some(3))
+                .with_matched_by_bloom_filter(Some(0))
                 .with_pruned_by_bloom_filter(Some(0))
                 .with_expected_rows(11)
                 .test_row_group_prune()
@@ -424,7 +424,7 @@ macro_rules! int_tests {
                 .with_matched_by_stats(Some(3))
                 .with_pruned_by_stats(Some(1))
                 .with_pruned_files(Some(0))
-                .with_matched_by_bloom_filter(Some(3))
+                .with_matched_by_bloom_filter(Some(0))
                 .with_pruned_by_bloom_filter(Some(0))
                 .with_expected_rows(11)
                 .test_row_group_prune()
@@ -474,7 +474,7 @@ macro_rules! int_tests {
                 .with_matched_by_stats(Some(4))
                 .with_pruned_by_stats(Some(0))
                 .with_pruned_files(Some(0))
-                .with_matched_by_bloom_filter(Some(4))
+                .with_matched_by_bloom_filter(Some(0))
                 .with_pruned_by_bloom_filter(Some(0))
                 .with_expected_rows(3)
                 .test_row_group_prune()
@@ -490,7 +490,7 @@ macro_rules! int_tests {
                 .with_matched_by_stats(Some(4))
                 .with_pruned_by_stats(Some(0))
                 .with_pruned_files(Some(0))
-                .with_matched_by_bloom_filter(Some(4))
+                .with_matched_by_bloom_filter(Some(0))
                 .with_pruned_by_bloom_filter(Some(0))
                 .with_expected_rows(2)
                 .test_row_group_prune()
@@ -506,7 +506,7 @@ macro_rules! int_tests {
                 .with_matched_by_stats(Some(4))
                 .with_pruned_by_stats(Some(0))
                 .with_pruned_files(Some(0))
-                .with_matched_by_bloom_filter(Some(4))
+                .with_matched_by_bloom_filter(Some(0))
                 .with_pruned_by_bloom_filter(Some(0))
                 .with_expected_rows(9)
                 .test_row_group_prune()
@@ -551,6 +551,8 @@ macro_rules! int_tests {
         #[tokio::test]
         async fn $fn_eq_in_list_negated() {
             // result of sql "SELECT * FROM t where not in (1)" prune nothing
+            // Groups without 1 are fully matched by statistics and skip Bloom.
+            // Only [0, 5) contains 1, so only that group is Bloom-evaluated.
             RowGroupPruningTest::new()
                 .with_scenario(Scenario::Int)
                 .with_query(&format!("SELECT * FROM t where i{} not in (1)", $bits))
@@ -558,7 +560,7 @@ macro_rules! int_tests {
                 .with_matched_by_stats(Some(4))
                 .with_pruned_by_stats(Some(0))
                 .with_pruned_files(Some(0))
-                .with_matched_by_bloom_filter(Some(4))
+                .with_matched_by_bloom_filter(Some(1))
                 .with_pruned_by_bloom_filter(Some(0))
                 .with_expected_rows(19)
                 .test_row_group_prune()
@@ -608,7 +610,7 @@ macro_rules! uint_tests {
                 .with_matched_by_stats(Some(3))
                 .with_pruned_by_stats(Some(1))
                 .with_pruned_files(Some(0))
-                .with_matched_by_bloom_filter(Some(3))
+                .with_matched_by_bloom_filter(Some(0))
                 .with_pruned_by_bloom_filter(Some(0))
                 .with_expected_rows(11)
                 .test_row_group_prune()
@@ -658,7 +660,7 @@ macro_rules! uint_tests {
                 .with_matched_by_stats(Some(4))
                 .with_pruned_by_stats(Some(0))
                 .with_pruned_files(Some(0))
-                .with_matched_by_bloom_filter(Some(4))
+                .with_matched_by_bloom_filter(Some(0))
                 .with_pruned_by_bloom_filter(Some(0))
                 .with_expected_rows(2)
                 .test_row_group_prune()
@@ -674,7 +676,7 @@ macro_rules! uint_tests {
                 .with_matched_by_stats(Some(4))
                 .with_pruned_by_stats(Some(0))
                 .with_pruned_files(Some(0))
-                .with_matched_by_bloom_filter(Some(4))
+                .with_matched_by_bloom_filter(Some(0))
                 .with_pruned_by_bloom_filter(Some(0))
                 .with_expected_rows(2)
                 .test_row_group_prune()
@@ -718,7 +720,9 @@ macro_rules! uint_tests {
 
         #[tokio::test]
         async fn $fn_eq_in_list_negated() {
-            // result of sql "SELECT * FROM t where not in (1)" prune nothing
+            // result of sql "SELECT * FROM t where not in (6)" prune nothing
+            // Groups without 6 are fully matched by statistics and skip Bloom.
+            // Only [5, 10) contains 6, so only that group is Bloom-evaluated.
             RowGroupPruningTest::new()
                 .with_scenario(Scenario::UInt)
                 .with_query(&format!("SELECT * FROM t where u{} not in (6)", $bits))
@@ -726,7 +730,7 @@ macro_rules! uint_tests {
                 .with_matched_by_stats(Some(4))
                 .with_pruned_by_stats(Some(0))
                 .with_pruned_files(Some(0))
-                .with_matched_by_bloom_filter(Some(4))
+                .with_matched_by_bloom_filter(Some(1))
                 .with_pruned_by_bloom_filter(Some(0))
                 .with_expected_rows(19)
                 .test_row_group_prune()
@@ -814,7 +818,7 @@ async fn prune_f64_lt() {
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(11)
         .test_row_group_prune()
@@ -826,7 +830,7 @@ async fn prune_f64_lt() {
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(11)
         .test_row_group_prune()
@@ -844,7 +848,7 @@ async fn prune_f64_scalar_fun_and_gt() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(2))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -861,7 +865,7 @@ async fn prune_f64_scalar_fun() {
         .with_matched_by_stats(Some(4))
         .with_pruned_by_stats(Some(0))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(4))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -878,7 +882,7 @@ async fn prune_f64_complex_expr() {
         .with_matched_by_stats(Some(4))
         .with_pruned_by_stats(Some(0))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(4))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(9)
         .test_row_group_prune()
@@ -895,7 +899,7 @@ async fn prune_f64_complex_expr_subtract() {
         .with_matched_by_stats(Some(4))
         .with_pruned_by_stats(Some(0))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(4))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(9)
         .test_row_group_prune()
@@ -914,7 +918,7 @@ async fn prune_decimal_lt() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -926,7 +930,7 @@ async fn prune_decimal_lt() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(8)
         .test_row_group_prune()
@@ -938,7 +942,7 @@ async fn prune_decimal_lt() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -950,7 +954,7 @@ async fn prune_decimal_lt() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(8)
         .test_row_group_prune()
@@ -999,6 +1003,8 @@ async fn prune_decimal_eq() {
         .with_expected_rows(2)
         .test_row_group_prune()
         .await;
+    // Maximum-precision decimal widening accepts this aligned literal, so
+    // Bloom-filter pruning evaluates it just like the equivalent source cast.
     RowGroupPruningTest::new()
         .with_scenario(Scenario::DecimalLargePrecision)
         .with_query("SELECT * FROM t where decimal_col = 4.00")
@@ -1011,7 +1017,90 @@ async fn prune_decimal_eq() {
         .with_expected_rows(2)
         .test_row_group_prune()
         .await;
-    // The data type of decimal_col is decimal(38,2)
+    // A source-typed decimal literal exposes a usable Bloom-filter guarantee.
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::DecimalLargePrecision)
+        .with_query("SELECT * FROM t where decimal_col = cast(4.00 as decimal(38,2))")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
+        .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_expected_rows(2)
+        .test_row_group_prune()
+        .await;
+    // Source-precision regression: the same scale-up rewrite must admit
+    // sub-maximum decimal sources, not only decimal(38,x). Each pair below
+    // writes one row group per value list [1,2,3,4,6], [-5,1,3,4,6] and
+    // [20,30,30,40,60], stored unscaled at the source scale, so 4.00 is in the
+    // first two row groups only.
+    for (precision, scale) in [(30u8, 2i8), (28, 0), (36, 4)] {
+        let unit = 10_i128.pow(scale as u32);
+        let batches = [
+            vec![1, 2, 3, 4, 6],
+            vec![-5, 1, 3, 4, 6],
+            vec![20, 30, 30, 40, 60],
+        ]
+        .into_iter()
+        .map(|values| {
+            make_decimal_batch(
+                values.into_iter().map(|v| v * unit).collect(),
+                precision,
+                scale,
+            )
+        })
+        .collect::<Vec<_>>();
+
+        let mut ctx = ContextWithParquet::with_custom_data(
+            Scenario::DecimalLargePrecision,
+            RowGroup(5),
+            batches[0].schema(),
+            batches,
+        )
+        .await;
+        let output = ctx.query("SELECT * FROM t where decimal_col = 4.00").await;
+
+        println!(
+            "--- decimal source decimal({precision},{scale}) ---\n{}",
+            output.description()
+        );
+
+        let case = format!("decimal({precision},{scale})");
+        assert_eq!(
+            output.predicate_evaluation_errors(),
+            Some(0),
+            "predicate_evaluation_errors for {case}"
+        );
+        assert_eq!(
+            output.row_groups_matched_statistics(),
+            Some(2),
+            "row_groups_matched_statistics for {case}"
+        );
+        assert_eq!(
+            output.row_groups_pruned_statistics(),
+            Some(1),
+            "row_groups_pruned_statistics for {case}"
+        );
+        let bloom = output
+            .row_groups_bloom_filter()
+            .unwrap_or_else(|| panic!("no bloom filter metrics for {case}"));
+        assert_eq!(bloom.total_matched(), 2, "bloom filter matched for {case}");
+        assert_eq!(bloom.total_pruned(), 0, "bloom filter pruned for {case}");
+        assert_eq!(output.result_rows, 2, "result rows for {case}");
+
+        // The two returned rows are exactly 4.00 at the source scale.
+        let expected = ScalarValue::Decimal128(Some(4 * unit), precision, scale);
+        assert_eq!(
+            output
+                .pretty_results()
+                .matches(&format!("| {expected} "))
+                .count(),
+            2,
+            "expected two {expected} rows for {case}, got:\n{}",
+            output.pretty_results()
+        );
+    }
 }
 
 #[tokio::test]
@@ -1026,7 +1115,7 @@ async fn prune_decimal_in_list() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(5)
         .test_row_group_prune()
@@ -1038,7 +1127,7 @@ async fn prune_decimal_in_list() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -1050,7 +1139,7 @@ async fn prune_decimal_in_list() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(5)
         .test_row_group_prune()
@@ -1062,7 +1151,7 @@ async fn prune_decimal_in_list() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -1177,7 +1266,9 @@ async fn prune_string_neq() {
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        // 'all frontends' is fully matched (value outside min/max) and skips Bloom.
+        // 'mixed' and 'all backends' are Bloom-evaluated; != cannot Bloom-prune.
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(14)
         .test_row_group_prune()
@@ -1196,7 +1287,7 @@ async fn prune_string_lt() {
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(3)
         .test_row_group_prune()
@@ -1211,7 +1302,7 @@ async fn prune_string_lt() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         // all backends from 'mixed' and 'all backends'
         .with_expected_rows(8)
@@ -1285,7 +1376,9 @@ async fn prune_binary_neq() {
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        // 'all frontends' is fully matched (value outside min/max) and skips Bloom.
+        // 'mixed' and 'all backends' are Bloom-evaluated; != cannot Bloom-prune.
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(14)
         .test_row_group_prune()
@@ -1304,7 +1397,7 @@ async fn prune_binary_lt() {
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(3)
         .test_row_group_prune()
@@ -1319,7 +1412,7 @@ async fn prune_binary_lt() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         // all backends from 'mixed' and 'all backends'
         .with_expected_rows(8)
@@ -1392,7 +1485,9 @@ async fn prune_fixedsizebinary_neq() {
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(3))
+        // 'all frontends' and 'all backends' are fully matched ('be1' outside min/max).
+        // Only 'mixed' contains 'be1' and is Bloom-evaluated.
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(14)
         .test_row_group_prune()
@@ -1411,7 +1506,7 @@ async fn prune_fixedsizebinary_lt() {
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
         .test_row_group_prune()
@@ -1426,7 +1521,7 @@ async fn prune_fixedsizebinary_lt() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         // all backends from 'mixed' and 'all backends'
         .with_expected_rows(8)
@@ -1447,7 +1542,8 @@ async fn prune_periods_in_column_names() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(2))
+        // All-frontend group is fully matched; only the mixed group is Bloom-evaluated.
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(7)
         .test_row_group_prune()
@@ -1459,7 +1555,8 @@ async fn prune_periods_in_column_names() {
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(1))
+        // Remaining group is all HTTP PUT, so statistics fully match != HTTP GET.
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(5)
         .test_row_group_prune()
@@ -1494,7 +1591,7 @@ async fn test_row_group_with_null_values() {
         .with_pruned_files(Some(0))
         .with_pruned_by_stats(Some(2))
         .with_expected_rows(5)
-        .with_matched_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .test_row_group_prune()
         .await;
@@ -1508,7 +1605,7 @@ async fn test_row_group_with_null_values() {
         .with_pruned_files(Some(0))
         .with_pruned_by_stats(Some(1))
         .with_expected_rows(10)
-        .with_matched_by_bloom_filter(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .test_row_group_prune()
         .await;
@@ -1522,7 +1619,7 @@ async fn test_row_group_with_null_values() {
         .with_pruned_files(Some(0))
         .with_pruned_by_stats(Some(2))
         .with_expected_rows(5)
-        .with_matched_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .test_row_group_prune()
         .await;
@@ -2095,7 +2192,7 @@ async fn prune_like_prefix() {
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1) // only "a" matches LIKE 'a%'
         .test_row_group_prune()
