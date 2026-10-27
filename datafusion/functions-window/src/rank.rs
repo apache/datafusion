@@ -24,6 +24,7 @@ use datafusion_common::arrow::array::{Float64Array, UInt64Array};
 use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
+use datafusion_common::arrow::compute::kernels::sort::{LexicographicalComparator, SortColumn};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_doc::window_doc_sections::DOC_SECTION_RANKING;
@@ -284,8 +285,9 @@ impl PartitionEvaluator for RankEvaluator {
         let last_rank_data = get_row_at_idx(range_columns, row_idx)?;
         let new_rank_encountered =
             if let Some(state_last_rank_data) = &self.state.last_rank_data {
-                // if rank data changes, new rank is encountered
-                state_last_rank_data != &last_rank_data
+                // Nested ORDER BY keys can encode the same value with different
+                // physical layouts; ScalarValue inequality would split peers.
+                !rows_logically_equal(state_last_rank_data, &last_rank_data)?
             } else {
                 // First rank seen
                 true
@@ -367,6 +369,40 @@ impl PartitionEvaluator for RankEvaluator {
     fn include_rank(&self) -> bool {
         true
     }
+}
+
+
+/// Compare two ORDER BY rows with Arrow logical equality when any value is
+/// nested. Physical [`PartialEq`] can distinguish a null dictionary key from a
+/// key that references a null value.
+fn rows_logically_equal(left: &[ScalarValue], right: &[ScalarValue]) -> Result<bool> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    if left == right {
+        return Ok(true);
+    }
+    if !left
+        .iter()
+        .chain(right.iter())
+        .any(|value| value.data_type().is_nested())
+    {
+        return Ok(false);
+    }
+    let columns = left
+        .iter()
+        .zip(right.iter())
+        .map(|(a, b)| ScalarValue::iter_to_array([a.clone(), b.clone()]))
+        .collect::<Result<Vec<_>>>()?;
+    let sort_columns = columns
+        .iter()
+        .map(|values| SortColumn {
+            values: Arc::clone(values),
+            options: Some(SortOptions::default()),
+        })
+        .collect::<Vec<_>>();
+    let comparator = LexicographicalComparator::try_new(&sort_columns)?;
+    Ok(comparator.compare(0, 1).is_eq())
 }
 
 #[cfg(test)]
@@ -453,4 +489,42 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn nested_dictionary_null_peers_share_rank() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int8Array, Int32Array, ListArray};
+        use arrow::buffer::OffsetBuffer;
+        use arrow::datatypes::{Field, Int8Type};
+        use std::sync::Arc;
+
+        // Both lists contain NULL via different dictionary encodings.
+        let children: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![None, Some(0)]),
+            Arc::new(Int32Array::from(vec![None])),
+        )?);
+        let key: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new("item", children.data_type().clone(), true)),
+            OffsetBuffer::from_lengths([1, 1]),
+            children,
+            None,
+        ));
+
+        for (expr, expected) in [
+            (Rank::basic(), vec![1u64, 1u64]),
+            (Rank::dense_rank(), vec![1u64, 1u64]),
+        ] {
+            let mut evaluator = expr.partition_evaluator(PartitionEvaluatorArgs::default())?;
+            let mut out = Vec::new();
+            for idx in 0..2 {
+                let value = evaluator.evaluate(std::slice::from_ref(&key), &(idx..idx + 1))?;
+                out.push(match value {
+                    ScalarValue::UInt64(Some(v)) => v,
+                    other => panic!("unexpected {other:?}"),
+                });
+            }
+            assert_eq!(out, expected, "{}", expr.name());
+        }
+        Ok(())
+    }
+
 }

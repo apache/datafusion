@@ -90,6 +90,8 @@ impl WindowAggState {
                     .iter_mut()
                     .for_each(|(_, start_idx)| *start_idx -= n_prune);
                 state.current_group_idx -= n_group_to_del;
+                // Replacement ORDER BY arrays invalidate the cache by identity.
+                state.peer_comparator = None;
             }
             None => {}
         }
@@ -204,7 +206,7 @@ impl WindowFrameContext {
             },
             WindowFrameUnits::Groups => WindowFrameContext::Groups {
                 window_frame,
-                state: WindowFrameStateGroups::default(),
+                state: WindowFrameStateGroups::new(sort_options),
             },
         }
     }
@@ -234,9 +236,8 @@ impl WindowFrameContext {
                 length,
                 idx,
             ),
-            // Sort options is not used in GROUPS mode calculations as the
-            // inequality of two rows indicates a group change, and ordering
-            // or position of NULLs do not impact inequality.
+            // Sort options feed the nested peer comparator. Non-nested keys
+            // still use ScalarValue equality; null ordering does not affect it.
             WindowFrameContext::Groups {
                 window_frame,
                 state,
@@ -624,7 +625,7 @@ impl WindowFrameStateRange {
 
 /// This structure encapsulates all the state information we require as we
 /// scan groups of data while processing window frames.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct WindowFrameStateGroups {
     /// A tuple containing group values and the row index where the group ends.
     /// Example: [[1, 1], [1, 1], [2, 1], [2, 1], ...] would correspond to
@@ -632,9 +633,106 @@ pub struct WindowFrameStateGroups {
     pub group_end_indices: VecDeque<(Vec<ScalarValue>, usize)>,
     /// The group index to which the row index belongs.
     pub current_group_idx: usize,
+    /// ORDER BY sort options used to build the nested peer comparator.
+    sort_options: Vec<SortOptions>,
+    /// Cached Arrow comparator for nested ORDER BY keys.
+    peer_comparator: Option<RangePeerComparator>,
+}
+
+impl Clone for WindowFrameStateGroups {
+    fn clone(&self) -> Self {
+        // A clone builds its own comparator when it first sees nested keys.
+        Self::new(self.sort_options.clone())
+    }
 }
 
 impl WindowFrameStateGroups {
+    /// Create a new object to store the search state.
+    fn new(sort_options: Vec<SortOptions>) -> Self {
+        Self {
+            group_end_indices: VecDeque::new(),
+            current_group_idx: 0,
+            sort_options,
+            peer_comparator: None,
+        }
+    }
+
+    fn ensure_peer_comparator(
+        &mut self,
+        range_columns: &[ArrayRef],
+    ) -> Result<&LexicographicalComparator> {
+        let needs_rebuild = match &self.peer_comparator {
+            Some(cached) => !cached.matches_columns(range_columns),
+            None => true,
+        };
+        if needs_rebuild {
+            let sort_columns = range_columns
+                .iter()
+                .enumerate()
+                .map(|(i, values)| SortColumn {
+                    values: Arc::clone(values),
+                    options: Some(
+                        self.sort_options.get(i).copied().unwrap_or_default(),
+                    ),
+                })
+                .collect::<Vec<_>>();
+            self.peer_comparator = Some(RangePeerComparator {
+                columns: range_columns.to_vec(),
+                comparator: LexicographicalComparator::try_new(&sort_columns)?,
+            });
+        }
+        Ok(&self.peer_comparator.as_ref().unwrap().comparator)
+    }
+
+    /// Exclusive end of the group containing `peer_idx`, searching from `start`.
+    fn find_group_end(
+        &mut self,
+        range_columns: &[ArrayRef],
+        peer_idx: usize,
+        start: usize,
+        length: usize,
+    ) -> Result<usize> {
+        let nested = range_columns
+            .iter()
+            .any(|column| column.data_type().is_nested());
+        if nested {
+            let comparator = self.ensure_peer_comparator(range_columns)?;
+            let mut end = start;
+            while end < length && comparator.compare(peer_idx, end).is_eq() {
+                end += 1;
+            }
+            Ok(end)
+        } else {
+            let group_row = get_row_at_idx(range_columns, peer_idx)?;
+            search_in_slice(
+                range_columns,
+                &group_row,
+                check_equality,
+                start,
+                length,
+            )
+        }
+    }
+
+    /// Whether rows `peer_idx` and `idx` belong to the same GROUPS peer set.
+    fn is_same_group(
+        &mut self,
+        range_columns: &[ArrayRef],
+        peer_idx: usize,
+        idx: usize,
+        group_row: &[ScalarValue],
+    ) -> Result<bool> {
+        let nested = range_columns
+            .iter()
+            .any(|column| column.data_type().is_nested());
+        if nested {
+            let comparator = self.ensure_peer_comparator(range_columns)?;
+            Ok(comparator.compare(peer_idx, idx).is_eq())
+        } else {
+            Ok(get_row_at_idx(range_columns, idx)? == group_row)
+        }
+    }
+
     fn calculate_range(
         &mut self,
         window_frame: &Arc<WindowFrame>,
@@ -723,38 +821,40 @@ impl WindowFrameStateGroups {
         } else {
             0
         };
-        let mut group_start = 0;
-        let last_group = self.group_end_indices.back_mut();
-        if let Some((group_row, group_end)) = last_group {
-            if *group_end < length {
-                let new_group_row = get_row_at_idx(range_columns, *group_end)?;
-                // If last/current group keys are the same, we extend the last group:
-                if new_group_row.eq(group_row) {
-                    // Update the end boundary of the group (search right boundary):
-                    *group_end = search_in_slice(
-                        range_columns,
-                        group_row,
-                        check_equality,
-                        *group_end,
-                        length,
-                    )?;
+
+        // Optionally extend the trailing group when new rows still belong to it.
+        // Nested ORDER BY keys need Arrow logical comparison: ScalarValue
+        // equality can distinguish a null dictionary key from a key that
+        // references a null value.
+        let extend_info = self
+            .group_end_indices
+            .back()
+            .map(|(row, end)| (row.clone(), *end));
+        if let Some((group_row, group_end)) = extend_info {
+            if group_end < length && group_end > 0 {
+                let peer_idx = group_end - 1;
+                if self.is_same_group(range_columns, peer_idx, group_end, &group_row)? {
+                    let new_end =
+                        self.find_group_end(range_columns, peer_idx, group_end, length)?;
+                    if let Some((_, end)) = self.group_end_indices.back_mut() {
+                        *end = new_end;
+                    }
                 }
             }
-            // Start searching from the last group boundary:
-            group_start = *group_end;
         }
+
+        let mut group_start = self
+            .group_end_indices
+            .back()
+            .map(|(_, end)| *end)
+            .unwrap_or(0);
 
         // Advance groups until `idx` is inside a group:
         while idx >= group_start {
-            let group_row = get_row_at_idx(range_columns, group_start)?;
-            // Find end boundary of the group (search right boundary):
-            let group_end = search_in_slice(
-                range_columns,
-                &group_row,
-                check_equality,
-                group_start,
-                length,
-            )?;
+            let peer_idx = group_start;
+            let group_row = get_row_at_idx(range_columns, peer_idx)?;
+            let group_end =
+                self.find_group_end(range_columns, peer_idx, group_start, length)?;
             self.group_end_indices.push_back((group_row, group_end));
             group_start = group_end;
         }
@@ -773,17 +873,12 @@ impl WindowFrameStateGroups {
             self.current_group_idx + delta
         };
 
-        // Extend `group_start_indices` until it includes at least `group_idx`:
+        // Extend groups until the frame boundary group is materialized:
         while self.group_end_indices.len() <= group_idx && group_start < length {
-            let group_row = get_row_at_idx(range_columns, group_start)?;
-            // Find end boundary of the group (search right boundary):
-            let group_end = search_in_slice(
-                range_columns,
-                &group_row,
-                check_equality,
-                group_start,
-                length,
-            )?;
+            let peer_idx = group_start;
+            let group_row = get_row_at_idx(range_columns, peer_idx)?;
+            let group_end =
+                self.find_group_end(range_columns, peer_idx, group_start, length)?;
             self.group_end_indices.push_back((group_row, group_end));
             group_start = group_end;
         }
@@ -923,6 +1018,38 @@ mod tests {
         for idx in 0..2 {
             range = state.calculate_range(&columns, &range, 2, idx)?;
             assert_eq!(range, 0..2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn groups_peers_compare_nested_dictionary_nulls_logically() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int8Array, Int32Array, ListArray};
+        use arrow::buffer::OffsetBuffer;
+        use arrow::datatypes::Int8Type;
+
+        // Both lists contain NULL: one dictionary key is null, the other
+        // references a null value. ScalarValue equality distinguishes them.
+        let values: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![None, Some(0)]),
+            Arc::new(Int32Array::from(vec![None])),
+        )?);
+        let columns: [ArrayRef; 1] = [Arc::new(ListArray::new(
+            Arc::new(Field::new("item", values.data_type().clone(), true)),
+            OffsetBuffer::from_lengths([1, 1]),
+            values,
+            None,
+        ))];
+        let frame = Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Groups,
+            WindowFrameBound::CurrentRow,
+            WindowFrameBound::CurrentRow,
+        ));
+        let mut state = WindowFrameContext::new(frame, vec![SortOptions::default()]);
+        let mut range = 0..0;
+        for idx in 0..2 {
+            range = state.calculate_range(&columns, &range, 2, idx)?;
+            assert_eq!(range, 0..2, "row {idx} should see both peers");
         }
         Ok(())
     }
