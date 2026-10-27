@@ -61,9 +61,6 @@ jobs:
         uses: ./.github/actions/setup-docs-builder
 
       - name: Build versioned docs
-        env:
-          # See docs.yaml
-          DATAFUSION_DOCS_BASE_PATH: ${{ vars.DATAFUSION_DOCS_BASE_PATH }}
         run: |
           set -x
           docs/scripts/build_versions.sh --output docs/build/versions

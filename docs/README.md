@@ -93,14 +93,3 @@ The documentation for previously released versions is served under
 `/versions/<version>/`. See the
 [release instructions](../dev/release/README.md#publish-the-versioned-documentation)
 for how it is published.
-
-### Testing the site on a fork
-
-The same workflow runs on forks: a push to `main` builds the site and pushes
-it to the fork's `asf-site` branch, which can be served with GitHub Pages
-(Settings → Pages → source branch `asf-site`, folder `/`). GitHub Pages serves
-a fork at `https://<user>.github.io/datafusion/` rather than at the site root,
-so set the repository variable `DATAFUSION_DOCS_BASE_PATH` to `/datafusion/`
-(Settings → Secrets and variables → Actions → Variables) so the version picker
-links resolve. The same variable works for local builds, for example
-`DATAFUSION_DOCS_BASE_PATH=/datafusion/ ./build.sh`.

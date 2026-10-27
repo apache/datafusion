@@ -57,8 +57,6 @@ Options:
 Environment:
   DATAFUSION_UPSTREAM_URL   Repository to fetch missing release tags from
                             (default: ${UPSTREAM_URL})
-  DATAFUSION_DOCS_BASE_PATH Path the site is served under (default: /),
-                            see docs/README.md
 
 Example: preview the site with the 55.0.0 docs under versions/55.0.0/
   cd docs
