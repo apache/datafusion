@@ -179,15 +179,14 @@ impl FileSource for AvroSource {
         datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
     }
 
-    /// Emit an `AvroScan` node wrapping the shared base config.
+    /// Emit an (empty) `AvroSourceNode`.
     #[cfg(feature = "proto")]
-    fn try_to_proto(
+    fn try_to_proto_file_source(
         &self,
-        base: &FileScanConfig,
-        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::FileSourceNode>> {
         use datafusion_proto_models::protobuf;
-        use protobuf::physical_plan_node::PhysicalPlanType;
+        use protobuf::file_source_node::FileSourceType;
 
         // Exhaustive destructure: adding a field to `AvroSource` without
         // deciding how it is serialized is a compile error, not a silent
@@ -203,18 +202,16 @@ impl FileSource for AvroSource {
             metrics: _,
         } = self;
 
-        let node = protobuf::AvroScanExecNode {
-            base_conf: Some(base.try_to_proto(ctx)?),
-        };
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::AvroScan(node)),
+        Ok(Some(protobuf::FileSourceNode {
+            file_source_type: Some(FileSourceType::Avro(protobuf::AvroSourceNode {})),
         }))
     }
 }
 
 #[cfg(feature = "proto")]
 impl AvroSource {
-    /// Reconstructs a `DataSourceExec` from a protobuf `AvroScan`.
+    /// Reconstructs a `DataSourceExec` from a legacy protobuf `AvroScan`.
+    #[deprecated(since = "56.0.0", note = "use `try_from_proto_file_source` instead")]
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
@@ -229,20 +226,30 @@ impl AvroSource {
                 "PhysicalPlanNode is not an AvroScan"
             );
         };
-
-        let protobuf::AvroScanExecNode { base_conf } = scan;
-
-        let base_conf = base_conf.as_ref().ok_or_else(|| {
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "AvroScanExecNode is missing required field 'base_conf'"
             )
         })?;
-
-        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
-        let source = Arc::new(AvroSource::new(table_schema));
-
+        let source = Self::try_from_proto_file_source(
+            &protobuf::AvroSourceNode::from(scan),
+            base_conf,
+            ctx,
+        )?;
         let conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
         Ok(DataSourceExec::from_data_source(conf))
+    }
+
+    /// Reconstructs an `AvroSource` from its protobuf representation. `base`
+    /// is the enclosing scan's shared config, used for the table schema.
+    pub fn try_from_proto_file_source(
+        node: &datafusion_proto_models::protobuf::AvroSourceNode,
+        base: &datafusion_proto_models::protobuf::FileScanExecConf,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn FileSource>> {
+        let datafusion_proto_models::protobuf::AvroSourceNode {} = node;
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base)?;
+        Ok(Arc::new(AvroSource::new(table_schema)))
     }
 }
 

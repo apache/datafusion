@@ -853,13 +853,11 @@ impl DataSink for CsvSink {
     }
 
     #[cfg(feature = "proto")]
-    fn try_to_proto(
+    fn try_to_proto_sink(
         &self,
-        exec: &DataSinkExec,
-        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::DataSinkNode>> {
         use datafusion_proto_models::protobuf;
-        use protobuf::physical_plan_node::PhysicalPlanType;
 
         // Keep an exhaustive guard in the active hook while centralizing the
         // field mapping in the exhaustive `TryFrom<&CsvSink>` below.
@@ -868,17 +866,10 @@ impl DataSink for CsvSink {
             writer_options: _,
         } = self;
 
-        let input = ctx.encode_child(exec.input())?;
-        let sort_order = exec.encode_sort_order(ctx)?;
-        let sink = protobuf::CsvSink::try_from(self)?;
-        let node = protobuf::CsvSinkExecNode {
-            input: Some(Box::new(input)),
-            sink: Some(sink),
-            sink_schema: Some(exec.schema().as_ref().try_into()?),
-            sort_order,
-        };
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::CsvSink(Box::new(node))),
+        Ok(Some(protobuf::DataSinkNode {
+            sink_type: Some(protobuf::data_sink_node::SinkType::Csv(
+                protobuf::CsvSink::try_from(self)?,
+            )),
         }))
     }
 }
@@ -928,7 +919,12 @@ impl TryFrom<&datafusion_proto_models::protobuf::CsvSink> for CsvSink {
 
 #[cfg(feature = "proto")]
 impl CsvSink {
-    /// Reconstructs a [`DataSinkExec`] containing a `CsvSink` from protobuf.
+    /// Reconstructs a [`DataSinkExec`] containing a `CsvSink` from a legacy
+    /// protobuf plan node.
+    #[deprecated(
+        since = "56.0.0",
+        note = "decode `DataSinkNode` with `TryFrom<&protobuf::CsvSink>` instead"
+    )]
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,

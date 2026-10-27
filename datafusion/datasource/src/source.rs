@@ -304,10 +304,27 @@ pub trait DataSource: Any + Send + Sync + Debug {
     ///
     /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
     #[cfg(feature = "proto")]
+    #[deprecated(since = "56.0.0", note = "implement `try_to_proto_source` instead")]
     fn try_to_proto(
         &self,
         _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
+    }
+
+    /// Serialize this data source into a [`DataSourceNode`], if it knows how.
+    /// [`DataSourceExec`] wraps the result in its own plan node.
+    ///
+    /// * `Ok(None)` (the default) — the caller falls back to the deprecated
+    ///   [`Self::try_to_proto`] hook and then to the extension codec.
+    /// * `Ok(Some(node))` — fully serialized.
+    ///
+    /// [`DataSourceNode`]: datafusion_proto_models::protobuf::DataSourceNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto_source(
+        &self,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::DataSourceNode>> {
         Ok(None)
     }
 }
@@ -607,15 +624,28 @@ impl ExecutionPlan for DataSourceExec {
         Ok(Arc::new(new_exec))
     }
 
-    /// Delegates serialization to the wrapped [`DataSource`]. For file scans the
-    /// concrete [`FileSource`] emits the node via its
-    /// own `try_to_proto` hook, keeping the format-specific wire logic in the
-    /// format crate.
+    /// Wraps the [`DataSourceNode`] emitted by the wrapped [`DataSource`] in a
+    /// `DataSourceExecNode`, falling back to the deprecated whole-plan hook.
+    ///
+    /// [`DataSourceNode`]: datafusion_proto_models::protobuf::DataSourceNode
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        if let Some(source) = self.data_source().try_to_proto_source(ctx)? {
+            use datafusion_proto_models::protobuf;
+            return Ok(Some(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(
+                    protobuf::physical_plan_node::PhysicalPlanType::DataSource(
+                        protobuf::DataSourceExecNode {
+                            source: Some(source),
+                        },
+                    ),
+                ),
+            }));
+        }
+        #[expect(deprecated)]
         self.data_source().try_to_proto(ctx)
     }
 }

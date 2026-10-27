@@ -271,15 +271,14 @@ impl DataSource for MemorySourceConfig {
     }
 
     /// Serialize this `MemorySourceConfig` as a `MemoryScanExecNode` wrapped
-    /// in a [`PhysicalPlanNode`]. Byte-compatible with the former central
-    /// `MemoryScan` arm in `datafusion-proto`.
+    /// in a [`DataSourceNode`].
     ///
-    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`DataSourceNode`]: datafusion_proto_models::protobuf::DataSourceNode
     #[cfg(feature = "proto")]
-    fn try_to_proto(
+    fn try_to_proto_source(
         &self,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+    ) -> Result<Option<datafusion_proto_models::protobuf::DataSourceNode>> {
         use datafusion_common::utils::usize_to_wire;
         use datafusion_physical_expr_common::sort_expr::sort_exprs_try_to_proto;
         use datafusion_proto_models::protobuf;
@@ -320,23 +319,19 @@ impl DataSource for MemorySourceConfig {
             });
         }
 
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(
-                protobuf::physical_plan_node::PhysicalPlanType::MemoryScan(
-                    protobuf::MemoryScanExecNode {
-                        partitions: proto_partitions,
-                        schema: Some(schema.as_ref().try_into()?),
-                        projection: proto_projection,
-                        sort_information: proto_sort_information,
-                        show_sizes: *show_sizes,
-                        fetch: fetch
-                            .map(|fetch| {
-                                usize_to_wire(fetch, "MemoryScanExecNode", "fetch")
-                            })
-                            .transpose()?,
-                    },
-                ),
-            ),
+        Ok(Some(protobuf::DataSourceNode {
+            source_type: Some(protobuf::data_source_node::SourceType::Memory(
+                protobuf::MemoryScanExecNode {
+                    partitions: proto_partitions,
+                    schema: Some(schema.as_ref().try_into()?),
+                    projection: proto_projection,
+                    sort_information: proto_sort_information,
+                    show_sizes: *show_sizes,
+                    fetch: fetch
+                        .map(|fetch| usize_to_wire(fetch, "MemoryScanExecNode", "fetch"))
+                        .transpose()?,
+                },
+            )),
         }))
     }
 }
@@ -702,22 +697,32 @@ impl MemorySourceConfig {
 #[cfg(feature = "proto")]
 impl MemorySourceConfig {
     /// Reconstruct a [`DataSourceExec`] wrapping a `MemorySourceConfig` from
-    /// its protobuf representation. Byte-compatible with the former central
-    /// `MemoryScan` arm in `datafusion-proto`.
+    /// a legacy `MemoryScan` plan node.
+    #[deprecated(since = "56.0.0", note = "use `try_from_proto_source` instead")]
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        let scan = datafusion_physical_plan::expect_plan_variant!(
+            node,
+            datafusion_proto_models::protobuf::physical_plan_node::PhysicalPlanType::MemoryScan,
+            "MemorySourceConfig",
+        );
+        Ok(DataSourceExec::from_data_source(
+            Self::try_from_proto_source(scan, ctx)?,
+        ))
+    }
+
+    /// Reconstruct a `MemorySourceConfig` from its protobuf representation,
+    /// the inverse of [`DataSource::try_to_proto_source`].
+    pub fn try_from_proto_source(
+        scan: &datafusion_proto_models::protobuf::MemoryScanExecNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Self> {
         use datafusion_common::internal_datafusion_err;
         use datafusion_common::utils::usize_from_wire;
         use datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto;
         use datafusion_proto_models::protobuf;
-
-        let scan = datafusion_physical_plan::expect_plan_variant!(
-            node,
-            protobuf::physical_plan_node::PhysicalPlanType::MemoryScan,
-            "MemorySourceConfig",
-        );
 
         // Destructure exhaustively so a newly added protobuf field must be
         // handled here instead of being silently ignored.
@@ -776,7 +781,7 @@ impl MemorySourceConfig {
         )?;
         source.sort_information = decoded_sort_information;
 
-        Ok(DataSourceExec::from_data_source(source))
+        Ok(source)
     }
 }
 

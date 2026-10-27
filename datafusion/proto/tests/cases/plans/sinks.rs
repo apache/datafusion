@@ -487,26 +487,28 @@ fn roundtrip_parquet_sink() -> Result<()> {
         #[cfg(feature = "json")]
         let roundtripped = super::roundtrip_test_json_and_return(roundtripped, &ctx)?;
         let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
-        let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetSink(node)) =
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::DataSink(node)) =
             node.physical_plan_type
         else {
-            panic!("expected ParquetSink node");
+            panic!("expected DataSink node");
         };
-        let actual = node
-            .sink
-            .expect("ParquetSinkExecNode should contain a sink")
-            .sorting_columns
-            .map(|columns| {
-                columns
-                    .columns
-                    .into_iter()
-                    .map(|column| SortingColumn {
-                        column_idx: column.column_idx,
-                        descending: column.descending,
-                        nulls_first: column.nulls_first,
-                    })
-                    .collect::<Vec<_>>()
-            });
+        let Some(protobuf::DataSinkNode {
+            sink_type: Some(protobuf::data_sink_node::SinkType::Parquet(sink)),
+        }) = node.sink
+        else {
+            panic!("expected ParquetSink");
+        };
+        let actual = sink.sorting_columns.map(|columns| {
+            columns
+                .columns
+                .into_iter()
+                .map(|column| SortingColumn {
+                    column_idx: column.column_idx,
+                    descending: column.descending,
+                    nulls_first: column.nulls_first,
+                })
+                .collect::<Vec<_>>()
+        });
         assert_eq!(actual, sorting_columns);
     }
     Ok(())

@@ -247,15 +247,14 @@ impl FileSource for JsonSource {
         datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
     }
 
-    /// Emit a `JsonScan` node wrapping the shared base config.
+    /// Emit a `JsonSourceNode` carrying the JSON options.
     #[cfg(feature = "proto")]
-    fn try_to_proto(
+    fn try_to_proto_file_source(
         &self,
-        base: &FileScanConfig,
-        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::FileSourceNode>> {
         use datafusion_proto_models::protobuf;
-        use protobuf::physical_plan_node::PhysicalPlanType;
+        use protobuf::file_source_node::FileSourceType;
 
         // Exhaustive destructure: adding a field to `JsonSource` without
         // deciding how it is serialized is a compile error, not a silent
@@ -272,25 +271,23 @@ impl FileSource for JsonSource {
             newline_delimited,
         } = self;
 
-        let node = protobuf::JsonScanExecNode {
-            base_conf: Some(base.try_to_proto(ctx)?),
+        let node = protobuf::JsonSourceNode {
             newline_delimited: if *newline_delimited {
                 None
             } else {
                 Some(false)
             },
         };
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::JsonScan(node)),
+        Ok(Some(protobuf::FileSourceNode {
+            file_source_type: Some(FileSourceType::Json(node)),
         }))
     }
 }
 
 #[cfg(feature = "proto")]
 impl JsonSource {
-    /// Reconstructs a `DataSourceExec` from a protobuf `JsonScan`.
-    ///
-    /// Payloads without a mode default to newline-delimited JSON.
+    /// Reconstructs a `DataSourceExec` from a legacy protobuf `JsonScan`.
+    #[deprecated(since = "56.0.0", note = "use `try_from_proto_file_source` instead")]
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
@@ -306,28 +303,35 @@ impl JsonSource {
                 "PhysicalPlanNode is not a JsonScan"
             );
         };
-
-        // Exhaustive destructure: a new field on `JsonScanExecNode` is a
-        // compile error here rather than a silently ignored wire field.
-        let protobuf::JsonScanExecNode {
-            base_conf,
-            newline_delimited,
-        } = scan;
-
-        let base_conf = base_conf.as_ref().ok_or_else(|| {
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "JsonScanExecNode is missing required field 'base_conf'"
             )
         })?;
-
-        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
-        let source = Arc::new(
-            JsonSource::new(table_schema)
-                .with_newline_delimited(newline_delimited.unwrap_or(true)),
-        );
-
+        let source_node = protobuf::JsonSourceNode::from(scan);
+        let source = Self::try_from_proto_file_source(&source_node, base_conf, ctx)?;
         let conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
         Ok(DataSourceExec::from_data_source(conf))
+    }
+
+    /// Reconstructs a `JsonSource` from its protobuf representation. `base`
+    /// is the enclosing scan's shared config, used for the table schema.
+    ///
+    /// Payloads without a mode default to newline-delimited JSON.
+    pub fn try_from_proto_file_source(
+        node: &datafusion_proto_models::protobuf::JsonSourceNode,
+        base: &datafusion_proto_models::protobuf::FileScanExecConf,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn FileSource>> {
+        use datafusion_datasource::file_scan_config::FileScanConfig;
+
+        let datafusion_proto_models::protobuf::JsonSourceNode { newline_delimited } =
+            node;
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base)?;
+        Ok(Arc::new(
+            JsonSource::new(table_schema)
+                .with_newline_delimited(newline_delimited.unwrap_or(true)),
+        ))
     }
 }
 

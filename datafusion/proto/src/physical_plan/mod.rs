@@ -26,6 +26,9 @@ use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::source::AvroSource;
@@ -84,7 +87,9 @@ use prost::bytes::BufMut;
 use crate::physical_plan::from_proto::parse_physical_expr_with_converter;
 use crate::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
-use crate::protobuf::{self, proto_error};
+use crate::protobuf::{
+    self, data_sink_node::SinkType, file_source_node::FileSourceType, proto_error,
+};
 
 pub mod from_proto;
 pub mod to_proto;
@@ -1232,37 +1237,71 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Filter(_) => {
                 FilterExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::CsvScan(_) => {
-                CsvSource::try_from_proto(self.node(), &decode_ctx)
-            }
-            PhysicalPlanType::JsonScan(_) => {
-                JsonSource::try_from_proto(self.node(), &decode_ctx)
-            }
-            PhysicalPlanType::ParquetScan(_) => {
-                #[cfg(feature = "parquet")]
-                {
-                    ParquetSource::try_from_proto(self.node(), &decode_ctx)
-                }
-                #[cfg(not(feature = "parquet"))]
-                not_impl_err!(
-                    "Unable to process a Parquet PhysicalPlan when the `parquet` feature is not enabled"
-                )
-            }
-            PhysicalPlanType::AvroScan(_) => {
-                #[cfg(feature = "avro")]
-                {
-                    AvroSource::try_from_proto(self.node(), &decode_ctx)
-                }
-                #[cfg(not(feature = "avro"))]
-                panic!(
-                    "Unable to process a Avro PhysicalPlan when `avro` feature is not enabled"
-                )
-            }
-            PhysicalPlanType::MemoryScan(_) => {
-                MemorySourceConfig::try_from_proto(self.node(), &decode_ctx)
-            }
-            PhysicalPlanType::ArrowScan(_) => {
-                ArrowSource::try_from_proto(self.node(), &decode_ctx)
+            PhysicalPlanType::DataSource(node) => decode_data_source(node, &decode_ctx),
+            PhysicalPlanType::DataSink(node) => decode_data_sink(node, &decode_ctx),
+            // Deprecated flat variants: decoded through the layered path.
+            PhysicalPlanType::ParquetScan(n) => decode_file_scan(
+                required(n.base_conf.as_ref(), "ParquetScanExecNode", "base_conf")?,
+                &FileSourceType::Parquet(n.into()),
+                &decode_ctx,
+            ),
+            PhysicalPlanType::CsvScan(n) => decode_file_scan(
+                required(n.base_conf.as_ref(), "CsvScanExecNode", "base_conf")?,
+                &FileSourceType::Csv(n.into()),
+                &decode_ctx,
+            ),
+            PhysicalPlanType::JsonScan(n) => decode_file_scan(
+                required(n.base_conf.as_ref(), "JsonScanExecNode", "base_conf")?,
+                &FileSourceType::Json(n.into()),
+                &decode_ctx,
+            ),
+            PhysicalPlanType::AvroScan(n) => decode_file_scan(
+                required(n.base_conf.as_ref(), "AvroScanExecNode", "base_conf")?,
+                &FileSourceType::Avro(n.into()),
+                &decode_ctx,
+            ),
+            PhysicalPlanType::ArrowScan(n) => decode_file_scan(
+                required(n.base_conf.as_ref(), "ArrowScanExecNode", "base_conf")?,
+                &FileSourceType::Arrow(n.into()),
+                &decode_ctx,
+            ),
+            PhysicalPlanType::MemoryScan(n) => Ok(DataSourceExec::from_data_source(
+                MemorySourceConfig::try_from_proto_source(n, &decode_ctx)?,
+            )),
+            PhysicalPlanType::JsonSink(n) => build_data_sink(
+                n.input.as_deref(),
+                Arc::new(JsonSink::try_from(required(
+                    n.sink.as_ref(),
+                    "JsonSinkExecNode",
+                    "sink",
+                )?)?),
+                n.sort_order.as_ref(),
+                &decode_ctx,
+            ),
+            PhysicalPlanType::CsvSink(n) => build_data_sink(
+                n.input.as_deref(),
+                Arc::new(CsvSink::try_from(required(
+                    n.sink.as_ref(),
+                    "CsvSinkExecNode",
+                    "sink",
+                )?)?),
+                n.sort_order.as_ref(),
+                &decode_ctx,
+            ),
+            #[cfg(feature = "parquet")]
+            PhysicalPlanType::ParquetSink(n) => build_data_sink(
+                n.input.as_deref(),
+                Arc::new(ParquetSink::try_from(required(
+                    n.sink.as_ref(),
+                    "ParquetSinkExecNode",
+                    "sink",
+                )?)?),
+                n.sort_order.as_ref(),
+                &decode_ctx,
+            ),
+            #[cfg(not(feature = "parquet"))]
+            PhysicalPlanType::ParquetSink(_) => {
+                not_impl_err!("ParquetSink requires the `parquet` feature")
             }
             #[expect(
                 deprecated,
@@ -1324,20 +1363,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             }
             PhysicalPlanType::Analyze(_) => {
                 AnalyzeExec::try_from_proto(self.node(), &decode_ctx)
-            }
-            PhysicalPlanType::JsonSink(_) => {
-                JsonSink::try_from_proto(self.node(), &decode_ctx)
-            }
-            PhysicalPlanType::CsvSink(_) => {
-                CsvSink::try_from_proto(self.node(), &decode_ctx)
-            }
-            PhysicalPlanType::ParquetSink(_) => {
-                #[cfg(feature = "parquet")]
-                {
-                    ParquetSink::try_from_proto(self.node(), &decode_ctx)
-                }
-                #[cfg(not(feature = "parquet"))]
-                not_impl_err!("ParquetSink requires the `parquet` feature")
             }
             PhysicalPlanType::Unnest(_) => {
                 UnnestExec::try_from_proto(self.node(), &decode_ctx)
@@ -2161,4 +2186,144 @@ impl ExecutionPlanDecode for ConverterPlanDecoder<'_, '_> {
                 .or_else(|_| self.ctx.codec().try_decode_udwf(name, &[])),
         }
     }
+}
+
+/// Borrow a required message field, or fail with a protobuf error naming it.
+fn required<'a, T>(field: Option<&'a T>, message: &str, name: &str) -> Result<&'a T> {
+    field.ok_or_else(|| {
+        proto_error(format!("{message} is missing required field '{name}'"))
+    })
+}
+
+/// Decode a `DataSourceExecNode`, dispatching on the built-in source types.
+fn decode_data_source(
+    node: &protobuf::DataSourceExecNode,
+    ctx: &ExecutionPlanDecodeCtx<'_>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    use protobuf::data_source_node::SourceType;
+
+    let source = node
+        .source
+        .as_ref()
+        .and_then(|source| source.source_type.as_ref())
+        .ok_or_else(|| proto_error("DataSourceExecNode is missing its source"))?;
+    match source {
+        SourceType::File(scan) => {
+            let base = scan
+                .base
+                .as_ref()
+                .ok_or_else(|| proto_error("FileScanNode is missing its base"))?;
+            let file_source = scan
+                .source
+                .as_ref()
+                .and_then(|source| source.file_source_type.as_ref())
+                .ok_or_else(|| proto_error("FileScanNode is missing its source"))?;
+            decode_file_scan(base, file_source, ctx)
+        }
+        SourceType::Memory(node) => Ok(DataSourceExec::from_data_source(
+            MemorySourceConfig::try_from_proto_source(node, ctx)?,
+        )),
+        SourceType::Extension(ext) => {
+            not_impl_err!("No decoder for extension DataSource '{}'", ext.name)
+        }
+    }
+}
+
+/// Decode a file scan from its shared config and format-specific source.
+fn decode_file_scan(
+    base: &protobuf::FileScanExecConf,
+    source: &FileSourceType,
+    ctx: &ExecutionPlanDecodeCtx<'_>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let file_source = match source {
+        #[cfg(feature = "parquet")]
+        FileSourceType::Parquet(node) => {
+            ParquetSource::try_from_proto_file_source(node, base, ctx)?
+        }
+        #[cfg(not(feature = "parquet"))]
+        FileSourceType::Parquet(_) => {
+            return not_impl_err!(
+                "Unable to process a Parquet PhysicalPlan when the `parquet` feature is not enabled"
+            );
+        }
+        FileSourceType::Csv(node) => {
+            CsvSource::try_from_proto_file_source(node, base, ctx)?
+        }
+        FileSourceType::Json(node) => {
+            JsonSource::try_from_proto_file_source(node, base, ctx)?
+        }
+        #[cfg(feature = "avro")]
+        FileSourceType::Avro(node) => {
+            AvroSource::try_from_proto_file_source(node, base, ctx)?
+        }
+        #[cfg(not(feature = "avro"))]
+        FileSourceType::Avro(_) => {
+            return not_impl_err!(
+                "Unable to process an Avro PhysicalPlan when the `avro` feature is not enabled"
+            );
+        }
+        FileSourceType::Arrow(node) => {
+            ArrowSource::try_from_proto_file_source(node, base, ctx)?
+        }
+        FileSourceType::Extension(ext) => {
+            return not_impl_err!("No decoder for extension FileSource '{}'", ext.name);
+        }
+    };
+    Ok(DataSourceExec::from_data_source(
+        FileScanConfig::try_from_proto(base, ctx, file_source)?,
+    ))
+}
+
+/// Decode a `DataSinkExecNode`, dispatching on the built-in sink types.
+fn decode_data_sink(
+    node: &protobuf::DataSinkExecNode,
+    ctx: &ExecutionPlanDecodeCtx<'_>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let protobuf::DataSinkExecNode {
+        input,
+        sink,
+        sort_order,
+    } = node;
+    // Report a missing input before a missing sink.
+    let input = required(input.as_deref(), "DataSinkExecNode", "input")?;
+    let sink = sink
+        .as_ref()
+        .and_then(|sink| sink.sink_type.as_ref())
+        .ok_or_else(|| proto_error("DataSinkExecNode is missing its sink"))?;
+    build_data_sink(
+        Some(input),
+        decode_sink_type(sink)?,
+        sort_order.as_ref(),
+        ctx,
+    )
+}
+
+/// Decode one of the built-in sink types.
+fn decode_sink_type(sink: &SinkType) -> Result<Arc<dyn DataSink>> {
+    Ok(match sink {
+        SinkType::Json(sink) => Arc::new(JsonSink::try_from(sink)?),
+        SinkType::Csv(sink) => Arc::new(CsvSink::try_from(sink)?),
+        #[cfg(feature = "parquet")]
+        SinkType::Parquet(sink) => Arc::new(ParquetSink::try_from(sink)?),
+        #[cfg(not(feature = "parquet"))]
+        SinkType::Parquet(_) => {
+            return not_impl_err!("ParquetSink requires the `parquet` feature");
+        }
+        SinkType::Extension(ext) => {
+            return not_impl_err!("No decoder for extension DataSink '{}'", ext.name);
+        }
+    })
+}
+
+/// Wrap a decoded sink in a `DataSinkExec` over its decoded input.
+fn build_data_sink(
+    input: Option<&protobuf::PhysicalPlanNode>,
+    sink: Arc<dyn DataSink>,
+    sort_order: Option<&protobuf::PhysicalSortExprNodeCollection>,
+    ctx: &ExecutionPlanDecodeCtx<'_>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input = ctx.decode_required_child(input, "DataSinkExecNode", "input")?;
+    let sort_order =
+        DataSinkExec::decode_sort_order(sort_order, ctx, input.schema().as_ref())?;
+    Ok(Arc::new(DataSinkExec::new(input, sink, sort_order)))
 }

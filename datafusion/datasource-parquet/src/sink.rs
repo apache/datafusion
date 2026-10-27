@@ -423,13 +423,11 @@ impl DataSink for ParquetSink {
     }
 
     #[cfg(feature = "proto")]
-    fn try_to_proto(
+    fn try_to_proto_sink(
         &self,
-        exec: &DataSinkExec,
-        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::DataSinkNode>> {
         use datafusion_proto_models::protobuf;
-        use protobuf::physical_plan_node::PhysicalPlanType;
 
         // Keep the active hook exhaustive while centralizing field mapping in
         // the exhaustive `TryFrom<&ParquetSink>` below.
@@ -443,17 +441,10 @@ impl DataSink for ParquetSink {
             metrics: _,
         } = self;
 
-        let input = ctx.encode_child(exec.input())?;
-        let sort_order = exec.encode_sort_order(ctx)?;
-        let sink = protobuf::ParquetSink::try_from(self)?;
-        let node = protobuf::ParquetSinkExecNode {
-            input: Some(Box::new(input)),
-            sink: Some(sink),
-            sink_schema: Some(exec.schema().as_ref().try_into()?),
-            sort_order,
-        };
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(node))),
+        Ok(Some(protobuf::DataSinkNode {
+            sink_type: Some(protobuf::data_sink_node::SinkType::Parquet(
+                protobuf::ParquetSink::try_from(self)?,
+            )),
         }))
     }
 }
@@ -554,7 +545,12 @@ impl TryFrom<&datafusion_proto_models::protobuf::ParquetSink> for ParquetSink {
 
 #[cfg(feature = "proto")]
 impl ParquetSink {
-    /// Reconstructs a [`DataSinkExec`] containing a `ParquetSink` from protobuf.
+    /// Reconstructs a [`DataSinkExec`] containing a `ParquetSink` from a legacy
+    /// protobuf plan node.
+    #[deprecated(
+        since = "56.0.0",
+        note = "decode `DataSinkNode` with `TryFrom<&protobuf::ParquetSink>` instead"
+    )]
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,

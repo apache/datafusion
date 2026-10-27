@@ -80,11 +80,28 @@ pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
     ///
     /// Returning `Ok(None)` lets the caller try its extension codec instead.
     #[cfg(feature = "proto")]
+    #[deprecated(since = "56.0.0", note = "implement `try_to_proto_sink` instead")]
     fn try_to_proto(
         &self,
         _exec: &DataSinkExec,
         _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
+    }
+
+    /// Serialize this sink into a [`DataSinkNode`], if it knows how.
+    /// [`DataSinkExec`] encodes its input and sort order alongside it.
+    ///
+    /// * `Ok(None)` (the default) — the caller falls back to the deprecated
+    ///   [`Self::try_to_proto`] hook and then to the extension codec.
+    /// * `Ok(Some(node))` — fully serialized.
+    ///
+    /// [`DataSinkNode`]: datafusion_proto_models::protobuf::DataSinkNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto_sink(
+        &self,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::DataSinkNode>> {
         Ok(None)
     }
 }
@@ -372,13 +389,30 @@ impl ExecutionPlan for DataSinkExec {
         self.sink.metrics()
     }
 
-    /// Delegates protobuf serialization to the underlying sink.
+    /// Wraps the [`DataSinkNode`] emitted by the underlying sink in a
+    /// `DataSinkExecNode`, falling back to the deprecated whole-plan hook.
+    ///
+    /// [`DataSinkNode`]: datafusion_proto_models::protobuf::DataSinkNode
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
-        self.sink().try_to_proto(self, ctx)
+        use datafusion_proto_models::protobuf;
+        let Some(sink) = self.sink().try_to_proto_sink(ctx)? else {
+            #[expect(deprecated)]
+            return self.sink().try_to_proto(self, ctx);
+        };
+        let node = protobuf::DataSinkExecNode {
+            input: Some(Box::new(ctx.encode_child(self.input())?)),
+            sink: Some(sink),
+            sort_order: self.encode_sort_order(ctx)?,
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::DataSink(Box::new(node)),
+            ),
+        }))
     }
 }
 
