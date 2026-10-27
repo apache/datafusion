@@ -3267,7 +3267,11 @@ impl DisplayAs for AddColumnExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let mode = if self.replaces_column() { " (replace)" } else { "" };
+                let mode = if self.replaces_column() {
+                    " (replace)"
+                } else {
+                    ""
+                };
                 write!(
                     f,
                     "AddColumnExec: {}{mode}, input_partitions={}",
