@@ -7709,12 +7709,65 @@ async fn test_dataframe_with_column_array_col_then_filter() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn test_dataframe_with_column_array_col_duplicate_name() -> Result<()> {
+#[tokio::test]
+async fn test_with_column_array_col_replaces_existing_column() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3], "data" => [42, 43, 44])?;
+    let new_id: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+    let df = df.with_column("id", array_col(new_id))?;
+
+    // Same position, new type, other columns untouched.
+    assert_eq!(
+        df.schema().field_with_unqualified_name("id")?.data_type(),
+        &DataType::Utf8
+    );
+    assert_batches_eq!(
+        &[
+            "+----+------+",
+            "| id | data |",
+            "+----+------+",
+            "| a  | 42   |",
+            "| b  | 43   |",
+            "| c  | 44   |",
+            "+----+------+",
+        ],
+        &df.collect().await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_column_array_col_replaces_array_column() -> Result<()> {
     let df = dataframe!("id" => [1, 2, 3])?;
-    let id: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
-    let err = df.with_column("id", array_col(id)).unwrap_err();
-    assert!(err.to_string().contains("already exists"));
+    let first: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+    let second: ArrayRef = Arc::new(Int32Array::from(vec![11, 21, 31]));
+    let df = df
+        .with_column("extra", array_col(first))?
+        .with_column("extra", array_col(second))?;
+
+    assert_eq!(df.schema().fields().len(), 2);
+    assert_batches_eq!(
+        &[
+            "+----+-------+",
+            "| id | extra |",
+            "+----+-------+",
+            "| 1  | 11    |",
+            "| 2  | 21    |",
+            "| 3  | 31    |",
+            "+----+-------+",
+        ],
+        &df.collect().await?
+    );
+    Ok(())
+}
+
+#[test]
+fn test_with_column_array_col_ambiguous_name() -> Result<()> {
+    let left = dataframe!("id" => [1, 2, 3])?.alias("l")?;
+    let right = dataframe!("id" => [1, 2, 3])?.alias("r")?;
+    let joined = left.join(right, JoinType::Inner, &["id"], &["id"], None)?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![7, 8, 9]));
+    let err = joined.with_column("id", array_col(a)).unwrap_err();
+    assert_contains!(err.to_string(), "ambiguous");
     Ok(())
 }
 

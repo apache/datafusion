@@ -2973,6 +2973,8 @@ impl DataFrame {
 ///   when the DataFrame is executed. It is never evaluated. To transform the
 ///   values, add the column first and then use a second `with_column` call on
 ///   the new column.
+/// * If a column with that name already exists it is replaced in place, as
+///   with any other `with_column` call; otherwise the column is appended.
 /// * The array must have exactly as many elements as the DataFrame produces
 ///   rows; a mismatch is an error at execution time.
 /// * Rows are paired in the order the input DataFrame produces them when
@@ -3097,15 +3099,14 @@ struct AddColumnProvider {
     input: LogicalPlan,
     name: String,
     array: ArrayRef,
+    /// Index of the new column in the output: the index of the replaced input
+    /// column, or the input's field count when the column is appended.
+    position: usize,
     schema: SchemaRef,
 }
 
 impl AddColumnProvider {
     fn try_new(input: LogicalPlan, name: &str, array: ArrayRef) -> Result<Self> {
-        if input.schema().has_column_with_unqualified_name(name) {
-            return plan_err!("Column '{name}' already exists");
-        }
-
         let mut fields: Vec<Field> = input
             .schema()
             .as_arrow()
@@ -3113,12 +3114,38 @@ impl AddColumnProvider {
             .iter()
             .map(|f| f.as_ref().clone())
             .collect();
-        fields.push(Field::new(name, array.data_type().clone(), true));
+        let new_field = Field::new(name, array.data_type().clone(), true);
+
+        // Same contract as `with_column` with an expression: an existing
+        // column is replaced in place, a new name is appended.
+        let matches: Vec<usize> = fields
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.name() == name)
+            .map(|(i, _)| i)
+            .collect();
+        let position = match matches.as_slice() {
+            [] => {
+                fields.push(new_field);
+                fields.len() - 1
+            }
+            [i] => {
+                fields[*i] = new_field;
+                *i
+            }
+            _ => {
+                return plan_err!(
+                    "Column '{name}' is ambiguous: {} input columns have that name",
+                    matches.len()
+                );
+            }
+        };
 
         Ok(Self {
             input,
             name: name.to_string(),
             array,
+            position,
             schema: Arc::new(Schema::new(fields)),
         })
     }
@@ -3163,6 +3190,7 @@ impl TableProvider for AddColumnProvider {
             input,
             self.name.clone(),
             Arc::clone(&self.array),
+            self.position,
             Arc::clone(&self.schema),
             projection,
         )?))
@@ -3185,6 +3213,8 @@ struct AddColumnExec {
     input: Arc<dyn ExecutionPlan>,
     name: String,
     array: ArrayRef,
+    /// Where the array goes in each output batch; see [`AddColumnProvider`].
+    position: usize,
     full_schema: SchemaRef,
     projection: Option<Vec<usize>>,
     cache: Arc<PlanProperties>,
@@ -3195,6 +3225,7 @@ impl AddColumnExec {
         input: Arc<dyn ExecutionPlan>,
         name: String,
         array: ArrayRef,
+        position: usize,
         full_schema: SchemaRef,
         projection: Option<&[usize]>,
     ) -> Result<Self> {
@@ -3204,6 +3235,7 @@ impl AddColumnExec {
             input,
             name,
             array,
+            position,
             full_schema,
             projection: projection.map(|p| p.to_vec()),
         })
@@ -3224,15 +3256,21 @@ impl AddColumnExec {
     fn input_partitions(&self) -> usize {
         self.input.output_partitioning().partition_count()
     }
+
+    /// `true` when the array replaces an input column rather than being appended.
+    fn replaces_column(&self) -> bool {
+        self.position < self.input.schema().fields().len()
+    }
 }
 
 impl DisplayAs for AddColumnExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let mode = if self.replaces_column() { " (replace)" } else { "" };
                 write!(
                     f,
-                    "AddColumnExec: {}, input_partitions={}",
+                    "AddColumnExec: {}{mode}, input_partitions={}",
                     self.name,
                     self.input_partitions()
                 )?;
@@ -3308,6 +3346,7 @@ impl ExecutionPlan for AddColumnExec {
             .boxed();
 
         let array = Arc::clone(&self.array);
+        let position = self.position;
         let full_schema = Arc::clone(&self.full_schema);
         let projection = self.projection.clone();
         let expected_rows = array.len();
@@ -3332,7 +3371,12 @@ impl ExecutionPlan for AddColumnExec {
                                 );
                             }
                             let mut columns = batch.columns().to_vec();
-                            columns.push(array.slice(offset, n));
+                            let column = array.slice(offset, n);
+                            if position < columns.len() {
+                                columns[position] = column;
+                            } else {
+                                columns.push(column);
+                            }
                             let full = RecordBatch::try_new(full_schema, columns)?;
                             let batch = match &projection {
                                 Some(indices) => full.project(indices)?,
