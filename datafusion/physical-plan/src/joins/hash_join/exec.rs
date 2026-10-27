@@ -31,7 +31,8 @@ use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::joins::probe_completion::{Completion, ProbeCompletion};
 use crate::joins::utils::{
     OnceAsync, OnceFut, asymmetric_join_output_partitioning, emits_unmatched_left_rows,
-    is_existence_join, reorder_output_after_swap, swap_join_projection, update_hash,
+    is_existence_join, reorder_output_after_swap, swap_join_projection,
+    update_hash_with_cache,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
 use crate::metrics::{Count, MetricBuilder, MetricCategory};
@@ -86,7 +87,7 @@ use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, l
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use datafusion_common::hash_utils::RandomState;
+use datafusion_common::hash_utils::{CachingArrayHasher, RandomState};
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
@@ -1796,7 +1797,7 @@ impl ExecutionPlan for HashJoinExec {
             build_accumulator,
             self.mode,
             self.fetch,
-        )))
+        )?))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -3234,6 +3235,12 @@ fn build_in_memory(
         }
         // The maximum is known: avoid geometric growth and its excess capacity.
         let mut hashes_buffer = Vec::with_capacity(max_batch_rows);
+        let fields = on_left
+            .iter()
+            .map(|expr| expr.return_field(schema))
+            .collect::<Result<Vec<_>>>()?;
+        let mut hasher =
+            CachingArrayHasher::new(&Schema::new(fields), random_state.clone());
         let mut offset = num_rows;
 
         // Update the hashmap starting from the last batch, so rows with smaller
@@ -3243,16 +3250,16 @@ fn build_in_memory(
             offset -= batch.num_rows();
             hashes_buffer.clear();
             hashes_buffer.resize(batch.num_rows(), 0);
-            update_hash(
+            update_hash_with_cache(
                 on_left,
                 batch,
                 &mut *hashmap,
                 offset,
-                random_state,
                 &mut hashes_buffer,
                 0,
                 true,
                 null_equality,
+                &mut hasher,
             )?;
         }
 

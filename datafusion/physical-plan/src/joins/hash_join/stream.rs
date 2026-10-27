@@ -27,7 +27,6 @@ use crate::joins::utils::{
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
-    hash_utils::create_hashes,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
@@ -45,7 +44,7 @@ use datafusion_common::{
 };
 use datafusion_physical_expr::PhysicalExprRef;
 
-use datafusion_common::hash_utils::RandomState;
+use datafusion_common::hash_utils::{CachingArrayHasher, RandomState};
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{Stream, StreamExt, ready};
 
@@ -385,6 +384,8 @@ pub(super) struct HashJoinStream {
     batch_size: usize,
     /// Scratch space for computing hashes
     hashes_buffer: Vec<u64>,
+    /// Caches dictionary value hashes by probe key.
+    hasher: CachingArrayHasher,
     /// Scratch space for probe indices during hash lookup
     probe_indices_buffer: Vec<u32>,
     /// Scratch space for build indices during hash lookup
@@ -558,12 +559,17 @@ impl HashJoinStream {
         build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
         fetch: Option<usize>,
-    ) -> Self {
+    ) -> Result<Self> {
         // Create output buffer with coalescing and optional fetch limit.
         let output_buffer =
             LimitedBatchCoalescer::new(Arc::clone(&schema), batch_size, fetch);
+        let fields = on_right
+            .iter()
+            .map(|expr| expr.return_field(right.schema().as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+        let hasher = CachingArrayHasher::new(&Schema::new(fields), random_state.clone());
 
-        Self {
+        Ok(Self {
             partition,
             schema,
             on_right,
@@ -578,6 +584,7 @@ impl HashJoinStream {
             build_side,
             batch_size,
             hashes_buffer,
+            hasher,
             probe_indices_buffer: Vec::with_capacity(batch_size),
             build_indices_buffer: Vec::with_capacity(batch_size),
             not_in: NotInProbe::default(),
@@ -585,7 +592,7 @@ impl HashJoinStream {
             build_report: BuildReportHandle::new(partition, mode, build_accumulator),
             mode,
             output_buffer,
-        }
+        })
     }
 
     /// Returns the next state after the build side has been fully collected
@@ -782,11 +789,8 @@ impl HashJoinStream {
                 {
                     self.hashes_buffer.clear();
                     self.hashes_buffer.resize(batch.num_rows(), 0);
-                    create_hashes(
-                        &keys_values,
-                        &self.random_state,
-                        &mut self.hashes_buffer,
-                    )?;
+                    self.hasher
+                        .create_hashes(&keys_values, &mut self.hashes_buffer)?;
                     matchable_join_keys(&keys_values, self.null_equality)
                 } else {
                     None

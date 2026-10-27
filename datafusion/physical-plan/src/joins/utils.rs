@@ -56,8 +56,9 @@ use arrow_ord::ord::{DynComparator, make_comparator};
 use arrow_schema::{DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::float_semantics::normalize_floats;
-use datafusion_common::hash_utils::RandomState;
+#[cfg(test)]
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::hash_utils::{CachingArrayHasher, RandomState};
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
@@ -2350,11 +2351,41 @@ pub fn update_hash(
     fifo_hashmap: bool,
     null_equality: NullEquality,
 ) -> Result<()> {
+    let fields = on
+        .iter()
+        .map(|expr| expr.return_field(batch.schema_ref()))
+        .collect::<Result<Vec<_>>>()?;
+    let mut hasher = CachingArrayHasher::new(&Schema::new(fields), random_state.clone());
+    update_hash_with_cache(
+        on,
+        batch,
+        hash_map,
+        offset,
+        hashes_buffer,
+        deleted_offset,
+        fifo_hashmap,
+        null_equality,
+        &mut hasher,
+    )
+}
+
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn update_hash_with_cache(
+    on: &[PhysicalExprRef],
+    batch: &RecordBatch,
+    hash_map: &mut dyn JoinHashMapType,
+    offset: usize,
+    hashes_buffer: &mut [u64],
+    deleted_offset: usize,
+    fifo_hashmap: bool,
+    null_equality: NullEquality,
+    hasher: &mut CachingArrayHasher,
+) -> Result<()> {
     // evaluate the keys
     let keys_values = evaluate_expressions_to_arrays(on, batch)?;
 
     // calculate the hash values
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+    let hash_values = hasher.create_hashes(&keys_values, hashes_buffer)?;
 
     // For usual JoinHashmap, the implementation is void.
     hash_map.extend_zero(batch.num_rows());
