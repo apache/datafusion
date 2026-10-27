@@ -10629,3 +10629,17 @@ DROP TABLE a;
 
 statement ok
 DROP TABLE b;
+
+
+# Repro for issue #17699 / #26661: distinct count with sum(decimal) preserves declared type across rewrites
+statement ok
+CREATE TABLE s_decimal_distinct (g varchar, k varchar, x decimal(18,6)) AS VALUES ('a', 'u1', 1.5), ('a', 'u2', 2.5), ('b', 'u1', 3.0);
+
+query TRII
+SELECT g, nullif(sum(x), 0) AS s, count(*) AS n, count(DISTINCT k) AS d FROM s_decimal_distinct GROUP BY g ORDER BY g;
+----
+a 4.000000 2 2
+b 3.000000 1 1
+
+statement ok
+DROP TABLE s_decimal_distinct;
