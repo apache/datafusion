@@ -1028,6 +1028,19 @@ fn test_duplicate_table_name_single_warning_in_multi_entry_from() {
 }
 
 #[test]
+fn test_duplicate_table_name_three_copies_each_point_to_first() {
+    // Assert the warnings comes in order: first for "b", second for "c"
+    let query = "SELECT 1 FROM j1 AS /*a*/t/*a*/, j2 AS /*b*/t/*b*/ JOIN j3 AS /*c*/t/*c*/ ON true";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 2);
+    assert_eq!(warnings[0].span, Some(spans["b"]));
+    assert_eq!(warnings[1].span, Some(spans["c"]));
+    assert_eq!(warnings[0].notes[0].span, Some(spans["a"]));
+    assert_eq!(warnings[1].notes[0].span, Some(spans["a"]));
+}
+
+#[test]
 fn test_same_table_name_in_different_scopes() {
     // Same table name, different schemas
     assert!(do_query_warnings("SELECT * FROM schema1.person, schema2.person").is_empty());
