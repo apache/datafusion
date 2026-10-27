@@ -297,8 +297,9 @@ mod tests {
     use super::*;
     use crate::spill::SPILL_BATCH_MEMORY_MARGIN;
     use arrow::array::{
-        Array, ArrayRef, AsArray, DictionaryArray, Int32Array, Int64Array, ListBuilder,
-        MapBuilder, StringArray, StringBuilder, StringViewArray, StructArray,
+        Array, ArrayRef, AsArray, BinaryViewArray, DictionaryArray, Int32Array,
+        Int64Array, ListBuilder, MapBuilder, StringArray, StringBuilder, StringViewArray,
+        StructArray, UInt32Array,
     };
     use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
     use datafusion_common::utils::memory::get_record_batch_memory_size;
@@ -811,6 +812,171 @@ mod tests {
             &read_values.iter().map(|a| a.as_ref()).collect::<Vec<_>>(),
         )?;
         assert_eq!(&read_values, &cast(&batch));
+        Ok(())
+    }
+    fn view_schema(fields: &[(&str, DataType)]) -> SchemaRef {
+        Arc::new(Schema::new(
+            fields
+                .iter()
+                .map(|(name, t)| Field::new(*name, t.clone(), true))
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    fn assert_bounded(read: &[RecordBatch], max_memory: usize, budget: usize) {
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(read.len() > 1, "expected the batch to be split");
+    }
+
+    /// `take` of every 16th row of a large view array keeps all the parent's buffers, but
+    /// is not a slice. Garbage collection must see the few values it uses, so the batch
+    /// fits the budget and is written as one small piece.
+    #[tokio::test]
+    async fn sparse_taken_view_array_is_compacted() -> Result<()> {
+        let parent = StringViewArray::from_iter_values((0..256).map(wide_value));
+        let indices = UInt32Array::from_iter_values((0..256).step_by(16));
+        let taken = arrow::compute::take(&parent, &indices, None)?;
+        let batch =
+            RecordBatch::try_new(view_schema(&[("v", DataType::Utf8View)]), vec![taken])?;
+        let budget = 2 * 1024 * 1024;
+        assert!(get_record_batch_memory_size(&batch) > budget);
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert_eq!(read.len(), 1);
+        assert!(max_memory <= budget, "spilled batch is {max_memory} bytes");
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// Sparse `take` outputs of one parent in several batches, each larger than the
+    /// budget once compacted: every piece holds only its own values.
+    #[tokio::test]
+    async fn sparse_taken_views_across_batches_are_split() -> Result<()> {
+        let parent = StringViewArray::from_iter_values((0..512).map(wide_value));
+        let schema = view_schema(&[("v", DataType::Utf8View)]);
+        let batches = [0u32, 1]
+            .into_iter()
+            .map(|start| {
+                let indices = UInt32Array::from_iter_values((start..512).step_by(2));
+                let taken = arrow::compute::take(&parent, &indices, None)?;
+                Ok(RecordBatch::try_new(Arc::clone(&schema), vec![taken])?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(&batches, budget).await?;
+        assert_bounded(&read, max_memory, budget);
+        assert!(read.len() >= 32, "got {} pieces", read.len());
+        assert_same_rows(&read, &batches);
+        Ok(())
+    }
+
+    /// Two columns of one batch share the same view buffers: one is the parent, the other
+    /// a reversed `take` of it. Each piece must count and copy each column's own values.
+    #[tokio::test]
+    async fn columns_sharing_view_buffers_are_split() -> Result<()> {
+        let parent: ArrayRef =
+            Arc::new(StringViewArray::from_iter_values((0..128).map(wide_value)));
+        let reversed = arrow::compute::take(
+            &parent,
+            &UInt32Array::from_iter_values((0..128).rev()),
+            None,
+        )?;
+        let batch = RecordBatch::try_new(
+            view_schema(&[("a", DataType::Utf8View), ("b", DataType::Utf8View)]),
+            vec![Arc::clone(&parent), reversed],
+        )?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert_bounded(&read, max_memory, budget);
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// An unsliced view array mixing inline (at most 12 bytes) values, long values and
+    /// nulls is split, and every kind of value reads back in order.
+    #[tokio::test]
+    async fn mixed_inline_long_and_null_views_are_split() -> Result<()> {
+        let values = (0..256).map(|i| match i % 3 {
+            0 => None,
+            1 => Some(format!("s{i}")),
+            _ => Some(wide_value(i)),
+        });
+        let batch = RecordBatch::try_new(
+            view_schema(&[("v", DataType::Utf8View)]),
+            vec![Arc::new(StringViewArray::from_iter(values))],
+        )?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert_bounded(&read, max_memory, budget);
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// Binary views are split like string views.
+    #[tokio::test]
+    async fn binary_view_column_is_split() -> Result<()> {
+        let values: Vec<Vec<u8>> = (0..128).map(|i| wide_value(i).into_bytes()).collect();
+        let batch = RecordBatch::try_new(
+            view_schema(&[("b", DataType::BinaryView)]),
+            vec![Arc::new(BinaryViewArray::from_iter_values(values))],
+        )?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert_bounded(&read, max_memory, budget);
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// A dictionary whose values are views: pruning the dictionary must also drop the
+    /// view buffers that only the unused values pointed at.
+    #[tokio::test]
+    async fn dictionary_of_views_is_divided() -> Result<()> {
+        let values = StringViewArray::from_iter_values((0..128).map(wide_value));
+        let keys = Int32Array::from_iter_values(0..128);
+        let dictionary = DictionaryArray::try_new(keys, Arc::new(values))?;
+        let batch = RecordBatch::try_new(
+            view_schema(&[("d", dictionary_type(DataType::Utf8View))]),
+            vec![Arc::new(dictionary)],
+        )?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert_bounded(&read, max_memory, budget);
+        let cast =
+            |b: &RecordBatch| arrow::compute::cast(b.column(0), &DataType::Utf8).unwrap();
+        let read_values: Vec<ArrayRef> = read.iter().map(cast).collect();
+        let read_values = arrow::compute::concat(
+            &read_values.iter().map(|a| a.as_ref()).collect::<Vec<_>>(),
+        )?;
+        assert_eq!(&read_values, &cast(&batch));
+        Ok(())
+    }
+
+    /// Views inside a struct and a list are below the top level. Each piece must still
+    /// hold only the view data of its own rows.
+    #[tokio::test]
+    async fn nested_views_are_split() -> Result<()> {
+        let views: ArrayRef =
+            Arc::new(StringViewArray::from_iter_values((0..256).map(wide_value)));
+        let fields = Fields::from(vec![Field::new("v", DataType::Utf8View, false)]);
+        let structs: ArrayRef =
+            Arc::new(StructArray::try_new(fields.clone(), vec![views], None)?);
+        let item = Arc::new(Field::new_list_field(DataType::Utf8View, false));
+        let lists: ArrayRef = Arc::new(arrow::array::ListArray::try_new(
+            Arc::clone(&item),
+            arrow::buffer::OffsetBuffer::from_lengths(vec![1; 256]),
+            Arc::new(StringViewArray::from_iter_values((0..256).map(wide_value))),
+            None,
+        )?);
+        let batch = RecordBatch::try_new(
+            view_schema(&[("s", DataType::Struct(fields)), ("l", DataType::List(item))]),
+            vec![structs, lists],
+        )?;
+        let budget = 2 * 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert_bounded(&read, max_memory, budget);
+        assert_same_rows(&read, &[batch]);
         Ok(())
     }
 }
