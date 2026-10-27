@@ -18,8 +18,8 @@
 name: Merge queue cleanup
 
 on:
-  # A replacement group starts cleanup promptly; the sweep also catches groups
-  # removed without a replacement and runs that appear after an earlier scan.
+  # New groups trigger an early scan. Ref deletion can lag this event; the
+  # sweep also catches groups removed without a replacement or missed earlier.
   merge_group:
     types: [checks_requested]
   schedule:
@@ -35,10 +35,10 @@ permissions:
   contents: read
   actions: write
 
-# Every invocation scans all active merge-group runs, so a newer pending
-# invocation can safely replace an older pending one. Do not interrupt a scan.
+# A dry run must not replace a pending cancellation scan. Within each mode,
+# a newer pending scan can replace an older one. Do not interrupt running scans.
 concurrency:
-  group: merge-queue-cleanup
+  group: merge-queue-cleanup-${{ vars.MERGE_QUEUE_CLEANUP_ENABLED != 'true' || (github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
   cancel-in-progress: false
 
 jobs:
@@ -53,11 +53,12 @@ jobs:
           persist-credentials: false
       - name: Cancel obsolete merge-group runs
         # During the PR that introduces this workflow, main has no script yet.
-        # Always execute main's script, never code from the merge group.
+        # Execute main's copy of the script.
         if: hashFiles('ci/scripts/cancel_merge_queue_runs.cjs') != ''
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          # Observe candidates for at least a week before enabling cancellation.
+          DRY_RUN: ${{ vars.MERGE_QUEUE_CLEANUP_ENABLED != 'true' || (github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
         with:
           script: |
             const { run } = require('./ci/scripts/cancel_merge_queue_runs.cjs');
@@ -66,7 +67,7 @@ jobs:
             await core.summary
               .addHeading(dryRun ? 'Would cancel merge-group runs' : 'Requested merge-group cancellations')
               .addTable([
-                [{ data: 'Run', header: true }, { data: 'Reason', header: true }],
-                ...results.map(({ id, reason }) => [String(id), reason]),
+                ['Run', 'SHA', 'Attempt', 'Observed at (UTC)', 'Reason'].map(data => ({ data, header: true })),
+                ...results.map(({ id, sha, attempt, observed_at, reason }) => [String(id), sha, String(attempt), observed_at, reason]),
               ])
               .write();

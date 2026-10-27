@@ -287,19 +287,32 @@ To make this work:
 
 #### Obsolete Merge Queue Runs
 
-The **Merge queue cleanup** workflow cancels unfinished CI runs when their
-exact merge queue branch disappears or points to a different commit. It runs
-when a new merge group is created and every 15 minutes. This frees runners
-when the queue removes a PR or rebuilds groups after a change ahead of them.
+The **Merge queue cleanup** workflow identifies unfinished CI runs whose
+exact merge queue branch disappears or points to a different commit. It scans
+when a new merge group is created and every 15 minutes. Ref deletion can lag
+the new-group event, and scheduled scans can be delayed. These triggers do not
+guarantee a particular cancellation latency.
 
-Cleanup checks the queue ref again before requesting cancellation. It keeps
-runs for active groups and does not cancel PR, push, or manually dispatched
-workflows. A failed check alone does not trigger cancellation. Each scan also
-skips runs whose attempt changed while it was checking them; a later scan can
-cancel the rerun if its group is still obsolete. To investigate an obsolete
-commit, create a branch at that commit and manually dispatch CI on the branch.
+Cleanup rechecks the queue ref and run before requesting cancellation. It
+preserves commits already in their target branch, active groups, and rerun
+attempts. Contributors can rerun obsolete jobs to investigate failures. PR,
+push, and manually dispatched workflows are excluded. A failed check alone
+does not trigger cancellation. API errors preserve affected runs; cleanup
+continues with other candidates. Errors produce warnings on merge-group scans
+and fail scheduled or manual scans. An unresolved cancellation is retried on
+a later scan; HTTP 409 alone is not treated as successful cancellation.
 
-Maintainers can preview cancellations by running **Merge queue cleanup**
-manually with its default `dry_run` input enabled. Disable this workflow in
-GitHub Actions to stop both automatic triggers. The cleanup executes the
-script from the default branch, rather than code from the merge group.
+Cancellation is disabled by default, including for manual runs. After at least
+one week of observation, maintainers can set the repository Actions variable
+`MERGE_QUEUE_CLEANUP_ENABLED` to `true`. Before enabling it, compare the logged
+candidate SHAs, attempts, reasons, and UTC observation times with subsequent
+queue and workflow outcomes. Check for false candidates and delays between
+replacement-group creation and detection. Dry runs measure detection, not
+actual cancellation latency or runner-instance shutdown costs.
+
+When cancellation is enabled, manual runs still default to `dry_run`. Dry runs
+use a separate concurrency group so they cannot displace cancellation scans.
+Remove the variable or set it to `false` to return to observation mode. Disable
+the workflow in GitHub Actions to stop both automatic triggers. The workflow
+checks out the default branch's script; the workflow definition itself comes
+from the triggering revision.

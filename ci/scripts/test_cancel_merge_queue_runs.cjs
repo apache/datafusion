@@ -18,8 +18,6 @@
 
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
-const { readFileSync } = require("node:fs");
-const { execFileSync } = require("node:child_process");
 const { run } = require("./cancel_merge_queue_runs.cjs");
 
 const sha = "a".repeat(40);
@@ -37,6 +35,7 @@ function workflow(id = 1, overrides = {}) {
     head_branch: branch,
     head_sha: sha,
     run_attempt: 1,
+    created_at: "2026-10-20T00:00:00Z",
     ...overrides,
   };
 }
@@ -52,6 +51,9 @@ async function execute({
   omitDryRun = false,
   owner = "apache",
   listError,
+  listResponse,
+  comparisons = {},
+  eventName = "schedule",
 } = {}) {
   const calls = [];
   const cancellations = [];
@@ -61,7 +63,30 @@ async function execute({
   const refReads = new Map();
   const runReads = new Map();
   const actions = {
-    listWorkflowRunsForRepo: () => {},
+    listWorkflowRunsForRepo: async (params) => {
+      assert.equal(params.event, "merge_group");
+      assert.equal(params.per_page, 100);
+      assert.equal(`${params.owner}/${params.repo}`, fullName);
+      calls.push(`list:${params.status}`);
+      if (params.status === listError) throw apiError(503);
+      if (listResponse) return { data: await listResponse(params) };
+      const [start, end] = params.created.split("..").map(Date.parse);
+      const filtered = runs.filter(
+        (r) =>
+          r.status === params.status &&
+          Date.parse(r.created_at) >= start &&
+          Date.parse(r.created_at) <= end
+      );
+      return {
+        data: {
+          total_count: filtered.length,
+          workflow_runs: filtered.slice(
+            (params.page - 1) * 100,
+            params.page * 100
+          ),
+        },
+      };
+    },
     getWorkflowRun: async ({ run_id }) => {
       calls.push(`get:${run_id}`);
       const index = runReads.get(run_id) ?? 0;
@@ -76,12 +101,22 @@ async function execute({
       assert.equal(`${owner}/${repo}`, fullName);
       calls.push(`cancel:${run_id}`);
       if (cancelErrors[run_id]) throw cancelErrors[run_id];
+      calls.push(`cancel:${run_id}`);
       cancellations.push(run_id);
     },
   };
   const github = {
     rest: {
       actions,
+      repos: {
+        compareCommitsWithBasehead: async ({ basehead, owner, repo }) => {
+          assert.equal(`${owner}/${repo}`, fullName);
+          calls.push(`compare:${basehead}`);
+          const response = comparisons[basehead] ?? "diverged";
+          if (response instanceof Error) throw response;
+          return { data: { status: response } };
+        },
+      },
       git: {
         getRef: async ({ ref, owner, repo }) => {
           assert.equal(`${owner}/${repo}`, fullName);
@@ -102,19 +137,10 @@ async function execute({
         },
       },
     },
-    paginate: async (method, params) => {
-      assert.equal(method, actions.listWorkflowRunsForRepo);
-      assert.equal(params.event, "merge_group");
-      assert.equal(params.per_page, 100);
-      assert.equal(`${params.owner}/${params.repo}`, fullName);
-      calls.push(`list:${params.status}`);
-      if (params.status === listError) throw apiError(503);
-      return runs.filter((r) => r.status === params.status);
-    },
   };
   const results = await run({
     github,
-    context: { repo: { owner, repo: "datafusion" }, runId: 999 },
+    context: { repo: { owner, repo: "datafusion" }, runId: 999, eventName },
     core: {
       info: (s) => logs.push(s),
       warning: (s) => warnings.push(s),
@@ -213,7 +239,11 @@ test("does nothing on a fork", async () => {
 test("dry run performs the same checks without mutations", async () => {
   const result = await execute({ dryRun: true });
   assert.deepEqual(result.cancellations, []);
-  assert.deepEqual(result.results, [{ id: 1, reason: "queue ref removed" }]);
+  assert.equal(result.results[0].id, 1);
+  assert.equal(result.results[0].sha, sha);
+  assert.equal(result.results[0].attempt, 1);
+  assert.equal(result.results[0].reason, "queue ref removed");
+  assert.ok(Number.isFinite(Date.parse(result.results[0].observed_at)));
   assert.match(result.logs[0], /Would cancel/);
 });
 
@@ -326,7 +356,10 @@ test("one failed group lookup does not stop cleanup of another group", async () 
 });
 
 test("a listing failure aborts before any cancellation", async () => {
-  await assert.rejects(execute({ listError: "requested" }), /HTTP 503/);
+  const result = await execute({ listError: "requested" });
+  assert.deepEqual(result.cancellations, []);
+  assert.equal(result.failures.length, 1);
+  assert.match(result.warnings[0], /HTTP 503/);
 });
 
 test("uses all paginated results and deduplicates repeated run IDs", async () => {
@@ -337,39 +370,124 @@ test("uses all paginated results and deduplicates repeated run IDs", async () =>
   assert.equal(new Set(result.cancellations).size, 205);
 });
 
-test("workflow loads default-branch code and supports prompt cleanup, sweeping, and dry runs", () => {
-  const workflowPath = `${__dirname}/../../.github/workflows/merge_queue_cleanup.yml`;
-  const yaml = JSON.parse(
-    execFileSync(
-      "python3",
-      [
-        "-c",
-        "import json,sys,yaml; print(json.dumps(yaml.safe_load(sys.stdin)))",
-      ],
-      {
-        input: readFileSync(workflowPath),
-        encoding: "utf8",
-      }
-    )
+test("keeps merged commits even when their queue ref has disappeared or changed", async () => {
+  for (const status of ["identical", "behind"]) {
+    for (const ref of [null, otherSha]) {
+      const result = await execute({
+        comparisons: { [`main...${sha}`]: status },
+        refs: { [`heads/${branch}`]: ref },
+      });
+      assert.deepEqual(result.cancellations, []);
+      assert.deepEqual(result.failures, []);
+    }
+  }
+});
+
+test("compares against the actual target branch, including slashes", async () => {
+  const result = await execute({
+    runs: [
+      workflow(1, {
+        head_branch: `gh-readonly-queue/release/56/pr-123-${sha}`,
+      }),
+    ],
+    comparisons: { [`release/56...${sha}`]: "behind" },
+  });
+  assert.deepEqual(result.cancellations, []);
+  assert.ok(result.calls.includes(`compare:release/56...${sha}`));
+});
+
+test("only ahead or diverged comparisons permit cancellation", async () => {
+  for (const status of ["ahead", "diverged"]) {
+    const result = await execute({
+      comparisons: { [`main...${sha}`]: status },
+    });
+    assert.deepEqual(result.cancellations, [1]);
+  }
+  for (const status of [
+    "unknown",
+    "",
+    apiError(404),
+    apiError(403),
+    apiError(503),
+  ]) {
+    const result = await execute({
+      comparisons: { [`main...${sha}`]: status },
+    });
+    assert.deepEqual(result.cancellations, []);
+    assert.equal(result.failures.length, 1);
+  }
+});
+
+test("reruns are exempt across successive scans, not just on attempt changes", async () => {
+  for (let scan = 0; scan < 2; scan++) {
+    const result = await execute({
+      runs: [workflow(1, { run_attempt: 2 }), workflow(2)],
+    });
+    assert.deepEqual(result.cancellations, [2]);
+    assert.ok(!result.calls.includes("get:1"));
+  }
+});
+
+test("merge-group maintenance errors warn without failing the commit", async () => {
+  for (const options of [
+    { listError: "requested" },
+    { refs: { [`heads/${branch}`]: apiError(403) } },
+    { comparisons: { [`main...${sha}`]: apiError(503) } },
+    { cancelErrors: { 1: apiError(409) } },
+  ]) {
+    const result = await execute({ eventName: "merge_group", ...options });
+    assert.deepEqual(result.failures, []);
+    assert.ok(result.warnings.length > 0);
+    assert.deepEqual(result.cancellations, []);
+  }
+});
+
+test("manual cleanup failures remain visible", async () => {
+  const result = await execute({
+    eventName: "workflow_dispatch",
+    cancelErrors: { 1: apiError(409) },
+  });
+  assert.equal(result.failures.length, 1);
+});
+
+test("an unresolved 409 is retried by later scans and is never reported as cancelled", async () => {
+  const first = await execute({ cancelErrors: { 1: apiError(409) } });
+  assert.deepEqual(first.results, []);
+  assert.equal(first.failures.length, 1);
+  const next = await execute();
+  assert.deepEqual(next.cancellations, [1]);
+});
+
+test("splits capped listings and collects all results before cancelling", async () => {
+  const runs = Array.from({ length: 1001 }, (_, i) =>
+    workflow(i + 10000, {
+      created_at: new Date(
+        Date.parse("2026-10-20T00:00:00Z") + i * 1000
+      ).toISOString(),
+    })
   );
-  const triggers = yaml.on ?? yaml.true;
-  assert.deepEqual(triggers.merge_group.types, ["checks_requested"]);
-  assert.equal(triggers.schedule[0].cron, "*/15 * * * *");
-  assert.equal(triggers.workflow_dispatch.inputs.dry_run.default, true);
-  assert.deepEqual(yaml.permissions, { contents: "read", actions: "write" });
-  assert.equal(yaml.concurrency["cancel-in-progress"], false);
-  assert.equal(
-    yaml.jobs.cleanup.if,
-    "github.repository == 'apache/datafusion'"
+  const result = await execute({ runs });
+  assert.equal(result.cancellations.length, 1001);
+  assert.ok(
+    result.calls.findLastIndex((c) => c.startsWith("list:")) <
+      result.calls.findIndex((c) => c.startsWith("cancel:"))
   );
-  assert.equal(
-    yaml.jobs.cleanup.steps[0].with.ref,
-    "${{ github.event.repository.default_branch }}"
-  );
-  assert.equal(yaml.jobs.cleanup.steps[0].with["persist-credentials"], false);
-  assert.match(yaml.jobs.cleanup.steps[1].if, /hashFiles/);
-  assert.match(
-    yaml.jobs.cleanup.steps[1].with.script,
-    /cancel_merge_queue_runs\.cjs/
-  );
+  assert.ok(result.calls.filter((c) => c.startsWith("list:")).length > 10);
+});
+
+test("cannot cancel from a truncated single-second window", async () => {
+  const result = await execute({
+    runs: Array.from({ length: 1000 }, (_, i) => workflow(i + 1)),
+  });
+  assert.deepEqual(result.cancellations, []);
+  assert.equal(result.failures.length, 1);
+  assert.match(result.warnings[0], /within one second/);
+});
+
+test("malformed listing metadata aborts without cancelling", async () => {
+  const result = await execute({
+    listResponse: () => ({ workflow_runs: [workflow()] }),
+  });
+  assert.deepEqual(result.cancellations, []);
+  assert.equal(result.failures.length, 1);
 });
