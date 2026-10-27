@@ -4295,6 +4295,38 @@ mod tests {
 
         arrow::util::display::FormatOptions::try_from(&FormatOptions::default())
             .expect("the default temporal formats must remain valid");
+
+        let options = FormatOptions {
+            timestamp_tz_format: Some("%+".to_owned()),
+            ..Default::default()
+        };
+        let options: arrow::util::display::FormatOptions = (&options)
+            .try_into()
+            .expect("the timezone-aware ISO 8601 format must be valid");
+        let schema = arrow::datatypes::Schema::new(vec![arrow::datatypes::Field::new(
+            "timestamp",
+            arrow::datatypes::DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Nanosecond,
+                Some("UTC".into()),
+            ),
+            false,
+        )]);
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            std::sync::Arc::new(schema),
+            vec![std::sync::Arc::new(
+                arrow::array::TimestampNanosecondArray::from(vec![0])
+                    .with_timezone("UTC"),
+            )],
+        )
+        .expect("valid timestamp batch");
+        let formatted =
+            arrow::util::pretty::pretty_format_batches_with_options(&[batch], &options)
+                .expect("valid timezone-aware format must render")
+                .to_string();
+        assert!(
+            formatted.contains("1970-01-01T00:00:00+00:00"),
+            "unexpected formatted output: {formatted}"
+        );
     }
     use std::any::Any;
     use std::collections::HashMap;
