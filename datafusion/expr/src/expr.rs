@@ -625,6 +625,35 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
 /// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs
 pub type SchemaFieldMetadata = Metadata;
 
+/// Arrow extension-type metadata key whose value is a JSON document.
+///
+/// Arrow stores extension metadata as a JSON string under this key. Two
+/// serializations that parse to the same JSON value describe the same metadata
+/// (whitespace / key order differ), so [`intersect_metadata_for_union`] treats
+/// them as equal instead of dropping the key. See
+/// <https://github.com/apache/datafusion/issues/26810>.
+const ARROW_EXTENSION_METADATA_KEY: &str = "ARROW:extension:metadata";
+
+/// Returns true when two metadata values agree for union intersection.
+///
+/// Most keys require byte-identical strings. [`ARROW_EXTENSION_METADATA_KEY`]
+/// is compared as parsed JSON so equivalent serializations (whitespace, key
+/// order) keep the extension metadata on the union field.
+fn metadata_values_agree(key: &str, left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    if key == ARROW_EXTENSION_METADATA_KEY {
+        if let (Ok(left_json), Ok(right_json)) = (
+            serde_json::from_str::<serde_json::Value>(left),
+            serde_json::from_str::<serde_json::Value>(right),
+        ) {
+            return left_json == right_json;
+        }
+    }
+    false
+}
+
 /// Intersects multiple metadata instances for UNION operations.
 ///
 /// This function implements the intersection strategy used by UNION operations,
@@ -636,8 +665,10 @@ pub type SchemaFieldMetadata = Metadata;
 /// Union operations require consistent metadata across all branches:
 /// - Only metadata keys present in ALL union branches are kept
 /// - For each kept key, the value must be identical across all branches
+/// - [`ARROW:extension:metadata`](ARROW_EXTENSION_METADATA_KEY) values are
+///   compared as parsed JSON so equivalent serializations agree
 /// - If a key has different values across branches, it is excluded from the result
-/// - If any input has no metadata, the result will be empty
+/// - Empty metadata branches are skipped (e.g. NULL literals)
 ///
 /// # Arguments
 ///
@@ -662,8 +693,15 @@ pub fn intersect_metadata_for_union<'a>(
                 intersected = Some(metadata.clone());
             }
             Some(current) => {
-                // Only keep keys that exist in both with the same value
-                current.retain(|k, v| metadata.get(k) == Some(&*v));
+                // Keep keys that exist in both with agreeing values. For
+                // ARROW:extension:metadata, agreement is JSON equality so
+                // whitespace-/order-equivalent serializations survive UNION
+                // (#26810).
+                current.retain(|k, v| {
+                    metadata
+                        .get(k)
+                        .is_some_and(|other| metadata_values_agree(k, v, other))
+                });
             }
         }
     }
@@ -4701,6 +4739,44 @@ mod test {
             let m2 = Metadata::new().with("key", "b");
             let result = intersect_metadata_for_union([&m1, &m2]);
             assert!(result.is_empty());
+        }
+
+        /// Extension metadata that differs only in JSON whitespace / formatting
+        /// must still intersect (#26810).
+        #[test]
+        fn extension_metadata_json_equivalent_kept() {
+            let m1 = Metadata::new()
+                .with("ARROW:extension:name", "example.width")
+                .with("ARROW:extension:metadata", r#"{"width":5}"#);
+            let m2 = Metadata::new()
+                .with("ARROW:extension:name", "example.width")
+                .with("ARROW:extension:metadata", r#"{      "width" : 5 }"#);
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert_eq!(
+                result.get("ARROW:extension:name").map(String::as_str),
+                Some("example.width")
+            );
+            // Retain the first branch's serialization when values agree as JSON.
+            assert_eq!(
+                result.get("ARROW:extension:metadata").map(String::as_str),
+                Some(r#"{"width":5}"#)
+            );
+        }
+
+        #[test]
+        fn extension_metadata_json_different_dropped() {
+            let m1 = Metadata::new()
+                .with("ARROW:extension:name", "example.width")
+                .with("ARROW:extension:metadata", r#"{"width":5}"#);
+            let m2 = Metadata::new()
+                .with("ARROW:extension:name", "example.width")
+                .with("ARROW:extension:metadata", r#"{"width":6}"#);
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert_eq!(
+                result.get("ARROW:extension:name").map(String::as_str),
+                Some("example.width")
+            );
+            assert!(result.get("ARROW:extension:metadata").is_none());
         }
 
         #[test]
