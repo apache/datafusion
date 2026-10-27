@@ -17,7 +17,9 @@
 
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
-use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray};
+use arrow::array::{
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray, PrimitiveArray,
+};
 use arrow::datatypes::Field;
 use arrow::datatypes::{
     ArrowNativeType, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
@@ -334,6 +336,11 @@ impl AggregateUDFImpl for Sum {
                     args.expr_fields[0].data_type()
                 ),
             }
+        } else if matches!(args.return_field.data_type(), DataType::Float64) {
+            // Count NaN and signed infinities instead of folding them into the
+            // running f64. `inf - inf` is NaN, and that NaN stuck to every
+            // later frame. https://github.com/apache/datafusion/issues/26222
+            Ok(Box::new(SlidingFloat64SumAccumulator::default()))
         } else {
             // non‐distinct path: existing sliding sum
             macro_rules! helper {
@@ -590,6 +597,203 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
     }
 }
 
+/// Sliding `Float64` sum that counts non-finite values.
+///
+/// Finite batches still update with one [`arrow::compute::sum`], so an
+/// all-finite frame stays bit-identical to [`SlidingSumAccumulator`].
+#[derive(Debug, Default)]
+struct SlidingFloat64SumAccumulator {
+    stats: NonFiniteFloat64State,
+}
+
+impl Accumulator for SlidingFloat64SumAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(self.stats.state())
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.stats.update_batch(values)
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.stats.merge_batch(states)
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Float64(self.stats.sum_value()))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.stats.retract_batch(values)
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+}
+
+/// Finite sum plus counts of non-null values, `NaN`, `+inf`, and `-inf`.
+///
+/// Shared by sliding `SUM` and `AVG`. `NaN` and infinities are not added into
+/// `finite_sum`: a mixed batch summed with [`arrow::compute::sum`] is `NaN`
+/// (`inf + -inf`), and subtracting that from the running total cannot be undone.
+#[derive(Debug, Default)]
+pub(crate) struct NonFiniteFloat64State {
+    finite_sum: f64,
+    /// Non-null values, including non-finite ones.
+    count: u64,
+    nan_count: u64,
+    pos_inf_count: u64,
+    neg_inf_count: u64,
+}
+
+/// One batch, split into a finite sum and non-finite counts.
+#[derive(Clone, Copy, Debug, Default)]
+struct Float64BatchDelta {
+    finite_sum: f64,
+    count: u64,
+    nan_count: u64,
+    pos_inf_count: u64,
+    neg_inf_count: u64,
+}
+
+impl Float64BatchDelta {
+    fn from_array(values: &PrimitiveArray<Float64Type>) -> Self {
+        // Nulls are not values. An all-null batch changes nothing.
+        if values.null_count() == values.len() {
+            return Self::default();
+        }
+
+        let mut delta = Self::default();
+        if values.null_count() == 0 {
+            for &value in values.values() {
+                delta.observe(value);
+            }
+        } else {
+            for value in values.iter().flatten() {
+                delta.observe(value);
+            }
+        }
+
+        // No non-finite value: replace the scan's sum with one
+        // `arrow::compute::sum`, matching `SlidingSumAccumulator` bit-for-bit.
+        // A mixed batch must not take that path (`inf + -inf` is `NaN`).
+        if delta.nan_count == 0 && delta.pos_inf_count == 0 && delta.neg_inf_count == 0 {
+            delta.finite_sum = arrow::compute::sum(values).unwrap_or(0.0);
+            delta.count = (values.len() - values.null_count()) as u64;
+        }
+        delta
+    }
+
+    fn observe(&mut self, value: f64) {
+        self.count += 1;
+        if value.is_nan() {
+            self.nan_count += 1;
+        } else if value.is_infinite() {
+            if value.is_sign_positive() {
+                self.pos_inf_count += 1;
+            } else {
+                self.neg_inf_count += 1;
+            }
+        } else {
+            self.finite_sum += value;
+        }
+    }
+}
+
+impl NonFiniteFloat64State {
+    pub(crate) fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.apply(
+            Float64BatchDelta::from_array(values[0].as_primitive::<Float64Type>()),
+            false,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.apply(
+            Float64BatchDelta::from_array(values[0].as_primitive::<Float64Type>()),
+            true,
+        );
+        Ok(())
+    }
+
+    /// Round-trips [`Self::state`]: finite sum, then the four counts.
+    pub(crate) fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if let Some(sum) = arrow::compute::sum(states[0].as_primitive::<Float64Type>()) {
+            self.finite_sum += sum;
+        }
+        self.count += sum_u64(&states[1]);
+        self.nan_count += sum_u64(&states[2]);
+        self.pos_inf_count += sum_u64(&states[3]);
+        self.neg_inf_count += sum_u64(&states[4]);
+        Ok(())
+    }
+
+    pub(crate) fn state(&self) -> Vec<ScalarValue> {
+        vec![
+            ScalarValue::Float64(Some(self.finite_sum)),
+            ScalarValue::UInt64(Some(self.count)),
+            ScalarValue::UInt64(Some(self.nan_count)),
+            ScalarValue::UInt64(Some(self.pos_inf_count)),
+            ScalarValue::UInt64(Some(self.neg_inf_count)),
+        ]
+    }
+
+    /// `NULL` when no non-null value remains, `NaN` when the frame holds a
+    /// `NaN` or both infinity signs, otherwise the single infinity or the
+    /// finite sum.
+    pub(crate) fn sum_value(&self) -> Option<f64> {
+        if self.count == 0 {
+            None
+        } else if self.nan_count > 0 || (self.pos_inf_count > 0 && self.neg_inf_count > 0)
+        {
+            Some(f64::NAN)
+        } else if self.pos_inf_count > 0 {
+            Some(f64::INFINITY)
+        } else if self.neg_inf_count > 0 {
+            Some(f64::NEG_INFINITY)
+        } else {
+            Some(self.finite_sum)
+        }
+    }
+
+    /// Same as [`Self::sum_value`], except an all-finite frame is
+    /// `finite_sum / count`. `avg([inf, 2.0])` stays `inf`.
+    pub(crate) fn avg_value(&self) -> Option<f64> {
+        let sum = self.sum_value()?;
+        if self.nan_count == 0 && self.pos_inf_count == 0 && self.neg_inf_count == 0 {
+            Some(self.finite_sum / self.count as f64)
+        } else {
+            Some(sum)
+        }
+    }
+
+    fn apply(&mut self, delta: Float64BatchDelta, retract: bool) {
+        if retract {
+            self.finite_sum -= delta.finite_sum;
+            self.count -= delta.count;
+            self.nan_count -= delta.nan_count;
+            self.pos_inf_count -= delta.pos_inf_count;
+            self.neg_inf_count -= delta.neg_inf_count;
+        } else {
+            self.finite_sum += delta.finite_sum;
+            self.count += delta.count;
+            self.nan_count += delta.nan_count;
+            self.pos_inf_count += delta.pos_inf_count;
+            self.neg_inf_count += delta.neg_inf_count;
+        }
+    }
+}
+
+fn sum_u64(values: &ArrayRef) -> u64 {
+    arrow::compute::sum(values.as_primitive::<UInt64Type>()).unwrap_or(0)
+}
+
 /// A sliding‐window accumulator for `SUM(DISTINCT)` over Int64 columns.
 /// Maintains a running sum so that `evaluate()` is O(1).
 #[derive(Debug)]
@@ -640,7 +844,7 @@ impl SlidingDistinctSumAccumulator {
 
     fn apply_valid_values<F>(
         &mut self,
-        arr: &arrow::array::PrimitiveArray<Int64Type>,
+        arr: &PrimitiveArray<Int64Type>,
         mut op: F,
     ) where
         F: FnMut(&mut Self, i64),
@@ -723,13 +927,47 @@ impl Accumulator for SlidingDistinctSumAccumulator {
 mod tests {
     use super::*;
     use arrow::{
-        array::{Decimal128Array, Int64Array},
+        array::{Decimal128Array, Float64Array, Int64Array},
         buffer::{NullBuffer, ScalarBuffer},
+        datatypes::Schema,
     };
     use std::{
         mem::{size_of, size_of_val},
         sync::Arc,
     };
+
+    fn sum_accumulator(
+        data_type: &DataType,
+        sliding: bool,
+    ) -> Result<Box<dyn Accumulator>> {
+        let schema = Schema::empty();
+        let field = Arc::new(Field::new("a", data_type.clone(), true));
+        let expr_fields = [Arc::clone(&field)];
+        let args = AccumulatorArgs {
+            return_field: field,
+            schema: &schema,
+            ignore_nulls: false,
+            order_bys: &[],
+            is_reversed: false,
+            name: "sum",
+            is_distinct: false,
+            exprs: &[],
+            expr_fields: &expr_fields,
+        };
+        if sliding {
+            Sum::new().create_sliding_accumulator(args)
+        } else {
+            Sum::new().accumulator(args)
+        }
+    }
+
+    fn f64_array(values: &[Option<f64>]) -> ArrayRef {
+        Arc::new(Float64Array::from(values.to_vec()))
+    }
+
+    fn state_arrays(state: &[ScalarValue]) -> Result<Vec<ArrayRef>> {
+        state.iter().map(ScalarValue::to_array).collect()
+    }
 
     #[test]
     fn sliding_distinct_sum_ignores_null_slots() -> Result<()> {
@@ -874,5 +1112,136 @@ mod tests {
             Sum::new().value_from_stats(&statistics_args),
             Some(ScalarValue::Decimal128(Some(12345), 15, 2))
         );
+    }
+
+    #[test]
+    fn sliding_float64_sum_retracts_non_finite_values() -> Result<()> {
+        let mut acc = sum_accumulator(&DataType::Float64, true)?;
+        acc.update_batch(&[f64_array(&[
+            Some(1.0),
+            Some(f64::INFINITY),
+            Some(f64::INFINITY),
+        ])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::INFINITY)));
+        acc.retract_batch(&[f64_array(&[Some(f64::INFINITY)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::INFINITY)));
+        acc.retract_batch(&[f64_array(&[Some(f64::INFINITY)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(1.0)));
+
+        let mut acc = sum_accumulator(&DataType::Float64, true)?;
+        acc.update_batch(&[f64_array(&[Some(f64::INFINITY), Some(f64::NEG_INFINITY)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::NAN)));
+        acc.retract_batch(&[f64_array(&[Some(f64::INFINITY)])])?;
+        assert_eq!(
+            acc.evaluate()?,
+            ScalarValue::Float64(Some(f64::NEG_INFINITY))
+        );
+
+        let mut acc = sum_accumulator(&DataType::Float64, true)?;
+        acc.update_batch(&[f64_array(&[
+            Some(1.0),
+            Some(f64::NAN),
+            Some(f64::NAN),
+            Some(f64::NAN),
+        ])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::NAN)));
+        acc.retract_batch(&[f64_array(&[Some(f64::NAN)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::NAN)));
+        acc.retract_batch(&[f64_array(&[Some(f64::NAN), Some(f64::NAN)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(1.0)));
+
+        let mut acc = sum_accumulator(&DataType::Float64, true)?;
+        acc.update_batch(&[f64_array(&[Some(1.0), None, Some(2.0)])])?;
+        let before = acc.state()?;
+        acc.retract_batch(&[f64_array(&[None])])?;
+        assert_eq!(acc.state()?, before);
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(3.0)));
+
+        let mut acc = sum_accumulator(&DataType::Float64, true)?;
+        acc.update_batch(&[f64_array(&[Some(1.0), None])])?;
+        acc.retract_batch(&[f64_array(&[Some(1.0)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(None));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_float64_sum_state_round_trips_counts() -> Result<()> {
+        let mut acc = sum_accumulator(&DataType::Float64, true)?;
+        acc.update_batch(&[f64_array(&[Some(1.0), Some(f64::INFINITY), Some(4.0)])])?;
+        let expected = acc.evaluate()?;
+        let state = acc.state()?;
+        assert_eq!(
+            state,
+            vec![
+                ScalarValue::Float64(Some(5.0)),
+                ScalarValue::UInt64(Some(3)),
+                ScalarValue::UInt64(Some(0)),
+                ScalarValue::UInt64(Some(1)),
+                ScalarValue::UInt64(Some(0)),
+            ]
+        );
+
+        let mut merged = sum_accumulator(&DataType::Float64, true)?;
+        merged.merge_batch(&state_arrays(&state)?)?;
+        assert_eq!(merged.evaluate()?, expected);
+        assert_eq!(merged.state()?, state);
+
+        let mut other = sum_accumulator(&DataType::Float64, true)?;
+        other.update_batch(&[f64_array(&[Some(2.0), Some(f64::NEG_INFINITY)])])?;
+        merged.merge_batch(&state_arrays(&other.state()?)?)?;
+        assert_eq!(merged.evaluate()?, ScalarValue::Float64(Some(f64::NAN)));
+        assert_eq!(
+            merged.state()?,
+            vec![
+                ScalarValue::Float64(Some(7.0)),
+                ScalarValue::UInt64(Some(5)),
+                ScalarValue::UInt64(Some(0)),
+                ScalarValue::UInt64(Some(1)),
+                ScalarValue::UInt64(Some(1)),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_float64_sum_all_finite_matches_arrow_sum() -> Result<()> {
+        let input = Float64Array::from(vec![0.1, 0.2, 0.3]);
+        let arrow_sum = arrow::compute::sum(&input).unwrap();
+        let mut acc = sum_accumulator(&DataType::Float64, true)?;
+        acc.update_batch(&[Arc::new(input)])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(arrow_sum)));
+
+        let retract = Float64Array::from(vec![0.1]);
+        let expected = arrow_sum - arrow::compute::sum(&retract).unwrap();
+        acc.retract_batch(&[Arc::new(retract)])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(expected)));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_int64_sum_keeps_running_subtraction() -> Result<()> {
+        let mut acc = sum_accumulator(&DataType::Int64, true)?;
+        acc.update_batch(&[Arc::new(Int64Array::from(vec![1, 2, 3]))])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(6)));
+        acc.retract_batch(&[Arc::new(Int64Array::from(vec![1]))])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(5)));
+        Ok(())
+    }
+
+    #[test]
+    fn grouped_float64_sum_still_adds_non_finite_values() -> Result<()> {
+        let mut acc = sum_accumulator(&DataType::Float64, false)?;
+        acc.update_batch(&[f64_array(&[
+            Some(1.0),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+        ])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::NAN)));
+
+        let mut acc = sum_accumulator(&DataType::Float64, false)?;
+        acc.update_batch(&[f64_array(&[Some(1.0), Some(f64::INFINITY), Some(2.0)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::INFINITY)));
+        Ok(())
     }
 }
