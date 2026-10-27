@@ -123,9 +123,9 @@ pub struct DFSchema {
     /// Lazily built lookup from field name to positions in `inner`, only used
     /// for schemas with more than [`LINEAR_NAME_SCAN_MAX`] fields.
     ///
-    /// Derived from the field names alone, so it is shared by clones and by
-    /// schemas that only change qualifiers, and must be reset whenever `inner`
-    /// changes. It takes no part in equality, hashing or `Debug` output.
+    /// Derived from the field names alone, so it is shared by clones and must
+    /// be reset whenever `inner` changes. It takes no part in equality,
+    /// hashing or `Debug` output.
     name_index: OnceLock<Arc<NameIndex>>,
 }
 
@@ -248,7 +248,7 @@ impl DFSchema {
             inner: Arc::clone(&self.inner),
             field_qualifiers: qualifiers,
             functional_dependencies: self.functional_dependencies.clone(),
-            name_index: self.name_index.clone(),
+            name_index: OnceLock::new(),
         })
     }
 
@@ -894,7 +894,7 @@ impl DFSchema {
             field_qualifiers: vec![None; self.inner.fields.len()],
             inner: self.inner,
             functional_dependencies: self.functional_dependencies,
-            name_index: self.name_index,
+            name_index: OnceLock::new(),
         }
     }
 
@@ -905,7 +905,7 @@ impl DFSchema {
             field_qualifiers: vec![Some(qualifier); self.inner.fields.len()],
             inner: self.inner,
             functional_dependencies: self.functional_dependencies,
-            name_index: self.name_index,
+            name_index: OnceLock::new(),
         }
     }
 
@@ -2055,13 +2055,11 @@ mod tests {
         assert_eq!(schema, unprobed);
         assert_eq!(format!("{schema:?}"), format!("{unprobed:?}"));
 
-        // Clones and qualifier rewrites keep the fields, so they share the index.
+        // Clones keep the fields, so they share the index.
         assert!(Arc::ptr_eq(
             schema.clone().name_index.get().unwrap(),
             &index
         ));
-        let stripped = schema.clone().strip_qualifiers();
-        assert!(Arc::ptr_eq(stripped.name_index.get().unwrap(), &index));
         let replaced = schema.clone().replace_qualifier("t");
         assert_eq!(
             replaced.index_of_column_by_name(Some(&TableReference::bare("t")), "a"),
