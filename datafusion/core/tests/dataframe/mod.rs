@@ -23,8 +23,9 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
     FixedSizeListBuilder, Float16Array, Float32Array, Float64Array, Int8Array,
     Int16Array, Int32Array, Int32Builder, Int64Array, LargeListArray, ListArray,
-    ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt8Array,
-    UInt16Array, UInt32Array, UInt32Builder, UInt64Array, UnionArray, record_batch,
+    ListBuilder, NullArray, RecordBatch, StringArray, StringBuilder, StructBuilder,
+    UInt8Array, UInt16Array, UInt32Array, UInt32Builder, UInt64Array, UnionArray,
+    record_batch,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
@@ -7952,6 +7953,25 @@ async fn test_array_col_with_alias() -> Result<()> {
     let df = df.with_column("extra", array_col(a).alias("ignored"))?;
     assert!(df.schema().field_with_unqualified_name("extra").is_ok());
     assert!(df.schema().field_with_unqualified_name("ignored").is_err());
+    Ok(())
+}
+
+#[test]
+fn test_with_column_array_col_nullability() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let no_nulls: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let with_nulls: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+    let all_null: ArrayRef = Arc::new(NullArray::new(3));
+
+    let df = df
+        .with_column("a", array_col(no_nulls))?
+        .with_column("b", array_col(with_nulls))?
+        .with_column("c", array_col(all_null))?;
+
+    let schema = df.schema();
+    assert!(!schema.field_with_unqualified_name("a")?.is_nullable());
+    assert!(schema.field_with_unqualified_name("b")?.is_nullable());
+    assert!(schema.field_with_unqualified_name("c")?.is_nullable());
     Ok(())
 }
 

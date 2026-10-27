@@ -2975,6 +2975,8 @@ impl DataFrame {
 ///   the new column.
 /// * If a column with that name already exists it is replaced in place, as
 ///   with any other `with_column` call; otherwise the column is appended.
+/// * The new field is nullable only if the array may contain nulls
+///   (`Array::is_nullable`).
 /// * The array must have exactly as many elements as the DataFrame produces
 ///   rows; a mismatch is an error at execution time.
 /// * Rows are paired in the order the input DataFrame produces them when
@@ -3114,7 +3116,7 @@ impl AddColumnProvider {
             .iter()
             .map(|f| f.as_ref().clone())
             .collect();
-        let new_field = Field::new(name, array.data_type().clone(), true);
+        let new_field = Field::new(name, array.data_type().clone(), array.is_nullable());
 
         // Same contract as `with_column` with an expression: an existing
         // column is replaced in place, a new name is appended.
