@@ -20,6 +20,7 @@ use arrow::array::{ArrayRef, AsArray, Int32Array, StringArrayType};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::types::logical_string;
+use datafusion_common::utils::map_dictionary_values;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
@@ -190,9 +191,7 @@ pub fn ascii(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(calculate_ascii(&string_array)?)
         }
         DataType::Dictionary(_, _) => {
-            let dictionary = args[0].as_any_dictionary();
-            let converted = ascii(&[Arc::clone(dictionary.values())])?;
-            Ok(dictionary.with_values(converted))
+            map_dictionary_values(&args[0], |values| ascii(&[Arc::clone(values)]))
         }
         _ => internal_err!("Unsupported data type"),
     }

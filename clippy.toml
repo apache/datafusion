@@ -1,6 +1,8 @@
 disallowed-methods = [
     { path = "tokio::task::spawn", reason = "To provide cancel-safety, use `SpawnedTask::spawn` instead (https://github.com/apache/datafusion/issues/6513)" },
     { path = "tokio::task::spawn_blocking", reason = "To provide cancel-safety, use `SpawnedTask::spawn_blocking` instead (https://github.com/apache/datafusion/issues/6513)" },
+    { path = "arrow_array::array::AnyDictionaryArray::with_values", reason = "Running code on every dictionary value can cost far more than the batch has rows; use `datafusion_common::utils::map_dictionary_values`" },
+    { path = "arrow_array::array::DictionaryArray::with_values", reason = "Running code on every dictionary value can cost far more than the batch has rows; use `datafusion_common::utils::map_dictionary_values`" },
     { path = "std::vec::Vec::reserve", reason = "Use `Vec::try_reserve` so allocation failures can be reported instead of panicking", replacement = "try_reserve" },
 ]
 

@@ -1913,6 +1913,7 @@ dependencies = [
  "arrow",
  "arrow-ipc",
  "arrow-schema",
+ "arrow-select",
  "chrono",
  "criterion",
  "foldhash 0.2.0",

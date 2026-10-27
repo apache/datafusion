@@ -24,13 +24,14 @@ use crate::strings::{
     StringViewArrayBuilder, substr_view,
 };
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
     StringViewArray, new_null_array,
 };
 use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
+use datafusion_common::utils::map_dictionary_values;
 use datafusion_common::utils::{offset_span, offset_span_len};
 use datafusion_common::{ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
@@ -541,9 +542,9 @@ fn case_conversion_dictionary(
     lower: bool,
     name: &str,
 ) -> Result<ArrayRef> {
-    let dictionary = array.as_any_dictionary();
-    let converted = case_conversion_columnar_array(dictionary.values(), lower, name)?;
-    Ok(dictionary.with_values(converted))
+    map_dictionary_values(array, |values| {
+        case_conversion_columnar_array(values, lower, name)
+    })
 }
 
 fn case_conversion_array<O: OffsetSizeTrait>(
