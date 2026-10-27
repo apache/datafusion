@@ -41,9 +41,7 @@ impl TraverseState {
     /// Forget the chain we were walking: no limit in hand, nothing to grow by,
     /// and back to looking for the next limit.
     pub fn reset(&mut self) {
-        self.limit = None;
-        self.lookahead = 0;
-        self.phase = Phase::FindOrGrow;
+        *self = Self::default();
     }
 
     /// Start a chain from a limit we just found. The phase is deliberately left
@@ -151,10 +149,11 @@ fn apply_limit(
     if !node.is::<SortExec>() && !node.is::<SortPreservingMergeExec>() {
         return None;
     }
-    let latest = ctx.limit;
-    let lookahead = ctx.lookahead;
-    ctx.reset();
-    let Some(fetch) = latest else {
+    // Taking the state both reads the chain we were walking and forgets it.
+    let TraverseState {
+        limit, lookahead, ..
+    } = std::mem::take(ctx);
+    let Some(fetch) = limit else {
         return Some(Transformed::no(Arc::clone(node)));
     };
     // A fetch that overflows can't drop any rows, so skip the pushdown rather
@@ -166,10 +165,10 @@ fn apply_limit(
         None => fetch,
         Some(existing) => existing.min(fetch),
     };
-    // Carry on past this sort rather than stopping. `ctx` was reset above, so it
-    // now holds exactly what it held at the start of the traversal, which makes
-    // walking the subtree below equivalent to running the rule on it afresh --
-    // and that subtree may hold another independent limit over another window.
+    // Carry on past this sort rather than stopping. `ctx` is back to its default
+    // above, which is exactly what it held at the start of the traversal, so
+    // walking the subtree below is equivalent to running the rule on it afresh
+    // -- and that subtree may hold another independent limit over another window.
     Some(Transformed::yes(node.with_fetch(Some(fetch)).unwrap()))
 }
 
