@@ -326,14 +326,11 @@ git worktree add --detach /tmp/datafusion-55.0.0 55.0.0
 cd /tmp/datafusion-55.0.0/docs
 DATAFUSION_DOCS_SOURCE="$PWD/source" DATAFUSION_DOCS_VERSION=55.0.0 \
   SPHINXOPTS="-W -c $DATAFUSION_DOCS_OVERLAY" \
-  uv run --package datafusion-docs --with sphinx-sitemap ./build.sh
+  uv run --package datafusion-docs ./build.sh
 cd -
 ```
 
-Notes:
-
-1. You need to use an absolute path to the overlay in your current checkout.
-2. The `--with sphinx-sitemap` option supplies the sitemap extension for older tags.
+Note: you need to use an absolute path to the overlay in your current checkout.
 
 To preview the result, build the docs from your main checkout
 (`uv run --package datafusion-docs ./build.sh` in `docs/`), copy the release
