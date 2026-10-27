@@ -434,9 +434,14 @@ mod tests {
         GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
     };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_expr::AggregateUDF;
+    use datafusion_functions_aggregate::any_value::any_value_udaf;
+    use datafusion_functions_aggregate::approx_distinct::approx_distinct_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::aggregate::{
+        AggregateExprBuilder, AggregateFunctionExpr,
+    };
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -486,6 +491,21 @@ mod tests {
         pool: Arc<dyn MemoryPool>,
     ) -> Result<Vec<RecordBatch>> {
         let schema = batches[0].schema();
+        let sum = AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("sum")
+            .build()?;
+        run_aggregates(batches, vec![Arc::new(sum)], pool).await
+    }
+
+    /// Runs a partial aggregate of `aggregates` grouped by `k0, ..` over
+    /// `batches`, which are sorted on every key.
+    async fn run_aggregates(
+        batches: Vec<RecordBatch>,
+        aggregates: Vec<Arc<AggregateFunctionExpr>>,
+        pool: Arc<dyn MemoryPool>,
+    ) -> Result<Vec<RecordBatch>> {
+        let schema = batches[0].schema();
         let keys = (0..schema.fields().len() - 1)
             .map(|i| Ok((col(&format!("k{i}"), &schema)?, format!("k{i}"))))
             .collect::<Result<Vec<_>>>()?;
@@ -499,13 +519,8 @@ mod tests {
         let aggregate = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(keys),
-            vec![Arc::new(
-                AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias("sum")
-                    .build()?,
-            )],
-            vec![None],
+            aggregates.clone(),
+            vec![None; aggregates.len()],
             Arc::new(input),
             Arc::clone(&schema),
         )?;
@@ -558,5 +573,67 @@ mod tests {
         let plan = sum_over_sorted_input(AggregateMode::Partial, &["k"], full_batches())?;
         assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
         assert_completed_groups_emitted_under_limit(&plan).await
+    }
+
+    /// Like [`completed_groups_under_memory_pressure`], but with accumulators
+    /// that keep per-batch scratch. For example, each `APPROX_DISTINCT` keeps
+    /// the hashes of the last batch (64 KB for 8192 rows), and the
+    /// `GroupsAccumulatorAdapter` of `ANY_VALUE` keeps its per-batch indices
+    /// (~160 KB). After the completed groups are emitted, the accumulators must
+    /// release that scratch too, or reserving the table fails the limit
+    /// although the active group needs a few KB. The output must not change.
+    #[tokio::test]
+    async fn accumulator_scratch_under_memory_pressure() -> Result<()> {
+        type Aggregates = fn(&SchemaRef) -> Result<Vec<Arc<AggregateFunctionExpr>>>;
+        fn build(
+            udaf: Arc<AggregateUDF>,
+            args: &[&str],
+            schema: &SchemaRef,
+        ) -> Result<Arc<AggregateFunctionExpr>> {
+            let alias = format!("{}({})", udaf.name(), args.join(", "));
+            let args = args
+                .iter()
+                .map(|name| col(name, schema))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(
+                AggregateExprBuilder::new(udaf, args)
+                    .schema(Arc::clone(schema))
+                    .alias(alias)
+                    .build()?,
+            ))
+        }
+        let cases: [(&str, Aggregates); 2] = [
+            // `HllGroupsAccumulator`
+            ("approx_distinct", |schema| {
+                Ok(vec![
+                    build(approx_distinct_udaf(), &["k0"], schema)?,
+                    build(approx_distinct_udaf(), &["v"], schema)?,
+                ])
+            }),
+            // `GroupsAccumulatorAdapter`
+            ("any_value", |schema| {
+                Ok(vec![build(any_value_udaf(), &["v"], schema)?])
+            }),
+        ];
+        for (name, aggregates) in cases {
+            let input =
+                || batches(&[DataType::Int64], &[0..8193, 8192..16385, 16384..24576]);
+            let schema = input()?[0].schema();
+            let expected = run_aggregates(
+                input()?,
+                aggregates(&schema)?,
+                Arc::new(UnboundedMemoryPool::default()),
+            )
+            .await?;
+            let actual = run_aggregates(
+                input()?,
+                aggregates(&schema)?,
+                Arc::new(GreedyMemoryPool::new(100 * 1024)),
+            )
+            .await
+            .map_err(|e| e.context(format!("aggregates {name}")))?;
+            assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
+        }
+        Ok(())
     }
 }

@@ -287,14 +287,16 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
     }
 
     /// Releases the capacity that the buffer holds beyond its stored groups,
-    /// such as hash table slots and the per-batch `group_indices` scratch, so
-    /// that [`Self::memory_size`] reflects the remaining groups.
-    ///
-    /// Accumulator capacity is not released.
+    /// such as hash table slots, the per-batch `group_indices` scratch and
+    /// per-batch accumulator scratch, so that [`Self::memory_size`] reflects
+    /// the remaining groups.
     pub(in crate::aggregates) fn shrink_to_fit(&mut self) {
         self.buffer.group_values.shrink_to_fit();
         self.buffer.group_indices.clear();
         self.buffer.group_indices.shrink_to_fit();
+        for acc in &mut self.buffer.accumulators {
+            acc.shrink_to_fit();
+        }
     }
 
     pub(in crate::aggregates) fn metrics(&self) -> ClusteredAggregateTableMetrics {

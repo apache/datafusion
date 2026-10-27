@@ -816,6 +816,11 @@ impl HashAggregateAccumulator {
         self.accumulator.size()
     }
 
+    /// See [`GroupsAccumulator::shrink_to_fit`].
+    pub(super) fn shrink_to_fit(&mut self) {
+        self.accumulator.shrink_to_fit();
+    }
+
     pub(super) fn update_batch(
         &mut self,
         values: &CompactedAccumulatorArgs,

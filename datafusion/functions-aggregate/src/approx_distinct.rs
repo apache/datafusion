@@ -629,6 +629,11 @@ impl GroupsAccumulator for HllGroupsAccumulator {
             + self.allocated_bytes
             + self.hashes.capacity() * size_of::<u64>()
     }
+
+    fn shrink_to_fit(&mut self) {
+        self.groups.shrink_to_fit();
+        self.hashes = Vec::new();
+    }
 }
 
 impl Debug for ApproxDistinct {

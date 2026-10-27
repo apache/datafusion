@@ -653,6 +653,14 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         self.allocation_bytes
     }
 
+    fn shrink_to_fit(&mut self) {
+        let vec_size_pre = self.states.allocated_size();
+        self.states.shrink_to_fit();
+        self.adjust_allocation(vec_size_pre, self.states.allocated_size());
+        let scratch = std::mem::take(&mut self.scratch);
+        self.free_allocation(scratch.allocated_size());
+    }
+
     fn convert_to_state(
         &self,
         values: &[ArrayRef],
