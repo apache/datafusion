@@ -180,6 +180,7 @@ struct Run {
     clustering: GroupClusteringMode,
     metrics: MetricsSet,
     output_batch_rows: Vec<usize>,
+    output: Vec<RecordBatch>,
     /// The most bytes the aggregate held at once.
     peak: usize,
 }
@@ -339,7 +340,7 @@ impl Case {
             ),
             Err(e) => format!("Err({})", e.strip_backtrace()),
         };
-        drop(result);
+        let output = result.unwrap_or_default();
         drop(context);
         assert_eq!(pool.reserved(), 0, "every reservation is released");
 
@@ -348,6 +349,7 @@ impl Case {
             clustering: aggregate.group_clustering_mode().clone(),
             metrics: aggregate.metrics().unwrap(),
             output_batch_rows,
+            output,
             peak: pool.peak.load(Ordering::Relaxed),
         })
     }
@@ -620,6 +622,24 @@ async fn output_materialization_refused() -> Result<()> {
     FinalHashAggregateStream[0] unregister
     => Ok(256 rows in 4 batches)
     ");
+
+    let unlimited = Case {
+        memory_limit: usize::MAX,
+        ..padded(AggregateMode::Final)
+    }
+    .run()
+    .await?;
+    assert_eq!(unlimited.spill_count(), 0);
+    assert_eq!(run.output, unlimited.output);
+
+    let run = Case {
+        spill_enabled: false,
+        ..padded(AggregateMode::Final)
+    }
+    .run()
+    .await?;
+    assert_eq!(run.spill_count(), 0);
+    assert!(run.snapshot.contains("cannot spill its output"));
 
     let run = padded(AggregateMode::Single).run().await?;
     assert_eq!(run.spill_count(), 0);
