@@ -1727,9 +1727,9 @@ dependencies = [
  "cfg-if",
  "crossbeam-utils",
  "hashbrown 0.14.5",
- "lock_api",
+ "lock_api 0.4.14",
  "once_cell",
- "parking_lot_core",
+ "parking_lot_core 0.9.12",
 ]
 
 [[package]]
@@ -1787,7 +1787,7 @@ dependencies = [
  "log",
  "nix",
  "object_store",
- "parking_lot",
+ "parking_lot 0.13.0",
  "parquet",
  "rand 0.9.4",
  "rand_distr",
@@ -1857,7 +1857,7 @@ dependencies = [
  "itertools 0.15.0",
  "log",
  "object_store",
- "parking_lot",
+ "parking_lot 0.13.0",
  "tokio",
 ]
 
@@ -1907,7 +1907,7 @@ dependencies = [
  "log",
  "mimalloc",
  "object_store",
- "parking_lot",
+ "parking_lot 0.13.0",
  "parquet",
  "regex",
  "rstest",
@@ -1986,7 +1986,7 @@ dependencies = [
  "liblzma",
  "log",
  "object_store",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pin-project-lite",
  "rand 0.9.4",
  "tempfile",
@@ -2117,7 +2117,7 @@ dependencies = [
  "itertools 0.15.0",
  "log",
  "object_store",
- "parking_lot",
+ "parking_lot 0.13.0",
  "parquet",
  "tempfile",
  "tokio",
@@ -2181,7 +2181,7 @@ dependencies = [
  "insta",
  "log",
  "object_store",
- "parking_lot",
+ "parking_lot 0.13.0",
  "parquet",
  "pin-project-lite",
  "rand 0.9.4",
@@ -2397,7 +2397,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-proto-common",
  "datafusion-proto-models",
- "parking_lot",
+ "parking_lot 0.13.0",
 ]
 
 [[package]]
@@ -2479,7 +2479,7 @@ dependencies = [
  "indexmap 2.14.2",
  "insta",
  "itertools 0.15.0",
- "parking_lot",
+ "parking_lot 0.13.0",
  "petgraph",
  "rand 0.9.4",
  "recursive",
@@ -2515,7 +2515,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "indexmap 2.14.2",
  "itertools 0.15.0",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pin-project",
  "rand 0.9.4",
  "regex",
@@ -2578,7 +2578,7 @@ dependencies = [
  "log",
  "loom",
  "num-traits",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pin-project-lite",
  "rand 0.9.4",
  "rstest",
@@ -2618,7 +2618,7 @@ dependencies = [
  "doc-comment",
  "flate2",
  "object_store",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pretty_assertions",
  "prost",
  "recursive",
@@ -2682,7 +2682,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-plan",
  "futures",
- "parking_lot",
+ "parking_lot 0.13.0",
 ]
 
 [[package]]
@@ -4210,6 +4210,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lock_api"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65d91b22da179613dcf4d6ec8349563f52a363f6849e03b00dd0a185ec4a59af"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4572,7 +4581,7 @@ dependencies = [
  "itertools 0.15.0",
  "md-5 0.11.0",
  "nix",
- "parking_lot",
+ "parking_lot 0.12.5",
  "percent-encoding",
  "quick-xml",
  "rand 0.10.1",
@@ -4649,8 +4658,18 @@ version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
- "lock_api",
- "parking_lot_core",
+ "lock_api 0.4.14",
+ "parking_lot_core 0.9.12",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9cf937ca4e1d0b7578784559063422fc39ae7c5a00f02471f2614d5486fd226"
+dependencies = [
+ "lock_api 0.5.0",
+ "parking_lot_core 0.10.0",
 ]
 
 [[package]]
@@ -4662,6 +4681,18 @@ dependencies = [
  "cfg-if",
  "libc",
  "redox_syscall 0.5.18",
+ "smallvec",
+ "windows-link",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cfff060068cc18aa7815010fcaf80c68c7fb9e85fc7f5c0f9bf142c21d19826"
+dependencies = [
+ "libc",
+ "redox_syscall 0.9.5",
  "smallvec",
  "windows-link",
 ]
@@ -5354,6 +5385,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_syscall"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "580c875845b41ecb1564ad1ae4703044cef774145e3d7a94dc2b3fa7c97868fd"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
 name = "redox_users"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6033,9 +6073,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.15.1"
+version = "1.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+checksum = "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8"
 
 [[package]]
 name = "snap"
@@ -6521,7 +6561,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -6553,7 +6593,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "log",
- "parking_lot",
+ "parking_lot 0.12.5",
  "percent-encoding",
  "phf 0.13.1",
  "pin-project-lite",
