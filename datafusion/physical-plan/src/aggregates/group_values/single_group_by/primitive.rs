@@ -252,6 +252,11 @@ where
         true
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.map.shrink_to_fit(|&(_, hash)| hash);
+        self.values.shrink_to_fit();
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         self.values.clear();
         self.values.shrink_to(num_rows);
