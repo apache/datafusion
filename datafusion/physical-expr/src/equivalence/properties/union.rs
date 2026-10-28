@@ -58,8 +58,12 @@ fn calculate_union_binary(
                 .map(|rhs_const| {
                     let mut const_expr = lhs_const.clone();
                     // If both sides have matching constant values, preserve it.
-                    // Otherwise, set fall back to heterogeneous values.
-                    if lhs_const.across_partitions != rhs_const.across_partitions {
+                    // Otherwise, set fall back to heterogeneous values. Two
+                    // unknown values are not known to match, so they fall back
+                    // too.
+                    if lhs_const.across_partitions != rhs_const.across_partitions
+                        || lhs_const.across_partitions == AcrossPartitions::Uniform(None)
+                    {
                         const_expr.across_partitions = AcrossPartitions::Heterogeneous;
                     }
                     const_expr

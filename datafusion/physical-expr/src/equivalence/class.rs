@@ -29,6 +29,7 @@ use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequire
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result, ScalarValue};
+use datafusion_expr::sort_properties::SortProperties;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
@@ -361,8 +362,9 @@ impl EquivalenceGroup {
             return;
         }
         // If the expression is not in any equivalence class, but has the same
-        // constant value with some class, add it to that class:
-        if let AcrossPartitions::Uniform(_) = &const_expr.across_partitions {
+        // constant value with some class, add it to that class. An unknown
+        // value is never known to match, so it gets a class of its own:
+        if let AcrossPartitions::Uniform(Some(_)) = &const_expr.across_partitions {
             for (idx, cls) in self.classes.iter_mut().enumerate() {
                 if cls
                     .constant
@@ -792,9 +794,21 @@ impl EquivalenceGroup {
         // TODO: This function should be able to return values of non-literal
         //       complex constants as well; e.g. it should return `8` for the
         //       expression `3 + 5`, not an unknown `heterogenous` value.
+        // A volatile expression can change from row to row, even when all of
+        // its inputs are constant
+        if expr.is_volatile_node() {
+            return None;
+        }
         let children = expr.children();
         if children.is_empty() {
-            return None;
+            // A leaf that reads no column can still be constant, e.g. an
+            // uncorrelated scalar subquery, which reports itself as a
+            // singleton. It does not depend on the row or the partition, so
+            // its value is the same everywhere, even if it is not known yet.
+            let singleton = expr
+                .get_properties(&[])
+                .is_ok_and(|props| props.sort_properties == SortProperties::Singleton);
+            return singleton.then_some(AcrossPartitions::Uniform(None));
         }
         for child in children {
             self.is_expr_constant(child)?;
@@ -1364,6 +1378,117 @@ mod tests {
 
     /// A constant on the right side of a join stays constant in the join
     /// output, unless unmatched rows pad the right side with NULLs.
+    /// An uncorrelated scalar subquery is a leaf with no columns, so the only
+    /// way to know it is constant is to ask the expression itself.
+    /// <https://github.com/apache/datafusion/issues/26572>
+    #[test]
+    fn test_scalar_subquery_is_uniform_constant() -> Result<()> {
+        use crate::scalar_subquery::ScalarSubqueryExpr;
+        use datafusion_expr::physical_planning_context::{
+            ScalarSubqueryResults, SubqueryIndex,
+        };
+
+        let subquery: Arc<dyn PhysicalExpr> = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            true,
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        ));
+        let group = EquivalenceGroup::default();
+        assert_eq!(
+            group.is_expr_constant(&subquery),
+            Some(AcrossPartitions::Uniform(None))
+        );
+        // A column is a leaf too, but it is not constant
+        let schema = abc_schema();
+        assert_eq!(group.is_expr_constant(&col("a", &schema)?), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_volatile_function_of_constants_is_not_constant() -> Result<()> {
+        use crate::ScalarFunctionExpr;
+        use crate::scalar_subquery::ScalarSubqueryExpr;
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::physical_planning_context::{
+            ScalarSubqueryResults, SubqueryIndex,
+        };
+        use datafusion_expr::{ColumnarValue, Volatility, create_udf};
+
+        let schema = abc_schema();
+        let group = EquivalenceGroup::default();
+        let subquery: Arc<dyn PhysicalExpr> = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            true,
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        ));
+        let call = |volatility, arg: Arc<dyn PhysicalExpr>| -> Result<_> {
+            let udf = Arc::new(create_udf(
+                "f",
+                vec![DataType::Int32],
+                DataType::Int32,
+                volatility,
+                Arc::new(|args: &[ColumnarValue]| Ok(args[0].clone())),
+            ));
+            let expr = ScalarFunctionExpr::try_new(
+                udf,
+                vec![arg],
+                &schema,
+                Arc::new(ConfigOptions::new()),
+            )?;
+            Ok(Arc::new(expr) as Arc<dyn PhysicalExpr>)
+        };
+
+        // A volatile function can return a new value for every row, even
+        // when its argument is constant
+        for arg in [lit(1i32), Arc::clone(&subquery)] {
+            let volatile = call(Volatility::Volatile, arg)?;
+            assert_eq!(group.is_expr_constant(&volatile), None);
+        }
+        // A stable function of a constant is constant
+        let stable = call(Volatility::Stable, subquery)?;
+        assert_eq!(
+            group.is_expr_constant(&stable),
+            Some(AcrossPartitions::Heterogeneous)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unknown_constants_stay_apart() -> Result<()> {
+        // Two constants whose values are unknown are not known to be equal,
+        // so they must not be merged into one class
+        let schema = abc_schema();
+        let mut group = EquivalenceGroup::default();
+        group.add_constant(ConstExpr::new(
+            col("a", &schema)?,
+            AcrossPartitions::Uniform(None),
+        ));
+        group.add_constant(ConstExpr::new(
+            col("b", &schema)?,
+            AcrossPartitions::Uniform(None),
+        ));
+        assert_eq!(group.len(), 2);
+
+        // Two constants with the same known value are merged
+        let mut group = EquivalenceGroup::default();
+        let one = Some(ScalarValue::Int32(Some(1)));
+        group.add_constant(ConstExpr::new(
+            col("a", &schema)?,
+            AcrossPartitions::Uniform(one.clone()),
+        ));
+        group.add_constant(ConstExpr::new(
+            col("b", &schema)?,
+            AcrossPartitions::Uniform(one),
+        ));
+        assert_eq!(group.len(), 1);
+
+        Ok(())
+    }
+
     /// <https://github.com/apache/datafusion/issues/26283>
     #[test]
     fn test_join_keeps_right_constants() -> Result<()> {
