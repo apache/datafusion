@@ -1,0 +1,35 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# FIRST_VALUE, LAST_VALUE and NTH_VALUE with IGNORE NULLS, whose `memoize` drops rows between
+# batches. One row per batch evaluates a single frame, more rows gather results for several.
+# Matrix rules: no EXPLAIN, no in-file SET of a swept knob, rowsort every multi-row query.
+
+# configMatrix: datafusion.execution.batch_size=1,2,100,8192
+
+# The RANGE frame end stalls after each jump of `k`, so a frame can be empty once `memoize` has
+# dropped the rows before it. `mx` comes from a separate operator, which does not keep them.
+query II
+SELECT count(lv), sum(CASE WHEN lv IS DISTINCT FROM mx THEN 1 ELSE 0 END)
+FROM (SELECT mx, LAST_VALUE(v) IGNORE NULLS OVER w AS lv
+  FROM (SELECT k, v, max(v) OVER w AS mx
+    FROM (SELECT i + 100 * (i / 10) AS k, CASE WHEN i % 7 < 3 THEN i END AS v
+      FROM (SELECT value AS i FROM generate_series(1, 200)))
+    WINDOW w AS (ORDER BY k RANGE BETWEEN UNBOUNDED PRECEDING AND 5 PRECEDING))
+  WINDOW w AS (ORDER BY k RANGE BETWEEN UNBOUNDED PRECEDING AND 5 PRECEDING));
+----
+195 0
