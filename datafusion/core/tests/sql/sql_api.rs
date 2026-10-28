@@ -1,22 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion::prelude::*;
-use datafusion_common::assert_contains;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{TableReference, assert_batches_eq, assert_contains};
+use datafusion_expr::dml::MergeIntoOp;
+use datafusion_expr::{Expr, LogicalPlan, WriteOp};
 
 use tempfile::TempDir;
 
@@ -114,6 +104,45 @@ async fn unsupported_copy_returns_error() {
 }
 
 #[tokio::test]
+async fn copy_can_be_disabled_independently_from_dml() {
+    let tmpdir = TempDir::new().unwrap();
+    let tmpfile = tmpdir.path().join("foo.parquet");
+
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE test (x int)").await.unwrap();
+
+    let options = SQLOptions::new().with_allow_copy(false);
+    let sql = format!(
+        "COPY (values(1)) TO '{}' STORED AS parquet",
+        tmpfile.to_string_lossy()
+    );
+    let df = ctx.sql_with_options(&sql, options).await;
+    assert_eq!(
+        df.unwrap_err().strip_backtrace(),
+        "Error during planning: COPY not supported"
+    );
+
+    ctx.sql_with_options("INSERT INTO test VALUES (1)", options)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let results = ctx
+        .sql_with_options("SELECT x FROM test", options)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(["+---+", "| x |", "+---+", "| 1 |", "+---+"], &results);
+
+    let options = options.with_allow_copy(true);
+    ctx.sql_with_options(&sql, options).await.unwrap();
+}
+
+#[tokio::test]
 async fn unsupported_statement_returns_error() {
     let ctx = SessionContext::new();
     ctx.sql("CREATE TABLE test (x int)").await.unwrap();
@@ -206,6 +235,102 @@ async fn ddl_can_not_be_planned_by_session_state() {
         physical_plan.unwrap_err().strip_backtrace(),
         "This feature is not implemented: Unsupported logical plan: DropTable"
     );
+}
+
+async fn merge_into_context() -> SessionContext {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE target (id INT)").await.unwrap();
+    ctx.sql("CREATE TABLE source (id INT)").await.unwrap();
+    ctx
+}
+
+async fn merge_operation(ctx: &SessionContext, sql: &str) -> Box<MergeIntoOp> {
+    let plan = ctx.state().create_logical_plan(sql).await.unwrap();
+    let LogicalPlan::Dml(dml) = plan else {
+        panic!("expected MERGE DML")
+    };
+    let WriteOp::MergeInto(merge_op) = dml.op else {
+        panic!("expected MERGE operation")
+    };
+    merge_op
+}
+
+fn has_outer_reference_to(expr: &Expr, qualifier: &TableReference) -> bool {
+    let mut found = false;
+    expr.apply(|expr| {
+        let outer_refs = match expr {
+            Expr::Exists(exists) => Some(&exists.subquery.outer_ref_columns),
+            Expr::InSubquery(in_subquery) => {
+                Some(&in_subquery.subquery.outer_ref_columns)
+            }
+            Expr::SetComparison(set_comparison) => {
+                Some(&set_comparison.subquery.outer_ref_columns)
+            }
+            Expr::ScalarSubquery(subquery) => Some(&subquery.outer_ref_columns),
+            _ => None,
+        };
+        found = outer_refs.is_some_and(|outer_refs| {
+            outer_refs.iter().any(|expr| {
+                matches!(
+                    expr,
+                    Expr::OuterReferenceColumn(_, column)
+                        if column.relation.as_ref() == Some(qualifier)
+                )
+            })
+        });
+        Ok(if found {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })
+    .unwrap();
+    found
+}
+
+#[tokio::test]
+async fn merge_into_preserves_target_alias_in_correlated_subquery() {
+    let ctx = merge_into_context().await;
+    let direct_exists = "MERGE INTO target AS t USING source AS s \
+         ON EXISTS (SELECT 1 FROM source AS x WHERE x.id = t.id) \
+         WHEN MATCHED THEN DELETE";
+    let direct_in = "MERGE INTO target AS t USING source AS s \
+         ON t.id IN (SELECT x.id FROM source AS x WHERE x.id = t.id) \
+         WHEN MATCHED THEN DELETE";
+    let direct_any = "MERGE INTO target AS t USING source AS s \
+         ON t.id = ANY (SELECT x.id FROM source AS x WHERE x.id = t.id) \
+         WHEN MATCHED THEN DELETE";
+    let direct_all = "MERGE INTO target AS t USING source AS s \
+         ON t.id = ALL (SELECT x.id FROM source AS x WHERE x.id = t.id) \
+         WHEN MATCHED THEN DELETE";
+    let direct_scalar = "MERGE INTO target AS t USING source AS s \
+         ON t.id = (SELECT max(x.id) FROM source AS x WHERE x.id = t.id) \
+         WHEN MATCHED THEN DELETE";
+
+    for sql in [
+        direct_exists,
+        direct_in,
+        direct_any,
+        direct_all,
+        direct_scalar,
+    ] {
+        let merge_op = merge_operation(&ctx, sql).await;
+        assert_eq!(merge_op.target_qualifier(), &TableReference::bare("t"));
+        assert!(has_outer_reference_to(
+            &merge_op.on,
+            &TableReference::bare("t")
+        ));
+    }
+
+    let shadowed_correlation = "MERGE INTO target AS t USING source AS s \
+         ON EXISTS (SELECT 1 FROM source AS t \
+           WHERE EXISTS (SELECT 1 FROM source AS x WHERE x.id = t.id)) \
+         WHEN MATCHED THEN DELETE";
+    let merge_op = merge_operation(&ctx, shadowed_correlation).await;
+    assert!(!has_outer_reference_to(
+        &merge_op.on,
+        &TableReference::bare("t")
+    ));
 }
 
 #[tokio::test]

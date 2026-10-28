@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! See `main.rs` for how to run it.
 //!
@@ -37,7 +24,9 @@ use std::sync::Arc;
 
 use datafusion::common::Result;
 use datafusion::common::internal_err;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::TaskContext;
+use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::{
@@ -110,11 +99,22 @@ impl ExecutionPlan for ParentExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unreachable!()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -123,6 +123,15 @@ impl ExecutionPlan for ParentExec {
         _context: Arc<TaskContext>,
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -138,7 +147,7 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
         _ctx: &TaskContext,
         _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if buf == "ParentExec".as_bytes() {
+        if buf == b"ParentExec" {
             Ok(Arc::new(ParentExec {
                 input: inputs[0].clone(),
             }))
@@ -154,7 +163,7 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
         _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         if node.is::<ParentExec>() {
-            buf.extend_from_slice("ParentExec".as_bytes());
+            buf.extend_from_slice(b"ParentExec");
             Ok(())
         } else {
             internal_err!("Not supported")
@@ -188,11 +197,22 @@ impl ExecutionPlan for ChildExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unreachable!()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -201,6 +221,15 @@ impl ExecutionPlan for ChildExec {
         _context: Arc<TaskContext>,
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -216,7 +245,7 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         _ctx: &TaskContext,
         _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if buf == "ChildExec".as_bytes() {
+        if buf == b"ChildExec" {
             Ok(Arc::new(ChildExec {}))
         } else {
             internal_err!("Not supported")
@@ -230,7 +259,7 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         if node.is::<ChildExec>() {
-            buf.extend_from_slice("ChildExec".as_bytes());
+            buf.extend_from_slice(b"ChildExec");
             Ok(())
         } else {
             internal_err!("Not supported")

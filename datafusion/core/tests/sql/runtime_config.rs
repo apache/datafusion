@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests for runtime configuration SQL interface
 
@@ -368,7 +355,7 @@ async fn test_list_files_cache_ttl() {
     };
 
     update_limit(&ctx, "1m").await;
-    assert_eq!(get_limit(&ctx), Duration::from_secs(60));
+    assert_eq!(get_limit(&ctx), Duration::from_mins(1));
 
     update_limit(&ctx, "30s").await;
     assert_eq!(get_limit(&ctx), Duration::from_secs(30));

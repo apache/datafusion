@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::{
@@ -74,10 +61,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         unsigned_number: &str,
         negative: bool,
     ) -> Result<Expr> {
-        let signed_number: Cow<str> = if negative {
-            Cow::Owned(format!("-{unsigned_number}"))
-        } else {
+        // remove underscores, since the Rust parser used here does not support them
+        let signed_number = if !negative && !unsigned_number.contains('_') {
             Cow::Borrowed(unsigned_number)
+        } else {
+            let mut signed_number =
+                String::with_capacity(unsigned_number.len() + usize::from(negative));
+            if negative {
+                signed_number.push('-');
+            }
+            unsigned_number.bytes().for_each(|b| {
+                if b != b'_' {
+                    signed_number.push(b as char);
+                }
+            });
+            Cow::Owned(signed_number)
+        };
+
+        let unsigned_number = if negative {
+            &signed_number[1..]
+        } else {
+            &signed_number
         };
 
         // Try to parse as i64 first, then u64 if negative is false, then decimal or f64

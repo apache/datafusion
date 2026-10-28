@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! # HyperLogLog
 //!
@@ -34,6 +21,7 @@
 //!
 //! This module also borrows some code structure from [pdatastructs.rs](https://github.com/crepererum/pdatastructs.rs/blob/3997ed50f6b6871c9e53c4c5e0f48f431405fc63/src/hyperloglog.rs).
 
+#[cfg(not(feature = "force_hash_collisions"))]
 use std::hash::BuildHasher;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -79,6 +67,10 @@ where
     /// Creates a HyperLogLog from already populated registers
     /// note that this method should not be invoked in untrusted environment
     /// because the internal structure of registers are not examined.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "The registers are moved into the returned `Self`, so taking a reference would only add a copy"
+    )]
     pub(crate) fn new_with_registers(registers: [u8; NUM_REGISTERS]) -> Self {
         Self {
             registers,
@@ -88,9 +80,18 @@ where
 
     /// The HLL hash state is shared through `datafusion_common::hash_utils`
     /// so sketches remain compatible across accumulators.
+    #[cfg(not(feature = "force_hash_collisions"))]
     #[inline]
     fn hash_value(&self, obj: &T) -> u64 {
         HLL_HASH_STATE.hash_one(obj)
+    }
+
+    /// Test version of `hash_value` that forces all hashes to collide to zero,
+    /// matching `create_hashes`.
+    #[cfg(feature = "force_hash_collisions")]
+    #[inline]
+    fn hash_value(&self, _obj: &T) -> u64 {
+        0
     }
 
     /// Adds an element to the HyperLogLog.
@@ -281,7 +282,9 @@ where
     }
 }
 
-#[cfg(test)]
+/// These tests check cardinality estimates, which collapse to 1 under
+/// `force_hash_collisions` because every value hashes to zero.
+#[cfg(all(test, not(feature = "force_hash_collisions")))]
 mod tests {
     use super::{HyperLogLog, NUM_REGISTERS};
 

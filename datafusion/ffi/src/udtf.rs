@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::ffi::c_void;
@@ -23,14 +10,14 @@ use datafusion_catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
 use datafusion_common::DataFusionError;
 use datafusion_common::error::Result;
 use datafusion_execution::TaskContext;
-use datafusion_proto::logical_plan::from_proto::parse_exprs;
-use datafusion_proto::logical_plan::to_proto::serialize_exprs;
+use datafusion_proto::bytes::{
+    logical_exprs_from_bytes_with_extension_codec,
+    logical_exprs_to_bytes_with_extension_codec,
+};
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
-use datafusion_proto::protobuf::LogicalExprList;
 use datafusion_session::Session;
-use prost::Message;
 use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
 
@@ -113,12 +100,10 @@ unsafe extern "C" fn call_fn_wrapper(
         sresult_return!((&udtf.logical_codec.task_ctx_provider).try_into());
     let codec: Arc<dyn LogicalExtensionCodec> = (&udtf.logical_codec).into();
 
-    let proto_filters = sresult_return!(LogicalExprList::decode(args.as_ref()));
-
-    let args = sresult_return!(parse_exprs(
-        proto_filters.expr.iter(),
+    let args = sresult_return!(logical_exprs_from_bytes_with_extension_codec(
+        args.as_ref(),
         ctx.as_ref(),
-        codec.as_ref()
+        codec.as_ref(),
     ));
 
     #[expect(deprecated)]
@@ -143,19 +128,17 @@ unsafe extern "C" fn call_with_args_wrapper(
         sresult_return!((&udtf.logical_codec.task_ctx_provider).try_into());
     let codec: Arc<dyn LogicalExtensionCodec> = (&udtf.logical_codec).into();
 
-    let proto_filters = sresult_return!(LogicalExprList::decode(args.as_ref()));
-
-    let args = sresult_return!(parse_exprs(
-        proto_filters.expr.iter(),
+    let args = sresult_return!(logical_exprs_from_bytes_with_extension_codec(
+        args.as_ref(),
         ctx.as_ref(),
-        codec.as_ref()
+        codec.as_ref(),
     ));
 
     let mut foreign_session = None;
     let session = sresult_return!(
         session
             .as_local()
-            .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+            .map(Ok::<&dyn Session, DataFusionError>)
             .unwrap_or_else(|| {
                 foreign_session = Some(ForeignSession::try_from(&session)?);
                 Ok(foreign_session.as_ref().unwrap())
@@ -176,7 +159,7 @@ unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) {
     unsafe {
         debug_assert!(!udtf.private_data.is_null());
         let private_data =
-            Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
+            Box::from_raw(udtf.private_data.cast::<TableFunctionPrivateData>());
         drop(private_data);
         udtf.private_data = std::ptr::null_mut();
     }
@@ -238,7 +221,7 @@ impl FFI_TableFunction {
             logical_codec,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -280,13 +263,12 @@ impl TableFunctionImpl for ForeignTableFunction {
             self.0.logical_codec.clone(),
         );
         let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
-        let expr_list = LogicalExprList {
-            expr: serialize_exprs(args.exprs(), codec.as_ref())?,
-        };
-        let filters_serialized = expr_list.encode_to_vec().into_iter().collect();
+        let bytes =
+            logical_exprs_to_bytes_with_extension_codec(args.exprs(), codec.as_ref())?;
+        let args_serialized = SVec::from(bytes.as_ref());
 
         let table_provider =
-            unsafe { (self.0.call_with_args)(&self.0, filters_serialized, session) };
+            unsafe { (self.0.call_with_args)(&self.0, args_serialized, session) };
 
         let table_provider = df_result!(table_provider)?;
         let table_provider: Arc<dyn TableProvider> = (&table_provider).into();
@@ -296,13 +278,11 @@ impl TableFunctionImpl for ForeignTableFunction {
 
     fn call(&self, args: &[datafusion_expr::Expr]) -> Result<Arc<dyn TableProvider>> {
         let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
-        let expr_list = LogicalExprList {
-            expr: serialize_exprs(args, codec.as_ref())?,
-        };
-        let filters_serialized = expr_list.encode_to_vec().into_iter().collect();
+        let bytes = logical_exprs_to_bytes_with_extension_codec(args, codec.as_ref())?;
+        let args_serialized = SVec::from(bytes.as_ref());
 
         #[expect(deprecated)]
-        let table_provider = unsafe { (self.0.call)(&self.0, filters_serialized) };
+        let table_provider = unsafe { (self.0.call)(&self.0, args_serialized) };
 
         let table_provider = df_result!(table_provider)?;
         let table_provider: Arc<dyn TableProvider> = (&table_provider).into();

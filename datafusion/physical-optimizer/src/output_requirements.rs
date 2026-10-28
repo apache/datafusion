@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! The GlobalOrderRequire optimizer rule either:
 //! - Adds an auxiliary `OutputRequirementExec` operator to keep track of global
@@ -27,12 +14,16 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
-use datafusion_physical_plan::execution_plan::Boundedness;
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, replace_children_if_necessary,
+};
 use datafusion_physical_plan::projection::{
     ProjectionExec, make_with_child, update_expr, update_ordering_requirement,
 };
@@ -40,8 +31,9 @@ use datafusion_physical_plan::scalar_subquery::ScalarSubqueryExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
-    ChildStats, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, SendableRecordBatchStream, StatisticsArgs,
+    ChildStats, ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream, StatisticsArgs,
 };
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
@@ -112,7 +104,7 @@ impl OutputRequirementExec {
         dist_requirement: Distribution,
         fetch: Option<usize>,
     ) -> Self {
-        let cache = Self::compute_properties(&input, &fetch);
+        let cache = Self::compute_properties(&input, fetch);
         Self {
             input,
             order_requirement: requirements,
@@ -129,7 +121,7 @@ impl OutputRequirementExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
-        fetch: &Option<usize>,
+        fetch: Option<usize>,
     ) -> PlanProperties {
         let boundedness = if fetch.is_some() {
             Boundedness::Bounded
@@ -231,9 +223,10 @@ impl ExecutionPlan for OutputRequirementExec {
         vec![self.order_requirement.clone()]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             children.remove(0), // has a single child
@@ -241,6 +234,16 @@ impl ExecutionPlan for OutputRequirementExec {
             self.dist_requirement.clone(),
             self.fetch,
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -279,8 +282,8 @@ impl ExecutionPlan for OutputRequirementExec {
 
         let mut requirements = self.required_input_ordering().swap_remove(0);
         if let Some(reqs) = requirements {
-            let mut updated_reqs = vec![];
             let (lexes, soft) = reqs.into_alternatives();
+            let mut updated_reqs = Vec::with_capacity(lexes.len());
             for lex in lexes.into_iter() {
                 let Some(updated_lex) = update_ordering_requirement(lex, proj_exprs)?
                 else {
@@ -297,7 +300,7 @@ impl ExecutionPlan for OutputRequirementExec {
                 Distribution::HashPartitioned(exprs)
                 | Distribution::KeyPartitioned(exprs),
             ) => {
-                let mut updated_exprs = vec![];
+                let mut updated_exprs = Vec::with_capacity(exprs.len());
                 for expr in exprs {
                     let Some(new_expr) = update_expr(expr, projection.expr(), false)?
                     else {
@@ -323,6 +326,15 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -460,7 +472,7 @@ fn require_top_ordering_helper(
                 require_top_ordering_helper(Arc::clone(&children[idx]))?;
             if is_changed {
                 children[idx] = new_child;
-                return Ok((plan.with_new_children(children)?, true));
+                return Ok((replace_children_if_necessary(plan, children)?, true));
             }
         }
         Ok((plan, false))

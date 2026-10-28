@@ -42,6 +42,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-proto-models = { workspace = true, optional = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
@@ -65,3 +66,10 @@ path = "src/mod.rs"
 # This feature is deprecated, as core functionality in the SpillManager requires all features
 # it enabled, and will be removed in a future version.
 compression = []
+# Enables `FileSource::try_to_proto` on `ArrowSource` and the `ArrowScan` decode
+# entry point. Mirrors the `proto` feature on `datafusion-datasource`.
+proto = [
+    "dep:datafusion-proto-models",
+    "datafusion-datasource/proto",
+    "datafusion-physical-plan/proto",
+]

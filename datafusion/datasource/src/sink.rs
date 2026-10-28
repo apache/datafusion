@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Execution plan for writing data to [`DataSink`]s
 
@@ -24,16 +11,17 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{Distribution, EquivalenceProperties};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequirements};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
-    InputDistributionRequirements, Partitioning, PlanProperties,
-    SendableRecordBatchStream, execute_input_stream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, InputDistributionRequirements, Partitioning, PlanProperties,
+    ReplaceChildrenOptions, SendableRecordBatchStream, execute_input_stream,
 };
 
 use async_trait::async_trait;
@@ -77,8 +65,7 @@ pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
     /// Implementations can use `ctx` to encode the input plan, sink-specific
     /// expressions, and [`DataSinkExec::encode_sort_order`].
     ///
-    /// Returning `Ok(None)` preserves the legacy central serialization fallback
-    /// without eagerly encoding any child plans or expressions.
+    /// Returning `Ok(None)` lets the caller try its extension codec instead.
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
@@ -194,6 +181,42 @@ impl DataSinkExec {
             .transpose()
     }
 
+    /// Decode the optional sink ordering from a protobuf plan node.
+    #[cfg(feature = "proto")]
+    pub fn decode_sort_order(
+        collection: Option<
+            &datafusion_proto_models::protobuf::PhysicalSortExprNodeCollection,
+        >,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+        schema: &Schema,
+    ) -> Result<Option<LexRequirement>> {
+        use arrow::compute::SortOptions;
+        use datafusion_physical_expr::PhysicalSortExpr;
+
+        let Some(collection) = collection else {
+            return Ok(None);
+        };
+        let sort_exprs = collection
+            .physical_sort_expr_nodes
+            .iter()
+            .map(|node| {
+                let expr = node.expr.as_ref().ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "Unexpected empty physical expression"
+                    )
+                })?;
+                Ok(PhysicalSortExpr {
+                    expr: ctx.decode_expr(expr, schema)?,
+                    options: SortOptions {
+                        descending: !node.asc,
+                        nulls_first: node.nulls_first,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(LexRequirement::new(sort_exprs.into_iter().map(Into::into)))
+    }
+
     fn create_schema(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
@@ -254,7 +277,7 @@ impl ExecutionPlan for DataSinkExec {
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // The required input ordering is set externally (e.g. by a `ListingTable`).
         // Otherwise, there is no specific requirement (i.e. `sort_order` is `None`).
-        vec![self.sort_order.as_ref().cloned().map(Into::into)]
+        vec![self.sort_order.clone().map(Into::into)]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -269,15 +292,33 @@ impl ExecutionPlan for DataSinkExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
             Arc::clone(&self.sink),
             self.sort_order.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     /// Execute the plan and return a stream of `RecordBatch`es for
@@ -331,11 +372,11 @@ impl ExecutionPlan for DataSinkExec {
 /// Create a output record batch with a count
 ///
 /// ```text
-/// +-------+,
-/// | count |,
-/// +-------+,
-/// | 6     |,
-/// +-------+,
+/// +-------+
+/// | count |
+/// +-------+
+/// | 6     |
+/// +-------+
 /// ```
 fn make_count_batch(count: u64) -> RecordBatch {
     let array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;

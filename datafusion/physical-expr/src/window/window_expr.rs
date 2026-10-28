@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::fmt::Debug;
@@ -23,7 +10,7 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 
 use arrow::array::BooleanArray;
-use arrow::array::{Array, ArrayRef, new_empty_array};
+use arrow::array::{Array, ArrayRef, make_comparator, new_empty_array};
 use arrow::compute::SortOptions;
 use arrow::compute::filter as arrow_filter;
 use arrow::compute::kernels::sort::SortColumn;
@@ -31,9 +18,9 @@ use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::RandomState;
-use datafusion_common::utils::compare_rows;
 use datafusion_common::{
-    Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, internal_err,
+    Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, exec_err,
+    internal_err,
 };
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,
@@ -250,18 +237,24 @@ pub trait AggregateWindowExpr: WindowExpr {
                     WindowState {
                         state: WindowAggState::new(out_type)?,
                         window_fn: WindowFn::Aggregate(accumulator),
+                        published: false,
                     },
                 );
-            };
+            }
             let window_state = window_agg_state
                 .get_mut(partition_row)
                 .ok_or_else(|| exec_datafusion_err!("Cannot find state"))?;
-            let accumulator = match &mut window_state.window_fn {
-                WindowFn::Aggregate(accumulator) => accumulator,
-                _ => unreachable!(),
+            let WindowFn::Aggregate(accumulator) = &mut window_state.window_fn else {
+                unreachable!()
             };
             let state = &mut window_state.state;
             let record_batch = &partition_batch_state.record_batch;
+
+            // Skip partitions that cannot produce anything new until they
+            // either receive rows or reach their end.
+            if state.is_up_to_date_with(partition_batch_state) {
+                continue;
+            }
 
             // If there is no window state context, initialize it.
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
@@ -343,8 +336,13 @@ pub trait AggregateWindowExpr: WindowExpr {
 
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
-        let mut row_wise_results: Vec<ScalarValue> = vec![];
+        let mut row_wise_results: Vec<ScalarValue> =
+            Vec::with_capacity(length.saturating_sub(idx));
         let is_causal = self.get_window_frame().is_causal();
+        // These ordering arrays do not change during this evaluation. Compare
+        // their last/most-recent rows lazily once, since comparator setup can
+        // scan entire dictionary arrays to compute logical nulls.
+        let mut row_ahead = None;
         while idx < length {
             // Start search from the last_range. This squeezes searched range.
             let cur_range =
@@ -359,6 +357,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                     most_recent_row_order_bys,
                     self.order_by(),
                     idx,
+                    &mut row_ahead,
                 )?
             {
                 break;
@@ -414,6 +413,7 @@ pub(crate) fn filter_arrays(
 ///   columns.
 /// * `sort_exprs`: Defines the lexicographical ordering in question.
 /// * `idx`: The current index in the window frame.
+/// * `row_ahead`: The last/most-recent row comparison, reused within one evaluation.
 ///
 /// # Returns
 ///
@@ -424,11 +424,12 @@ pub(crate) fn is_end_bound_safe(
     most_recent_order_bys: Option<&[ArrayRef]>,
     sort_exprs: &[PhysicalSortExpr],
     idx: usize,
+    row_ahead: &mut Option<bool>,
 ) -> Result<bool> {
     if sort_exprs.is_empty() {
         // Early return if no sort expressions are present:
         return Ok(false);
-    };
+    }
 
     match window_frame_ctx {
         WindowFrameContext::Rows(window_frame) => {
@@ -440,6 +441,7 @@ pub(crate) fn is_end_bound_safe(
             most_recent_order_bys.map(|items| &items[0]),
             &sort_exprs[0].options,
             idx,
+            row_ahead,
         ),
         WindowFrameContext::Groups {
             window_frame,
@@ -450,6 +452,7 @@ pub(crate) fn is_end_bound_safe(
             &order_bys[0],
             most_recent_order_bys.map(|items| &items[0]),
             &sort_exprs[0].options,
+            row_ahead,
         ),
     }
 }
@@ -497,18 +500,14 @@ fn is_end_bound_safe_for_range(
     most_recent_ob_col: Option<&ArrayRef>,
     sort_options: &SortOptions,
     idx: usize,
+    row_ahead: &mut Option<bool>,
 ) -> Result<bool> {
     match end_bound {
-        WindowFrameBound::Preceding(value) => {
-            let zero = ScalarValue::new_zero(&value.data_type())?;
-            if value.eq(&zero) {
-                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
-            } else {
-                Ok(true)
-            }
-        }
-        WindowFrameBound::CurrentRow => {
-            is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+        // A frame ending in `N PRECEDING` can only reach the end of the buffer
+        // when the current row's frame ends at its last peer, as for a NULL or
+        // NaN ORDER BY value, so it is safe once a row past its peers arrives.
+        WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow => {
+            is_row_ahead(orderby_col, most_recent_ob_col, sort_options, row_ahead)
         }
         WindowFrameBound::Following(delta) => {
             let Some(most_recent_ob_col) = most_recent_ob_col else {
@@ -553,23 +552,24 @@ fn is_end_bound_safe_for_groups(
     orderby_col: &ArrayRef,
     most_recent_ob_col: Option<&ArrayRef>,
     sort_options: &SortOptions,
+    row_ahead: &mut Option<bool>,
 ) -> Result<bool> {
     match end_bound {
         WindowFrameBound::Preceding(value) => {
             let zero = ScalarValue::new_zero(&value.data_type())?;
             if value.eq(&zero) {
-                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+                is_row_ahead(orderby_col, most_recent_ob_col, sort_options, row_ahead)
             } else {
                 Ok(true)
             }
         }
         WindowFrameBound::CurrentRow => {
-            is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+            is_row_ahead(orderby_col, most_recent_ob_col, sort_options, row_ahead)
         }
         WindowFrameBound::Following(ScalarValue::UInt64(Some(offset))) => {
             let delta = state.group_end_indices.len() - state.current_group_idx;
             if delta == (*offset as usize) + 1 {
-                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+                is_row_ahead(orderby_col, most_recent_ob_col, sort_options, row_ahead)
             } else {
                 Ok(false)
             }
@@ -578,23 +578,27 @@ fn is_end_bound_safe_for_groups(
     }
 }
 
-/// This utility function checks whether `current_cols` is ahead of the `old_cols`
-/// in terms of `sort_options`.
+/// Checks whether the most recent input row is ahead of the partition's last row.
+/// Both arrays stay unchanged during one evaluation, so reuse the comparison.
 fn is_row_ahead(
     old_col: &ArrayRef,
     current_col: Option<&ArrayRef>,
     sort_options: &SortOptions,
+    row_ahead: &mut Option<bool>,
 ) -> Result<bool> {
+    if let Some(ahead) = *row_ahead {
+        return Ok(ahead);
+    }
     let Some(current_col) = current_col else {
         return Ok(false);
     };
     if old_col.is_empty() || current_col.is_empty() {
         return Ok(false);
     }
-    let last_value = ScalarValue::try_from_array(old_col, old_col.len() - 1)?;
-    let current_value = ScalarValue::try_from_array(current_col, 0)?;
-    let cmp = compare_rows(&[current_value], &[last_value], &[*sort_options])?;
-    Ok(cmp.is_gt())
+    let cmp = make_comparator(old_col.as_ref(), current_col.as_ref(), *sort_options)?;
+    let ahead = cmp(old_col.len() - 1, 0).is_lt();
+    *row_ahead = Some(ahead);
+    Ok(ahead)
 }
 
 /// Get order by expression results inside `order_by_columns`.
@@ -602,9 +606,16 @@ pub(crate) fn get_orderby_values(order_by_columns: Vec<SortColumn>) -> Vec<Array
     order_by_columns.into_iter().map(|s| s.values).collect()
 }
 
+/// State for incrementally evaluating a window function
+/// within a partition, created by [`WindowExpr::create_window_fn`].
 #[derive(Debug)]
 pub enum WindowFn {
+    /// A "normal" window function, such as `lead` or `lag`, evaluated via a
+    /// [`PartitionEvaluator`]. Despite the name, it is used for all window
+    /// functions that are not aggregate functions.
     Builtin(Box<dyn PartitionEvaluator>),
+    /// An aggregate function used as a window function, such as `avg` or
+    /// `sum`, which is evaluated via an [`Accumulator`].
     Aggregate(Box<dyn Accumulator>),
 }
 
@@ -646,7 +657,49 @@ impl<'a> WindowEvalContext<'a> {
 pub struct WindowState {
     pub state: WindowAggState,
     pub window_fn: WindowFn,
+    /// True once [`Self::aggregate_state`] has been called on this entry.
+    /// Guards against a second destructive [`Accumulator::state`] read: the
+    /// method itself errors on second call, and the observer loop in
+    /// `BoundedWindowAggStream::publish_finalized_states` uses this as an
+    /// early-skip so it doesn't attempt one. Independent of `state.is_end`,
+    /// which is a group-closed signal that the pruning path also reads.
+    pub published: bool,
 }
+
+impl WindowState {
+    /// [`Accumulator::state`] if this window function is an aggregate, `None`
+    /// otherwise (built-in functions like `row_number`, `rank`, `lead`/`lag`
+    /// have no serializable accumulator state).
+    ///
+    /// [`Accumulator::state`] takes `&mut self` and its trait doc calls out
+    /// that "this function should not be called twice, otherwise it will
+    /// result in potentially non-deterministic behavior." Several built-in
+    /// impls (`median`, `percentile_cont`, `string_agg`,
+    /// `min_max_bytes`/`min_max_struct`) `std::mem::take` their internal
+    /// buffers on call — a second call returns *empty* state, not the same
+    /// state, so a downstream prefix-merge would silently lose every value
+    /// the accumulator had ingested.
+    ///
+    /// Enforced at this layer: on first call we set [`Self::published`] and
+    /// return the state; any later call errors rather than performing a
+    /// destructive re-read.
+    pub fn aggregate_state(&mut self) -> Result<Option<Vec<ScalarValue>>> {
+        if self.published {
+            return exec_err!(
+                "WindowState::aggregate_state called more than once; \
+                 Accumulator::state is a destructive read for several \
+                 built-in aggregates and a second call would silently lose data"
+            );
+        }
+        let state = match &mut self.window_fn {
+            WindowFn::Aggregate(accumulator) => Some(accumulator.state()?),
+            WindowFn::Builtin(_) => None,
+        };
+        self.published = true;
+        Ok(state)
+    }
+}
+
 pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState, RandomState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
@@ -656,11 +709,66 @@ pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState, RandomSt
 mod tests {
     use std::sync::Arc;
 
-    use crate::window::window_expr::is_row_ahead;
+    use crate::window::window_expr::{WindowFn, WindowState, is_row_ahead};
 
     use arrow::array::{ArrayRef, Float64Array};
     use arrow::compute::SortOptions;
-    use datafusion_common::Result;
+    use arrow::datatypes::DataType;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{Accumulator, window_state::WindowAggState};
+
+    /// Minimal [`Accumulator`] whose `state()` records how many times it was
+    /// called by returning the count as its single state element. Any second
+    /// call would surface (were it allowed to happen) as `[UInt64(2)]`
+    /// instead of `[UInt64(1)]`.
+    #[derive(Debug)]
+    struct CallCountingAccumulator {
+        calls: usize,
+    }
+
+    impl Accumulator for CallCountingAccumulator {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Null)
+        }
+        fn size(&self) -> usize {
+            size_of::<Self>()
+        }
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            self.calls += 1;
+            Ok(vec![ScalarValue::UInt64(Some(self.calls as u64))])
+        }
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn aggregate_state_errors_on_second_call() -> Result<()> {
+        // `Accumulator::state()` is a destructive read for several built-in
+        // aggregates (median, percentile_cont, string_agg, min_max_bytes/
+        // min_max_struct all `mem::take` their internal buffers). Its trait
+        // doc says "should not be called twice"; `WindowState::aggregate_state`
+        // enforces that at this layer by returning an error rather than
+        // performing the second read.
+        let acc: Box<dyn Accumulator> = Box::new(CallCountingAccumulator { calls: 0 });
+        let mut ws = WindowState {
+            state: WindowAggState::new(&DataType::UInt64)?,
+            window_fn: WindowFn::Aggregate(acc),
+            published: false,
+        };
+        let first = ws.aggregate_state()?;
+        assert_eq!(first, Some(vec![ScalarValue::UInt64(Some(1))]));
+        assert!(ws.published, "published must flip on successful publish");
+        let err = ws.aggregate_state().unwrap_err().to_string();
+        assert!(
+            err.contains("called more than once"),
+            "expected second-call error, got: {err}"
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_is_row_ahead() -> Result<()> {
@@ -676,7 +784,8 @@ mod tests {
             &SortOptions {
                 descending: false,
                 nulls_first: false
-            }
+            },
+            &mut None,
         )?);
         assert!(!is_row_ahead(
             &old_values,
@@ -684,7 +793,8 @@ mod tests {
             &SortOptions {
                 descending: false,
                 nulls_first: false
-            }
+            },
+            &mut None,
         )?);
 
         Ok(())

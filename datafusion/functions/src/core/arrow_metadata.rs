@@ -1,21 +1,8 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::{MapBuilder, StringBuilder};
+use arrow::array::{MapBuilder, MapFieldNames, StringBuilder};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::types::logical_string;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
@@ -38,11 +25,11 @@ use std::sync::Arc;
 | {k: v}                     |
 +----------------------------+
 > select arrow_metadata(col, 'k') from table;
-+-------------------------------+
-| arrow_metadata(table.col, 'k')|
-+-------------------------------+
-| v                             |
-+-------------------------------+
++--------------------------------+
+| arrow_metadata(table.col, 'k') |
++--------------------------------+
+| v                              |
++--------------------------------+
 ```"#,
     argument(
         name = "expression",
@@ -120,24 +107,29 @@ impl ScalarUDFImpl for ArrowMetadataFunc {
         let metadata = args.arg_fields[0].metadata();
 
         if args.args.len() == 2 {
-            let key = match &args.args[1] {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(key))) => key,
-                _ => {
-                    return exec_err!(
-                        "Second argument to arrow_metadata must be a string literal key"
-                    );
-                }
+            let ColumnarValue::Scalar(ScalarValue::Utf8(Some(key))) = &args.args[1]
+            else {
+                return exec_err!(
+                    "Second argument to arrow_metadata must be a string literal key"
+                );
             };
             let value = metadata.get(key).cloned();
             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(value)))
         } else if args.args.len() == 1 {
-            let mut map_builder =
-                MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+            // Match the field names declared in `return_type` (the arrow-rs
+            // default changed to `key`/`value` in arrow 60)
+            let map_field_names = MapFieldNames {
+                entry: "entries".to_string(),
+                key: "keys".to_string(),
+                value: "values".to_string(),
+            };
+            let mut map_builder = MapBuilder::new(
+                Some(map_field_names),
+                StringBuilder::new(),
+                StringBuilder::new(),
+            );
 
-            let mut entries: Vec<_> = metadata.iter().collect();
-            entries.sort_by_key(|(k, _)| *k);
-
-            for (k, v) in entries {
+            for (k, v) in metadata {
                 map_builder.keys().append_value(k);
                 map_builder.values().append_value(v);
             }

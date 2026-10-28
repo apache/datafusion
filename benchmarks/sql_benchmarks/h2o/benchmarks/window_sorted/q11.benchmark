@@ -1,0 +1,13 @@
+# DENSE_RANK top-2 per partition, mirroring the RANK sweep. DENSE_RANK keeps
+# every row whose ORDER BY value is among the 2 distinct-greatest in the
+# partition, so rows kept per partition is unbounded in rows-per-distinct-value.
+
+subgroup window_sorted
+
+template sql_benchmarks/h2o/window_sorted.benchmark.template
+QPAD=11
+FN=DENSE_RANK
+PK_MOD=100
+OB_EXPR=v2
+OB_BOUND=count(DISTINCT ob) > 1000
+NAME=window_sorted_q11_dense_rank_100_partitions

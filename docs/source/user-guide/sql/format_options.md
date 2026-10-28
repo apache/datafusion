@@ -78,6 +78,25 @@ In this example, we write the entire `source_table` out to a folder of Parquet f
 
 # Available Options
 
+## Arrow Format Options
+
+The following options are available when writing [Arrow IPC](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format) files. Note: If any unsupported option is specified, an error will be raised and the query will fail.
+
+| Option            | Description                                                                                                                                                            | Default Value |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| COMPRESSION       | Sets the compression codec used for the record batch bodies within the Arrow IPC file. Supported values are UNCOMPRESSED, LZ4_FRAME, and ZSTD.                         | LZ4_FRAME     |
+| COMPRESSION_LEVEL | Sets the compression level to use with the `ZSTD` codec. Not supported by `LZ4_FRAME` or `UNCOMPRESSED`. If not specified, the default zstd compression level is used. | None          |
+| ALIGNMENT         | Sets the byte alignment used to pad buffers when writing the Arrow IPC file. Must be one of 8, 16, 32, or 64.                                                          | 64            |
+
+**Example:**
+
+```sql
+COPY source_table
+  TO '/tmp/foo.arrow'
+  STORED AS ARROW
+  OPTIONS('COMPRESSION' 'zstd', 'COMPRESSION_LEVEL' '15');
+```
+
 ## JSON Format Options
 
 The following options are available when reading or writing JSON files. Note: If any unsupported option is specified, an error will be raised and the query will fail.
@@ -164,6 +183,10 @@ The following options are available when reading or writing Parquet files. If an
 | ALLOW_SINGLE_FILE_PARALLELISM              | No                      | Enables parallel serialization of columns in a single file.                                                                                                                                                                                                                                                                          | `'allow_single_file_parallelism'`                     | true                     |
 | MAXIMUM_PARALLEL_ROW_GROUP_WRITERS         | No                      | Maximum number of parallel row group writers.                                                                                                                                                                                                                                                                                        | `'maximum_parallel_row_group_writers'`                | 1                        |
 | MAXIMUM_BUFFERED_RECORD_BATCHES_PER_STREAM | No                      | Maximum number of buffered record batches per stream.                                                                                                                                                                                                                                                                                | `'maximum_buffered_record_batches_per_stream'`        | 2                        |
+| CONTENT_DEFINED_CHUNKING_ENABLED           | No                      | Enables experimental content-defined chunking when writing Parquet files. Enabling it uses the sequential writer for each output file so chunker state persists across row groups. See [Parquet Content-Defined Chunking](../parquet-content-defined-chunking.md).                                                                   | `'content_defined_chunking.enabled'`                  | false                    |
+| CONTENT_DEFINED_CHUNKING_MIN_CHUNK_SIZE    | No                      | Minimum logical size in bytes before the rolling hash can select a chunk boundary.                                                                                                                                                                                                                                                   | `'content_defined_chunking.min_chunk_size'`           | 262144 (256 KiB)         |
+| CONTENT_DEFINED_CHUNKING_MAX_CHUNK_SIZE    | No                      | Maximum logical size in bytes before the writer forces a chunk boundary. Must be greater than `content_defined_chunking.min_chunk_size`.                                                                                                                                                                                             | `'content_defined_chunking.max_chunk_size'`           | 1048576 (1 MiB)          |
+| CONTENT_DEFINED_CHUNKING_NORM_LEVEL        | No                      | Controls how aggressively chunk boundaries are selected. Higher values can improve deduplication but increase fragmentation. The recommended range is `-3` through `3`.                                                                                                                                                              | `'content_defined_chunking.norm_level'`               | 0                        |
 | KEY_VALUE_METADATA                         | No (Key is specific)    | Adds custom key-value pairs to the file metadata. Use the format `'metadata::your_key_name' 'your_value'`. Multiple entries allowed.                                                                                                                                                                                                 | `'metadata::key_name'`                                | None                     |
 
 **Example:**

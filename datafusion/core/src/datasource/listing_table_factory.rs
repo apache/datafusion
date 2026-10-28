@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Factory for creating ListingTables with default options
 
@@ -36,6 +23,7 @@ use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use futures::future::BoxFuture;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 #[derive(Debug, Default)]
@@ -50,7 +38,33 @@ impl ListingTableFactory {
 
 #[async_trait]
 impl TableProviderFactory for ListingTableFactory {
-    async fn create(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn create<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        cmd: &'life2 CreateExternalTable,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn TableProvider>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.create_boxed(state, cmd)
+    }
+}
+
+impl ListingTableFactory {
+    fn create_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
+        Box::pin(self.create_inner(state, cmd))
+    }
+
+    async fn create_inner(
         &self,
         state: &dyn Session,
         cmd: &CreateExternalTable,
@@ -178,7 +192,7 @@ impl TableProviderFactory for ListingTableFactory {
             // exclude partition columns to support creating partitioned external table
             // with a specified column definition like
             // `create external table a(c0 int, c1 int) stored as csv partitioned by (c1)...`
-            let mut project_idx = Vec::new();
+            let mut project_idx = Vec::with_capacity(schema.fields().len());
             for i in 0..schema.fields().len() {
                 if !cmd.table_partition_cols.contains(schema.field(i).name()) {
                     project_idx.push(i);

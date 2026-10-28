@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Window frame module
 //!
@@ -135,7 +122,7 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
             && val.is_null()
         {
             plan_err!("Invalid window frame: end bound cannot be UNBOUNDED PRECEDING")?
-        };
+        }
 
         let units = value.units.into();
         Ok(Self::new_bounds(units, start_bound, end_bound))
@@ -224,7 +211,13 @@ impl WindowFrame {
                 }
                 _ => true,
             },
-            WindowFrameUnits::Range | WindowFrameUnits::Groups => match &end_bound {
+            // For a row whose ORDER BY value is NULL or NaN, an offset bound
+            // ends the RANGE frame at its last peer, which may be a later row.
+            WindowFrameUnits::Range => matches!(
+                &end_bound,
+                WindowFrameBound::Preceding(value) if value.is_null()
+            ),
+            WindowFrameUnits::Groups => match &end_bound {
                 WindowFrameBound::Preceding(value) => {
                     if value.is_null() {
                         // Unbounded preceding
@@ -282,7 +275,13 @@ impl WindowFrame {
 
     /// Returns whether the window frame is "free range"; i.e. its start/end
     /// bounds are UNBOUNDED or CURRENT ROW.
-    fn free_range(&self) -> bool {
+    ///
+    /// This inspects only the bounds, not the frame units, so it returns `true`
+    /// for ROWS and GROUPS frames with such bounds as well. For RANGE frames,
+    /// such bounds are located by comparing order key values, whereas a finite
+    /// offset bound (e.g. `5 PRECEDING`) has to be computed arithmetically from
+    /// the current row's order key value.
+    pub fn free_range(&self) -> bool {
         (self.start_bound.is_unbounded()
             || self.start_bound == WindowFrameBound::CurrentRow)
             && (self.end_bound.is_unbounded()
@@ -469,7 +468,7 @@ pub enum WindowFrameUnits {
     Range,
     /// The GROUPS frame type means that the starting and ending boundaries are determine
     /// by counting "groups" relative to the current group. A "group" is a set of rows that all have
-    /// equivalent values for all all terms of the window ORDER BY clause.
+    /// equivalent values for all terms of the window ORDER BY clause.
     Groups,
 }
 

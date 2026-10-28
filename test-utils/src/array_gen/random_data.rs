@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::ArrowPrimitiveType;
 use arrow::datatypes::{
@@ -51,6 +38,31 @@ macro_rules! basic_random_data {
     };
 }
 
+macro_rules! float_random_data {
+    ($ARROW_TYPE:ty, $NATIVE:ty) => {
+        impl RandomNativeData for $ARROW_TYPE {
+            fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
+                match rng.random_range(0..100) {
+                    0 => 0.0,
+                    1 => -0.0,
+                    2 => <$NATIVE>::INFINITY,
+                    3 => <$NATIVE>::NEG_INFINITY,
+                    4 => {
+                        // Generate a NaN with a uniformly selected sign and nonzero payload.
+                        let sign_mask = (-0.0 as $NATIVE).to_bits();
+                        let exponent_mask = <$NATIVE>::INFINITY.to_bits();
+                        let payload_mask = !(sign_mask | exponent_mask);
+                        let sign = if rng.random() { sign_mask } else { 0 };
+                        let payload = rng.random_range(1..=payload_mask);
+                        <$NATIVE>::from_bits(sign | exponent_mask | payload)
+                    }
+                    _ => rng.random(),
+                }
+            }
+        }
+    };
+}
+
 basic_random_data!(Int8Type);
 basic_random_data!(Int16Type);
 basic_random_data!(Int32Type);
@@ -59,8 +71,8 @@ basic_random_data!(UInt8Type);
 basic_random_data!(UInt16Type);
 basic_random_data!(UInt32Type);
 basic_random_data!(UInt64Type);
-basic_random_data!(Float32Type);
-basic_random_data!(Float64Type);
+float_random_data!(Float32Type, f32);
+float_random_data!(Float64Type, f64);
 basic_random_data!(Date32Type);
 basic_random_data!(Time32SecondType);
 basic_random_data!(Time32MillisecondType);
@@ -108,9 +120,7 @@ impl RandomNativeData for IntervalMonthDayNanoType {
     }
 }
 
-// Restrict Duration(Seconds) to i64::MIN / 1000 to i64::MAX / 1000 to
-// avoid panics on pretty printing. See
-// https://github.com/apache/arrow-rs/issues/7533
+// Keep values in the pretty-print range; all others render as `<invalid>`.
 impl RandomNativeData for DurationSecondType {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
         rng.random::<i64>() / 1000

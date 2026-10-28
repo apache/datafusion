@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utility functions to make testing DataFusion based crates easier
 
@@ -26,6 +13,7 @@ use futures::Stream;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::fs::File;
+use std::future::ready;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -53,6 +41,7 @@ use datafusion_expr::{
 use std::pin::Pin;
 
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 
 use tempfile::TempDir;
 // backwards compatibility
@@ -182,9 +171,35 @@ pub struct TestTableFactory {}
 
 #[async_trait]
 impl TableProviderFactory for TestTableFactory {
-    async fn create(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn create<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        session: &'life1 dyn Session,
+        cmd: &'life2 CreateExternalTable,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn TableProvider>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.create_boxed(session, cmd)
+    }
+}
+
+impl TestTableFactory {
+    fn create_boxed<'a>(
+        &'a self,
+        session: &'a dyn Session,
+        cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
+        Box::pin(ready(self.create_inner(session, cmd)))
+    }
+
+    fn create_inner(
         &self,
-        _: &dyn Session,
+        _session: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
         let Some(location) = cmd.locations.first() else {
@@ -222,7 +237,7 @@ impl TableProvider for TestTableProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
+        _projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

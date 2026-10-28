@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use insta::assert_snapshot;
 use std::sync::Arc;
@@ -187,6 +174,45 @@ async fn test_hash_left_join_swap() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_hash_left_semi_join() -> Result<()> {
+    // LeftSemi hash joins emit matched build-side rows only after probing
+    // completes, so their emission type is Final.
+
+    let test1 = BinaryTestCase {
+        // The optimizer swaps the inputs and changes LeftSemi to RightSemi.
+        // The bounded right table becomes the build side, allowing matched
+        // rows from the unbounded left table to be emitted incrementally.
+        source_types: (SourceType::Unbounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+
+    let test2 = BinaryTestCase {
+        // LeftSemi waits for the unbounded probe side to finish before
+        // emitting matched build-side rows. SanityCheckPlan must reject
+        // this pipeline because it cannot produce output.
+        source_types: (SourceType::Bounded, SourceType::Unbounded),
+        expect_fail: true,
+    };
+
+    let test3 = BinaryTestCase {
+        // Both inputs are bounded, so probing can finish and final output
+        // can be emitted.
+        source_types: (SourceType::Bounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+
+    let case = QueryCase {
+        sql: "SELECT l.c1 FROM left AS l LEFT SEMI JOIN right AS r ON l.c1 = r.c1"
+            .to_string(),
+        cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
+        error_operator: "operator: HashJoinExec".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_hash_right_join_swap() -> Result<()> {
     let test1 = BinaryTestCase {
         source_types: (SourceType::Unbounded, SourceType::Bounded),
@@ -275,6 +301,27 @@ async fn test_aggregate() -> Result<()> {
     let case = QueryCase {
         sql: "SELECT c1, MIN(c4) FROM test GROUP BY c1".to_string(),
         cases: vec![Arc::new(test1), Arc::new(test2)],
+        error_operator: "operator: AggregateExec".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_constant_grouping_expr_on_unbounded_input() -> Result<()> {
+    let case = QueryCase {
+        sql: "SELECT c1, c2, MIN(c4) FROM test WHERE c2 = 1 GROUP BY c1, c2".to_string(),
+        cases: vec![
+            Arc::new(UnaryTestCase {
+                source_type: SourceType::Bounded,
+                expect_fail: false,
+            }),
+            Arc::new(UnaryTestCase {
+                source_type: SourceType::Unbounded,
+                expect_fail: true,
+            }),
+        ],
         error_operator: "operator: AggregateExec".to_string(),
     };
 

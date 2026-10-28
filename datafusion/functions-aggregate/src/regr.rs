@@ -1,27 +1,15 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::cast::{as_float64_array, as_uint64_array};
-use datafusion_common::{HashMap, Result, ScalarValue};
+use datafusion_common::{HashMap, Result, ScalarValue, not_impl_err};
 use datafusion_doc::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -170,7 +158,7 @@ create table weekly_performance(week int, productivity_score int) as values (1,6
 select * from weekly_performance;
 +------+---------------------+
 | week | productivity_score  |
-| ---- | ------------------- |
++------+---------------------+
 | 1    | 60                  |
 | 2    | 65                  |
 | 3    | 70                  |
@@ -179,12 +167,11 @@ select * from weekly_performance;
 +------+---------------------+
 
 SELECT regr_intercept(productivity_score, week) AS intercept FROM weekly_performance;
-+----------+
-|intercept|
-|intercept |
-+----------+
-|  55      |
-+----------+
++-----------+
+| intercept |
++-----------+
+| 55        |
++-----------+
 ```
 "#
                 )
@@ -206,7 +193,7 @@ create table daily_metrics(day int, user_signups int) as values (1,100), (2,120)
 select * from daily_metrics;
 +-----+---------------+
 | day | user_signups  |
-| --- | ------------- |
++-----+---------------+
 | 1   | 100           |
 | 2   | 120           |
 | 3   | NULL          |
@@ -250,11 +237,11 @@ select * from weekly_performance;
 +-----+--------------+
 
 SELECT regr_r2(user_signups, day) AS r_squared FROM weekly_performance;
-+---------+
-|r_squared|
-+---------+
-| 1.0     |
-+---------+
++-----------+
+| r_squared |
++-----------+
+| 1.0       |
++-----------+
 ```
 "#
                 )
@@ -276,7 +263,7 @@ create table daily_sales(day int, total_sales int) as values (1,100), (2,150), (
 select * from daily_sales;
 +-----+-------------+
 | day | total_sales |
-| --- | ----------- |
++-----+-------------+
 | 1   | 100         |
 | 2   | 150         |
 | 3   | 200         |
@@ -311,7 +298,7 @@ create table daily_temperature(day int, temperature int) as values (1,30), (2,32
 select * from daily_temperature;
 +-----+-------------+
 | day | temperature |
-| --- | ----------- |
++-----+-------------+
 | 1   | 30          |
 | 2   | 32          |
 | 3   | NULL        |
@@ -469,7 +456,13 @@ impl AggregateUDFImpl for Regr {
         self.regr_type != RegrType::Count
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!(
+                "{}(DISTINCT) aggregations are not available",
+                self.func_name.to_uppercase()
+            );
+        }
         Ok(Box::new(RegrAccumulator::try_new(&self.regr_type)?))
     }
 
@@ -513,6 +506,13 @@ impl AggregateUDFImpl for Regr {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.regr_type.documentation()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`. It only
+        // works when the planner removes it first (`SingleDistinctToGroupBy`
+        // for a single distinct field, e.g. `regr_slope(DISTINCT x, x)`).
+        DistinctHandling::Unsupported
     }
 }
 
@@ -600,10 +600,8 @@ impl Accumulator for RegrAccumulator {
 
         for (value_y, value_x) in values_y.iter().zip(values_x) {
             // skip either x or y is NULL
-            let (value_y, value_x) = match (value_y, value_x) {
-                (Some(y), Some(x)) => (y, x),
-                // skip either x or y is NULL
-                _ => continue,
+            let (Some(value_y), Some(value_x)) = (value_y, value_x) else {
+                continue;
             };
 
             // Update states for regr_slope(y,x) [using cov_pop(x,y)/var_pop(x)]
@@ -632,10 +630,8 @@ impl Accumulator for RegrAccumulator {
 
         for (value_y, value_x) in values_y.iter().zip(values_x) {
             // skip either x or y is NULL
-            let (value_y, value_x) = match (value_y, value_x) {
-                (Some(y), Some(x)) => (y, x),
-                // skip either x or y is NULL
-                _ => continue,
+            let (Some(value_y), Some(value_x)) = (value_y, value_x) else {
+                continue;
             };
 
             // Update states for regr_slope(y,x) [using cov_pop(x,y)/var_pop(x)]

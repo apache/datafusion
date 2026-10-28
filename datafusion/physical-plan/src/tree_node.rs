@@ -1,26 +1,14 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-use crate::{ExecutionPlan, displayable, with_new_children_if_necessary};
+use crate::execution_plan::replace_children_if_necessary;
+use crate::{ExecutionPlan, displayable};
 
 use datafusion_common::Result;
 use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode};
@@ -35,7 +23,7 @@ impl DynTreeNode for dyn ExecutionPlan {
         arc_self: Arc<Self>,
         new_children: Vec<Arc<Self>>,
     ) -> Result<Arc<Self>> {
-        with_new_children_if_necessary(arc_self, new_children)
+        replace_children_if_necessary(arc_self, new_children)
     }
 }
 
@@ -73,7 +61,7 @@ impl<T> PlanContext<T> {
     /// if the `PlanContext.children` have been changed.
     pub fn update_plan_from_children(mut self) -> Result<Self> {
         let children_plans = self.children.iter().map(|c| Arc::clone(&c.plan)).collect();
-        self.plan = with_new_children_if_necessary(self.plan, children_plans)?;
+        self.plan = replace_children_if_necessary(self.plan, children_plans)?;
 
         Ok(self)
     }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::fmt::Display;
@@ -245,7 +232,8 @@ impl EquivalenceClass {
     }
 
     /// Adds the given offset to all columns in the expressions inside this
-    /// class. This is used when schemas are appended, e.g. in joins.
+    /// class, keeping its constant value. This is used when schemas are
+    /// appended, e.g. in joins.
     pub fn try_with_offset(&self, offset: isize) -> Result<Self> {
         let mut cls = Self::default();
         for expr_result in self
@@ -256,6 +244,7 @@ impl EquivalenceClass {
         {
             cls.push(expr_result?);
         }
+        cls.constant.clone_from(&self.constant);
         Ok(cls)
     }
 }
@@ -310,6 +299,33 @@ pub struct EquivalenceGroup {
 }
 
 impl EquivalenceGroup {
+    /// A cheap, deliberately conservative check that two groups hold the same
+    /// equivalence classes.
+    ///
+    /// This is not `PartialEq`, and the distinction is the point. `classes` is a
+    /// `Vec` whose order carries no meaning -- `remove_class_at_idx` uses
+    /// `swap_remove` -- so two groups describing exactly the same equalities can
+    /// hold their classes in different orders and this returns `false` for them.
+    /// Naming it `PartialEq` would invite callers to read it as semantic equality,
+    /// which it is not.
+    ///
+    /// The comparison is positional because it runs on a hot path:
+    /// `ProjectionExec` consults it every time a rule replaces its child. Set
+    /// semantics would mean scanning the other group once per class, and that
+    /// quadratic term costs more than the recomputation the caller is trying to
+    /// skip, by a margin that widens with the number of classes.
+    ///
+    /// Only the false direction is reachable: a group can be reported different
+    /// when it is not, never the same when it is not. Callers using this to skip
+    /// work must be built so that a `false` merely costs them that work, which is
+    /// exactly how the projection fast path uses it.
+    ///
+    /// `map` is an index into `classes` and carries no information the classes do
+    /// not already have, so it takes no part in the comparison.
+    pub fn has_same_classes(&self, other: &Self) -> bool {
+        self.classes == other.classes
+    }
+
     /// Creates an equivalence group from the given equivalence classes.
     pub fn new(classes: impl IntoIterator<Item = EquivalenceClass>) -> Self {
         classes.into_iter().collect::<Vec<_>>().into()
@@ -362,7 +378,7 @@ impl EquivalenceGroup {
         let (mut idx, mut change) = (0, false);
         while idx < self.classes.len() {
             let cls = &mut self.classes[idx];
-            if let Some(AcrossPartitions::Heterogeneous) = cls.constant {
+            if cls.constant == Some(AcrossPartitions::Heterogeneous) {
                 change = true;
                 if cls.len() == 1 {
                     // If this class becomes trivial, remove it entirely:
@@ -597,8 +613,8 @@ impl EquivalenceGroup {
             .filter(|req| !self.is_uniform_constant(&req.expr))
     }
 
-    /// Perform an indirect projection of `expr` by consulting the equivalence
-    /// classes.
+    /// Projects `expr` through its children or an equivalent expression in the
+    /// mapping, preferring to preserve its structure.
     fn project_expr_indirect(
         aug_mapping: &AugmentedMapping,
         expr: &Arc<dyn PhysicalExpr>,
@@ -608,8 +624,32 @@ impl EquivalenceGroup {
             return Some(Arc::clone(expr));
         }
 
-        // The given expression is not inside the mapping, so we try to project
-        // indirectly using equivalence classes.
+        // Preserve expression structure when its children can be projected.
+        // Otherwise, projecting a class such as a + 1 = b can collapse it to
+        // b = b, losing the equivalence even when a survives the projection.
+        let children = expr.children();
+        if !children.is_empty() {
+            let projected_children = children
+                .into_iter()
+                .map(|child| {
+                    // First, we try to project children with an exact match. If
+                    // we are unable to do this, we consult equivalence classes.
+                    if let Some((targets, _)) = aug_mapping.get(child) {
+                        // If we match the source, we can project directly:
+                        let (target, _) = targets.first();
+                        Some(Arc::clone(target))
+                    } else {
+                        Self::project_expr_indirect(aug_mapping, child)
+                    }
+                })
+                .collect::<Option<Vec<_>>>();
+            if let Some(children) = projected_children {
+                return Some(Arc::clone(expr).with_new_children(children).unwrap());
+            }
+        }
+
+        // Project expressions whose children could not be projected by consulting
+        // equivalence classes.
         for (targets, eq_class) in aug_mapping.values() {
             // If we match an equivalent expression to a source expression in
             // the mapping, then we can project. For example, if we have the
@@ -620,27 +660,7 @@ impl EquivalenceGroup {
                 return Some(Arc::clone(target));
             }
         }
-        // Project a non-leaf expression by projecting its children.
-        let children = expr.children();
-        if children.is_empty() {
-            // A leaf expression should be inside the mapping.
-            return None;
-        }
-        children
-            .into_iter()
-            .map(|child| {
-                // First, we try to project children with an exact match. If
-                // we are unable to do this, we consult equivalence classes.
-                if let Some((targets, _)) = aug_mapping.get(child) {
-                    // If we match the source, we can project directly:
-                    let (target, _) = targets.first();
-                    Some(Arc::clone(target))
-                } else {
-                    Self::project_expr_indirect(aug_mapping, child)
-                }
-            })
-            .collect::<Option<Vec<_>>>()
-            .map(|children| Arc::clone(expr).with_new_children(children).unwrap())
+        None
     }
 
     fn augment_projection_mapping<'a>(
@@ -650,7 +670,17 @@ impl EquivalenceGroup {
         mapping
             .iter()
             .map(|(k, v)| {
-                let eq_class = self.get_equivalence_class(k);
+                // A source expression may only be in a class in its normalized
+                // form. For example, if `a == b`, `a + c` is in a class, and
+                // the mapping has `b + c`, then the class of `b + c` is found
+                // only through `a + c`. A leaf that is in no class normalizes
+                // to itself, so only expressions with children are normalized.
+                let eq_class = self.get_equivalence_class(k).or_else(|| {
+                    if k.children().is_empty() {
+                        return None;
+                    }
+                    self.get_equivalence_class(&self.normalize_expr(Arc::clone(k)))
+                });
                 (k, (v, eq_class))
             })
             .collect()
@@ -706,7 +736,8 @@ impl EquivalenceGroup {
         // The key is the source expression, and the value is the equivalence
         // class that contains the corresponding target expression.
         let mut new_constants = vec![];
-        let mut new_classes = IndexMap::<_, EquivalenceClass>::new();
+        let mut new_classes =
+            IndexMap::<_, EquivalenceClass>::with_capacity(mapping.len());
         for (source, targets) in mapping.iter() {
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and
@@ -791,7 +822,16 @@ impl EquivalenceGroup {
                     self.iter().cloned().chain(
                         right_equivalences
                             .iter()
-                            .map(|cls| cls.try_with_offset(left_size as _))
+                            .map(|cls| {
+                                let mut cls = cls.try_with_offset(left_size as _)?;
+                                // Rows without a match on the right side are
+                                // padded with NULLs, so its constants no
+                                // longer hold.
+                                if matches!(join_type, JoinType::Left | JoinType::Full) {
+                                    cls.constant = None;
+                                }
+                                Ok(cls)
+                            })
                             .collect::<Result<Vec<_>>>()?,
                     ),
                 );
@@ -924,7 +964,7 @@ mod tests {
     use super::*;
     use crate::equivalence::tests::create_test_params;
     use crate::expressions::{BinaryExpr, Column, binary, col, lit};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use datafusion_expr::Operator;
 
@@ -1242,6 +1282,222 @@ mod tests {
         let second_normalized = projected.normalize_expr(col("b+c", &projected_schema)?);
 
         assert!(first_normalized.eq(&second_normalized));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_constant_of_equivalent_source() -> Result<()> {
+        // - columns: [a, b, c].
+        // - "a" and "b" in the same equivalence class, and a + c = 7.
+        // - then after a b + c projection, col(0) must be the constant 7.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(col("a", &schema)?, col("b", &schema)?);
+        group.add_equal_conditions(
+            binary(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+            lit(7),
+        );
+
+        let projected_schema =
+            Arc::new(Schema::new(vec![Field::new("b+c", DataType::Int32, false)]));
+        let mapping = std::iter::once((
+            binary(
+                col("b", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+            vec![(col("b+c", &projected_schema)?, 0)].into(),
+        ))
+        .collect::<ProjectionMapping>();
+
+        let projected = group.project(&mapping);
+
+        assert_eq!(
+            projected.is_expr_constant(&col("b+c", &projected_schema)?),
+            Some(AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(7)))))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_class_of_equivalent_source() -> Result<()> {
+        // - columns: [a, b, c, d].
+        // - "a" and "b" in the same equivalence class, and a + c = d * 2.
+        // - then after a b + c, d projection, col(0) and col(1) * 2 must be
+        // in the same class.
+        let schema = abc_schema();
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(col("a", &schema)?, col("b", &schema)?);
+        group.add_equal_conditions(
+            binary(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+            binary(col("d", &schema)?, Operator::Multiply, lit(2), &schema)?,
+        );
+
+        let projected_schema = Arc::new(Schema::new(vec![
+            Field::new("b+c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]));
+        let mapping = [
+            (
+                binary(
+                    col("b", &schema)?,
+                    Operator::Plus,
+                    col("c", &schema)?,
+                    &schema,
+                )?,
+                vec![(col("b+c", &projected_schema)?, 0)].into(),
+            ),
+            (
+                col("d", &schema)?,
+                vec![(col("d", &projected_schema)?, 1)].into(),
+            ),
+        ]
+        .into_iter()
+        .collect::<ProjectionMapping>();
+
+        let projected = group.project(&mapping);
+
+        let first_normalized = projected.normalize_expr(col("b+c", &projected_schema)?);
+        let second_normalized = projected.normalize_expr(binary(
+            col("d", &projected_schema)?,
+            Operator::Multiply,
+            lit(2),
+            &projected_schema,
+        )?);
+        assert!(first_normalized.eq(&second_normalized));
+
+        Ok(())
+    }
+
+    /// Builds a group from a list of equated column pairs.
+    fn group_of(schema: &SchemaRef, pairs: &[(&str, &str)]) -> Result<EquivalenceGroup> {
+        let mut group = EquivalenceGroup::default();
+        for (lhs, rhs) in pairs {
+            group.add_equal_conditions(col(lhs, schema)?, col(rhs, schema)?);
+        }
+        Ok(group)
+    }
+
+    fn abc_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]))
+    }
+
+    #[test]
+    fn test_has_same_classes_is_conservative_about_class_order() -> Result<()> {
+        // `classes` is a `Vec` and `remove_class_at_idx` uses `swap_remove`, so
+        // the order two groups hold their classes in depends on how they were
+        // built. This check is positional and reports such a pair as different.
+        //
+        // That is deliberate, and it is why this is not `PartialEq`: set
+        // semantics would mean scanning the other group per class, and the
+        // quadratic cost dwarfs the recomputation the caller is trying to skip.
+        // The error can only go this way -- different when they match, never the
+        // reverse -- so a caller only forfeits an optimization.
+        let schema = abc_schema();
+        let ab_then_cd = group_of(&schema, &[("a", "b"), ("c", "d")])?;
+        let cd_then_ab = group_of(&schema, &[("c", "d"), ("a", "b")])?;
+
+        assert_eq!(ab_then_cd.len(), 2, "expected two disjoint classes");
+        assert!(!ab_then_cd.has_same_classes(&cd_then_ab));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_has_same_classes_compares_classes() -> Result<()> {
+        let schema = abc_schema();
+
+        // Two empty groups agree.
+        assert!(group_of(&schema, &[])?.has_same_classes(&group_of(&schema, &[])?));
+        // The same class, built the same way.
+        assert!(
+            group_of(&schema, &[("a", "b")])?
+                .has_same_classes(&group_of(&schema, &[("a", "b")])?)
+        );
+        // A class is a set, so the order within a pair is immaterial.
+        assert!(
+            group_of(&schema, &[("a", "b")])?
+                .has_same_classes(&group_of(&schema, &[("b", "a")])?)
+        );
+        // A populated group is not an empty one.
+        assert!(
+            !group_of(&schema, &[("a", "b")])?.has_same_classes(&group_of(&schema, &[])?)
+        );
+        // Equating a different pair yields a different group.
+        assert!(
+            !group_of(&schema, &[("a", "b")])?
+                .has_same_classes(&group_of(&schema, &[("a", "c")])?)
+        );
+        // Widening a class yields a different group.
+        assert!(
+            !group_of(&schema, &[("a", "b")])?
+                .has_same_classes(&group_of(&schema, &[("a", "b"), ("b", "c")])?)
+        );
+
+        Ok(())
+    }
+
+    /// A constant on the right side of a join stays constant in the join
+    /// output, unless unmatched rows pad the right side with NULLs.
+    /// <https://github.com/apache/datafusion/issues/26283>
+    #[test]
+    fn test_join_keeps_right_constants() -> Result<()> {
+        let schema = abc_schema();
+        let mut right = EquivalenceGroup::default();
+        right.add_constant(ConstExpr::from(col("a", &schema)?));
+        // `a` of the right side is column 4 of the join output
+        let right_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 4));
+
+        for (join_type, expected) in [
+            (JoinType::Inner, true),
+            (JoinType::Right, true),
+            (JoinType::Left, false),
+            (JoinType::Full, false),
+        ] {
+            let joined = EquivalenceGroup::default().join(&right, &join_type, 4, &[])?;
+            assert_eq!(
+                joined.is_expr_constant(&right_a).is_some(),
+                expected,
+                "{join_type}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_has_same_classes_ignores_the_map() -> Result<()> {
+        // `map` indexes into `classes`, so equal classes must imply equal
+        // groups no matter how the classes were arrived at. Bridging `a = b`
+        // and `b = c` into one class must match stating `a = c` and `a = b`.
+        let schema = abc_schema();
+        let bridged = group_of(&schema, &[("a", "b"), ("b", "c")])?;
+        let direct = group_of(&schema, &[("a", "c"), ("a", "b")])?;
+
+        assert_eq!(bridged.len(), 1, "expected a single bridged class");
+        assert!(bridged.has_same_classes(&direct));
 
         Ok(())
     }

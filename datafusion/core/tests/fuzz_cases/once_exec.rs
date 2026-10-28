@@ -1,27 +1,16 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow_schema::SchemaRef;
-use datafusion_common::internal_datafusion_err;
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ReplaceChildrenOptions,
 };
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};
@@ -86,11 +75,22 @@ impl ExecutionPlan for OnceExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     /// Returns a stream which yields data
@@ -98,11 +98,20 @@ impl ExecutionPlan for OnceExec {
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
-    ) -> datafusion_common::Result<SendableRecordBatchStream> {
+    ) -> Result<SendableRecordBatchStream> {
         assert_eq!(partition, 0);
 
         let stream = self.stream.lock().unwrap().take();
 
         stream.ok_or_else(|| internal_datafusion_err!("Stream already consumed"))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }

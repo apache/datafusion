@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sort-merge join stream specialized for semi/anti/mark joins.
 //!
@@ -123,13 +110,16 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::EmptyRecordBatchStream;
-use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
+use crate::joins::utils::{JoinFilter, JoinKeyComparator};
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time,
 };
+use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
-use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch, RecordBatchOptions,
+};
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch, not};
 use arrow::datatypes::SchemaRef;
 use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
@@ -234,9 +224,9 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     // Inner key group buffer: all inner rows sharing the current join key.
     // Only populated when a filter is present. Unbounded — a single key
     // with many inner rows will buffer them all. See "Degenerate cases"
-    // in exec.rs. Spilled to disk when memory reservation fails.
+    // in exec.rs. On memory pool overflow the buffered slices move to a
+    // per-group spill file (see [`Self::buffer_inner_key_group`]).
     inner_key_buffer: Vec<RecordBatch>,
-    inner_key_spill: Option<Arc<dyn SpillFile>>,
 
     // Join ON expressions, evaluated against each new batch to produce
     // the key arrays used for sorted key comparisons.
@@ -339,7 +329,6 @@ impl BitwiseSortMergeJoinStream {
             inner_key_arrays: vec![],
             matched: BooleanBufferBuilder::new(0),
             inner_key_buffer: vec![],
-            inner_key_spill: None,
             on_outer,
             on_inner,
             filter,
@@ -443,30 +432,44 @@ impl BitwiseSortMergeJoinStream {
         Ok(self.inner_self_cmp.as_ref().unwrap())
     }
 
-    /// Spill the in-memory inner key buffer to disk and clear it.
-    fn spill_inner_key_buffer(&mut self) -> Result<()> {
-        let spill_file = self
-            .spill_manager
-            .spill_record_batch_and_finish(
-                &self.inner_key_buffer,
-                "semi_anti_smj_inner_key_spill",
-            )?
-            .expect("inner_key_buffer is non-empty when spilling");
-        self.inner_key_buffer.clear();
+    /// Spill the in-memory inner key buffer to disk and clear it. One key
+    /// group can spill repeatedly; every call appends to `writer` — the
+    /// group's single open spill file — creating it on first use.
+    fn spill_inner_key_buffer(
+        &mut self,
+        writer: &mut Option<InProgressSpillFile>,
+    ) -> Result<()> {
+        if writer.is_none() {
+            *writer = Some(
+                self.spill_manager
+                    .create_in_progress_file("semi_anti_smj_inner_key_spill")?,
+            );
+        }
+        let writer = writer.as_mut().unwrap();
+        for batch in self.inner_key_buffer.drain(..) {
+            writer.append_batch(&batch)?;
+        }
         self.inner_buffer_size = 0;
-        self.inner_key_spill = Some(spill_file);
         // Should succeed now — inner buffer has been spilled.
         self.try_resize_reservation()
     }
 
     /// Clear inner key group state after processing. Does not resize the
     /// reservation — the next key group will resize when buffering, or
-    /// the stream's Drop will free it. This avoids unnecessary memory
+    /// [`Self::release_inner`] will free it. This avoids unnecessary memory
     /// pool interactions (see apache/datafusion#20729).
     fn clear_inner_key_group(&mut self) {
         self.inner_key_buffer.clear();
-        self.inner_key_spill = None;
         self.inner_buffer_size = 0;
+    }
+
+    /// Drops the inner input and frees the inner key group reservation once no outer row can
+    /// match any more, so that memory is back in the pool before the remaining output is
+    /// emitted rather than when the stream is dropped.
+    fn release_inner(&mut self) {
+        self.clear_inner_key_group();
+        self.reservation.free();
+        self.inner = Box::pin(EmptyRecordBatchStream::new(self.inner.schema()));
     }
 
     /// Fetch the next outer batch. Returns true if a batch was loaded.
@@ -639,13 +642,15 @@ impl BitwiseSortMergeJoinStream {
     /// cursor past the group. Collects all inner rows with the current key
     /// across batch boundaries. Sets `inner_batch` to `None` if inner is
     /// exhausted.
-    async fn buffer_inner_key_group(&mut self) -> Result<()> {
+    ///
+    /// Slices that overflow the memory pool are appended to a single spill
+    /// file, returned finished — ready for reading — once the whole group
+    /// has been buffered. `None` means the group fit in memory.
+    async fn buffer_inner_key_group(&mut self) -> Result<Option<Arc<dyn SpillFile>>> {
         self.clear_inner_key_group();
+        let mut writer: Option<InProgressSpillFile> = None;
 
-        loop {
-            let Some(inner_batch) = &self.inner_batch else {
-                return Ok(());
-            };
+        while let Some(inner_batch) = &self.inner_batch {
             let num_inner = inner_batch.num_rows();
             let from = self.inner_offset;
             let group_end =
@@ -653,14 +658,24 @@ impl BitwiseSortMergeJoinStream {
 
             let inner_batch = self.inner_batch.as_ref().unwrap();
             let slice = inner_batch.slice(from, group_end - from);
-            self.inner_buffer_size += slice.get_array_memory_size();
+            // A slice reports its parent's full buffers, so a group ending
+            // inside the batch is charged its share of the parent by row
+            // count (rounded up per row, which cannot overflow). A group
+            // reaching the batch end keeps the whole parent alive once the
+            // cursor advances, so charge all of it.
+            let parent_size = slice.get_array_memory_size();
+            self.inner_buffer_size += if group_end < num_inner {
+                parent_size.div_ceil(num_inner) * slice.num_rows()
+            } else {
+                parent_size
+            };
             self.inner_key_buffer.push(slice);
 
             // Reserve memory for the newly buffered slice. If the pool
             // is exhausted, spill the entire buffer to disk.
             if self.try_resize_reservation().is_err() {
                 if self.runtime_env.disk_manager.tmp_files_enabled() {
-                    self.spill_inner_key_buffer()?;
+                    self.spill_inner_key_buffer(&mut writer)?;
                 } else {
                     // Re-attempt to get the error message
                     self.try_resize_reservation().map_err(|e| {
@@ -673,7 +688,7 @@ impl BitwiseSortMergeJoinStream {
 
             if group_end < num_inner {
                 self.inner_offset = group_end;
-                return Ok(());
+                break;
             }
 
             // Key group extends to the end of the batch — it may continue
@@ -682,7 +697,7 @@ impl BitwiseSortMergeJoinStream {
 
             if !self.next_inner_batch().await? {
                 self.inner_batch = None;
-                return Ok(());
+                break;
             }
             if !keys_match(
                 &saved_inner_keys,
@@ -690,20 +705,30 @@ impl BitwiseSortMergeJoinStream {
                 &self.sort_options,
                 self.null_equality,
             )? {
-                return Ok(());
+                break;
             }
+        }
+
+        match writer {
+            Some(mut writer) => writer.finish(),
+            None => Ok(None),
         }
     }
 
     /// Process a key match with a filter. For each inner row in the buffered
-    /// key group, evaluates the filter against the outer key group and ORs
-    /// the results into the matched bitset using u64-chunked bitwise ops.
-    async fn process_key_match_with_filter(&mut self) -> Result<()> {
+    /// key group — the spilled slices in `spill` plus the in-memory
+    /// `inner_key_buffer` — evaluates the filter against the outer key group
+    /// and ORs the results into the matched bitset using u64-chunked bitwise
+    /// ops.
+    async fn process_key_match_with_filter(
+        &mut self,
+        spill: Option<&Arc<dyn SpillFile>>,
+    ) -> Result<()> {
         let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
 
         // buffer_inner_key_group must be called before this function
         debug_assert!(
-            !self.inner_key_buffer.is_empty() || self.inner_key_spill.is_some(),
+            !self.inner_key_buffer.is_empty() || spill.is_some(),
             "process_key_match_with_filter called with no inner key data"
         );
         debug_assert!(
@@ -734,7 +759,7 @@ impl BitwiseSortMergeJoinStream {
 
         // Process spilled inner batches first asynchronously.
         if matched_count < outer_group_len
-            && let Some(spill_file) = &self.inner_key_spill
+            && let Some(spill_file) = spill
         {
             let mut spill_stream = self
                 .spill_manager
@@ -799,10 +824,15 @@ impl BitwiseSortMergeJoinStream {
 
     /// Evaluate the filter for the buffered inner key group against the
     /// outer key group. If the outer key group continues into subsequent
-    /// outer batches, keep evaluating there too.
-    async fn process_filtered_match_loop(&mut self) -> Result<()> {
+    /// outer batches, keep evaluating there too. Dropping `spill` on return
+    /// deletes the group's temp file.
+    async fn process_filtered_match_loop(
+        &mut self,
+        spill: Option<Arc<dyn SpillFile>>,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
         loop {
-            self.process_key_match_with_filter().await?;
+            self.process_key_match_with_filter(spill.as_ref()).await?;
 
             let outer_batch = self.outer_batch.as_ref().unwrap();
             if self.outer_offset < outer_batch.num_rows() {
@@ -815,6 +845,7 @@ impl BitwiseSortMergeJoinStream {
                 slice_keys(&self.outer_key_arrays, outer_batch.num_rows() - 1);
 
             self.emit_outer_batch()?;
+            self.emit_completed_batches(emitter).await;
 
             if !self.next_outer_batch().await? {
                 break;
@@ -835,7 +866,10 @@ impl BitwiseSortMergeJoinStream {
 
     /// Mark the outer key group as matched. If the outer key group continues
     /// into subsequent outer batches, keep marking there too.
-    async fn process_unfiltered_match_loop(&mut self) -> Result<()> {
+    async fn process_unfiltered_match_loop(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
         loop {
             self.mark_outer_key_group_matched()?;
 
@@ -850,6 +884,7 @@ impl BitwiseSortMergeJoinStream {
                 slice_keys(&self.outer_key_arrays, outer_batch.num_rows() - 1);
 
             self.emit_outer_batch()?;
+            self.emit_completed_batches(emitter).await;
 
             if !self.next_outer_batch().await? {
                 return Ok(());
@@ -867,18 +902,21 @@ impl BitwiseSortMergeJoinStream {
 
     /// Keys at both cursors are equal: determine which outer rows in the key
     /// group have a match. Both key groups may span batch boundaries.
-    async fn process_key_match(&mut self) -> Result<()> {
+    async fn process_key_match(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
         if self.filter.is_some() {
             // Buffer the inner key group so each inner row can be evaluated
             // against the outer key group, OR-ing filter results into the
             // matched bitset.
-            self.buffer_inner_key_group().await?;
-            self.process_filtered_match_loop().await
+            let spill = self.buffer_inner_key_group().await?;
+            self.process_filtered_match_loop(spill, emitter).await
         } else {
             // Without a filter, key equality alone means every outer row in
             // the group matches; the inner rows themselves are not needed.
             self.advance_inner_past_key_group().await?;
-            self.process_unfiltered_match_loop().await
+            self.process_unfiltered_match_loop(emitter).await
         }
     }
 
@@ -1016,10 +1054,26 @@ impl BitwiseSortMergeJoinStream {
     /// current outer batch and all remaining ones with their current matched
     /// bits (semi drops unmatched rows, anti emits them, mark emits them
     /// with mark=false).
-    async fn drain_outer(&mut self) -> Result<()> {
-        self.emit_outer_batch()?;
-        while self.next_outer_batch().await? {
+    async fn drain_outer(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        // The remaining outer rows can no longer match. Anti and mark joins still emit
+        // them; a semi join is finished without reading them and drops the outer input too.
+        let is_semi = matches!(self.join_type, JoinType::LeftSemi | JoinType::RightSemi);
+        self.release_inner();
+        if is_semi {
+            self.outer = Box::pin(EmptyRecordBatchStream::new(self.outer.schema()));
+        }
+        loop {
             self.emit_outer_batch()?;
+            self.emit_completed_batches(emitter).await;
+            if is_semi {
+                break;
+            }
+            if !self.next_outer_batch().await? {
+                break;
+            }
         }
         Ok(())
     }
@@ -1049,7 +1103,7 @@ impl BitwiseSortMergeJoinStream {
         // helpers are only entered at batch boundaries.
         while self.has_current_outer_row() || self.advance_outer_row(emitter).await? {
             if !(self.has_current_inner_row() || self.advance_inner_row().await?) {
-                self.drain_outer().await?;
+                self.drain_outer(emitter).await?;
                 break;
             }
 
@@ -1065,7 +1119,7 @@ impl BitwiseSortMergeJoinStream {
                 }
                 Ordering::Equal => {
                     if !self.try_process_key_match()? {
-                        self.process_key_match().await?;
+                        self.process_key_match(emitter).await?;
                     }
                 }
             }
@@ -1074,6 +1128,10 @@ impl BitwiseSortMergeJoinStream {
                 self.emit_completed_batches(emitter).await;
             }
         }
+
+        // The outer input is exhausted or dropped by now; when it ran out first, the inner
+        // input and the last inner key group are still held.
+        self.release_inner();
 
         // Flush whatever is still buffered in the coalescer.
         self.coalescer.finish_buffered_batch()?;
@@ -1157,15 +1215,15 @@ fn keys_match(
     null_equality: NullEquality,
 ) -> Result<bool> {
     debug_assert!(left_arrays.iter().all(|a| a.len() == 1));
-    let cmp = compare_join_arrays(
-        left_arrays,
-        0,
-        right_arrays,
-        0,
-        sort_options,
-        null_equality,
-    )?;
-    Ok(cmp == Ordering::Equal)
+    // Use the merge scan's comparator so every key type it supports, and its
+    // floating-point equality (NaN, signed zero), also applies across batches.
+    // Slicing the right side to one row keeps construction independent of the
+    // batch size.
+    let right_keys = slice_keys(right_arrays, 0);
+    Ok(
+        JoinKeyComparator::new(left_arrays, &right_keys, sort_options, null_equality)?
+            .is_equal(0, 0),
+    )
 }
 
 /// Evaluate the join filter for one inner row against a slice of outer rows.
@@ -1222,7 +1280,11 @@ fn evaluate_filter_for_inner_row(
         }
     }
 
-    let filter_batch = RecordBatch::try_new(Arc::clone(filter.schema()), columns)?;
+    let filter_batch = RecordBatch::try_new_with_options(
+        Arc::clone(filter.schema()),
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(num_outer_rows)),
+    )?;
     let result = filter
         .expression()
         .evaluate(&filter_batch)?

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Result building helpers for InList operations.
 //!
@@ -24,15 +11,21 @@
 use arrow::array::BooleanArray;
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 
-// Truth table for (needle_nulls, haystack_has_nulls, negated):
-// (Some, true,  false) => values: valid & contains,  nulls: valid & contains
-// (None, true,  false) => values: contains,          nulls: contains
-// (Some, true,  true)  => values: valid & !contains, nulls: valid & contains
-// (None, true,  true)  => values: !contains,         nulls: contains
-// (Some, false, false) => values: valid & contains,  nulls: valid
-// (Some, false, true)  => values: valid & !contains, nulls: valid
-// (None, false, false) => values: contains,          nulls: none
-// (None, false, true)  => values: !contains,         nulls: none
+// Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
+// ("-" means the value does not affect the result)
+//
+// | needle null | set has null | negated | found in set | result |
+// |-------------|--------------|---------|--------------|--------|
+// | true        | -            | false   | -            | null   |
+// | true        | -            | true    | -            | null   |
+// | false       | true         | false   | true         | true   |
+// | false       | true         | false   | false        | null   |
+// | false       | true         | true    | true         | false  |
+// | false       | true         | true    | false        | null   |
+// | false       | false        | false   | true         | true   |
+// | false       | false        | false   | false        | false  |
+// | false       | false        | true    | true         | false  |
+// | false       | false        | true    | false        | true   |
 
 /// Builds a BooleanArray result for IN list operations.
 ///
@@ -44,7 +37,7 @@ use arrow::buffer::{BooleanBuffer, NullBuffer};
 /// This version computes contains for all positions, including nulls, then applies
 /// null masking via bitmap operations.
 #[inline]
-pub(crate) fn build_in_list_result<C>(
+pub(super) fn build_in_list_result<C>(
     len: usize,
     needle_nulls: Option<&NullBuffer>,
     haystack_has_nulls: bool,
@@ -63,7 +56,7 @@ where
 /// This version does not assume contains_buf is pre-masked at null positions.
 /// It handles nulls using bitmap operations.
 #[inline]
-pub(crate) fn build_result_from_contains(
+pub(super) fn build_result_from_contains(
     needle_nulls: Option<&NullBuffer>,
     haystack_has_nulls: bool,
     negated: bool,

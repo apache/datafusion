@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sort enforcement helpers. The standalone `EnforceSorting` rule that
 //! previously lived here has been retired in favour of `EnsureRequirements`
@@ -102,8 +89,9 @@ fn update_sort_ctx_children_data(
         child_node.data = if is_sort(child_plan) {
             // child is sort
             true
-        } else if is_limit(child_plan) {
-            // There is no sort linkage for this path, it starts at a limit.
+        } else if is_limit(child_plan) || child_plan.fetch().is_some() {
+            // Removing a sort below a row limit can change which rows survive,
+            // including limits embedded in operators such as FilterExec.
             false
         } else {
             // If a descendent is a sort, and the child maintains the sort.
@@ -170,8 +158,10 @@ fn update_coalesce_ctx_children(
         // Plan has no children, it cannot be a `CoalescePartitionsExec`.
         false
     } else if is_coalesce_partitions(&coalesce_context.plan) {
-        // Initiate a connection:
-        true
+        // A fetched coalesce selects rows before the sort. Removing it would
+        // lose that limit, and moving its fetch onto the sort changes which
+        // rows are selected.
+        coalesce_context.plan.fetch().is_none()
     } else {
         children.iter().enumerate().any(|(idx, node)| {
             // Only consider operators that don't require a single partition,
@@ -212,7 +202,7 @@ pub fn replace_with_partial_sort(
 
     let mut common_prefix_length = 0;
     while child_eq_properties
-        .ordering_satisfy(sort_exprs[0..common_prefix_length + 1].to_vec())?
+        .ordering_satisfy(sort_exprs[0..=common_prefix_length].iter().cloned())?
     {
         common_prefix_length += 1;
     }
@@ -418,23 +408,21 @@ pub fn ensure_sorting(
     };
 
     let plan = &requirements.plan;
-    let mut updated_children = vec![];
+    let mut updated_children = Vec::with_capacity(requirements.children.len());
     for (idx, (required_ordering, mut child)) in plan
         .required_input_ordering()
         .into_iter()
         .zip(requirements.children)
         .enumerate()
     {
-        let physical_ordering = child.plan.output_ordering();
-
         if let Some(required) = required_ordering {
             let eq_properties = child.plan.equivalence_properties();
             let req = required.into_single();
             if !eq_properties.ordering_satisfy_requirement(req.clone())? {
-                // Make sure we preserve the ordering requirements:
-                if physical_ordering.is_some() {
-                    child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
-                }
+                // The new sort supersedes linked sorts even when a projection
+                // hides their keys. Explicit and embedded limits stop sort
+                // linkage, preserving sorts that determine which rows survive.
+                child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 child = add_sort_above(
                     child,
                     req,
@@ -444,9 +432,11 @@ pub fn ensure_sorting(
                 );
                 child = update_sort_ctx_children_data(child, true)?;
             }
-        } else if physical_ordering.is_none() || !plan.maintains_input_order()[idx] {
-            // We have a `SortExec` whose effect may be neutralized by another
-            // order-imposing operator, remove this sort:
+        } else if !plan.maintains_input_order()[idx] {
+            // Remove linked sorts only when this operator does not preserve
+            // their row order. A projection can hide the sort key, making
+            // output_ordering() None, while a later LIMIT or OFFSET still
+            // depends on that order to select rows.
             child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
         }
         updated_children.push(child);
@@ -461,13 +451,16 @@ pub fn ensure_sorting(
     } else if is_sort_preserving_merge(&requirements.plan)
         && child_node.plan.output_partitioning().partition_count() <= 1
     {
-        // This `SortPreservingMergeExec` is unnecessary, input already has a
-        // single partition and no fetch is required.
-        let mut child_node = requirements.children.swap_remove(0);
+        // This `SortPreservingMergeExec` is unnecessary because its input has a
+        // single partition.
+        let child_node = requirements.children.swap_remove(0);
         if let Some(fetch) = requirements.plan.fetch() {
-            // Add the limit exec if the original SPM had a fetch:
-            child_node.plan =
-                Arc::new(LocalLimitExec::new(Arc::clone(&child_node.plan), fetch));
+            let limit = LocalLimitExec::new(Arc::clone(&child_node.plan), fetch);
+            return Ok(Transformed::yes(PlanContext::new(
+                Arc::new(limit),
+                false,
+                vec![child_node],
+            )));
         }
         return Ok(Transformed::yes(child_node));
     }
@@ -510,17 +503,11 @@ fn analyze_immediate_sort_removal(
         // Remove the sort:
         node.children = node.children.swap_remove(0).children;
         if let Some(fetch) = sort_exec.fetch() {
-            let required_ordering = sort_exec.properties().output_ordering().cloned();
             // If the sort has a fetch, we need to add a limit:
             if properties.output_partitioning().partition_count() == 1 {
-                let mut global_limit =
-                    GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch));
-                global_limit.set_required_ordering(required_ordering);
-                Arc::new(global_limit)
+                Arc::new(GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch)))
             } else {
-                let mut local_limit = LocalLimitExec::new(Arc::clone(sort_input), fetch);
-                local_limit.set_required_ordering(required_ordering);
-                Arc::new(local_limit)
+                Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
             }
         } else {
             Arc::clone(sort_input)
@@ -552,17 +539,33 @@ fn adjust_window_sort_removal(
     window_tree.children.push(child_node);
 
     let child_plan = &window_tree.children[0].plan;
+    // Captured up-front so the fallback `BoundedWindowAggExec::try_new` below
+    // can reinstall the observer that was on the source exec. `None` when
+    // the source is a `WindowAggExec` (no observer) or when no observer was
+    // installed on the source `BoundedWindowAggExec`.
+    let state_observer = window_tree
+        .plan
+        .downcast_ref::<BoundedWindowAggExec>()
+        .and_then(|exec| exec.state_observer().cloned());
     let (window_expr, new_window) = if let Some(exec) =
         window_tree.plan.downcast_ref::<WindowAggExec>()
     {
         let window_expr = exec.window_expr();
-        let new_window =
-            get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
+        let new_window = get_best_fitting_window(
+            window_expr,
+            child_plan,
+            &exec.partition_keys(),
+            None,
+        )?;
         (window_expr, new_window)
     } else if let Some(exec) = window_tree.plan.downcast_ref::<BoundedWindowAggExec>() {
         let window_expr = exec.window_expr();
-        let new_window =
-            get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
+        let new_window = get_best_fitting_window(
+            window_expr,
+            child_plan,
+            &exec.partition_keys(),
+            state_observer.clone(),
+        )?;
         (window_expr, new_window)
     } else {
         return plan_err!("Expected WindowAggExec or BoundedWindowAggExec");
@@ -585,12 +588,15 @@ fn adjust_window_sort_removal(
         window_tree.children.push(child_node);
 
         if window_expr.iter().all(|e| e.uses_bounded_memory()) {
-            Arc::new(BoundedWindowAggExec::try_new(
-                window_expr.to_vec(),
-                child_plan,
-                InputOrderMode::Sorted,
-                !window_expr[0].partition_by().is_empty(),
-            )?) as _
+            Arc::new(
+                BoundedWindowAggExec::try_new(
+                    window_expr.to_vec(),
+                    child_plan,
+                    InputOrderMode::Sorted,
+                    !window_expr[0].partition_by().is_empty(),
+                )?
+                .with_state_observer(state_observer)?,
+            ) as _
         } else {
             Arc::new(WindowAggExec::try_new(
                 window_expr.to_vec(),
@@ -645,11 +651,9 @@ fn remove_bottleneck_in_subplan_impl(
                 Some(Distribution::SinglePartition)
             )
     };
-    let remove_from_first_child = requirements
-        .children
-        .first()
-        .is_some_and(|child| is_coalesce_partitions(&child.plan))
-        && removable(0);
+    let remove_from_first_child = requirements.children.first().is_some_and(|child| {
+        is_coalesce_partitions(&child.plan) && child.plan.fetch().is_none()
+    }) && removable(0);
     let children = &mut requirements.children;
     if remove_from_first_child {
         // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
@@ -759,7 +763,7 @@ fn remove_corresponding_sort_from_sub_plan(
                 repartition.properties().output_partitioning().clone(),
             )?) as _;
         }
-    };
+    }
     // Deleting a merging sort may invalidate distribution requirements.
     // Ensure that we stay compliant with such requirements:
     if requires_single_partition && node.plan.output_partitioning().partition_count() > 1

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
@@ -28,7 +15,8 @@ use crate::execution::session_state::SessionStateBuilder;
 use crate::{
     catalog::listing_schema::ListingSchemaProvider,
     catalog::{
-        CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
+        CatalogProvider, CatalogProviderFactory, CatalogProviderList, TableProvider,
+        TableProviderFactory,
     },
     dataframe::DataFrame,
     datasource::listing::{
@@ -44,10 +32,10 @@ use crate::{
     logical_expr::AggregateUDF,
     logical_expr::ScalarUDF,
     logical_expr::{
-        CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
-        CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
-        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, ResetVariable,
-        SetVariable, TableType, UNNAMED_TABLE,
+        CreateCatalog, CreateCatalogSchema, CreateExternalCatalog, CreateExternalTable,
+        CreateFunction, CreateMemoryTable, CreateView, DropCatalog, DropCatalogSchema,
+        DropFunction, DropTable, DropView, Execute, LogicalPlan, LogicalPlanBuilder,
+        Prepare, ResetVariable, SetVariable, TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
@@ -561,6 +549,19 @@ impl SessionContext {
         self.state.read().table_factories().get(file_type).cloned()
     }
 
+    /// Return the [`CatalogProviderFactory`] that is registered for the
+    /// specified catalog type, if any.
+    pub fn catalog_factory(
+        &self,
+        catalog_type: &str,
+    ) -> Option<Arc<dyn CatalogProviderFactory>> {
+        self.state
+            .read()
+            .catalog_factories()
+            .get(catalog_type)
+            .cloned()
+    }
+
     /// Return the `enable_ident_normalization` of this Session
     pub fn enable_ident_normalization(&self) -> bool {
         self.state
@@ -705,9 +706,15 @@ impl SessionContext {
                         self.create_catalog_schema(cmd)
                     }
                     DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd),
+                    DdlStatement::CreateExternalCatalog(cmd) => {
+                        (Box::pin(async move { self.create_external_catalog(&cmd).await })
+                            as std::pin::Pin<Box<dyn Future<Output = _> + Send>>)
+                            .await
+                    }
                     DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)).await,
                     DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)).await,
                     DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd),
+                    DdlStatement::DropCatalog(cmd) => self.drop_catalog(cmd),
                     DdlStatement::CreateFunction(cmd) => {
                         Box::pin(self.create_function(*cmd)).await
                     }
@@ -1043,6 +1050,49 @@ impl SessionContext {
         }
     }
 
+    async fn create_external_catalog(
+        &self,
+        cmd: &CreateExternalCatalog,
+    ) -> Result<DataFrame> {
+        let exists = self.catalog(cmd.catalog_name.as_str()).is_some();
+
+        match (cmd.if_not_exists, cmd.or_replace, exists) {
+            (true, false, true) => self.return_empty_dataframe(),
+            (true, true, true) => {
+                exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
+            }
+            (false, false, true) => {
+                exec_err!("External catalog '{}' already exists", cmd.catalog_name)
+            }
+            (_, _, _) => {
+                let new_catalog = self.create_custom_catalog(cmd).await?;
+                self.state
+                    .write()
+                    .catalog_list()
+                    .register_catalog(cmd.catalog_name.clone(), new_catalog);
+                self.return_empty_dataframe()
+            }
+        }
+    }
+
+    async fn create_custom_catalog(
+        &self,
+        cmd: &CreateExternalCatalog,
+    ) -> Result<Arc<dyn CatalogProvider>> {
+        let state = self.state.read().clone();
+        let catalog_type = cmd.catalog_type.to_uppercase();
+        let factory = state
+            .catalog_factories()
+            .get(catalog_type.as_str())
+            .ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Unable to find catalog factory for {}",
+                    cmd.catalog_type
+                )
+            })?;
+        factory.create(&state, cmd).await
+    }
+
     async fn drop_table(&self, cmd: DropTable) -> Result<DataFrame> {
         let DropTable {
             name, if_exists, ..
@@ -1106,10 +1156,27 @@ impl SessionContext {
         exec_err!("Schema '{schema_ref}' doesn't exist.")
     }
 
+    fn drop_catalog(&self, cmd: DropCatalog) -> Result<DataFrame> {
+        let DropCatalog {
+            name,
+            if_exists,
+            cascade,
+            ..
+        } = cmd;
+        let dereg = self
+            .state
+            .write()
+            .catalog_list()
+            .deregister_catalog(&name, cascade)?;
+        match (dereg, if_exists) {
+            (Some(_), _) => self.return_empty_dataframe(),
+            (None, true) => self.return_empty_dataframe(),
+            (None, false) => exec_err!("Catalog '{name}' doesn't exist."),
+        }
+    }
+
     fn set_variable(&self, stmt: SetVariable) -> Result<()> {
-        let SetVariable {
-            variable, value, ..
-        } = stmt;
+        let SetVariable { variable, value } = stmt;
 
         // Check if this is a runtime configuration
         if variable.starts_with("datafusion.runtime.") {
@@ -1258,7 +1325,7 @@ impl SessionContext {
                     builder.with_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
-        };
+        }
         *state = SessionStateBuilder::from(state.clone())
             .with_runtime_env(Arc::new(builder.build()?))
             .build();
@@ -1519,7 +1586,7 @@ impl SessionContext {
                 self.state.write().register_higher_order_function(f)?;
             }
             RegisterFunction::Table(name, f) => self.register_udtf(&name, f),
-        };
+        }
 
         self.return_empty_dataframe()
     }
@@ -1551,9 +1618,7 @@ impl SessionContext {
     }
 
     fn execute_prepared(&self, execute: Execute) -> Result<DataFrame> {
-        let Execute {
-            name, parameters, ..
-        } = execute;
+        let Execute { name, parameters } = execute;
         let prepared = self.state.read().get_prepared(&name).ok_or_else(|| {
             exec_datafusion_err!("Prepared statement '{}' does not exist", name)
         })?;
@@ -1735,9 +1800,7 @@ impl SessionContext {
         // check if the file extension matches the expected extension
         for path in &table_paths {
             let file_path = path.as_str();
-            if !file_path.ends_with(option_extension.clone().as_str())
-                && !path.is_collection()
-            {
+            if !file_path.ends_with(option_extension.as_str()) && !path.is_collection() {
                 return exec_err!(
                     "File path '{file_path}' does not match the expected extension '{option_extension}'"
                 );
@@ -2282,6 +2345,8 @@ pub struct SQLOptions {
     allow_ddl: bool,
     /// See [`Self::with_allow_dml`]
     allow_dml: bool,
+    /// See [`Self::with_allow_copy`]
+    allow_copy: bool,
     /// See [`Self::with_allow_statements`]
     allow_statements: bool,
 }
@@ -2291,6 +2356,7 @@ impl Default for SQLOptions {
         Self {
             allow_ddl: true,
             allow_dml: true,
+            allow_copy: true,
             allow_statements: true,
         }
     }
@@ -2311,6 +2377,15 @@ impl SQLOptions {
     /// Should DML data modification commands (e.g. `INSERT` and `COPY`) be run? Defaults to `true`
     pub fn with_allow_dml(mut self, allow: bool) -> Self {
         self.allow_dml = allow;
+        self
+    }
+
+    /// Should `COPY` commands be run? Defaults to `true`.
+    ///
+    /// `COPY` commands are also disabled when DML is disabled with
+    /// [`Self::with_allow_dml`].
+    pub fn with_allow_copy(mut self, allow: bool) -> Self {
+        self.allow_copy = allow;
         self
     }
 
@@ -2347,6 +2422,9 @@ impl<'n> TreeNodeVisitor<'n> for BadPlanVisitor<'_> {
             }
             LogicalPlan::Dml(dml) if !self.options.allow_dml => {
                 plan_err!("DML not supported: {}", dml.op)
+            }
+            LogicalPlan::Copy(_) if !self.options.allow_copy => {
+                plan_err!("COPY not supported")
             }
             LogicalPlan::Copy(_) if !self.options.allow_dml => {
                 plan_err!("DML not supported: COPY")
@@ -2768,11 +2846,13 @@ mod tests {
     async fn sql_create_catalog() -> Result<()> {
         // the information schema used to introduce cyclic Arcs
         let ctx = SessionContext::new_with_config(
-            SessionConfig::new().with_information_schema(true),
+            SessionConfig::new()
+                .with_information_schema(true)
+                .with_system_catalog(Some(String::from("system"))),
         );
 
         // Create catalog
-        ctx.sql("CREATE DATABASE test").await?.collect().await?;
+        ctx.sql("CREATE CATALOG test").await?.collect().await?;
 
         // Create schema
         ctx.sql("CREATE SCHEMA test.abc").await?.collect().await?;
@@ -2784,7 +2864,7 @@ mod tests {
             .await?;
 
         // Check table exists in schema
-        let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
+        let results = ctx.sql("SELECT * FROM system.information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
         Ok(())
@@ -2959,8 +3039,8 @@ mod tests {
         // Valid durations
         for (duration, want) in [
             ("1s", Duration::from_secs(1)),
-            ("1m", Duration::from_secs(60)),
-            ("1m0s", Duration::from_secs(60)),
+            ("1m", Duration::from_mins(1)),
+            ("1m0s", Duration::from_mins(1)),
             ("1m1s", Duration::from_secs(61)),
         ] {
             let have =
@@ -2985,6 +3065,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Each `Duration` deliberately uses the same unit as the suffix in the string it is parsed from"
+    )]
     fn test_parse_duration_with_overflow_check() {
         const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
 
@@ -2996,7 +3080,7 @@ mod tests {
             ),
             (
                 "307445734561825860m",
-                Duration::from_secs(307445734561825860 * 60),
+                Duration::from_mins(307445734561825860),
             ),
             (
                 "307445734561825860m10s",

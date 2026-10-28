@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::ffi::c_void;
@@ -93,14 +80,14 @@ pub struct PartitionEvaluatorPrivateData {
 impl FFI_PartitionEvaluator {
     unsafe fn inner_mut(&mut self) -> &mut Box<dyn PartitionEvaluator + 'static> {
         unsafe {
-            let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
+            let private_data = self.private_data.cast::<PartitionEvaluatorPrivateData>();
             &mut (*private_data).evaluator
         }
     }
 
     unsafe fn inner(&self) -> &(dyn PartitionEvaluator + 'static) {
         unsafe {
-            let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
+            let private_data = self.private_data.cast::<PartitionEvaluatorPrivateData>();
             (*private_data).evaluator.as_ref()
         }
     }
@@ -196,7 +183,9 @@ unsafe extern "C" fn release_fn_wrapper(evaluator: &mut FFI_PartitionEvaluator) 
     unsafe {
         if !evaluator.private_data.is_null() {
             let private_data = Box::from_raw(
-                evaluator.private_data as *mut PartitionEvaluatorPrivateData,
+                evaluator
+                    .private_data
+                    .cast::<PartitionEvaluatorPrivateData>(),
             );
             drop(private_data);
             evaluator.private_data = std::ptr::null_mut();
@@ -230,7 +219,7 @@ impl From<Box<dyn PartitionEvaluator>> for FFI_PartitionEvaluator {
             include_rank,
             uses_window_frame,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
+            private_data: Box::into_raw(Box::new(private_data)).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -258,7 +247,9 @@ impl From<FFI_PartitionEvaluator> for Box<dyn PartitionEvaluator> {
         if (evaluator.library_marker_id)() == crate::get_library_marker_id() {
             unsafe {
                 let private_data = Box::from_raw(
-                    evaluator.private_data as *mut PartitionEvaluatorPrivateData,
+                    evaluator
+                        .private_data
+                        .cast::<PartitionEvaluatorPrivateData>(),
                 );
                 // We must set this to null to avoid a double free
                 evaluator.private_data = std::ptr::null_mut();
@@ -384,6 +375,8 @@ mod tests {
     }
 
     #[test]
+    // The pointer casts are aligned because the pointees are the concrete types.
+    #[expect(clippy::cast_ptr_alignment)]
     fn test_ffi_partition_evaluator_local_bypass_inner() -> datafusion_common::Result<()>
     {
         let original_accum = TestPartitionEvaluator {};
@@ -394,8 +387,9 @@ mod tests {
         // Verify local libraries can be downcast to their original
         let foreign_accum: Box<dyn PartitionEvaluator> = ffi_accum.into();
         unsafe {
-            let concrete = &*(foreign_accum.as_ref() as *const dyn PartitionEvaluator
-                as *const TestPartitionEvaluator);
+            let concrete =
+                &*std::ptr::from_ref::<dyn PartitionEvaluator>(foreign_accum.as_ref())
+                    .cast::<TestPartitionEvaluator>();
             assert!(!concrete.uses_window_frame());
         }
 
@@ -406,8 +400,9 @@ mod tests {
         ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_accum: Box<dyn PartitionEvaluator> = ffi_accum.into();
         unsafe {
-            let concrete = &*(foreign_accum.as_ref() as *const dyn PartitionEvaluator
-                as *const ForeignPartitionEvaluator);
+            let concrete =
+                &*std::ptr::from_ref::<dyn PartitionEvaluator>(foreign_accum.as_ref())
+                    .cast::<ForeignPartitionEvaluator>();
             assert!(!concrete.uses_window_frame());
         }
 

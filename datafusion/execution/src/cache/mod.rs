@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 pub mod cache_manager;
 pub mod lru_queue;
@@ -228,7 +215,7 @@ impl DFHeapSize for SchemaFingerprint {
 #[cfg(test)]
 mod schema_fingerprint_tests {
     use super::*;
-    use datafusion_common::arrow::datatypes::Field;
+    use datafusion_common::arrow::datatypes::{Field, Metadata};
 
     fn fp(fields: Vec<Field>) -> SchemaFingerprint {
         SchemaFingerprint::from_schema(&Schema::new(fields))
@@ -263,13 +250,13 @@ mod schema_fingerprint_tests {
 
         let field_md = SchemaFingerprint::from_schema(&Schema::new(vec![
             Field::new("id", DataType::Int64, false)
-                .with_metadata([("note".to_string(), "x".to_string())].into()),
+                .with_metadata(Metadata::new().with("note", "x")),
         ]));
         assert_eq!(plain, field_md, "field metadata must be ignored");
 
         let schema_md = SchemaFingerprint::from_schema(
             &Schema::new(vec![Field::new("id", DataType::Int64, false)])
-                .with_metadata([("k".to_string(), "v".to_string())].into()),
+                .with_metadata(Metadata::new().with("k", "v")),
         );
         assert_eq!(plain, schema_md, "schema metadata must be ignored");
     }

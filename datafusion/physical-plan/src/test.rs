@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utilities for testing datafusion-physical-plan
 
@@ -24,7 +11,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
 
-use crate::ExecutionPlan;
 use crate::common;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
@@ -32,10 +18,12 @@ use crate::metrics::MetricsSet;
 use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
+use crate::{ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions};
 use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, Statistics, assert_or_internal_err, config::ConfigOptions, project_schema,
 };
@@ -45,7 +33,9 @@ use datafusion_physical_expr::equivalence::{
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
+use datafusion_physical_expr::{
+    EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr,
+};
 
 use futures::{Future, FutureExt};
 
@@ -138,11 +128,29 @@ impl ExecutionPlan for TestMemoryExec {
         Vec::new()
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn repartitioned(

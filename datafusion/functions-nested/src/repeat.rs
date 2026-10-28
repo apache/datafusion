@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarUDFImpl`] definitions for array_repeat function.
 
@@ -37,6 +24,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -135,6 +123,12 @@ impl ScalarUDFImpl for ArrayRepeat {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_repeat_inner)(&args.args)
+    }
+
+    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // this is not strictly order preserving
+        // since array_repeat(NULL, 2) = [NULL, NULL] and not NULL
+        Ok(false)
     }
 
     fn aliases(&self) -> &[String] {
@@ -262,8 +256,16 @@ fn general_list_repeat<O: OffsetSizeTrait>(
             continue;
         };
         let list_is_valid = list_array.is_valid(row_idx);
-        let start = list_offsets[row_idx].to_usize().unwrap();
-        let end = list_offsets[row_idx + 1].to_usize().unwrap();
+        // A NULL list slot may still have a non-empty offset range; treat the
+        // range as empty to keep the inner offsets and taken values in step.
+        let (start, end) = if list_is_valid {
+            (
+                list_offsets[row_idx].to_usize().unwrap(),
+                list_offsets[row_idx + 1].to_usize().unwrap(),
+            )
+        } else {
+            (0, 0)
+        };
         let row_len = end - start;
 
         for _ in 0..count {
@@ -272,9 +274,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
             let offset = checked_repeat_offset::<O>(inner_running)?;
             inner_offsets.push(offset);
             inner_nulls.append(list_is_valid);
-            if list_is_valid {
-                take_indices.extend(start as u64..end as u64);
-            }
+            take_indices.extend(start as u64..end as u64);
         }
     }
 
@@ -285,7 +285,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         None,
     )?;
     let inner_list = GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(list_array.value_type().clone(), true)),
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::new(inner_offsets.into()),
         inner_values,
         Some(NullBuffer::new(inner_nulls.finish())),
@@ -388,7 +388,7 @@ mod tests {
     use super::{array_repeat_inner, general_list_repeat, general_repeat};
     use arrow::array::{Array, ArrayRef, AsArray, Int32Array, Int64Array, ListArray};
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow::datatypes::{Field, Int32Type};
+    use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::Result;
     use std::sync::Arc;
 
@@ -438,6 +438,41 @@ mod tests {
             OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 2, 3])),
             Arc::new(repeated_values),
             Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_repeat_nested_null_list_with_nonempty_range() -> Result<()> {
+        // A NULL list slot might still have a non-empty offset range
+        // https://github.com/apache/datafusion/issues/25223
+        let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+        let list_array = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 6])),
+            Arc::new(values),
+            Some(NullBuffer::from(vec![false, true])),
+        );
+        let counts = Int64Array::from(vec![2, 2]);
+
+        let result = general_list_repeat::<i32>(&list_array, &counts)?;
+        let repeated_values = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            None,
+            None,
+            Some(vec![Some(4), Some(5), Some(6)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+        ]);
+        let expected = ListArray::new(
+            Arc::new(Field::new_list_field(
+                repeated_values.data_type().clone(),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 4])),
+            Arc::new(repeated_values),
+            None,
         );
 
         assert_eq!(result.as_list::<i32>(), &expected);

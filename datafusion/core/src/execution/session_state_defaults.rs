@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::catalog::{CatalogProvider, TableProviderFactory};
@@ -195,9 +182,8 @@ impl SessionStateDefaults {
     ) {
         let url = config.options().catalog.location.as_ref();
         let format = config.options().catalog.format.as_ref();
-        let (url, format) = match (url, format) {
-            (Some(url), Some(format)) => (url, format),
-            _ => return,
+        let (Some(url), Some(format)) = (url, format) else {
+            return;
         };
         let url = url.to_string();
         let format = format.to_string();
@@ -211,13 +197,11 @@ impl SessionStateDefaults {
         let path = object_store::path::Path::parse(path).expect("Can't parse path");
         let store = ObjectStoreUrl::parse(authority.as_str())
             .expect("Invalid default catalog url");
-        let store = match runtime.object_store(store) {
-            Ok(store) => store,
-            _ => return,
+        let Ok(store) = runtime.object_store(store) else {
+            return;
         };
-        let factory = match table_factories.get(format.as_str()) {
-            Some(factory) => factory,
-            _ => return,
+        let Some(factory) = table_factories.get(format.as_str()) else {
+            return;
         };
         let schema = ListingSchemaProvider::new(
             authority,
@@ -237,7 +221,7 @@ impl SessionStateDefaults {
         for format in formats {
             if let Err(e) = state.register_file_format(format, false) {
                 log::info!("Unable to register default file format: {e}")
-            };
+            }
         }
     }
 }

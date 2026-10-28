@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 #![doc(
@@ -124,39 +111,44 @@ impl Documentation {
         let st_arg_token = " expression to operate on. Can be a constant, column, or function, and any combination of operators.";
         // Standard Arguments
         if let Some(args) = self.arguments.clone() {
-            args.iter().for_each(|(name, value)| {
+            for (name, value) in &args {
                 if value.contains(st_arg_token) {
                     if name.starts_with("The ") {
-                        result.push_str(format!("\n    standard_argument(\n        name = \"{name}\"),").as_ref());
+                        result.push_str(
+                            format!(
+                                "\n    standard_argument(\n        name = \"{name}\"),"
+                            )
+                            .as_ref(),
+                        );
                     } else {
                         result.push_str(format!("\n    standard_argument(\n        name = \"{}\",\n        prefix = \"{}\"\n    ),", name, value.replace(st_arg_token, "")).as_ref());
                     }
                 }
-            });
+            }
         }
 
         // Arguments
         if let Some(args) = self.arguments.clone() {
-            args.iter().for_each(|(name, value)| {
+            for (name, value) in &args {
                 if !value.contains(st_arg_token) {
                     result.push_str(format!("\n    argument(\n        name = \"{name}\",\n        description = \"{value}\"\n    ),").as_ref());
                 }
-            });
+            }
         }
 
         if let Some(alt_syntax) = self.alternative_syntax.clone() {
-            alt_syntax.iter().for_each(|syntax| {
+            for syntax in &alt_syntax {
                 result.push_str(
                     format!("\n    alternative_syntax = \"{syntax}\",").as_ref(),
                 );
-            });
+            }
         }
 
         // Related UDFs
         if let Some(related_udf) = self.related_udfs.clone() {
-            related_udf.iter().for_each(|udf| {
+            for udf in &related_udf {
                 result.push_str(format!("\n    related_udf(name = \"{udf}\"),").as_ref());
-            });
+            }
         }
 
         result.push_str("\n)]");

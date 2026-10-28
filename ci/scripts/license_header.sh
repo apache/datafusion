@@ -63,15 +63,7 @@ fi
 
 if [[ "$MODE" == "write" ]]; then
   echo "[${SCRIPT_NAME}] \`hawkeye format --config ${HAWKEYE_CONFIG}\`"
-  if ! hawkeye format --config "${HAWKEYE_CONFIG}"; then
-    status=$?
-    # hawkeye returns exit code 1 when it applies fixes; treat that as success.
-    if [[ $status -eq 1 ]]; then
-      echo "[${SCRIPT_NAME}] hawkeye format applied fixes (exit 1 treated as success)"
-    else
-      exit $status
-    fi
-  fi
+  hawkeye format --config "${HAWKEYE_CONFIG}"
 else
   echo "[${SCRIPT_NAME}] \`hawkeye check --config ${HAWKEYE_CONFIG}\`"
   hawkeye check --config "${HAWKEYE_CONFIG}"

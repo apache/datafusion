@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Helper that helps with interactive editing, including multi-line parsing and validation,
 //! and auto-completion for file name during creating external table.
@@ -75,14 +62,11 @@ impl CliHelper {
 
     fn validate_input(&self, input: &str) -> Result<ValidationResult> {
         if let Some(sql) = input.strip_suffix(';') {
-            let dialect = match dialect_from_str(self.dialect) {
-                Some(dialect) => dialect,
-                None => {
-                    return Ok(ValidationResult::Invalid(Some(format!(
-                        "  🤔 Invalid dialect: {}",
-                        self.dialect
-                    ))));
-                }
+            let Some(dialect) = dialect_from_str(self.dialect) else {
+                return Ok(ValidationResult::Invalid(Some(format!(
+                    "  🤔 Invalid dialect: {}",
+                    self.dialect
+                ))));
             };
             let lines = split_from_semicolon(sql);
             for line in lines {
@@ -164,7 +148,7 @@ impl Completer for CliHelper {
         if is_open_quote_for_location(line, pos) {
             self.completer.complete(line, pos, ctx)
         } else {
-            Ok((0, Vec::with_capacity(0)))
+            Ok((0, Vec::new()))
         }
     }
 }
@@ -183,7 +167,7 @@ impl Helper for CliHelper {}
 /// Splits a string which consists of multiple queries.
 pub(crate) fn split_from_semicolon(sql: &str) -> Vec<String> {
     let mut commands = Vec::new();
-    let mut current_command = String::new();
+    let mut current_command = String::with_capacity(sql.len());
     let mut in_single_quote = false;
     let mut in_double_quote = false;
 
@@ -308,16 +292,14 @@ mod tests {
         let mut validator = CliHelper::default();
 
         // should be invalid in generic dialect
-        let result =
-            readline_direct(Cursor::new(r"select 1 # 2;".as_bytes()), &validator)?;
+        let result = readline_direct(Cursor::new(br"select 1 # 2;"), &validator)?;
         assert!(
             matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("Invalid statement"))
         );
 
         // valid in postgresql dialect
         validator.set_dialect(&Dialect::PostgreSQL);
-        let result =
-            readline_direct(Cursor::new(r"select 1 # 2;".as_bytes()), &validator)?;
+        let result = readline_direct(Cursor::new(br"select 1 # 2;"), &validator)?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
         Ok(())

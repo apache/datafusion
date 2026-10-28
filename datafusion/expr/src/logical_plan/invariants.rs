@@ -1,28 +1,16 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::logical_plan::MaterializedCtePlan;
 use datafusion_common::{
     DFSchemaRef, Result, assert_or_internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
 };
 
 use crate::{
-    Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window,
-    expr::{Exists, InSubquery, SetComparison},
+    Aggregate, DmlStatement, Expr, Filter, Join, JoinType, LogicalPlan, Window, WriteOp,
+    expr::{Exists, InSubquery, SetComparison, in_subquery_tuple_values},
     expr_rewriter::strip_outer_reference,
     utils::{collect_subquery_cols, split_conjunction},
 };
@@ -86,7 +74,7 @@ fn assert_valid_extension_nodes(plan: &LogicalPlan, check: InvariantLevel) -> Re
                         assert_valid_extension_nodes(&subquery.subquery, check)?;
                     }
                     _ => {}
-                };
+                }
                 Ok(TreeNodeRecursion::Continue)
             })
         })
@@ -139,7 +127,7 @@ fn assert_subqueries_are_valid(plan: &LogicalPlan) -> Result<()> {
                         check_subquery_expr(plan, &subquery.subquery, expr)?;
                     }
                     _ => {}
-                };
+                }
                 Ok(TreeNodeRecursion::Continue)
             })
         })
@@ -185,11 +173,7 @@ pub fn check_subquery_expr(
                     }
                 }
                 _ => {
-                    if inner_plan
-                        .max_rows()
-                        .filter(|max_row| *max_row <= 1)
-                        .is_some()
-                    {
+                    if inner_plan.max_rows().is_some_and(|max_row| max_row <= 1) {
                         Ok(())
                     } else {
                         plan_err!(
@@ -199,7 +183,12 @@ pub fn check_subquery_expr(
                 }
             }?;
             match outer_plan {
-                LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => Ok(()),
+                LogicalPlan::Projection(_)
+                | LogicalPlan::Filter(_)
+                | LogicalPlan::Dml(DmlStatement {
+                    op: WriteOp::MergeInto(_),
+                    ..
+                }) => Ok(()),
                 LogicalPlan::Aggregate(Aggregate {
                     group_expr,
                     aggr_expr,
@@ -217,20 +206,26 @@ pub fn check_subquery_expr(
                 }
                 _ => plan_err!(
                     "Correlated scalar subquery can only be used in Projection, \
-                    Filter, Aggregate plan nodes"
+                    Filter, Aggregate and MERGE DML plan nodes"
                 ),
             }?;
         }
-        check_correlations_in_subquery(inner_plan)
     } else {
         if let Expr::InSubquery(subquery) = expr {
-            // InSubquery should only return one column
-            if subquery.subquery.subquery.schema().fields().len() > 1 {
-                return plan_err!(
-                    "InSubquery should only return one column, but found {}: {}",
-                    subquery.subquery.subquery.schema().fields().len(),
-                    subquery.subquery.subquery.schema().field_names().join(", ")
-                );
+            // InSubquery should only return one column, unless it is a
+            // multi-column `(a, b) IN (SELECT x, y ...)` with one tuple element
+            // per subquery column.
+            let num_subquery_cols = subquery.subquery.subquery.schema().fields().len();
+            match in_subquery_tuple_values(&subquery.expr, &subquery.subquery.subquery)? {
+                Some(_) => {}
+                None if num_subquery_cols > 1 => {
+                    return plan_err!(
+                        "InSubquery should only return one column, but found {}: {}",
+                        num_subquery_cols,
+                        subquery.subquery.subquery.schema().field_names().join(", ")
+                    );
+                }
+                None => {}
             }
         }
         if let Expr::SetComparison(set_comparison) = expr
@@ -253,7 +248,11 @@ pub fn check_subquery_expr(
             | LogicalPlan::TableScan(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Join(_) => Ok(()),
+            | LogicalPlan::Join(_)
+            | LogicalPlan::Dml(DmlStatement {
+                op: WriteOp::MergeInto(_),
+                ..
+            }) => Ok(()),
             _ => plan_err!(
                 "In/Exist/SetComparison subquery can only be used in \
                 Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, \
@@ -261,8 +260,8 @@ pub fn check_subquery_expr(
                 outer_plan.display()
             ),
         }?;
-        check_correlations_in_subquery(inner_plan)
     }
+    check_correlations_in_subquery(inner_plan)
 }
 
 // Recursively check the unsupported outer references in the sub query plan.
@@ -344,6 +343,9 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
             }
         },
         LogicalPlan::Extension(_) => Ok(()),
+        // A materialized CTE is not checked, as when it was an extension
+        // node. `PullUpCorrelatedExpr` rewrites its continuation, or stops.
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(_)) => Ok(()),
         plan => check_no_outer_references(plan),
     }
 }
@@ -372,15 +374,10 @@ fn check_aggregation_in_scalar_subquery(
         let correlated_exprs = get_correlated_expressions(inner_plan)?;
         let inner_subquery_cols =
             collect_subquery_cols(&correlated_exprs, agg.input.schema())?;
-        let mut group_columns = agg
-            .group_expr
-            .iter()
-            .map(|group| Ok(group.column_refs().into_iter().cloned().collect::<Vec<_>>()))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten();
+        let mut group_columns =
+            agg.group_expr.iter().flat_map(|group| group.column_refs());
 
-        if !group_columns.all(|group| inner_subquery_cols.contains(&group)) {
+        if !group_columns.all(|group| inner_subquery_cols.contains(group)) {
             // Group BY columns must be a subset of columns in the correlated expressions
             return plan_err!(
                 "A GROUP BY clause in a scalar correlated subquery cannot contain non-correlated columns"

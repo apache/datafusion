@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! EmptyRelation produce_one_row=true execution plan
 
@@ -23,15 +10,18 @@ use crate::coop::cooperative;
 use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream, Statistics, common,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, Statistics,
+    common,
 };
 
 use arrow::array::{ArrayRef, NullArray, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::PhysicalExpr;
 
 use crate::statistics::StatisticsArgs;
 use log::trace;
@@ -136,11 +126,29 @@ impl ExecutionPlan for PlaceholderRowExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -192,17 +200,25 @@ impl ExecutionPlan for PlaceholderRowExec {
         &self,
         _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
-        let schema = self.schema().as_ref().try_into()?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `PlaceholderRowExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            schema,
+            partitions,
+            // Derived from `schema` and `partitions`, recomputed on decode.
+            cache: _,
+        } = self;
+        let schema = schema.as_ref().try_into()?;
+        let partitions = usize_to_wire(*partitions, "PlaceholderRowExec", "partitions")?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::PlaceholderRow(
                     protobuf::PlaceholderRowExecNode {
                         schema: Some(schema),
-                        partitions: self
-                            .properties()
-                            .output_partitioning()
-                            .partition_count() as u32,
+                        partitions,
                     },
                 ),
             ),
@@ -223,7 +239,11 @@ impl PlaceholderRowExec {
             protobuf::physical_plan_node::PhysicalPlanType::PlaceholderRow,
             "PlaceholderRowExec",
         );
-        let schema = placeholder.schema.as_ref().ok_or_else(|| {
+        // Destructure exhaustively so that a new field on
+        // `PlaceholderRowExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::PlaceholderRowExecNode { schema, partitions } = placeholder;
+        let schema = schema.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "PlaceholderRowExec is missing required field 'schema'"
             )
@@ -231,7 +251,7 @@ impl PlaceholderRowExec {
         let schema = Arc::new(Schema::try_from(schema)?);
         // A zero (absent) partition count comes from a plan encoded before the
         // field existed, which always meant a single partition.
-        let partitions = placeholder.partitions.max(1) as usize;
+        let partitions = (*partitions).max(1) as usize;
         Ok(Arc::new(
             PlaceholderRowExec::new(schema).with_partitions(partitions),
         ))
@@ -241,16 +261,15 @@ impl PlaceholderRowExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test;
-    use crate::with_new_children_if_necessary;
+    use crate::{execution_plan::replace_children_if_necessary, test};
 
     #[test]
-    fn with_new_children() -> Result<()> {
+    fn replace_children() -> Result<()> {
         let schema = test::aggr_test_schema();
 
         let placeholder = Arc::new(PlaceholderRowExec::new(schema));
 
-        let placeholder_2 = with_new_children_if_necessary(
+        let placeholder_2 = replace_children_if_necessary(
             Arc::clone(&placeholder) as Arc<dyn ExecutionPlan>,
             vec![],
         )?;
@@ -258,7 +277,7 @@ mod tests {
 
         let too_many_kids = vec![placeholder_2];
         assert!(
-            with_new_children_if_necessary(placeholder, too_many_kids).is_err(),
+            replace_children_if_necessary(placeholder, too_many_kids).is_err(),
             "expected error when providing list of kids"
         );
         Ok(())

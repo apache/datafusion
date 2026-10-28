@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Shared helpers for Spark-compatible hash functions.
 //!
@@ -898,7 +885,14 @@ macro_rules! create_hashes_internal {
                 DataType::Decimal128(_, _) => {
                     $crate::hash_array_decimal!(Decimal128Array, col, $hashes_buffer, $hash_method);
                 }
-                DataType::Dictionary(index_type, _) => match **index_type {
+                DataType::Dictionary(index_type, _) => {
+                    // Only use the fast path if every row starts from the same hash
+                    let first_col = first_col
+                        && match $hashes_buffer.first() {
+                            None => true,
+                            Some(first) => $hashes_buffer.iter().all(|h| h == first),
+                        };
+                    match **index_type {
                     DataType::Int8 => {
                         $create_dictionary_hash_method::<Int8Type>(col, $hashes_buffer, first_col)?;
                     }
@@ -957,7 +951,8 @@ macro_rules! create_hashes_internal {
                             col.data_type(),
                         )))
                     }
-                },
+                    }
+                }
                 DataType::List(field) => {
                     let list_array = col.as_any().downcast_ref::<ListArray>().unwrap();
                     let values = list_array.values();
@@ -982,9 +977,22 @@ macro_rules! create_hashes_internal {
                 DataType::Struct(_) => {
                     let struct_array = col.as_any().downcast_ref::<StructArray>().unwrap();
                     // Hash each field of the struct - Spark hashes all fields recursively
-                    let columns: Vec<ArrayRef> = struct_array.columns().to_vec();
+                    let columns = struct_array.columns();
                     if !columns.is_empty() {
-                        $recursive_hash_method(&columns, $hashes_buffer)?;
+                        match struct_array.nulls().filter(|nulls| nulls.null_count() > 0) {
+                            // A NULL struct leaves the hash unchanged like any other
+                            // NULL, whatever its fields still hold.
+                            Some(nulls) => {
+                                let before = $hashes_buffer.to_vec();
+                                $recursive_hash_method(columns, $hashes_buffer)?;
+                                for (i, hash) in $hashes_buffer.iter_mut().enumerate() {
+                                    if nulls.is_null(i) {
+                                        *hash = before[i];
+                                    }
+                                }
+                            }
+                            None => $recursive_hash_method(columns, $hashes_buffer)?,
+                        }
                     }
                 }
                 DataType::Map(field, _) => {

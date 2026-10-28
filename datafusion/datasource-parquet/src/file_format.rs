@@ -1,22 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -32,16 +20,19 @@ pub use crate::schema_coercion::{
 
 pub use crate::sink::ParquetSink;
 
-use arrow::datatypes::{Fields, Schema, SchemaRef};
+use arrow::datatypes::{DataType, FieldRef, Fields, Metadata, Schema, SchemaRef};
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 
-use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
+use datafusion_datasource::file_format::{
+    FileFormat, FileFormatFactory, ensure_unique_field_names,
+};
 
 use datafusion_common::Statistics;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::encryption::FileDecryptionProperties;
+use datafusion_common::parquet_config::DFTimeUnit;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     DEFAULT_PARQUET_EXTENSION, DataFusionError, GetExt, Result, internal_datafusion_err,
@@ -50,6 +41,7 @@ use datafusion_common::{
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
+use datafusion_datasource::write::get_writer_schema;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::ExecutionPlan;
@@ -57,20 +49,16 @@ use datafusion_session::Session;
 
 use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
 use crate::reader::CachedParquetFileReaderFactory;
-use crate::source::{
-    ParquetSource, parse_coerce_int96_string, parse_coerce_int96_tz_string,
-};
+use crate::source::ParquetSource;
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::errors::ParquetError;
-use parquet::file::metadata::ParquetMetaData;
 
 #[derive(Default)]
 /// Factory struct used to create [ParquetFormat]
@@ -97,7 +85,7 @@ impl FileFormatFactory for ParquetFormatFactory {
     fn create(
         &self,
         state: &dyn Session,
-        format_options: &std::collections::HashMap<String, String>,
+        format_options: &HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         let parquet_options = match &self.options {
             None => {
@@ -151,46 +139,47 @@ impl ParquetFormat {
         Self::default()
     }
 
-    /// Activate statistics based row group level pruning
-    /// - If `None`, defaults to value on `config_options`
+    /// Set [`pruning`]
+    ///
+    /// [`pruning`]: datafusion_common::config::ParquetOptions::pruning
     pub fn with_enable_pruning(mut self, enable: bool) -> Self {
         self.options.global.pruning = enable;
         self
     }
 
-    /// Return `true` if pruning is enabled
+    /// Get [`pruning`]
+    ///
+    /// [`pruning`]: datafusion_common::config::ParquetOptions::pruning
     pub fn enable_pruning(&self) -> bool {
         self.options.global.pruning
     }
 
-    /// Provide a hint to the size of the file metadata. If a hint is provided
-    /// the reader will try and fetch the last `size_hint` bytes of the parquet file optimistically.
-    /// Without a hint, two read are required. One read to fetch the 8-byte parquet footer and then
-    /// another read to fetch the metadata length encoded in the footer.
+    /// Set [`metadata_size_hint`]
     ///
-    /// - If `None`, defaults to value on `config_options`
+    /// [`metadata_size_hint`]: datafusion_common::config::ParquetOptions::metadata_size_hint
     pub fn with_metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
         self.options.global.metadata_size_hint = size_hint;
         self
     }
 
-    /// Return the metadata size hint if set
+    /// Get [`metadata_size_hint`]
+    ///
+    /// [`metadata_size_hint`]: datafusion_common::config::ParquetOptions::metadata_size_hint
     pub fn metadata_size_hint(&self) -> Option<usize> {
         self.options.global.metadata_size_hint
     }
 
-    /// Tell the parquet reader to skip any metadata that may be in
-    /// the file Schema. This can help avoid schema conflicts due to
-    /// metadata.
+    /// Set [`skip_metadata`]
     ///
-    /// - If `None`, defaults to value on `config_options`
+    /// [`skip_metadata`]: datafusion_common::config::ParquetOptions::skip_metadata
     pub fn with_skip_metadata(mut self, skip_metadata: bool) -> Self {
         self.options.global.skip_metadata = skip_metadata;
         self
     }
 
-    /// Returns `true` if schema metadata will be cleared prior to
-    /// schema merging.
+    /// Get [`skip_metadata`]
+    ///
+    /// [`skip_metadata`]: datafusion_common::config::ParquetOptions::skip_metadata
     pub fn skip_metadata(&self) -> bool {
         self.options.global.skip_metadata
     }
@@ -206,50 +195,47 @@ impl ParquetFormat {
         &self.options
     }
 
-    /// Return `true` if should use view types.
+    /// Get [`schema_force_view_types`]
     ///
-    /// If this returns true, DataFusion will instruct the parquet reader
-    /// to read string / binary columns using view `StringView` or `BinaryView`
-    /// if the table schema specifies those types, regardless of any embedded metadata
-    /// that may specify an alternate Arrow type. The parquet reader is optimized
-    /// for reading `StringView` and `BinaryView` and such queries are significantly faster.
-    ///
-    /// If this returns false, the parquet reader will read the columns according to the
-    /// defaults or any embedded Arrow type information. This may result in reading
-    /// `StringArrays` and then casting to `StringViewArray` which is less efficient.
+    /// [`schema_force_view_types`]: datafusion_common::config::ParquetOptions::schema_force_view_types
     pub fn force_view_types(&self) -> bool {
         self.options.global.schema_force_view_types
     }
 
-    /// If true, will use view types. See [`Self::force_view_types`] for details
+    /// Set [`schema_force_view_types`]
+    ///
+    /// [`schema_force_view_types`]: datafusion_common::config::ParquetOptions::schema_force_view_types
     pub fn with_force_view_types(mut self, use_views: bool) -> Self {
         self.options.global.schema_force_view_types = use_views;
         self
     }
 
-    /// Return `true` if binary types will be read as strings.
+    /// Get [`binary_as_string`]
     ///
-    /// If this returns true, DataFusion will instruct the parquet reader
-    /// to read binary columns such as `Binary` or `BinaryView` as the
-    /// corresponding string type such as `Utf8` or `LargeUtf8`.
-    /// The parquet reader has special optimizations for `Utf8` and `LargeUtf8`
-    /// validation, and such queries are significantly faster than reading
-    /// binary columns and then casting to string columns.
+    /// [`binary_as_string`]: datafusion_common::config::ParquetOptions::binary_as_string
     pub fn binary_as_string(&self) -> bool {
         self.options.global.binary_as_string
     }
 
-    /// If true, will read binary types as strings. See [`Self::binary_as_string`] for details
+    /// Set [`binary_as_string`]
+    ///
+    /// [`binary_as_string`]: datafusion_common::config::ParquetOptions::binary_as_string
     pub fn with_binary_as_string(mut self, binary_as_string: bool) -> Self {
         self.options.global.binary_as_string = binary_as_string;
         self
     }
 
-    pub fn coerce_int96(&self) -> Option<String> {
-        self.options.global.coerce_int96.clone()
+    /// Get [`coerce_int96`]
+    ///
+    /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
+    pub fn coerce_int96(&self) -> Option<DFTimeUnit> {
+        self.options.global.coerce_int96
     }
 
-    pub fn with_coerce_int96(mut self, time_unit: Option<String>) -> Self {
+    /// Set [`coerce_int96`]
+    ///
+    /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
+    pub fn with_coerce_int96(mut self, time_unit: Option<DFTimeUnit>) -> Self {
         self.options.global.coerce_int96 = time_unit;
         self
     }
@@ -265,11 +251,107 @@ fn clear_metadata(
             .fields()
             .iter()
             .map(|field| {
-                field.as_ref().clone().with_metadata(Default::default()) // clear meta
+                field.as_ref().clone().with_metadata(Metadata::new()) // clear meta
             })
             .collect::<Fields>();
         Schema::new(fields)
     })
+}
+
+/// Widen fields missing from some of their containing schemas. An absent parent
+/// produces a null parent, not a null value for each required child, so children
+/// are compared only across files in which their parent exists.
+fn mark_partially_present_fields_nullable(schema: Schema, sources: &[Schema]) -> Schema {
+    if sources.len() <= 1
+        || sources[1..]
+            .iter()
+            .all(|source| source.fields() == sources[0].fields())
+    {
+        return schema;
+    }
+    let fields = widen_fields(
+        schema.fields(),
+        &sources.iter().map(Schema::fields).collect::<Vec<_>>(),
+    );
+    Schema::new_with_metadata(fields, schema.metadata().clone())
+}
+
+fn widen_fields(fields: &Fields, sources: &[&Fields]) -> Fields {
+    if !sources.is_empty()
+        && fields == sources[0]
+        && sources[1..].iter().all(|source| *source == sources[0])
+    {
+        return fields.clone();
+    }
+
+    let mut present: HashMap<&str, Vec<&FieldRef>> = HashMap::new();
+    for source in sources {
+        for field in *source {
+            present.entry(field.name()).or_default().push(field);
+        }
+    }
+    fields
+        .iter()
+        .map(|field| {
+            let occurrences = present
+                .get(field.name().as_str())
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let missing = occurrences.is_empty() || occurrences.len() < sources.len();
+            widen_field(field, occurrences, missing)
+        })
+        .collect()
+}
+
+fn widen_field(field: &FieldRef, sources: &[&FieldRef], missing: bool) -> FieldRef {
+    let source_types = sources.iter().map(|f| f.data_type()).collect::<Vec<_>>();
+    let data_type = widen_nested_type(field.data_type(), &source_types);
+    let nullable = field.is_nullable() || missing;
+    if &data_type == field.data_type() && nullable == field.is_nullable() {
+        Arc::clone(field)
+    } else {
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_data_type(data_type)
+                .with_nullable(nullable),
+        )
+    }
+}
+
+fn widen_nested_type(data_type: &DataType, sources: &[&DataType]) -> DataType {
+    match data_type {
+        DataType::Struct(fields) => {
+            let sources = sources
+                .iter()
+                .filter_map(|t| match t {
+                    DataType::Struct(fields) => Some(fields),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            DataType::Struct(widen_fields(fields, &sources))
+        }
+        DataType::List(field) | DataType::LargeList(field) => {
+            let sources = sources
+                .iter()
+                .filter_map(|t| match t {
+                    DataType::List(f) | DataType::LargeList(f) => Some(f),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let field = widen_field(field, &sources, false);
+            if matches!(data_type, DataType::List(_)) {
+                DataType::List(field)
+            } else {
+                DataType::LargeList(field)
+            }
+        }
+        // Parquet cannot represent unions. Arrow requires exact type equality
+        // for ListView, LargeListView, FixedSizeList, Map, Dictionary, and
+        // RunEndEncoded, so nested evolution in those types is rejected earlier.
+        _ => data_type.clone(),
+    }
 }
 
 #[cfg(feature = "parquet_encryption")]
@@ -297,6 +379,7 @@ async fn get_file_decryption_properties(
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
+#[expect(clippy::unused_async)]
 async fn get_file_decryption_properties(
     _state: &dyn Session,
     _options: &TableParquetOptions,
@@ -332,17 +415,13 @@ impl FileFormat for ParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        let coerce_int96 = match self.coerce_int96() {
-            Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
-            None => None,
-        };
+        let coerce_int96 = self.coerce_int96().map(arrow::datatypes::TimeUnit::from);
         let coerce_int96_tz = self
             .options
             .global
             .coerce_int96_tz
             .as_ref()
-            .map(|tz| parse_coerce_int96_tz_string(tz))
-            .transpose()?;
+            .map(|tz| Arc::<str>::from(tz.as_str()));
 
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
@@ -355,14 +434,16 @@ impl FileFormat for ParquetFormat {
                     &object.location,
                 )
                 .await?;
-                let result = DFParquetMetadata::new(store.as_ref(), object)
+                let meta = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(self.metadata_size_hint())
                     .with_decryption_properties(file_decryption_properties)
                     .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
                     .with_coerce_int96(coerce_int96)
                     .with_coerce_int96_tz(coerce_int96_tz.clone())
-                    .fetch_schema_with_location()
-                    .await?;
+                    .with_enable_rle_to_dictionary(
+                        self.options.global.enable_rle_to_dictionary,
+                    );
+                let result = meta.fetch_schema_with_location().await?;
                 Ok::<_, DataFusionError>(result)
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -386,13 +467,32 @@ impl FileFormat for ParquetFormat {
         schemas
             .sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
-        let schemas = schemas.into_iter().map(|(_, schema)| schema);
+        let mut seen = HashSet::new();
+        for (location, schema) in &schemas {
+            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
+                DataFusionError::Context(
+                    format!("Error when processing Parquet file {location}"),
+                    Box::new(err),
+                )
+            })?;
+        }
+        drop(seen);
 
+        // Normalize dict-promoted schemas before merging so mixed dict/plain files merge cleanly.
+        let mut schemas: Vec<Schema> =
+            schemas.into_iter().map(|(_, schema)| schema).collect();
+        if self.options.global.enable_rle_to_dictionary {
+            schemas = crate::schema_coercion::uniform_dict_schemas(schemas);
+        }
+
+        let source_schemas = schemas.clone();
         let schema = if self.skip_metadata() {
             Schema::try_merge(clear_metadata(schemas))
         } else {
             Schema::try_merge(schemas)
         }?;
+
+        let schema = mark_partially_present_fields_nullable(schema, &source_schemas);
 
         let schema = if self.binary_as_string() {
             transform_binary_to_string(&schema)
@@ -508,7 +608,7 @@ impl FileFormat for ParquetFormat {
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
         if let Some(metadata_size_hint) = metadata_size_hint {
-            source = source.with_metadata_size_hint(metadata_size_hint)
+            source = source.with_metadata_size_hint(metadata_size_hint);
         }
 
         source = self.set_source_encryption_factory(source, state)?;
@@ -533,11 +633,18 @@ impl FileFormat for ParquetFormat {
         // Convert ordering requirements to Parquet SortingColumns for file metadata
         let sorting_columns = if let Some(ref requirements) = order_requirements {
             let ordering: LexOrdering = requirements.clone().into();
+            let writer_schema = get_writer_schema(&conf);
             // In cases like `COPY (... ORDER BY ...) TO ...` the ORDER BY clause
             // may not be compatible with Parquet sorting columns (e.g. ordering on `random()`).
             // So if we cannot create a Parquet sorting column from the ordering requirement,
             // we skip setting sorting columns on the Parquet sink.
-            lex_ordering_to_sorting_columns(&ordering).ok()
+            lex_ordering_to_sorting_columns(
+                &ordering,
+                conf.output_schema(),
+                &writer_schema,
+            )
+            .ok()
+            .filter(|columns| !columns.is_empty())
         } else {
             None
         };
@@ -618,64 +725,244 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
     }
 }
 
-/// Fetches parquet metadata from ObjectStore for given object
+#[cfg(feature = "proto")]
+use datafusion_proto_models::protobuf::{self, parquet_column_options, parquet_options};
+
+/// Encode a [`ParquetFormatFactory`]'s options as their protobuf form.
 ///
-/// This component is a subject to **change** in near future and is exposed for low level integrations
-/// through [`ParquetFileReaderFactory`].
-///
-/// [`ParquetFileReaderFactory`]: crate::ParquetFileReaderFactory
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::fetch_metadata` instead"
-)]
-pub async fn fetch_parquet_metadata(
-    store: &dyn ObjectStore,
-    object_meta: &ObjectMeta,
-    size_hint: Option<usize>,
-    decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<FileMetadataCache>>,
-) -> Result<Arc<ParquetMetaData>> {
-    let decryption_properties = decryption_properties.cloned().map(Arc::new);
-    DFParquetMetadata::new(store, object_meta)
-        .with_metadata_size_hint(size_hint)
-        .with_decryption_properties(decryption_properties)
-        .with_file_metadata_cache(file_metadata_cache)
-        .fetch_metadata()
-        .await
+/// The reverse direction is `TryFrom<&protobuf::TableParquetOptions> for
+/// TableParquetOptions` in `datafusion-proto-models`: `TableParquetOptions` is
+/// a `datafusion-common` type, so that half cannot live here.
+#[cfg(feature = "proto")]
+impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
+    fn from(factory: &ParquetFormatFactory) -> Self {
+        let global_options = if let Some(ref options) = factory.options {
+            options.clone()
+        } else {
+            return protobuf::TableParquetOptions::default();
+        };
+
+        let column_specific_options = global_options.column_specific_options;
+        protobuf::TableParquetOptions {
+        global: Some(protobuf::ParquetOptions {
+            enable_page_index: global_options.global.enable_page_index,
+            pruning: global_options.global.pruning,
+            skip_metadata: global_options.global.skip_metadata,
+            metadata_size_hint_opt: global_options.global.metadata_size_hint.map(|size| {
+                parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size as u64)
+            }),
+            pushdown_filters: global_options.global.pushdown_filters,
+            reorder_filters: global_options.global.reorder_filters,
+            force_filter_selections: global_options.global.force_filter_selections,
+            data_pagesize_limit: global_options.global.data_pagesize_limit as u64,
+            write_batch_size: global_options.global.write_batch_size as u64,
+            writer_version: global_options.global.writer_version.to_string(),
+            compression_opt: global_options.global.compression.map(|compression| {
+                parquet_options::CompressionOpt::Compression(compression.to_string())
+            }),
+            enable_rle_to_dictionary: global_options.global.enable_rle_to_dictionary,
+            dictionary_enabled_opt: global_options.global.dictionary_enabled.map(|enabled| {
+                parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
+            }),
+            dictionary_page_size_limit: global_options.global.dictionary_page_size_limit as u64,
+            statistics_enabled_opt: global_options.global.statistics_enabled.map(|enabled| {
+                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled.to_string())
+            }),
+            max_row_group_size: global_options.global.max_row_group_size as u64,
+            max_in_list_size: global_options.global.max_in_list_size as u64,
+            row_group_range_assignment: global_options.global.row_group_range_assignment.to_string(),
+            created_by: global_options.global.created_by.clone(),
+            column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
+                parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)
+            }),
+            statistics_truncate_length_opt: global_options.global.statistics_truncate_length.map(|length| {
+                parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length as u64)
+            }),
+            data_page_row_count_limit: global_options.global.data_page_row_count_limit as u64,
+            encoding_opt: global_options.global.encoding.map(|encoding| {
+                parquet_options::EncodingOpt::Encoding(encoding.to_string())
+            }),
+            bloom_filter_on_read: global_options.global.bloom_filter_on_read,
+            bloom_filter_on_write: global_options.global.bloom_filter_on_write,
+            bloom_filter_fpp_opt: global_options.global.bloom_filter_fpp.map(|fpp| {
+                parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp)
+            }),
+            bloom_filter_ndv_opt: global_options.global.bloom_filter_ndv.map(|ndv| {
+                parquet_options::BloomFilterNdvOpt::BloomFilterNdv(ndv)
+            }),
+            allow_single_file_parallelism: global_options.global.allow_single_file_parallelism,
+            maximum_parallel_row_group_writers: global_options.global.maximum_parallel_row_group_writers as u64,
+            maximum_buffered_record_batches_per_stream: global_options.global.maximum_buffered_record_batches_per_stream as u64,
+            schema_force_view_types: global_options.global.schema_force_view_types,
+            binary_as_string: global_options.global.binary_as_string,
+            skip_arrow_metadata: global_options.global.skip_arrow_metadata,
+            write_row_group_number_distinct_values: global_options
+                .global
+                .write_row_group_number_distinct_values,
+            coerce_int96_opt: global_options.global.coerce_int96.map(|time_unit| {
+                parquet_options::CoerceInt96Opt::CoerceInt96(time_unit.to_string())
+            }),
+            coerce_int96_tz_opt: global_options.global.coerce_int96_tz.map(|tz| {
+                parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz.to_string())
+            }),
+            max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
+                parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
+            }),
+            max_row_group_bytes_opt: global_options.global.max_row_group_bytes.map(|size| {
+                parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size.get() as u64)
+            }),
+            content_defined_chunking: Some(protobuf::ParquetCdcOptions {
+                enabled: global_options.global.content_defined_chunking.enabled,
+                min_chunk_size: global_options.global.content_defined_chunking.min_chunk_size as u64,
+                max_chunk_size: global_options.global.content_defined_chunking.max_chunk_size as u64,
+                norm_level: global_options.global.content_defined_chunking.norm_level,
+            }),
+        }),
+        column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
+            protobuf::ParquetColumnSpecificOptions {
+                column_name,
+                options: Some(protobuf::ParquetColumnOptions {
+                    bloom_filter_enabled_opt: options.bloom_filter_enabled.map(|enabled| {
+                        parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(enabled)
+                    }),
+                    encoding_opt: options.encoding.map(|encoding| {
+                        parquet_column_options::EncodingOpt::Encoding(encoding)
+                    }),
+                    dictionary_enabled_opt: options.dictionary_enabled.map(|enabled| {
+                        parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
+                    }),
+                    compression_opt: options.compression.map(|compression| {
+                        parquet_column_options::CompressionOpt::Compression(compression)
+                    }),
+                    statistics_enabled_opt: options.statistics_enabled.map(|enabled| {
+                        parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
+                    }),
+                    bloom_filter_fpp_opt: options.bloom_filter_fpp.map(|fpp| {
+                        parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(fpp)
+                    }),
+                    bloom_filter_ndv_opt: options.bloom_filter_ndv.map(|ndv| {
+                        parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(ndv)
+                    }),
+                })
+            }
+        }).collect(),
+        key_value_metadata: global_options.key_value_metadata
+            .iter()
+            .filter_map(|(key, value)| {
+                value.as_ref().map(|v| (key.clone(), v.clone()))
+            })
+            .collect(),
+    }
+    }
 }
 
-/// Read and parse the statistics of the Parquet file at location `path`
-///
-/// See [`statistics_from_parquet_meta_calc`] for more details
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::fetch_statistics` instead"
-)]
-pub async fn fetch_statistics(
-    store: &dyn ObjectStore,
-    table_schema: SchemaRef,
-    file: &ObjectMeta,
-    metadata_size_hint: Option<usize>,
-    decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<FileMetadataCache>>,
-) -> Result<Statistics> {
-    let decryption_properties = decryption_properties.cloned().map(Arc::new);
-    DFParquetMetadata::new(store, file)
-        .with_metadata_size_hint(metadata_size_hint)
-        .with_decryption_properties(decryption_properties)
-        .with_file_metadata_cache(file_metadata_cache)
-        .fetch_statistics(&table_schema)
-        .await
-}
+#[cfg(test)]
+mod schema_presence_tests {
+    use super::*;
+    use arrow::datatypes::Field;
 
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::statistics_from_parquet_metadata` instead"
-)]
-#[expect(clippy::needless_pass_by_value)]
-pub fn statistics_from_parquet_meta_calc(
-    metadata: &ParquetMetaData,
-    table_schema: SchemaRef,
-) -> Result<Statistics> {
-    DFParquetMetadata::statistics_from_parquet_metadata(metadata, &table_schema)
+    fn structure(include_y: bool) -> DataType {
+        let mut fields = vec![Field::new("x", DataType::Int32, false)];
+        if include_y {
+            fields.push(
+                Field::new("y", DataType::Int32, false)
+                    .with_metadata(HashMap::from([("tag".into(), "retained".into())])),
+            );
+        }
+        DataType::Struct(fields.into())
+    }
+
+    #[test]
+    fn nested_presence_respects_parent_and_container_constraints() {
+        for wrapper in ["struct", "list", "large_list"] {
+            let make = |include_y| {
+                let nested = structure(include_y);
+                let item = Arc::new(Field::new("item", nested.clone(), false));
+                let dt = match wrapper {
+                    "struct" => nested,
+                    "list" => DataType::List(item),
+                    "large_list" => DataType::LargeList(item),
+                    _ => unreachable!(),
+                };
+                Schema::new(vec![Field::new("s", dt, false)])
+            };
+            let sources = vec![make(true), make(false), Schema::empty()];
+            let merged = Schema::try_merge(sources.clone())
+                .unwrap()
+                .with_metadata(HashMap::from([("schema".into(), "retained".into())]));
+            let result = mark_partially_present_fields_nullable(merged, &sources);
+            assert_eq!(result.metadata()["schema"], "retained");
+            let parent = result.field(0);
+            assert!(parent.is_nullable(), "{wrapper}");
+            let nested = match parent.data_type() {
+                DataType::Struct(_) => parent.data_type(),
+                DataType::List(f) | DataType::LargeList(f) => {
+                    assert!(!f.is_nullable());
+                    f.data_type()
+                }
+                _ => panic!(),
+            };
+            let DataType::Struct(children) = nested else {
+                panic!()
+            };
+            assert!(!children[0].is_nullable(), "{wrapper}");
+            assert!(children[1].is_nullable(), "{wrapper}");
+            assert_eq!(children[1].metadata()["tag"], "retained");
+        }
+    }
+
+    #[test]
+    fn nested_paths_are_independent() {
+        let sources = [true, false].map(|include_y| {
+            Schema::new(vec![
+                Field::new(
+                    "a",
+                    DataType::Struct(
+                        vec![Field::new("s", structure(include_y), false)].into(),
+                    ),
+                    false,
+                ),
+                Field::new("b", structure(true), false),
+                Field::new("a.s.y", DataType::Int32, false),
+            ])
+        });
+        let merged = Schema::try_merge(sources.clone()).unwrap();
+        let result = mark_partially_present_fields_nullable(merged, &sources);
+        let DataType::Struct(a) = result.field(0).data_type() else {
+            panic!()
+        };
+        let DataType::Struct(children) = a[0].data_type() else {
+            panic!()
+        };
+        assert!(children[1].is_nullable());
+        let DataType::Struct(b) = result.field(1).data_type() else {
+            panic!()
+        };
+        assert!(!b[1].is_nullable());
+        assert!(!result.field(2).is_nullable());
+    }
+
+    #[test]
+    fn absent_parent_does_not_widen_required_children() {
+        let sources = vec![
+            Schema::new(vec![Field::new("s", structure(true), false)]),
+            Schema::empty(),
+        ];
+        let merged = Schema::try_merge(sources.clone()).unwrap();
+        let result = mark_partially_present_fields_nullable(merged, &sources);
+        assert!(result.field(0).is_nullable());
+        let DataType::Struct(children) = result.field(0).data_type() else {
+            panic!()
+        };
+        assert!(children.iter().all(|f| !f.is_nullable()));
+    }
+
+    #[test]
+    fn missing_merged_field_is_defensively_nullable() {
+        let fields = Fields::from(vec![Field::new("missing", DataType::Int32, false)]);
+        let source = Fields::from(vec![Field::new("present", DataType::Int32, false)]);
+        let result = widen_fields(&fields, &[&source]);
+
+        assert!(result[0].is_nullable());
+    }
 }

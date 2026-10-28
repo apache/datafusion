@@ -15,17 +15,30 @@
 # specific language governing permissions and limitations
 # under the License.
 
-headerPath = "Apache-2.0-ASF.txt"
+[header]
+# All three SPDX tags are required by the ASF source header policy:
+# https://www.apache.org/legal/src-headers.html#is-an-spdx-form-of-the-source-header-acceptable
+text = """
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+"""
 
+[files]
 includes = [
     "*.rs",
     "*.py",
     "*.ts",
+    "*.slt",
 ]
 
 excludes = [
     # generated code
-    "datafusion/proto/src/generated/",
-    "datafusion/proto-common/src/generated/",
-    "datafusion/proto-models/src/generated/",
+    "datafusion/proto/src/generated/**",
+    "datafusion/proto-common/src/generated/**",
+    "datafusion/proto-models/src/generated/**",
 ]
+
+[[rules]]
+extensions = ["slt"]
+style_out = "script"

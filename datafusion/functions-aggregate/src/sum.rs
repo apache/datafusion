@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
@@ -48,7 +35,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_o
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::{CastExpr, Column};
-use std::mem::size_of_val;
+use std::mem::{size_of, size_of_val};
 
 make_udaf_expr_and_func!(
     Sum,
@@ -153,7 +140,7 @@ macro_rules! downcast_sum {
     sql_example = r#"```sql
 > SELECT sum(column_name) FROM table_name;
 +-----------------------+
-| sum(column_name)       |
+| sum(column_name)      |
 +-----------------------+
 | 12345                 |
 +-----------------------+
@@ -261,21 +248,18 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if args.is_distinct {
-            macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(DistinctSumAccumulator::<$t>::new(&$dt)))
-                };
-            }
-            downcast_sum!(args, helper)
-        } else {
-            macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(SumAccumulator::<$t>::new($dt.clone())))
-                };
-            }
-            downcast_sum!(args, helper)
+        let is_distinct = args.is_distinct;
+        macro_rules! helper {
+            ($t:ty, $dt:expr) => {
+                if is_distinct {
+                    Ok(Box::new(DistinctSumAccumulator::<$t>::new($dt))
+                        as Box<dyn Accumulator>)
+                } else {
+                    Ok(Box::new(SumAccumulator::<$t>::new($dt)) as Box<dyn Accumulator>)
+                }
+            };
         }
+        downcast_sum!(args, helper)
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -398,6 +382,12 @@ impl AggregateUDFImpl for Sum {
             }
         };
         if lit_type == DataType::Null {
+            return Ok(None);
+        }
+        // `CAST(COUNT(arg) AS <lit type>)` is not valid for intervals, and for
+        // decimals it can overflow or change the SUM result type.
+        // See https://github.com/apache/datafusion/issues/25943
+        if !(lit_type.is_integer() || lit_type.is_floating()) {
             return Ok(None);
         }
 
@@ -671,7 +661,8 @@ impl Accumulator for SlidingDistinctSumAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self)
+        // Estimate the owned map buckets; implementation-specific control bytes are excluded.
+        size_of_val(self) + self.counts.capacity() * size_of::<(i64, usize)>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -679,7 +670,7 @@ impl Accumulator for SlidingDistinctSumAccumulator {
         let keys = self
             .counts
             .keys()
-            .cloned()
+            .copied()
             .map(Some)
             .map(ScalarValue::Int64)
             .collect::<Vec<_>>();
@@ -722,7 +713,10 @@ mod tests {
         array::{Decimal128Array, Int64Array},
         buffer::{NullBuffer, ScalarBuffer},
     };
-    use std::sync::Arc;
+    use std::{
+        mem::{size_of, size_of_val},
+        sync::Arc,
+    };
 
     #[test]
     fn sliding_distinct_sum_ignores_null_slots() -> Result<()> {
@@ -746,6 +740,40 @@ mod tests {
             Arc::new(Int64Array::new(ScalarBuffer::from(vec![5]), None));
         acc.retract_batch(&[retract_last])?;
         assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
+
+        Ok(())
+    }
+
+    fn expected_sliding_distinct_sum_size(acc: &SlidingDistinctSumAccumulator) -> usize {
+        size_of_val(acc) + acc.counts.capacity() * size_of::<(i64, usize)>()
+    }
+
+    #[test]
+    fn sliding_distinct_sum_size_includes_hash_map_capacity() -> Result<()> {
+        let mut acc = SlidingDistinctSumAccumulator::try_new(&DataType::Int64)?;
+        let empty_size = acc.size();
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        acc.update_batch(&[Arc::clone(&values)])?;
+
+        let expected = expected_sliding_distinct_sum_size(&acc);
+        assert!(acc.counts.capacity() > 0);
+        assert_eq!(acc.size(), expected);
+        assert!(acc.size() > empty_size);
+
+        let initial_capacity = acc.counts.capacity();
+        let additional_values: ArrayRef =
+            Arc::new(Int64Array::from_iter(4..=(4 + initial_capacity as i64)));
+        acc.update_batch(&[Arc::clone(&additional_values)])?;
+
+        let grown_size = expected_sliding_distinct_sum_size(&acc);
+        assert!(acc.counts.capacity() > initial_capacity);
+        assert_eq!(acc.size(), grown_size);
+        assert!(acc.size() > expected);
+
+        acc.retract_batch(&[values])?;
+        acc.retract_batch(&[additional_values])?;
+        assert!(acc.counts.is_empty());
+        assert_eq!(acc.size(), grown_size);
 
         Ok(())
     }

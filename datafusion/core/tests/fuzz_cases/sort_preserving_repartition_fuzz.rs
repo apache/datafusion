@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #[cfg(test)]
 mod sp_repartition_fuzz_tests {
@@ -438,14 +425,14 @@ mod sp_repartition_fuzz_tests {
         // use a random number generator to pick a random sized output
         let mut rng = StdRng::seed_from_u64(random_seed);
         let mut input123: Vec<(i64, i64, i64)> = vec![(0, 0, 0); len];
-        input123.iter_mut().for_each(|v| {
+        for v in &mut input123 {
             *v = (
                 rng.random_range(0..n_distinct) as i64,
                 rng.random_range(0..n_distinct) as i64,
                 rng.random_range(0..n_distinct) as i64,
             )
-        });
-        input123.sort();
+        }
+        input123.sort_unstable();
         let input1 =
             Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.0));
         let input2 =

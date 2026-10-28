@@ -1,25 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::aggregates::AggregateExec;
+use crate::aggregates::group_values::AccumulatorPhase;
 
 use super::common::{AggregateHashTable, HashAggregateAccumulator, SingleMarker};
 
@@ -44,7 +32,7 @@ impl AggregateHashTable<SingleMarker> {
             output_schema,
             state_schema,
             batch_size,
-            agg.filter_expr.iter().cloned().collect(),
+            agg.filter_expr().to_vec(),
         )
     }
 
@@ -57,7 +45,10 @@ impl AggregateHashTable<SingleMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(HashAggregateAccumulator::evaluate_to_columns)
+        self.next_output_batch_inner(
+            HashAggregateAccumulator::evaluate_to_columns,
+            AccumulatorPhase::Evaluate,
+        )
     }
 
     /// Single aggregation consumes raw input rows and updates the table's
@@ -66,10 +57,15 @@ impl AggregateHashTable<SingleMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        self.aggregate_batch_inner(batch, HashAggregateAccumulator::update_batch)
+        self.aggregate_batch_inner(
+            batch,
+            HashAggregateAccumulator::update_batch,
+            AccumulatorPhase::Update,
+        )
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
+        self.init_empty_grouping_sets()?;
         self.start_outputting();
         Ok(())
     }

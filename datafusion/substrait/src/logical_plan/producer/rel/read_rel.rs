@@ -1,24 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::producer::{SubstraitProducer, to_substrait_named_struct};
-use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
+use datafusion::common::{
+    DFSchema, ToDFSchema, not_impl_datafusion_err, substrait_datafusion_err,
+};
 use datafusion::logical_expr::utils::conjunction;
-use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
+use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values, lit};
 use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
@@ -26,7 +15,7 @@ use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::nested::Struct as NestedStruct;
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
-use substrait::proto::{ReadRel, Rel};
+use substrait::proto::{FetchRel, ReadRel, Rel, fetch_rel};
 
 /// Converts rows of arbitrary expressions into Substrait nested structs.
 ///
@@ -61,6 +50,12 @@ pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
     scan: &TableScan,
 ) -> datafusion::common::Result<Box<Rel>> {
+    let skip = scan.skip.map(i64::try_from).transpose().map_err(|_| {
+        not_impl_datafusion_err!("TableScan offset exceeds the supported Int64 range")
+    })?;
+    let fetch = scan.fetch.map(i64::try_from).transpose().map_err(|_| {
+        not_impl_datafusion_err!("TableScan fetch exceeds the supported Int64 range")
+    })?;
     let projection = scan.projection.as_ref().map(|p| {
         p.iter()
             .map(|i| StructItem {
@@ -95,7 +90,7 @@ pub fn from_table_scan(
         Some(Box::new(filter_expr))
     };
 
-    Ok(Box::new(Rel {
+    let read = Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
             base_schema: Some(base_schema),
@@ -107,6 +102,30 @@ pub fn from_table_scan(
                 names: scan.table_name.to_vec(),
                 advanced_extension: None,
             })),
+        }))),
+    });
+
+    // ReadRel cannot represent pushed-down offsets or limits. Keep them with
+    // the scan, even when there is no parent Limit or a Projection separates it.
+    if scan.skip.is_none() && scan.fetch.is_none() {
+        return Ok(read);
+    }
+    let empty_schema = Arc::new(DFSchema::empty());
+    let offset_mode = skip
+        .map(|skip| producer.handle_expr(&lit(skip), &empty_schema))
+        .transpose()?
+        .map(|expr| fetch_rel::OffsetMode::OffsetExpr(Box::new(expr)));
+    let count_mode = fetch
+        .map(|fetch| producer.handle_expr(&lit(fetch), &empty_schema))
+        .transpose()?
+        .map(|expr| fetch_rel::CountMode::CountExpr(Box::new(expr)));
+    Ok(Box::new(Rel {
+        rel_type: Some(RelType::Fetch(Box::new(FetchRel {
+            common: None,
+            input: Some(read),
+            offset_mode,
+            count_mode,
+            advanced_extension: None,
         }))),
     }))
 }

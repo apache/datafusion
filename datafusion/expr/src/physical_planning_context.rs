@@ -1,50 +1,47 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
-use datafusion_common::{HashMap, Result, ScalarValue, internal_err};
+use datafusion_common::{HashMap, Result, ScalarValue, TableReference, internal_err};
 
 /// Context used while converting a logical plan subtree into a physical plan.
 ///
 /// Unlike [`ExecutionProps`](crate::execution_props::ExecutionProps), which
 /// applies to the overall planning and execution of a query, this context can
-/// differ between recursively planned subtrees. It currently carries the state
-/// needed to create physical expressions for [`Expr::ScalarSubquery`] nodes
-/// that read from a shared
-/// [`ScalarSubqueryResults`] container.
+/// differ between recursively planned subtrees. It currently carries:
+///
+/// * the state needed to create physical expressions for
+///   [`Expr::ScalarSubquery`] nodes that read from a shared
+///   [`ScalarSubqueryResults`] container, and
+/// * the qualifiers assigned to the [`Expr::LambdaVariable`]s that are in scope.
 ///
 /// The physical planner builds this context from the set of uncorrelated scalar
 /// subqueries it has scheduled for a subtree. It is then passed explicitly
 /// through `create_physical_expr` so that function can find the slot index for
-/// each [`Subquery`].
+/// each [`Subquery`]. While planning the body of a lambda,
+/// `create_physical_expr` extends the context with the lambda's parameters via
+/// [`Self::with_qualified_lambda_variables`].
 ///
 /// An empty [`PhysicalPlanningContext`] (the [`Default`]) is what every
 /// non-physical-planner caller passes; if such a caller encounters a scalar
 /// subquery, `create_physical_expr` returns a `not_impl_err`.
 ///
 /// [`Expr::ScalarSubquery`]: crate::Expr::ScalarSubquery
+/// [`Expr::LambdaVariable`]: crate::Expr::LambdaVariable
 /// [`Subquery`]: crate::logical_plan::Subquery
 #[derive(Clone, Debug, Default)]
 pub struct PhysicalPlanningContext {
-    indexes: HashMap<crate::logical_plan::Subquery, SubqueryIndex>,
+    /// Behind an `Arc` because the context is cloned for each lambda body that
+    /// is planned, and the indexes are the same for the whole subtree.
+    indexes: Arc<HashMap<crate::logical_plan::Subquery, SubqueryIndex>>,
     results: ScalarSubqueryResults,
+    /// Maps each lambda variable name in scope to the qualifier generated for
+    /// its lambda during physical planning.
+    lambda_variable_qualifier: HashMap<String, TableReference>,
 }
 
 impl PhysicalPlanningContext {
@@ -55,7 +52,11 @@ impl PhysicalPlanningContext {
         indexes: HashMap<crate::logical_plan::Subquery, SubqueryIndex>,
         results: ScalarSubqueryResults,
     ) -> Self {
-        Self { indexes, results }
+        Self {
+            indexes: Arc::new(indexes),
+            results,
+            lambda_variable_qualifier: HashMap::new(),
+        }
     }
 
     /// Returns the slot index assigned to `subquery`, if any.
@@ -69,6 +70,27 @@ impl PhysicalPlanningContext {
     /// Returns the shared results container.
     pub fn results(&self) -> &ScalarSubqueryResults {
         &self.results
+    }
+
+    /// Adds a mapping for each variable to the given qualifier. Existing
+    /// variables with conflicting names are shadowed.
+    pub fn with_qualified_lambda_variables(
+        mut self,
+        qualifier: &TableReference,
+        variables: &[String],
+    ) -> Self {
+        for var in variables {
+            self.lambda_variable_qualifier
+                .entry_ref(var)
+                .insert(qualifier.clone());
+        }
+
+        self
+    }
+
+    /// Returns the qualifier of the lambda variable `name`, if it is in scope.
+    pub fn lambda_variable_qualifier(&self, name: &str) -> Option<&TableReference> {
+        self.lambda_variable_qualifier.get(name)
     }
 }
 
@@ -190,6 +212,20 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn lambda_variables_shadow_outer_scope() {
+        let outer = TableReference::bare("lambda_1");
+        let inner = TableReference::bare("lambda_2");
+
+        let ctx = PhysicalPlanningContext::default()
+            .with_qualified_lambda_variables(&outer, &["x".to_string(), "y".to_string()])
+            .with_qualified_lambda_variables(&inner, &["y".to_string()]);
+
+        assert_eq!(ctx.lambda_variable_qualifier("x"), Some(&outer));
+        assert_eq!(ctx.lambda_variable_qualifier("y"), Some(&inner));
+        assert_eq!(ctx.lambda_variable_qualifier("z"), None);
     }
 
     #[test]

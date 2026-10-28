@@ -1,25 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use arrow::datatypes::Field;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{Result, not_impl_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
@@ -44,13 +32,13 @@ make_udaf_expr_and_func!(
 > SELECT column_name, GROUPING(column_name) AS group_column
   FROM table_name
   GROUP BY GROUPING SETS ((column_name), ());
-+-------------+-------------+
++-------------+--------------+
 | column_name | group_column |
-+-------------+-------------+
-| value1      | 0           |
-| value2      | 0           |
-| NULL        | 1           |
-+-------------+-------------+
++-------------+--------------+
+| value1      | 0            |
+| value2      | 0            |
+| NULL        | 1            |
++-------------+--------------+
 ```"#,
     argument(
         name = "expression",
@@ -109,5 +97,14 @@ impl AggregateUDFImpl for Grouping {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // The result depends only on which grouping set a row belongs to, not
+        // on how many rows share a value, so duplicates cannot change it.
+        // `ResolveGroupingFunction` replaces the call before the optimizer
+        // runs, so this tag is not reachable from SQL and the accumulator
+        // above is never built.
+        DistinctHandling::Insensitive
     }
 }

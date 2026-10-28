@@ -1,28 +1,32 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::{
     SubstraitConsumer, from_substrait_func_args, substrait_fun_name,
 };
-use datafusion::common::{DFSchema, ScalarValue, not_impl_datafusion_err, plan_err};
+use datafusion::common::{
+    DFSchema, ScalarValue, not_impl_datafusion_err, not_impl_err, plan_datafusion_err,
+    plan_err,
+};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{Expr, SortExpr, expr};
 use std::sync::Arc;
-use substrait::proto::AggregateFunction;
+use substrait::proto::{AggregateFunction, AggregationPhase};
+
+pub(super) fn validate_aggregation_phase(phase: i32) -> datafusion::common::Result<()> {
+    match AggregationPhase::try_from(phase)
+        .map_err(|e| plan_datafusion_err!("Invalid aggregation phase {phase}: {e}"))?
+    {
+        // Substrait defines UNSPECIFIED as INTERMEDIATE_TO_RESULT. Accept it as a
+        // complete call only for compatibility with existing DataFusion-produced
+        // aggregate and window plans. This exception also accepts unspecified
+        // intermediate-state calls from other producers; their intent cannot be
+        // distinguished here. Explicit intermediate phases remain unsupported.
+        AggregationPhase::Unspecified | AggregationPhase::InitialToResult => Ok(()),
+        phase => not_impl_err!("Unsupported aggregation phase: {}", phase.as_str_name()),
+    }
+}
 
 /// Convert Substrait AggregateFunction to DataFusion Expr
 pub async fn from_substrait_agg_func(
@@ -33,6 +37,7 @@ pub async fn from_substrait_agg_func(
     order_by: Vec<SortExpr>,
     distinct: bool,
 ) -> datafusion::common::Result<Arc<Expr>> {
+    validate_aggregation_phase(f.phase)?;
     let Some(fn_signature) = consumer
         .get_extensions()
         .functions

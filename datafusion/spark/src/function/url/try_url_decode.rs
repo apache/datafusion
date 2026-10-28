@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
@@ -24,7 +11,9 @@ use datafusion_expr::{
 };
 use datafusion_functions::utils::make_scalar_function;
 
-use crate::function::url::url_decode::{UrlDecode, spark_handled_url_decode};
+use crate::function::url::url_decode::{
+    OnDecodeError, UrlDecode, spark_handled_url_decode,
+};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TryUrlDecode {
@@ -67,10 +56,7 @@ impl ScalarUDFImpl for TryUrlDecode {
 }
 
 fn spark_try_url_decode(args: &[ArrayRef]) -> Result<ArrayRef> {
-    spark_handled_url_decode(args, |x| match x {
-        Err(_) => Ok(None),
-        result => result,
-    })
+    spark_handled_url_decode(args, OnDecodeError::Null)
 }
 
 #[cfg(test)]

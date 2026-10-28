@@ -1,26 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::{
-    Array, ArrayRef, BooleanArray, downcast_array, downcast_dictionary_array,
-    make_comparator,
-};
+use arrow::array::{Array, ArrayRef, BooleanArray, make_comparator};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::compute::{SortOptions, take};
+use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::Result;
@@ -70,7 +54,7 @@ impl ArrayStaticFilter {
         haystack: &ArrayRef,
         state: &RandomState,
     ) -> Result<HashTable<usize>> {
-        let mut table = HashTable::new();
+        let mut table = HashTable::with_capacity(haystack.len() - haystack.null_count());
 
         with_hashes([haystack.as_ref()], state, |hashes| -> Result<()> {
             let cmp = make_comparator(haystack, haystack, SortOptions::default())?;
@@ -139,22 +123,6 @@ impl StaticFilter for ArrayStaticFilter {
                 BooleanBuffer::new_unset(v.len()),
                 Some(nulls),
             ));
-        }
-
-        // Unwrap dictionary-encoded needles when the value type matches
-        // in_array, evaluating against the dictionary values and mapping
-        // back via keys.
-        downcast_dictionary_array! {
-            v => {
-                // Only unwrap when the haystack (in_array) type matches
-                // the dictionary value type
-                if v.values().data_type() == self.in_array.data_type() {
-                    let values_contains = self.contains(v.values().as_ref(), negated)?;
-                    let result = take(&values_contains, v.keys(), None)?;
-                    return Ok(downcast_array(result.as_ref()));
-                }
-            }
-            _ => {}
         }
 
         self.find_needles_in_haystack(v, negated)

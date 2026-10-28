@@ -1,25 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ParquetFileReaderFactory`] and [`DefaultParquetFileReaderFactory`] for
 //! low level control of parquet file readers
 
 use crate::ParquetFileMetrics;
 use crate::metadata::DFParquetMetadata;
+use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
 use datafusion_common::HashMap;
 use datafusion_datasource::PartitionedFile;
@@ -27,15 +15,38 @@ use datafusion_execution::cache::cache_manager::FileMetadata;
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::FutureExt;
+use futures::TryFutureExt;
 use futures::future::BoxFuture;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
-use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
+use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::schema::types::SchemaDescriptor;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
+
+/// Derives a file's Arrow schema from its physical Parquet schema during opening.
+///
+/// Install with [`ParquetSource::with_schema_provider`](crate::source::ParquetSource::with_schema_provider).
+/// This runs after the footer is loaded, before Arrow schema inference or filter
+/// preparation, so files may have different nested layouts without loading their
+/// footers during planning. The original Parquet metadata is retained.
+pub trait ParquetFileSchemaProvider: Debug + Send + Sync + 'static {
+    /// Return the complete Arrow schema for the physical file, excluding partition
+    /// and virtual columns. It must be compatible with the Parquet schema under
+    /// [`ArrowReaderOptions::with_schema`], which also ignores advisory `ARROW:schema`
+    /// metadata. Errors fail the file open.
+    ///
+    /// An explicit [`PartitionedFile::arrow_schema`] takes precedence and skips
+    /// this call. Existing table-schema and INT96 coercions are applied afterwards.
+    fn schema(
+        &self,
+        parquet_schema: &SchemaDescriptor,
+    ) -> datafusion_common::Result<SchemaRef>;
+}
 
 /// Interface for reading Apache Parquet files.
 ///
@@ -99,21 +110,10 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
             partitioned_file.object_meta.location.as_ref(),
             metrics,
         );
-        let store = Arc::clone(&self.store);
-        let mut inner = ParquetObjectReader::new(
-            store,
-            partitioned_file.object_meta.location.clone(),
-        )
-        .with_file_size(partitioned_file.object_meta.size);
-
-        if let Some(hint) = metadata_size_hint {
-            inner = inner.with_footer_size_hint(hint)
-        };
 
         let reader = ParquetFileReader::new(
             file_metrics,
             Arc::clone(&self.store),
-            inner,
             partitioned_file,
         )
         .with_metadata_hint(metadata_size_hint);
@@ -158,22 +158,10 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             partitioned_file.object_meta.location.as_ref(),
             metrics,
         );
-        let store = Arc::clone(&self.store);
-
-        let mut inner = ParquetObjectReader::new(
-            store,
-            partitioned_file.object_meta.location.clone(),
-        )
-        .with_file_size(partitioned_file.object_meta.size);
-
-        if let Some(hint) = metadata_size_hint {
-            inner = inner.with_footer_size_hint(hint)
-        };
 
         let reader = ParquetFileReader::new(
             file_metrics,
             Arc::clone(&self.store),
-            inner,
             partitioned_file,
         )
         .with_metadata_hint(metadata_size_hint)
@@ -185,9 +173,8 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
 
 /// Implements [`AsyncFileReader`] for a parquet file in object storage.
 ///
-/// This implementation uses the [`ParquetObjectReader`] to read data from the
-/// object store on demand, as required, tracking the number of bytes read via
-/// [`ParquetFileMetrics`].
+/// This implementation reads data directly from the underlying [`ObjectStore`]
+/// on demand, as required, tracking the number of bytes read.
 ///
 /// When configured via [`Self::with_metadata_cache`], [`Self::get_metadata`]
 /// reads footer and page metadata from the cache when available and populates
@@ -201,7 +188,6 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
 pub struct ParquetFileReader {
     file_metrics: ParquetFileMetrics,
     store: Arc<dyn ObjectStore>,
-    inner: ParquetObjectReader,
     partitioned_file: PartitionedFile,
     metadata_cache: Option<Arc<FileMetadataCache>>,
     metadata_size_hint: Option<usize>,
@@ -219,13 +205,11 @@ impl ParquetFileReader {
     pub(crate) fn new(
         file_metrics: ParquetFileMetrics,
         store: Arc<dyn ObjectStore>,
-        inner: ParquetObjectReader,
         partitioned_file: PartitionedFile,
     ) -> Self {
         Self {
             file_metrics,
             store,
-            inner,
             partitioned_file,
             metadata_cache: None,
             metadata_size_hint: None,
@@ -267,7 +251,10 @@ impl AsyncFileReader for ParquetFileReader {
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         let bytes_scanned = range.end - range.start;
         self.file_metrics.bytes_scanned.add(bytes_scanned as usize);
-        self.inner.get_bytes(range)
+        self.store
+            .get_range(&self.partitioned_file.object_meta.location, range)
+            .map_err(|e| ParquetError::External(Box::new(e)))
+            .boxed()
     }
 
     fn get_byte_ranges(
@@ -279,7 +266,13 @@ impl AsyncFileReader for ParquetFileReader {
     {
         let total: u64 = ranges.iter().map(|r| r.end - r.start).sum();
         self.file_metrics.bytes_scanned.add(total as usize);
-        self.inner.get_byte_ranges(ranges)
+        async move {
+            self.store
+                .get_ranges(&self.partitioned_file.object_meta.location, &ranges)
+                .await
+                .map_err(|e| ParquetError::External(Box::new(e)))
+        }
+        .boxed()
     }
 
     fn get_metadata<'a>(
@@ -308,7 +301,7 @@ impl AsyncFileReader for ParquetFileReader {
                 .fetch_metadata()
                 .await
                 .map_err(|e| {
-                    parquet::errors::ParquetError::General(format!(
+                    ParquetError::General(format!(
                         "Failed to fetch metadata for file {}: {e}",
                         object_meta.location,
                     ))
@@ -353,8 +346,10 @@ impl FileMetadata for CachedParquetMetaData {
     }
 
     fn extra_info(&self) -> HashMap<String, String> {
-        let page_index =
-            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        let page_index = self
+            .0
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete());
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }

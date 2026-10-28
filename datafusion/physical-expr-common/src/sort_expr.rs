@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sort expressions
 
@@ -104,25 +91,25 @@ impl PhysicalSortExpr {
         result
     }
 
-    /// Set the sort sort options to ASC
+    /// Set the sort options to ASC
     pub fn asc(mut self) -> Self {
         self.options.descending = false;
         self
     }
 
-    /// Set the sort sort options to DESC
+    /// Set the sort options to DESC
     pub fn desc(mut self) -> Self {
         self.options.descending = true;
         self
     }
 
-    /// Set the sort sort options to NULLS FIRST
+    /// Set the sort options to NULLS FIRST
     pub fn nulls_first(mut self) -> Self {
         self.options.nulls_first = true;
         self
     }
 
-    /// Set the sort sort options to NULLS LAST
+    /// Set the sort options to NULLS LAST
     pub fn nulls_last(mut self) -> Self {
         self.options.nulls_first = false;
         self
@@ -199,10 +186,11 @@ impl PhysicalSortExpr {
         &self,
         ctx: &crate::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<datafusion_proto_models::protobuf::PhysicalSortExprNode> {
+        let Self { expr, options } = self;
         Ok(datafusion_proto_models::protobuf::PhysicalSortExprNode {
-            expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
-            asc: !self.options.descending,
-            nulls_first: self.options.nulls_first,
+            expr: Some(Box::new(ctx.encode_child(expr)?)),
+            asc: !options.descending,
+            nulls_first: options.nulls_first,
         })
     }
 
@@ -211,16 +199,18 @@ impl PhysicalSortExpr {
         node: &datafusion_proto_models::protobuf::PhysicalSortExprNode,
         ctx: &crate::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Self> {
-        let expr = ctx.decode_required_expression(
-            node.expr.as_deref(),
-            "PhysicalSortExpr",
-            "expr",
-        )?;
+        let datafusion_proto_models::protobuf::PhysicalSortExprNode {
+            expr,
+            asc,
+            nulls_first,
+        } = node;
+        let expr =
+            ctx.decode_required_expression(expr.as_deref(), "PhysicalSortExpr", "expr")?;
         Ok(PhysicalSortExpr {
             expr,
             options: SortOptions {
-                descending: !node.asc,
-                nulls_first: node.nulls_first,
+                descending: !asc,
+                nulls_first: *nulls_first,
             },
         })
     }
@@ -265,7 +255,8 @@ pub fn sort_exprs_try_to_proto<E: std::borrow::Borrow<PhysicalSortExpr>>(
 /// [`LexRequirement`], because callers differ in what an empty list means:
 /// `LexOrdering::new` / `LexRequirement::new` return `None` for it, which is
 /// "no ordering declared" for a scan and an error for an operator that requires
-/// one.
+/// one. Callers with the former convention can use
+/// [`optional_ordering_try_from_proto`] instead.
 ///
 /// [`PhysicalSortExprNode`]: datafusion_proto_models::protobuf::PhysicalSortExprNode
 #[cfg(feature = "proto")]
@@ -277,6 +268,25 @@ pub fn sort_exprs_try_from_proto(
         .iter()
         .map(|node| PhysicalSortExpr::try_from_proto(node, ctx))
         .collect()
+}
+
+/// Serialize an optional [`LexOrdering`], encoding `None` as an empty list.
+#[cfg(feature = "proto")]
+pub fn optional_ordering_try_to_proto(
+    ordering: Option<&LexOrdering>,
+    ctx: &crate::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+) -> Result<Vec<datafusion_proto_models::protobuf::PhysicalSortExprNode>> {
+    sort_exprs_try_to_proto(ordering.into_iter().flatten(), ctx)
+}
+
+/// Counterpart of [`optional_ordering_try_to_proto`]: an empty list decodes
+/// as `None`.
+#[cfg(feature = "proto")]
+pub fn optional_ordering_try_from_proto(
+    nodes: &[datafusion_proto_models::protobuf::PhysicalSortExprNode],
+    ctx: &crate::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+) -> Result<Option<LexOrdering>> {
+    Ok(LexOrdering::new(sort_exprs_try_from_proto(nodes, ctx)?))
 }
 
 impl PartialEq for PhysicalSortExpr {
@@ -463,10 +473,11 @@ impl LexOrdering {
     /// If the vector is empty, returns `None`.
     pub fn new(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> Option<Self> {
         let exprs = exprs.into_iter();
+        let capacity = exprs.size_hint().0;
         let mut candidate = Self {
             // not valid yet; valid publicly-returned instance must be non-empty
-            exprs: Vec::new(),
-            set: IndexSet::new(),
+            exprs: Vec::with_capacity(capacity),
+            set: IndexSet::with_capacity(capacity),
         };
         for expr in exprs {
             candidate.push(expr);
@@ -713,9 +724,9 @@ impl LexRequirement {
     fn construct(
         reqs: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> (bool, Self) {
-        let mut set = HashSet::new();
+        let reqs = reqs.into_iter();
+        let mut set = HashSet::with_capacity(reqs.size_hint().0);
         let reqs = reqs
-            .into_iter()
             .filter_map(|r| set.insert(Arc::clone(&r.expr)).then_some(r))
             .collect();
         (!set.is_empty(), Self { reqs })
