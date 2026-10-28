@@ -919,6 +919,10 @@ impl ExecutionPlan for MaterializedCteScanExec {
     }
 }
 
+// Not used yet: `MaterializedCteExec` switches to it in a following change.
+#[expect(dead_code)]
+mod fanout;
+
 #[cfg(test)]
 mod tests {
     use super::*;
