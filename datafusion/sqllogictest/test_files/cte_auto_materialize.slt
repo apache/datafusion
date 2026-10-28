@@ -638,7 +638,22 @@ logical_plan
 08)--Union
 09)----MaterializedCteScan: name=u
 10)----MaterializedCteScan: name=u
-physical_plan_error Error during planning: MATERIALIZED CTE u reads an unbounded source, which cannot be materialized
+physical_plan
+01)UnionExec
+02)--UnionExec
+03)----ProjectionExec: expr=[CAST(c1@0 AS Int64) as c1]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+06)----ProjectionExec: expr=[CAST(c1@0 AS Int64) + 1 as c1]
+07)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+09)--UnionExec
+10)----ProjectionExec: expr=[CAST(c1@0 AS Int64) as c1]
+11)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)--------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+13)----ProjectionExec: expr=[CAST(c1@0 AS Int64) + 1 as c1]
+14)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+15)--------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
 
 # The same with one reference in a scalar subquery.
 query TT
@@ -658,12 +673,33 @@ logical_plan
 10)------Limit: skip=0, fetch=1
 11)--------MaterializedCteScan: name=u
 12)----MaterializedCteScan: name=u
-physical_plan_error Error during planning: MATERIALIZED CTE u reads an unbounded source, which cannot be materialized
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--UnionExec
+03)----FilterExec: c1@0 = scalar_subquery(<pending>)
+04)------ProjectionExec: expr=[CAST(c1@0 AS Int64) as c1]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+07)----FilterExec: c1@0 = scalar_subquery(<pending>)
+08)------ProjectionExec: expr=[CAST(c1@0 AS Int64) + 1 as c1]
+09)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)----------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+11)--CoalescePartitionsExec: fetch=1
+12)----UnionExec
+13)------ProjectionExec: expr=[CAST(c1@0 AS Int64) as c1]
+14)--------LocalLimitExec: fetch=1
+15)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+16)------------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+17)------ProjectionExec: expr=[CAST(c1@0 AS Int64) + 1 as c1]
+18)--------LocalLimitExec: fetch=1
+19)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+20)------------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
 
 # The query also runs. The file has no rows.
-query error DataFusion error: Error during planning: MATERIALIZED CTE u reads an unbounded source, which cannot be materialized
+query I
 WITH u AS (SELECT c1 FROM unbounded_t UNION ALL SELECT c1 + 1 FROM unbounded_t)
 SELECT c1 FROM u WHERE c1 = (SELECT c1 FROM u LIMIT 1)
+----
 
 statement ok
 DROP TABLE unbounded_t;
