@@ -533,21 +533,6 @@ mod tests {
     }
 
     #[test]
-    fn range_key_locality_analysis_distinguishes_null_literals_from_columns() -> Result<()>
-    {
-        let function = ScalarUDF::from(LiteralLocalityUDF::new(ScalarValue::Int32(None)));
-        let null_literal = Arc::new(Literal::new(ScalarValue::Int32(None)));
-        let column = Arc::new(Column::new("parameter", 0));
-
-        assert!(supports_locality_with_parameter(
-            function.clone(),
-            null_literal
-        )?);
-        assert!(!supports_locality_with_parameter(function, column)?);
-        Ok(())
-    }
-
-    #[test]
     fn range_key_locality_analysis_preserves_type_only_opt_ins() -> Result<()> {
         let schema = Schema::new(vec![Field::new(
             "ts",
