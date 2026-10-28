@@ -25,7 +25,7 @@ use crate::arrow::util::pretty;
 use crate::datasource::{
     DefaultTableSource, MemTable, TableProvider,
     file_format::{csv::CsvFormatFactory, format_as_file_type, json::JsonFormatFactory},
-    provider_as_source,
+    provider_as_source, source_as_provider,
 };
 use crate::error::Result;
 use crate::execution::{
@@ -2950,7 +2950,14 @@ impl DataFrame {
     /// See [`array_col`] for the contract.
     fn with_array_column(self, name: &str, array: ArrayRef) -> Result<DataFrame> {
         let (state, plan) = self.into_parts();
-        let provider = Arc::new(AddColumnProvider::try_new(plan, name, array)?);
+        // Consecutive `array_col` calls extend the existing provider instead of
+        // nesting one sub-plan per column.
+        let (input, mut columns) = match add_column_provider(&plan) {
+            Some((input, columns)) => (input, columns),
+            None => (plan, Vec::new()),
+        };
+        columns.push((name.to_string(), array));
+        let provider = Arc::new(AddColumnProvider::try_new(input, columns)?);
         let plan =
             LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
                 .build()?;
@@ -2978,7 +2985,9 @@ impl DataFrame {
 /// * The new field is nullable only if the array may contain nulls
 ///   (`Array::is_nullable`).
 /// * The array must have exactly as many elements as the DataFrame produces
-///   rows; a mismatch is an error at execution time.
+///   rows; a mismatch is an error at execution time. Consecutive `array_col`
+///   calls are planned as one operator, so their arrays must also agree with
+///   each other, which is checked when the column is added.
 /// * Rows are paired in the order the input DataFrame produces them when
 ///   executed as a single partition: in-memory sources (`from_columns`,
 ///   `read_batch`, `read_batches`) keep insertion order, and `filter`,
@@ -3096,19 +3105,49 @@ fn take_array_col(mut expr: &Expr) -> Option<ArrayRef> {
     }
 }
 
+/// When `plan` is a bare scan produced by [`DataFrame::with_array_column`],
+/// returns that provider's input plan and `(name, array)` columns so a further
+/// array column can be added to the same provider instead of nesting.
+fn add_column_provider(
+    plan: &LogicalPlan,
+) -> Option<(LogicalPlan, Vec<(String, ArrayRef)>)> {
+    let LogicalPlan::TableScan(scan) = plan else {
+        return None;
+    };
+    if scan.projection.is_some() || !scan.filters.is_empty() || scan.fetch.is_some() {
+        return None;
+    }
+    let provider = source_as_provider(&scan.source).ok()?;
+    let provider = provider.downcast_ref::<AddColumnProvider>()?;
+    Some((provider.input.clone(), provider.added_columns()))
+}
+
+/// A column attached by [`array_col`] and where it goes in the output.
+#[derive(Debug, Clone)]
+struct AddedColumn {
+    name: String,
+    array: ArrayRef,
+    /// Index of the column in the output: the index of the replaced input
+    /// column, or a new index past the input's fields when appended.
+    position: usize,
+}
+
+/// [`TableProvider`] that wraps a [`LogicalPlan`] and attaches one or more
+/// pre-materialized arrays as columns when it is executed.
 #[derive(Debug)]
 struct AddColumnProvider {
     input: LogicalPlan,
-    name: String,
-    array: ArrayRef,
-    /// Index of the new column in the output: the index of the replaced input
-    /// column, or the input's field count when the column is appended.
-    position: usize,
+    /// Sorted by `position`, so appended columns are in output order.
+    columns: Vec<AddedColumn>,
     schema: SchemaRef,
 }
 
 impl AddColumnProvider {
-    fn try_new(input: LogicalPlan, name: &str, array: ArrayRef) -> Result<Self> {
+    fn try_new(input: LogicalPlan, columns: Vec<(String, ArrayRef)>) -> Result<Self> {
+        if columns.is_empty() {
+            return internal_err!("AddColumnProvider requires at least one column");
+        }
+
         let mut fields: Vec<Field> = input
             .schema()
             .as_arrow()
@@ -3116,40 +3155,75 @@ impl AddColumnProvider {
             .iter()
             .map(|f| f.as_ref().clone())
             .collect();
-        let new_field = Field::new(name, array.data_type().clone(), array.is_nullable());
+        let mut added: Vec<AddedColumn> = Vec::with_capacity(columns.len());
+        let mut expected_len: Option<(String, usize)> = None;
 
-        // Same contract as `with_column` with an expression: an existing
-        // column is replaced in place, a new name is appended.
-        let matches: Vec<usize> = fields
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| f.name() == name)
-            .map(|(i, _)| i)
-            .collect();
-        let position = match matches.as_slice() {
-            [] => {
-                fields.push(new_field);
-                fields.len() - 1
+        for (name, array) in columns {
+            // Every array is paired with the same rows, so all of them must
+            // have the same length. The input's row count is only known at
+            // execution time and is checked there.
+            match &expected_len {
+                Some((first_name, len)) if *len != array.len() => {
+                    return plan_err!(
+                        "Column '{name}' has {} rows but column '{first_name}' has {len}: \
+                         all arrays added to a DataFrame must have the same length",
+                        array.len()
+                    );
+                }
+                Some(_) => {}
+                None => expected_len = Some((name.clone(), array.len())),
             }
-            [i] => {
-                fields[*i] = new_field;
-                *i
-            }
-            _ => {
-                return plan_err!(
-                    "Column '{name}' is ambiguous: {} input columns have that name",
-                    matches.len()
-                );
-            }
-        };
+
+            let new_field =
+                Field::new(&name, array.data_type().clone(), array.is_nullable());
+
+            // Same contract as `with_column` with an expression: an existing
+            // column is replaced in place, a new name is appended. A column
+            // added earlier by this provider is replaced the same way.
+            let matches: Vec<usize> = fields
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.name() == &name)
+                .map(|(i, _)| i)
+                .collect();
+            let position = match matches.as_slice() {
+                [] => {
+                    fields.push(new_field);
+                    fields.len() - 1
+                }
+                [i] => {
+                    fields[*i] = new_field;
+                    *i
+                }
+                _ => {
+                    return plan_err!(
+                        "Column '{name}' is ambiguous: {} input columns have that name",
+                        matches.len()
+                    );
+                }
+            };
+            added.retain(|c| c.position != position);
+            added.push(AddedColumn {
+                name,
+                array,
+                position,
+            });
+        }
+        added.sort_by_key(|c| c.position);
 
         Ok(Self {
             input,
-            name: name.to_string(),
-            array,
-            position,
+            columns: added,
             schema: Arc::new(Schema::new(fields)),
         })
+    }
+
+    /// The columns as `(name, array)` pairs, for building an extended provider.
+    fn added_columns(&self) -> Vec<(String, ArrayRef)> {
+        self.columns
+            .iter()
+            .map(|c| (c.name.clone(), Arc::clone(&c.array)))
+            .collect()
     }
 }
 
@@ -3172,8 +3246,9 @@ impl TableProvider for AddColumnProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Positional pairing is only defined on a stream that has not been
         // repartitioned: row `i` of the input must meet element `i` of the
-        // array. Plan the input as a single-partition sub-plan so the optimizer
-        // does not split the source or insert `RepartitionExec` below us.
+        // arrays. Plan the input as a single-partition sub-plan so the
+        // optimizer does not split the source or insert `RepartitionExec`
+        // below us.
         let state = state
             .as_any()
             .downcast_ref::<SessionState>()
@@ -3190,16 +3265,14 @@ impl TableProvider for AddColumnProvider {
             .await?;
         Ok(Arc::new(AddColumnExec::new(
             input,
-            self.name.clone(),
-            Arc::clone(&self.array),
-            self.position,
+            self.columns.clone(),
             Arc::clone(&self.schema),
             projection,
         )?))
     }
 }
 
-/// Appends a pre-materialized array as a column, pairing array element `i`
+/// Attaches pre-materialized arrays as columns, pairing array element `i`
 /// with the `i`-th row produced by `input`.
 ///
 /// Positional pairing is only defined on a stream that has not been
@@ -3213,10 +3286,8 @@ impl TableProvider for AddColumnProvider {
 #[derive(Debug)]
 struct AddColumnExec {
     input: Arc<dyn ExecutionPlan>,
-    name: String,
-    array: ArrayRef,
-    /// Where the array goes in each output batch; see [`AddColumnProvider`].
-    position: usize,
+    /// Sorted by position; see [`AddColumnProvider`].
+    columns: Arc<[AddedColumn]>,
     full_schema: SchemaRef,
     projection: Option<Vec<usize>>,
     cache: Arc<PlanProperties>,
@@ -3225,9 +3296,7 @@ struct AddColumnExec {
 impl AddColumnExec {
     fn new(
         input: Arc<dyn ExecutionPlan>,
-        name: String,
-        array: ArrayRef,
-        position: usize,
+        columns: Vec<AddedColumn>,
         full_schema: SchemaRef,
         projection: Option<&[usize]>,
     ) -> Result<Self> {
@@ -3235,9 +3304,7 @@ impl AddColumnExec {
         Ok(Self {
             cache: Arc::new(Self::compute_properties(projected_schema, input.as_ref())),
             input,
-            name,
-            array,
-            position,
+            columns: columns.into(),
             full_schema,
             projection: projection.map(|p| p.to_vec()),
         })
@@ -3259,9 +3326,20 @@ impl AddColumnExec {
         self.input.output_partitioning().partition_count()
     }
 
-    /// `true` when the array replaces an input column rather than being appended.
-    fn replaces_column(&self) -> bool {
-        self.position < self.input.schema().fields().len()
+    /// Column names for display, marking the ones that replace an input column.
+    fn column_names(&self) -> String {
+        let input_fields = self.input.schema().fields().len();
+        self.columns
+            .iter()
+            .map(|c| {
+                if c.position < input_fields {
+                    format!("{} (replace)", c.name)
+                } else {
+                    c.name.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -3269,15 +3347,10 @@ impl DisplayAs for AddColumnExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let mode = if self.replaces_column() {
-                    " (replace)"
-                } else {
-                    ""
-                };
                 write!(
                     f,
-                    "AddColumnExec: {}{mode}, input_partitions={}",
-                    self.name,
+                    "AddColumnExec: {}, input_partitions={}",
+                    self.column_names(),
                     self.input_partitions()
                 )?;
                 // The input is not a child, so the plan printer will not
@@ -3290,7 +3363,7 @@ impl DisplayAs for AddColumnExec {
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
-                writeln!(f, "column={}", self.name)?;
+                writeln!(f, "columns={}", self.column_names())?;
                 write!(f, "input_partitions={}", self.input_partitions())
             }
         }
@@ -3351,17 +3424,17 @@ impl ExecutionPlan for AddColumnExec {
             .try_flatten()
             .boxed();
 
-        let array = Arc::clone(&self.array);
-        let position = self.position;
+        let columns = Arc::clone(&self.columns);
         let full_schema = Arc::clone(&self.full_schema);
         let projection = self.projection.clone();
-        let expected_rows = array.len();
+        // All arrays have the same length; see `AddColumnProvider::try_new`.
+        let expected_rows = columns[0].array.len();
         let out_schema = self.schema();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             out_schema,
             futures::stream::try_unfold((stream, 0usize), move |(mut stream, offset)| {
-                let array = Arc::clone(&array);
+                let columns = Arc::clone(&columns);
                 let full_schema = Arc::clone(&full_schema);
                 let projection = projection.clone();
 
@@ -3371,19 +3444,23 @@ impl ExecutionPlan for AddColumnExec {
                             let n = batch.num_rows();
                             if offset + n > expected_rows {
                                 return exec_err!(
-                                    "Added column has {expected_rows} rows, \
+                                    "Added columns have {expected_rows} rows, \
                                          dataframe produced at least {}",
                                     offset + n
                                 );
                             }
-                            let mut columns = batch.columns().to_vec();
-                            let column = array.slice(offset, n);
-                            if position < columns.len() {
-                                columns[position] = column;
-                            } else {
-                                columns.push(column);
+                            let mut out = batch.columns().to_vec();
+                            // `columns` is sorted by position, so appended
+                            // columns are pushed in output order.
+                            for added in columns.iter() {
+                                let column = added.array.slice(offset, n);
+                                if added.position < out.len() {
+                                    out[added.position] = column;
+                                } else {
+                                    out.push(column);
+                                }
                             }
-                            let full = RecordBatch::try_new(full_schema, columns)?;
+                            let full = RecordBatch::try_new(full_schema, out)?;
                             let batch = match &projection {
                                 Some(indices) => full.project(indices)?,
                                 None => full,
@@ -3392,7 +3469,7 @@ impl ExecutionPlan for AddColumnExec {
                         }
                         Some(Err(e)) => Err(e),
                         None if offset != expected_rows => exec_err!(
-                            "Added column has {expected_rows} rows, \
+                            "Added columns have {expected_rows} rows, \
                                  dataframe produced {offset}"
                         ),
                         None => Ok(None),

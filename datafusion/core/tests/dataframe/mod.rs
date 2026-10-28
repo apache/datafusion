@@ -7956,6 +7956,87 @@ async fn test_array_col_with_alias() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_with_column_array_col_consecutive_calls_collapse() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+    let b: ArrayRef = Arc::new(StringArray::from(vec!["x", "y", "z"]));
+    let c: ArrayRef = Arc::new(Int32Array::from(vec![7, 8, 9]));
+    let df = df
+        .with_column("a", array_col(a))?
+        .with_column("b", array_col(b))?
+        .with_column("id", array_col(c))?; // replaces an input column
+
+    // One operator for all three columns, not one per call.
+    let plan = df.clone().create_physical_plan().await?;
+    let displayed = displayable(plan.as_ref()).indent(true).to_string();
+    assert_eq!(displayed.matches("AddColumnExec").count(), 1, "{displayed}");
+    assert_contains!(
+        &displayed,
+        "AddColumnExec: id (replace), a, b, input_partitions=1"
+    );
+
+    assert_batches_eq!(
+        &[
+            "+----+----+---+",
+            "| id | a  | b |",
+            "+----+----+---+",
+            "| 7  | 10 | x |",
+            "| 8  | 20 | y |",
+            "| 9  | 30 | z |",
+            "+----+----+---+",
+        ],
+        &df.collect().await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_column_array_col_does_not_collapse_across_filter() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+    // `b` is aligned with the filtered rows, so it must stay above the filter.
+    let b: ArrayRef = Arc::new(Int32Array::from(vec![200, 300]));
+    let df = df
+        .with_column("a", array_col(a))?
+        .filter(col("id").gt(lit(1)))?
+        .with_column("b", array_col(b))?;
+
+    let plan = df.clone().create_physical_plan().await?;
+    let displayed = displayable(plan.as_ref()).indent(true).to_string();
+    assert_eq!(displayed.matches("AddColumnExec").count(), 2, "{displayed}");
+
+    assert_batches_eq!(
+        &[
+            "+----+----+-----+",
+            "| id | a  | b   |",
+            "+----+----+-----+",
+            "| 2  | 20 | 200 |",
+            "| 3  | 30 | 300 |",
+            "+----+----+-----+",
+        ],
+        &df.collect().await?
+    );
+    Ok(())
+}
+
+#[test]
+fn test_with_column_array_col_arrays_of_different_length() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+    let b: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    // Caught when the column is added, not when the DataFrame is executed.
+    let err = df
+        .with_column("a", array_col(a))?
+        .with_column("b", array_col(b))
+        .unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Column 'b' has 2 rows but column 'a' has 3"
+    );
+    Ok(())
+}
+
 #[test]
 fn test_with_column_array_col_nullability() -> Result<()> {
     let df = dataframe!("id" => [1, 2, 3])?;
