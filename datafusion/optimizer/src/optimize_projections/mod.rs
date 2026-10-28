@@ -953,8 +953,9 @@ fn contains_subquery(expr: &Expr) -> bool {
 ///
 /// Pruning unreferenced sibling columns cannot change the retained fields, so
 /// as long as `schema` is current for the projection's expressions and input,
-/// the sliced schema is identical to the one [`projection_schema`] would
-/// recompute, at O(k) instead of O(exprs * schema_width).
+/// the sliced fields are identical to the ones [`projection_schema`] would
+/// recompute, at O(k) instead of O(exprs * schema_width). Functional
+/// dependencies can be weaker than recomputed ones, never stronger.
 ///
 /// [`projection_schema`]: datafusion_expr::logical_plan::projection_schema
 fn project_schema_by_indices(
@@ -1018,13 +1019,14 @@ mod tests {
     use std::vec;
 
     use crate::optimize_projections::OptimizeProjections;
-    use crate::optimizer::Optimizer;
+    use crate::optimizer::{ApplyOrder, Optimizer};
     use crate::test::{
         assert_fields_eq, scan_empty, test_table_scan, test_table_scan_fields,
         test_table_scan_with_name,
     };
-    use crate::{OptimizerContext, OptimizerRule};
+    use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, JoinType, Result, ScalarValue, TableReference,
     };
@@ -1035,7 +1037,7 @@ mod tests {
         build_join_schema,
         builder::table_scan_with_filters,
         col,
-        expr::{self, Cast},
+        expr::{self, Alias, Cast},
         lit,
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
         not, try_cast, when,
@@ -2824,6 +2826,107 @@ mod tests {
 
         let optimized = optimize(plan)?;
         assert_projection_schema_derived(&optimized)
+    }
+
+    /// A downstream rule that rewrites `a AS x` into
+    /// `CASE WHEN a > 0 THEN a END AS x` via `map_expressions`, so `x` becomes
+    /// nullable. With `transform` false it rewrites nothing.
+    #[derive(Debug)]
+    struct RewriteToCase {
+        transform: bool,
+    }
+
+    impl OptimizerRule for RewriteToCase {
+        fn name(&self) -> &str {
+            "rewrite_to_case"
+        }
+
+        fn apply_order(&self) -> Option<ApplyOrder> {
+            Some(ApplyOrder::BottomUp)
+        }
+
+        fn rewrite(
+            &self,
+            plan: LogicalPlan,
+            _config: &dyn OptimizerConfig,
+        ) -> Result<Transformed<LogicalPlan>> {
+            if !self.transform || !matches!(plan, LogicalPlan::Projection(_)) {
+                return Ok(Transformed::no(plan));
+            }
+            plan.map_expressions(|e| match e {
+                Expr::Alias(Alias {
+                    expr,
+                    relation,
+                    name,
+                    metadata,
+                }) if name == "x" && matches!(*expr, Expr::Column(_)) => {
+                    let new = when(expr.as_ref().clone().gt(lit(0u32)), *expr).end()?;
+                    Ok(Transformed::yes(Expr::Alias(Alias {
+                        expr: Box::new(new),
+                        relation,
+                        name,
+                        metadata,
+                    })))
+                }
+                e => Ok(Transformed::no(e)),
+            })
+        }
+    }
+
+    /// `SELECT DISTINCT x FROM (SELECT a AS x, b + 1 AS y FROM test)`
+    fn distinct_over_x_and_y() -> Result<LogicalPlan> {
+        LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a").alias("x"), (col("b") + lit(1u32)).alias("y")])?
+            .distinct()?
+            .project(vec![col("x")])?
+            .build()
+    }
+
+    /// A projection whose expressions a downstream rule rewrote carries the
+    /// schema the new expressions derive, even after `OptimizeProjections`
+    /// prunes it and reuses its schema.
+    #[test]
+    fn projection_schema_follows_rule_rewrite() -> Result<()> {
+        let plan = distinct_over_x_and_y()?;
+        assert!(!plan.schema().field(0).is_nullable());
+
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(RewriteToCase { transform: true }),
+            Arc::new(OptimizeProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
+
+        let mut projections = 0;
+        optimized.apply(|plan| {
+            if let LogicalPlan::Projection(_) = plan {
+                assert_projection_schema_derived(plan)?;
+                projections += 1;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert!(projections > 0, "expected a projection in {optimized}");
+        assert!(optimized.schema().field(0).is_nullable());
+        Ok(())
+    }
+
+    /// A rule that rewrites nothing keeps the projection's schema as is.
+    #[test]
+    fn projection_schema_kept_without_rule_rewrite() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a").alias("x"), (col("b") + lit(1u32)).alias("y")])?
+            .build()?;
+        let schema = Arc::clone(plan.schema());
+
+        let rewritten =
+            RewriteToCase { transform: false }.rewrite(plan, &OptimizerContext::new())?;
+        assert!(!rewritten.transformed);
+        assert!(Arc::ptr_eq(&schema, rewritten.data.schema()));
+
+        // Expressions visited but left unchanged also keep the schema.
+        let rewritten = rewritten.data.map_expressions(|e| Ok(Transformed::no(e)))?;
+        assert!(!rewritten.transformed);
+        assert!(Arc::ptr_eq(&schema, rewritten.data.schema()));
+        Ok(())
     }
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}

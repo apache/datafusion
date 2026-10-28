@@ -259,7 +259,7 @@ fn analyze_internal(
     };
 
     // apply coercion rewrite all expressions in the plan individually
-    plan.map_expressions(|expr| {
+    let coerced = plan.map_expressions(|expr| {
         // Preserve the names of grouping set members, not of the grouping set itself.
         // An aliased grouping set is no longer recognized as a grouping set.
         if let Expr::GroupingSet(_) = &expr {
@@ -267,11 +267,22 @@ fn analyze_internal(
         } else {
             coerce_expr(expr)
         }
-    })?
-    // some plans need extra coercion after their expressions are coerced
-    .map_data(|plan| expr_rewrite.coerce_plan(plan))?
-    // recompute the schema after the expressions have been rewritten as the types may have changed
-    .map_data(|plan| plan.recompute_schema())
+    })?;
+    // `map_expressions` already derived the schema of a projection whose
+    // expressions it rewrote, and `coerce_plan` leaves projections alone.
+    let schema_derived =
+        coerced.transformed && matches!(coerced.data, LogicalPlan::Projection(_));
+    coerced
+        // some plans need extra coercion after their expressions are coerced
+        .map_data(|plan| expr_rewrite.coerce_plan(plan))?
+        // recompute the schema after the expressions have been rewritten as the types may have changed
+        .map_data(|plan| {
+            if schema_derived {
+                Ok(plan)
+            } else {
+                plan.recompute_schema()
+            }
+        })
 }
 
 /// Rewrite expressions to apply type coercion.
