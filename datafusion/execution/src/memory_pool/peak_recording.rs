@@ -125,6 +125,11 @@ impl PeakRecordingPool {
         pool.downcast_ref::<Self>()
     }
 
+    /// The tracker this pool reports reservation changes to, if any.
+    pub fn drift_tracker(&self) -> Option<&Arc<MemoryDriftTracker>> {
+        self.drift.as_ref().map(|(tracker, _)| tracker)
+    }
+
     /// Peak reservation, in bytes, since the last [`Self::reset_peak`].
     pub fn peak_reserved(&self) -> usize {
         self.peak.load(Ordering::Relaxed)

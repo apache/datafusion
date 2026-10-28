@@ -8,7 +8,9 @@ use std::{path::PathBuf, time::Duration};
 use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::datafusion_engine::Result;
 use crate::engines::output::{DFColumnType, DFOutput};
-use crate::memory_drift::rewrap_replaced_pool;
+use crate::memory_drift::{
+    drift_before_statement, record_statement_drift, rewrap_replaced_pool,
+};
 use crate::{DFSqlLogicTestError, convert_batches, convert_schema_to_types};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -95,6 +97,7 @@ impl sqllogictest::AsyncDB for DataFusionSubstraitRoundTrip {
 
         let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
 
+        let drift_before = drift_before_statement(&self.ctx);
         let start = Instant::now();
         let result = run_query_substrait_round_trip(
             &self.ctx,
@@ -103,7 +106,9 @@ impl sqllogictest::AsyncDB for DataFusionSubstraitRoundTrip {
         )
         .await;
         let duration = start.elapsed();
-        rewrap_replaced_pool(&self.ctx, &self.relative_path.display().to_string());
+        let label = self.relative_path.display().to_string();
+        rewrap_replaced_pool(&self.ctx, &label);
+        record_statement_drift(&self.ctx, drift_before, &label, sql);
 
         self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 

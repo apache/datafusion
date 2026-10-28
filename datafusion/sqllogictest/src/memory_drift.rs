@@ -23,6 +23,7 @@
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
+    collections::HashMap,
     fmt::{Display, Formatter},
     ops::Range,
     sync::{Arc, Mutex, OnceLock},
@@ -30,6 +31,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::common::human_readable_size;
 use datafusion::common::runtime::{
     MemoryAccountTracer, MemoryTrackedFuture, current_memory_account,
     set_join_set_tracer, set_thread_allocated_bytes,
@@ -50,8 +52,32 @@ use object_store::{
 
 /// Set once drift logging is enabled.
 static LOG_THRESHOLD: OnceLock<usize> = OnceLock::new();
-/// Every test file's tracker, to report the peak at the end of the run.
-static TRACKERS: Mutex<Vec<Arc<MemoryDriftTracker>>> = Mutex::new(Vec::new());
+/// Each test file's peak drift and the statement running when it was reached.
+static FILE_PEAKS: Mutex<Option<HashMap<String, StatementDrift>>> = Mutex::new(None);
+
+/// A test file's peak drift and the statement running when it was reached.
+#[derive(Debug, Clone)]
+pub struct StatementDrift {
+    /// The file's peak drift.
+    pub sample: DriftSample,
+    /// Drift the statement added: the peak minus the file's drift when the
+    /// statement started.
+    pub added: isize,
+    /// The statement that was running.
+    pub sql: String,
+}
+
+impl Display for StatementDrift {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let sql = self.sql.split_whitespace().collect::<Vec<_>>().join(" ");
+        let added = if self.added < 0 {
+            format!("-{}", human_readable_size(self.added.unsigned_abs()))
+        } else {
+            human_readable_size(self.added as usize)
+        };
+        write!(f, "{} added={added} statement={sql}", self.sample)
+    }
+}
 
 /// A [`GlobalAlloc`] that counts the bytes each thread allocates minus the
 /// bytes it frees, delegating the allocation itself to [`System`].
@@ -122,13 +148,72 @@ pub fn enable_memory_drift_logging(log_threshold: usize) {
 }
 
 /// The largest drift any test file reached, if drift logging is enabled.
-pub fn peak_memory_drift() -> Option<DriftSample> {
-    TRACKERS
+pub fn peak_memory_drift() -> Option<StatementDrift> {
+    FILE_PEAKS
         .lock()
         .unwrap()
-        .iter()
-        .filter_map(|tracker| tracker.peak_drift())
-        .max_by_key(|sample| sample.drift)
+        .as_ref()?
+        .values()
+        .max_by_key(|peak| peak.sample.drift)
+        .cloned()
+}
+
+/// A test file's drift when a statement started.
+pub(crate) struct StatementStart {
+    /// The file's peak drift so far.
+    peak: Option<DriftSample>,
+    /// The file's drift right now.
+    drift: isize,
+}
+
+fn drift_tracker(ctx: &SessionContext) -> Option<Arc<MemoryDriftTracker>> {
+    let runtime = ctx.runtime_env();
+    PeakRecordingPool::from_pool(runtime.memory_pool.as_ref())?
+        .drift_tracker()
+        .cloned()
+}
+
+/// Pass the result to [`record_statement_drift`] after running a statement.
+pub(crate) fn drift_before_statement(ctx: &SessionContext) -> Option<StatementStart> {
+    let tracker = drift_tracker(ctx)?;
+    let account = current_memory_account()?;
+    Some(StatementStart {
+        peak: tracker.peak_drift(),
+        drift: account.bytes() as isize - tracker.reserved() as isize,
+    })
+}
+
+/// Record `sql` as the statement running at the file's peak drift if it raised
+/// the peak. A file's statements run one at a time, so the raise is its own.
+pub(crate) fn record_statement_drift(
+    ctx: &SessionContext,
+    start: Option<StatementStart>,
+    label: &str,
+    sql: &str,
+) {
+    let (Some(start), Some(sample)) = (
+        start,
+        drift_tracker(ctx).and_then(|tracker| tracker.peak_drift()),
+    ) else {
+        return;
+    };
+    if start.peak.is_some_and(|peak| peak.drift >= sample.drift) {
+        return;
+    }
+    let peak = StatementDrift {
+        added: sample.drift - start.drift,
+        sample,
+        sql: sql.to_string(),
+    };
+    log::debug!("memory drift peak: {peak}");
+    let mut file_peaks = FILE_PEAKS.lock().unwrap();
+    let file_peaks = file_peaks.get_or_insert_with(HashMap::new);
+    if file_peaks
+        .get(label)
+        .is_none_or(|file_peak| peak.sample.drift > file_peak.sample.drift)
+    {
+        file_peaks.insert(label.to_string(), peak);
+    }
 }
 
 /// Wrap `pool` so its reservations are compared with the account of the test
@@ -144,7 +229,6 @@ pub fn wrap_pool(pool: Arc<dyn MemoryPool>, label: &str) -> Arc<dyn MemoryPool> 
         MemoryDriftTracker::new(Arc::new(move || account.bytes().max(0) as usize))
             .with_log_threshold(log_threshold),
     );
-    TRACKERS.lock().unwrap().push(Arc::clone(&tracker));
     Arc::new(PeakRecordingPool::new(pool).with_drift_tracker(tracker, label))
 }
 

@@ -111,6 +111,8 @@ and never fails a test.
 
 Each test file is charged its own allocations, including those of the tasks it
 spawns through DataFusion, so files running concurrently are measured apart.
+The output also names the statement that was running at the file's peak, and
+`added`, the drift that statement added since it started.
 The consumer in the output is the reservation change that took the sample, not
 necessarily the code that allocated the untracked memory. Most drift at this
 scale is memory that `MemoryPool` does not track by design (for example,
