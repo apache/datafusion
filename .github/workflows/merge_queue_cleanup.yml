@@ -1,0 +1,75 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Merge queue cleanup
+
+on:
+  # New groups trigger an early scan. Ref deletion can lag this event; the
+  # sweep also catches groups removed without a replacement or missed earlier.
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report obsolete runs without cancelling them"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: write
+
+# Merge-group scans attach checks to commits that can land on main, so each
+# group SHA gets its own group: a replaced pending scan would show as cancelled.
+# Scheduled and manual scans share one group per mode, so a dry run cannot
+# replace a pending cancellation scan. Do not interrupt running scans.
+concurrency:
+  group: merge-queue-cleanup-${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || (vars.MERGE_QUEUE_CLEANUP_ENABLED != 'true' || (github.event_name == 'workflow_dispatch' && inputs.dry_run)) }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: github.repository == 'apache/datafusion'
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Cancel obsolete merge-group runs
+        # During the PR that introduces this workflow, main has no script yet.
+        # Execute main's copy of the script.
+        if: hashFiles('ci/scripts/cancel_merge_queue_runs.cjs') != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          # Observe candidates for at least a week before enabling cancellation.
+          DRY_RUN: ${{ vars.MERGE_QUEUE_CLEANUP_ENABLED != 'true' || (github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        with:
+          script: |
+            const { run } = require('./ci/scripts/cancel_merge_queue_runs.cjs');
+            const dryRun = process.env.DRY_RUN !== 'false';
+            const results = await run({ github, context, core, dryRun });
+            await core.summary
+              .addHeading(dryRun ? 'Would cancel merge-group runs' : 'Requested merge-group cancellations')
+              .addTable([
+                ['Run', 'SHA', 'Attempt', 'Observed at (UTC)', 'Reason'].map(data => ({ data, header: true })),
+                ...results.map(({ id, sha, attempt, observed_at, reason }) => [String(id), sha, String(attempt), observed_at, reason]),
+              ])
+              .write();

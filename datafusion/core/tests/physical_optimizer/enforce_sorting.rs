@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -26,7 +13,7 @@ use crate::physical_optimizer::test_utils::{
     parquet_exec_with_sort, projection_exec, repartition_exec, sort_exec,
     sort_exec_with_fetch, sort_expr, sort_expr_options, sort_merge_join_exec,
     sort_preserving_merge_exec, sort_preserving_merge_exec_with_fetch,
-    spr_repartition_exec, stream_exec_ordered, union_exec,
+    spr_repartition_exec, stream_exec, stream_exec_ordered, union_exec,
 };
 
 use arrow::compute::{SortOptions};
@@ -2785,6 +2772,68 @@ async fn test_push_with_required_input_ordering_allowed() -> Result<()> {
         DataSourceExec: partitions=1, partition_sizes=[0]
     ");
     // Should be able to push down
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_push_with_required_input_ordering_conflicting_suffix() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let required: LexOrdering = [sort_expr("a", &schema), sort_expr("b", &schema)].into();
+    let requested = [sort_expr("a", &schema), sort_expr("c", &schema)].into();
+    let input = sort_exec(required.clone(), memory_exec(&schema));
+    let plan = RequirementsTestExec::new(input)
+        .with_required_input_ordering(Some(required))
+        .into_arc();
+    let plan = sort_exec(requested, plan);
+    let test = EnforceSortingTest::new(plan).with_repartition_sorts(true);
+
+    assert_snapshot!(test.run(), @r"
+    Input / Optimized Plan:
+    SortExec: expr=[a@0 ASC, c@2 ASC], preserve_partitioning=[false]
+      RequiredInputOrderingExec
+        SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]
+          DataSourceExec: partitions=1, partition_sizes=[0]
+    ");
+    Ok(())
+}
+
+#[test]
+fn test_custom_sort_pushdown_keeps_sort_above_unbounded_input() -> Result<()> {
+    let schema = create_test_schema3()?;
+    // Keep the custom node directly below the sort. It bounds the stream
+    // without advertising a fetch, so this reaches the unbounded-input guard.
+    let custom = RequirementsTestExec::new(stream_exec(&schema))
+        .with_required_input_distribution(Distribution::SinglePartition)
+        .with_bounded_output()
+        .into_arc();
+    let plan = sort_exec([sort_expr("a", &schema)].into(), custom);
+
+    assert_snapshot!(EnforceSortingTest::new(plan).run(), @r"
+    Input / Optimized Plan:
+    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+      RequiredInputOrderingExec
+        StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true
+    ");
+    Ok(())
+}
+
+#[test]
+fn test_custom_sort_pushdown_rejects_narrower_order_maintaining_input() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let narrow_schema = Arc::new(schema.project(&[0])?);
+    // b@1 is valid in the first input and output, but not the second input.
+    let custom = RequirementsTestExec::new(memory_exec(&schema))
+        .with_additional_input(memory_exec(&narrow_schema))
+        .into_arc();
+    let plan = sort_exec([sort_expr("b", &schema)].into(), custom);
+
+    assert_snapshot!(EnforceSortingTest::new(plan).run(), @r"
+    Input / Optimized Plan:
+    SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
+      RequiredInputOrderingExec
+        DataSourceExec: partitions=1, partition_sizes=[0]
+        DataSourceExec: partitions=1, partition_sizes=[0]
+    ");
     Ok(())
 }
 
