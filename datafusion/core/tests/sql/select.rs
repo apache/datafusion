@@ -627,8 +627,7 @@ async fn materialized_cte_output_is_released_after_the_last_scan() -> Result<()>
         rows += batch.column(0).as_primitive::<Int64Type>().value(0);
     }
     assert_eq!(rows, 20000);
-    // Today the `TaskContext` of the run holds the output until it is dropped.
-    assert!(pool.reserved() > 0);
+    assert_eq!(pool.reserved(), 0);
     drop((stream, plan, task_ctx));
     Ok(())
 }
@@ -669,8 +668,6 @@ async fn materialized_cte_with_a_union_body_streams_to_one_scan_partition() -> R
         .lines()
         .find(|l| l.contains("MaterializedCteExec"))
         .unwrap();
-    // Today the body is buffered in full before the scan reads it, so it
-    // spills.
-    assert_contains!(line, "spill_count=2");
+    assert_contains!(line, "spill_count=0");
     Ok(())
 }
