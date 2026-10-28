@@ -5956,3 +5956,97 @@ y! 2 3 1
 
 statement ok
 DROP TABLE group_by_struct_requalify;
+
+# `GROUP BY a, CAST(a AS VARCHAR)` makes the aggregate output two columns that
+# share a flat name, and PushDownFilter used to rewrite a predicate on `a` to
+# whichever of them came last, which gave `Utf8View > Int32` for a valid query.
+# https://github.com/apache/datafusion/issues/26619
+statement ok
+CREATE TABLE group_by_duplicate_name (a INT) AS VALUES (1), (2);
+
+# the aggregate outputs both names
+query I
+SELECT a FROM group_by_duplicate_name
+GROUP BY a, CAST(a AS VARCHAR)
+HAVING a > (SELECT min(a) FROM group_by_duplicate_name);
+----
+2
+
+query I
+SELECT a FROM group_by_duplicate_name GROUP BY a, CAST(a AS VARCHAR) HAVING a > 1;
+----
+2
+
+# the cast is kept in the output, which changes what the later passes see
+query IT
+SELECT a, CAST(a AS VARCHAR) AS s FROM group_by_duplicate_name
+GROUP BY a, CAST(a AS VARCHAR)
+HAVING a > (SELECT min(a) FROM group_by_duplicate_name)
+ORDER BY a;
+----
+2 2
+
+# A control: with the cast first, the plain column is the one the old lookup
+# kept, so this ordering passed before the change. It pins the fact that the
+# answer no longer depends on the order of the group expressions.
+query IT
+SELECT a, CAST(a AS VARCHAR) AS s FROM group_by_duplicate_name
+GROUP BY CAST(a AS VARCHAR), a
+HAVING a > 1
+ORDER BY a;
+----
+2 2
+
+# A control: a predicate on the cast resolved to it either way, so this also
+# passed before the change. It pins the other side of the lookup.
+query IT
+SELECT a, CAST(a AS VARCHAR) AS s FROM group_by_duplicate_name
+GROUP BY a, CAST(a AS VARCHAR)
+HAVING CAST(a AS VARCHAR) > '1'
+ORDER BY a;
+----
+2 2
+
+# The HAVING cases above are all decided in the Aggregate branch. These two
+# reach the projection that EliminateGroupByConstant leaves behind, which
+# outputs `a` and `CAST(a AS VARCHAR)` under one flat name. The predicate has to
+# survive the first pass for the projection to exist by the time it is pushed:
+# once because an OR with an aggregate blocks it, once behind a LIMIT.
+query ITI
+SELECT a, CAST(a AS VARCHAR) AS s, count(*) AS n FROM group_by_duplicate_name
+GROUP BY a, CAST(a AS VARCHAR)
+HAVING a > 1 OR count(*) > 1;
+----
+2 2 1
+
+query IT
+SELECT * FROM (
+  SELECT a, CAST(a AS VARCHAR) AS s FROM group_by_duplicate_name
+  GROUP BY a, CAST(a AS VARCHAR)
+  LIMIT 10
+) WHERE a > 1;
+----
+2 2
+
+# the predicate still reaches the scan
+query TT
+EXPLAIN SELECT a, CAST(a AS VARCHAR) AS s FROM group_by_duplicate_name
+GROUP BY a, CAST(a AS VARCHAR)
+HAVING a > 1;
+----
+logical_plan
+01)Projection: group_by_duplicate_name.a, CAST(group_by_duplicate_name.a AS Utf8View) AS s
+02)--Aggregate: groupBy=[[group_by_duplicate_name.a]], aggr=[[]]
+03)----Filter: group_by_duplicate_name.a > Int32(1)
+04)------TableScan: group_by_duplicate_name projection=[a]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Utf8View) as s]
+02)--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+03)----RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------FilterExec: a@0 > 1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE group_by_duplicate_name;
