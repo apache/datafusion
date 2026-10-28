@@ -849,7 +849,7 @@ fn env_usize(var: &str) -> Option<usize> {
 
 type AxisGenerator = Box<dyn Fn(DataProfile, Cardinality, usize) -> Vec<RecordBatch>>;
 
-/// Benchmarks `SortExec` (at the 1M input size) on single partition across the following axes:
+/// Benchmarks `SortExec` on a single partition across the following axes.
 /// 1. Sort columns
 ///     - single column with a specialized impl (primitive or byte(view))
 ///     - multiple columns, which will use fallback impl
@@ -858,8 +858,14 @@ type AxisGenerator = Box<dyn Fn(DataProfile, Cardinality, usize) -> Vec<RecordBa
 /// 3. Value cardinality - whether the sort-key values overlap or not
 /// 4. Input ordering - already sorted / unsorted / nearly sorted
 fn sort_axis_benchmark(c: &mut Criterion) {
-    let input_size = 1_000_000u64;
-    let size_label = "1M";
+    let input_size = env_usize("SORT_AXIS_ROWS").unwrap_or(1_000_000) as u64;
+    let size_label = if input_size.is_multiple_of(1_000_000) {
+        format!("{}M", input_size / 1_000_000)
+    } else if input_size.is_multiple_of(1_000) {
+        format!("{}K", input_size / 1_000)
+    } else {
+        input_size.to_string()
+    };
 
     const AXIS_BATCH_SIZE: usize = 8192;
 
