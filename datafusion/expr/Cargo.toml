@@ -78,3 +78,7 @@ insta = { workspace = true }
 [[bench]]
 name = "normalize_columns"
 harness = false
+
+[[bench]]
+name = "expr_schema"
+harness = false
