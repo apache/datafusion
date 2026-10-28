@@ -870,15 +870,6 @@ fn rewrite_projection_given_requirements(
 
     let exprs_used = indices.get_at_indices(&expr);
 
-    // The retained expressions are a subset of the original projection's
-    // expressions, so their output fields are unchanged by pruning unreferenced
-    // sibling columns. Derive the pruned output schema by selecting those fields
-    // from the existing projection schema instead of recomputing every field's
-    // type/nullability via `Expr::to_field` (see `projection_schema`), which is
-    // quadratic in the schema width. This mirrors the schema reuse already
-    // performed in `merge_consecutive_projections`.
-    let projected_schema = project_schema_by_indices(&schema, indices.indices())?;
-
     let required_indices =
         RequiredIndices::new().with_exprs(input.schema(), exprs_used.iter());
     let old_input_schema = Arc::clone(input.schema());
@@ -904,10 +895,18 @@ fn rewrite_projection_given_requirements(
                     .map(LogicalPlan::Projection)
                     .map(Transformed::yes)
             } else {
+                // The retained expressions are a subset of the original ones and
+                // read unchanged input fields, so their output fields are
+                // unchanged too. Select them from the existing schema instead of
+                // recomputing each one via `Expr::to_field` (see
+                // `projection_schema`), which costs O(exprs * schema_width).
+                // `merge_consecutive_projections` reuses the schema the same way.
+                let projected_schema =
+                    project_schema_by_indices(&schema, indices.indices())?;
                 Projection::try_new_with_schema(
                     exprs_used,
                     Arc::new(input),
-                    Arc::clone(&projected_schema),
+                    projected_schema,
                 )
                 .map(LogicalPlan::Projection)
                 .map(Transformed::yes)
@@ -953,6 +952,7 @@ fn contains_subquery(expr: &Expr) -> bool {
 /// field's type/nullability from the expressions.
 ///
 /// Pruning unreferenced sibling columns cannot change the retained fields, so
+/// as long as `schema` is current for the projection's expressions and input,
 /// the sliced schema is identical to the one [`projection_schema`] would
 /// recompute, at O(k) instead of O(exprs * schema_width).
 ///
@@ -1334,8 +1334,8 @@ mod tests {
             "input columns are expected to be NOT NULL"
         );
 
-        // Every sorted, deduplicated subset RequiredIndices could produce,
-        // including the "nothing pruned" identity case.
+        // A sample of the sorted, deduplicated subsets RequiredIndices can
+        // produce, including the "nothing pruned" identity case.
         let subsets: Vec<Vec<usize>> = vec![
             vec![0, 1, 2, 3, 4], // identity (SELECT * fast path)
             vec![0],
