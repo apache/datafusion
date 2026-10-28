@@ -99,3 +99,72 @@ DROP TABLE t1;
 
 statement ok
 DROP TABLE t2;
+
+# COUNT of a non-nullable column is rewritten to COUNT(1)
+
+statement ok
+CREATE TABLE count_l (id INT NOT NULL, v INT NOT NULL);
+
+statement ok
+INSERT INTO count_l VALUES (1, 10), (2, 20), (3, 30);
+
+statement ok
+CREATE TABLE count_r (id INT NOT NULL, w INT NOT NULL);
+
+statement ok
+INSERT INTO count_r VALUES (1, 100);
+
+# The rewritten COUNT keeps its FILTER clause
+query TT
+EXPLAIN SELECT count(v) FILTER (WHERE id > 1) FROM count_l;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) FILTER (WHERE count_l.id > Int32(1)) AS count(count_l.v) FILTER (WHERE count_l.id > Int64(1))]]
+02)--TableScan: count_l projection=[id]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[count(1) FILTER (WHERE count_l.id > Int32(1)) as count(count_l.v) FILTER (WHERE count_l.id > Int64(1))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT count(v) FILTER (WHERE id > 1) FROM count_l;
+----
+2
+
+# count_r.w is nullable after the LEFT JOIN, so its COUNT is not rewritten
+query TT
+EXPLAIN SELECT count_l.id, count(count_l.v), count(count_r.w)
+FROM count_l LEFT JOIN count_r ON count_l.id = count_r.id
+GROUP BY count_l.id ORDER BY count_l.id;
+----
+logical_plan
+01)Sort: count_l.id ASC NULLS LAST
+02)--Aggregate: groupBy=[[count_l.id]], aggr=[[count(Int64(1)) AS count(count_l.v), count(count_r.w)]]
+03)----Projection: count_l.id, count_r.w
+04)------Left Join: count_l.id = count_r.id
+05)--------TableScan: count_l projection=[id]
+06)--------TableScan: count_r projection=[id, w]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[count(1) as count(count_l.v), count(count_r.w)]
+04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[count(1) as count(count_l.v), count(count_r.w)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, id@0)], projection=[id@0, w@2]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query III
+SELECT count_l.id, count(count_l.v), count(count_r.w)
+FROM count_l LEFT JOIN count_r ON count_l.id = count_r.id
+GROUP BY count_l.id ORDER BY count_l.id;
+----
+1 1 1
+2 1 0
+3 1 0
+
+statement ok
+DROP TABLE count_l;
+
+statement ok
+DROP TABLE count_r;

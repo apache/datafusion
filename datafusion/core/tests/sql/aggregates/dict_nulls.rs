@@ -101,6 +101,89 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
     Ok(())
 }
 
+/// Creates a context with table `t` whose non-nullable dictionary column `d` is `'a', NULL, NULL, 'a'`
+fn non_nullable_dict_with_null_values_context() -> Result<SessionContext> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("d", string_dict_type(), false),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+            Arc::new(create_test_dict(
+                &[Some("a"), None],
+                &[Some(0), Some(1), Some(1), Some(0)],
+            )),
+        ],
+    )?;
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    Ok(ctx)
+}
+
+/// Executes `sql` after checking that `count(t.d)` is neither rewritten to `count(1)` nor answered from statistics
+async fn collect_count_of_dict(
+    ctx: &SessionContext,
+    sql: &str,
+) -> Result<Vec<RecordBatch>> {
+    let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+    assert_contains!(
+        displayable(plan.as_ref()).indent(true).to_string(),
+        "aggr=[count(t.d)]"
+    );
+    collect(plan, ctx.task_ctx()).await
+}
+
+/// Test global COUNT on a non-nullable dictionary column with null values
+#[tokio::test]
+async fn test_global_count_non_nullable_dict_with_null_values() -> Result<()> {
+    let ctx = non_nullable_dict_with_null_values_context()?;
+
+    // The filter makes the row count inexact so statistics cannot answer the count
+    let results =
+        collect_count_of_dict(&ctx, "SELECT count(d) AS cnt FROM t WHERE k > 0").await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r"
+    +-----+
+    | cnt |
+    +-----+
+    | 2   |
+    +-----+
+    "
+    );
+
+    Ok(())
+}
+
+/// Test grouped COUNT on a non-nullable dictionary column with null values
+#[tokio::test]
+async fn test_grouped_count_non_nullable_dict_with_null_values() -> Result<()> {
+    let ctx = non_nullable_dict_with_null_values_context()?;
+
+    let results = collect_count_of_dict(
+        &ctx,
+        "SELECT k, count(d) AS cnt FROM t GROUP BY k ORDER BY k",
+    )
+    .await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r"
+    +---+-----+
+    | k | cnt |
+    +---+-----+
+    | 1 | 1   |
+    | 2 | 1   |
+    +---+-----+
+    "
+    );
+
+    Ok(())
+}
+
 /// Test FIRST_VAL and LAST_VAL with null values and GROUP BY dict with null keys and null values - may return null if first/last value is null (single and multiple partitions)
 #[tokio::test]
 async fn test_first_last_val_null_handling() -> Result<()> {

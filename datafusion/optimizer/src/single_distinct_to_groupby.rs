@@ -470,6 +470,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use datafusion_common::alias::AliasGenerator;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::metadata::FieldMetadata;
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::function::AccumulatorArgs;
@@ -484,6 +485,7 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};
     use datafusion_functions_aggregate::min_max::max_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
+    use std::collections::HashMap;
 
     fn max_distinct(expr: Expr) -> Expr {
         Expr::AggregateFunction(AggregateFunction::new_udf(
@@ -1264,6 +1266,42 @@ mod tests {
               TableScan: test [a:UInt32, b:Utf8, c:UInt32]
         "
         )
+    }
+
+    #[test]
+    fn aliased_count_with_metadata_and_distinct_is_not_rewritten() -> Result<()> {
+        let table_scan = test_table_scan_utf8_b()?;
+        let metadata = FieldMetadata::from(HashMap::from([(
+            "key".to_string(),
+            "value".to_string(),
+        )]));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![
+                    count_star()
+                        .alias_with_metadata("count(test.a)", Some(metadata.clone())),
+                    count_distinct(col("b")),
+                ],
+            )?
+            .build()?;
+
+        // Do nothing: removing the alias would drop its metadata
+        let rule: Arc<dyn OptimizerRule + Send + Sync> =
+            Arc::new(SingleDistinctToGroupBy::new());
+        let optimized_plan = Optimizer::with_rules(vec![rule]).optimize(
+            plan.clone(),
+            &RegistryOptimizerContext::new(),
+            |_, _| {},
+        )?;
+
+        assert_eq!(optimized_plan, plan);
+        assert_eq!(
+            optimized_plan.schema().field(0).metadata(),
+            &metadata.to_hashmap()
+        );
+        Ok(())
     }
 
     #[test]
