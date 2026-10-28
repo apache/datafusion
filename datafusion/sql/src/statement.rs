@@ -2115,7 +2115,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         opts: ExplainStatementOptions,
         statement: DFStatement,
     ) -> Result<LogicalPlan> {
-        let plan = self.statement_to_plan(statement)?;
+        let plan = match statement {
+            // EXPLAIN shows the plan of the query, so it gets no column labels
+            DFStatement::Statement(statement) => match *statement {
+                Statement::Query(query) => {
+                    self.query_to_plan(*query, &mut PlannerContext::new())?
+                }
+                statement => self.sql_statement_to_plan(statement)?,
+            },
+            statement => self.statement_to_plan(statement)?,
+        };
         if matches!(plan, LogicalPlan::Explain(_)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }

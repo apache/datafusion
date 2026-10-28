@@ -330,7 +330,9 @@ config_namespace! {
         /// columns by name work as before. Columns that you name in the
         /// outermost `SELECT` list, and statements that store column names
         /// (`CREATE VIEW`, `CREATE TABLE AS`, `INSERT`, `COPY`), get no
-        /// labels.
+        /// labels. A `DataFrame` made from a labeled query keeps its labels
+        /// when you write it with `DataFrame::write_table` or turn it into a
+        /// view.
         pub column_labels: bool, default = false
     }
 }

@@ -86,6 +86,7 @@ pub(crate) fn label_output_columns(
     typed_names: &HashSet<String>,
 ) -> Result<LogicalPlan> {
     let schema = Arc::clone(plan.schema());
+    let mut cache = TraceCache::new();
     let labels = schema
         .fields()
         .iter()
@@ -95,7 +96,7 @@ pub(crate) fn label_output_columns(
             if typed_names.contains(name) {
                 return Ok(None);
             }
-            let label = trace_column(&plan, idx)?
+            let label = trace_column(&plan, idx, &mut cache)?
                 .map(|expr| expr.human_display().to_string())
                 .filter(|label| label != name);
             Ok(label)
@@ -150,6 +151,12 @@ fn with_label(
     }
 }
 
+/// The traced origin of the output columns of the plan nodes visited so far,
+/// keyed by node address and column index. An expression that refers to
+/// several columns of one input would otherwise trace that input once per
+/// reference, which multiplies at every nesting level.
+type TraceCache = HashMap<(*const LogicalPlan, usize), Option<Expr>>;
+
 /// Follows output column `idx` of `plan` down to the expression that
 /// produced it, and returns that expression with every column reference
 /// replaced by its own origin. The result has no table qualifiers, and
@@ -157,23 +164,41 @@ fn with_label(
 ///
 /// Returns `None` when the origin can't be traced, for example through
 /// `UNNEST`, `VALUES`, a `USING` join, or a subquery expression.
-fn trace_column(plan: &LogicalPlan, idx: usize) -> Result<Option<Expr>> {
+fn trace_column(
+    plan: &LogicalPlan,
+    idx: usize,
+    cache: &mut TraceCache,
+) -> Result<Option<Expr>> {
+    let key = (std::ptr::from_ref(plan), idx);
+    if let Some(origin) = cache.get(&key) {
+        return Ok(origin.clone());
+    }
+    let origin = trace_column_uncached(plan, idx, cache)?;
+    cache.insert(key, origin.clone());
+    Ok(origin)
+}
+
+fn trace_column_uncached(
+    plan: &LogicalPlan,
+    idx: usize,
+    cache: &mut TraceCache,
+) -> Result<Option<Expr>> {
     match plan {
         LogicalPlan::Projection(projection) => match &projection.expr[idx] {
             // Fast path for `SELECT *`: the column is usually at the same index
             // in the input
             Expr::Column(column) => {
                 match column_index(projection.input.schema(), column, idx) {
-                    Some(input_idx) => trace_column(&projection.input, input_idx),
+                    Some(input_idx) => trace_column(&projection.input, input_idx, cache),
                     None => Ok(None),
                 }
             }
-            expr => resolve_expr(expr, &projection.input),
+            expr => resolve_expr(expr, &projection.input, cache),
         },
         LogicalPlan::Aggregate(aggregate) => {
             let group_exprs = grouping_set_to_exprlist(&aggregate.group_expr)?;
             if let Some(expr) = group_exprs.get(idx) {
-                return resolve_expr(expr, &aggregate.input);
+                return resolve_expr(expr, &aggregate.input, cache);
             }
             let mut idx = idx - group_exprs.len();
             // Grouping sets add an internal grouping id column
@@ -183,36 +208,42 @@ fn trace_column(plan: &LogicalPlan, idx: usize) -> Result<Option<Expr>> {
                 }
                 idx -= 1;
             }
-            resolve_aggregate_expr(&aggregate.aggr_expr[idx], &aggregate.input)
+            resolve_aggregate_expr(&aggregate.aggr_expr[idx], &aggregate.input, cache)
         }
         LogicalPlan::Window(window) => {
             let input_len = window.input.schema().fields().len();
             if idx < input_len {
-                trace_column(&window.input, idx)
+                trace_column(&window.input, idx, cache)
             } else {
-                resolve_window_expr(&window.window_expr[idx - input_len], &window.input)
+                resolve_window_expr(
+                    &window.window_expr[idx - input_len],
+                    &window.input,
+                    cache,
+                )
             }
         }
-        LogicalPlan::SubqueryAlias(alias) => trace_column(&alias.input, idx),
-        LogicalPlan::Filter(filter) => trace_column(&filter.input, idx),
-        LogicalPlan::Sort(sort) => trace_column(&sort.input, idx),
-        LogicalPlan::Limit(limit) => trace_column(&limit.input, idx),
-        LogicalPlan::Distinct(Distinct::All(input)) => trace_column(input, idx),
+        LogicalPlan::SubqueryAlias(alias) => trace_column(&alias.input, idx, cache),
+        LogicalPlan::Filter(filter) => trace_column(&filter.input, idx, cache),
+        LogicalPlan::Sort(sort) => trace_column(&sort.input, idx, cache),
+        LogicalPlan::Limit(limit) => trace_column(&limit.input, idx, cache),
+        LogicalPlan::Distinct(Distinct::All(input)) => trace_column(input, idx, cache),
         // SQL takes the output names of a set operation from its first input
-        LogicalPlan::Union(union) => trace_column(&union.inputs[0], idx),
+        LogicalPlan::Union(union) => trace_column(&union.inputs[0], idx, cache),
         LogicalPlan::Join(join) if join.join_constraint == JoinConstraint::On => {
             let left_len = join.left.schema().fields().len();
             match join.join_type {
                 JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
                     if idx < left_len {
-                        trace_column(&join.left, idx)
+                        trace_column(&join.left, idx, cache)
                     } else {
-                        trace_column(&join.right, idx - left_len)
+                        trace_column(&join.right, idx - left_len, cache)
                     }
                 }
-                JoinType::LeftSemi | JoinType::LeftAnti => trace_column(&join.left, idx),
+                JoinType::LeftSemi | JoinType::LeftAnti => {
+                    trace_column(&join.left, idx, cache)
+                }
                 JoinType::RightSemi | JoinType::RightAnti => {
-                    trace_column(&join.right, idx)
+                    trace_column(&join.right, idx, cache)
                 }
                 JoinType::LeftMark | JoinType::RightMark => Ok(None),
             }
@@ -237,12 +268,17 @@ fn column_index(schema: &DFSchema, column: &Column, hint: usize) -> Option<usize
 
 /// Replaces each column reference in `expr`, an expression evaluated on
 /// `input`, with its origin.
-fn resolve_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Expr>> {
+fn resolve_expr(
+    expr: &Expr,
+    input: &LogicalPlan,
+    cache: &mut TraceCache,
+) -> Result<Option<Expr>> {
     match expr {
         Expr::Alias(alias) => {
             if let Expr::Column(column) = alias.expr.as_ref()
                 && is_count_star_window_alias(column, &alias.name)
-                && let Some(Expr::Column(label)) = resolve_expr(&alias.expr, input)?
+                && let Some(Expr::Column(label)) =
+                    resolve_expr(&alias.expr, input, cache)?
                 && let Some(args) = label.name.strip_prefix("count(1)")
             {
                 return Ok(Some(Expr::Column(Column::new_unqualified(format!(
@@ -255,7 +291,7 @@ fn resolve_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Expr>> {
             ))))
         }
         Expr::Column(column) => match input.schema().maybe_index_of_column(column) {
-            Some(idx) => trace_column(input, idx),
+            Some(idx) => trace_column(input, idx, cache),
             None => Ok(None),
         },
         _ => {
@@ -274,7 +310,8 @@ fn resolve_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Expr>> {
             }
             let mut origins = HashMap::new();
             for column in expr.column_refs() {
-                let Some(origin) = resolve_expr(&Expr::Column(column.clone()), input)?
+                let Some(origin) =
+                    resolve_expr(&Expr::Column(column.clone()), input, cache)?
                 else {
                     return Ok(None);
                 };
@@ -307,10 +344,14 @@ fn is_count_star_window_alias(column: &Column, alias: &str) -> bool {
 
 /// Like [`resolve_expr`] for a list of expressions. Returns `None` when any
 /// of them can't be traced.
-fn resolve_all(exprs: &[Expr], input: &LogicalPlan) -> Result<Option<Vec<Expr>>> {
+fn resolve_all(
+    exprs: &[Expr],
+    input: &LogicalPlan,
+    cache: &mut TraceCache,
+) -> Result<Option<Vec<Expr>>> {
     exprs
         .iter()
-        .map(|e| resolve_expr(e, input))
+        .map(|e| resolve_expr(e, input, cache))
         .collect::<Result<Option<Vec<_>>>>()
 }
 
@@ -318,10 +359,13 @@ fn resolve_all(exprs: &[Expr], input: &LogicalPlan) -> Result<Option<Vec<Expr>>>
 fn resolve_sorts(
     sorts: &[SortExpr],
     input: &LogicalPlan,
+    cache: &mut TraceCache,
 ) -> Result<Option<Vec<SortExpr>>> {
     sorts
         .iter()
-        .map(|sort| Ok(resolve_expr(&sort.expr, input)?.map(|expr| sort.with_expr(expr))))
+        .map(|sort| {
+            Ok(resolve_expr(&sort.expr, input, cache)?.map(|expr| sort.with_expr(expr)))
+        })
         .collect::<Result<Option<Vec<_>>>>()
 }
 
@@ -339,9 +383,13 @@ fn call_label(name: &str, distinct: bool, args: &[Expr]) -> String {
 /// aggregate function is rendered as `name(args)` followed by its
 /// `DISTINCT`, null treatment, `FILTER` and `ORDER BY` parts. An ordered-set
 /// aggregate is rendered with `WITHIN GROUP`, like in the query.
-fn resolve_aggregate_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Expr>> {
+fn resolve_aggregate_expr(
+    expr: &Expr,
+    input: &LogicalPlan,
+    cache: &mut TraceCache,
+) -> Result<Option<Expr>> {
     let Expr::AggregateFunction(aggregate_function) = expr else {
-        return resolve_expr(expr, input);
+        return resolve_expr(expr, input, cache);
     };
     let AggregateFunction { func, params } = aggregate_function;
     let AggregateFunctionParams {
@@ -352,15 +400,15 @@ fn resolve_aggregate_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Exp
         null_treatment,
     } = params;
 
-    let Some(args) = resolve_all(args, input)? else {
+    let Some(args) = resolve_all(args, input, cache)? else {
         return Ok(None);
     };
-    let Some(order_by) = resolve_sorts(order_by, input)? else {
+    let Some(order_by) = resolve_sorts(order_by, input, cache)? else {
         return Ok(None);
     };
     let filter = match filter
         .as_deref()
-        .map(|f| resolve_expr(f, input))
+        .map(|f| resolve_expr(f, input, cache))
         .transpose()?
     {
         Some(None) => return Ok(None),
@@ -370,7 +418,11 @@ fn resolve_aggregate_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Exp
     let within_group = func.supports_within_group_clause() && !order_by.is_empty();
     // The planner puts the ordering expression of a WITHIN GROUP clause first
     // in the args, but the query only has the direct args there
-    let args = if within_group { &args[1..] } else { &args[..] };
+    let args = if within_group {
+        args.get(1..).unwrap_or_default()
+    } else {
+        &args[..]
+    };
     let mut label = call_label(func.name(), *distinct, args);
     if within_group {
         write!(
@@ -395,9 +447,13 @@ fn resolve_aggregate_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Exp
 /// Like [`resolve_expr`] for an expression of a `Window` node. A window
 /// function is rendered as `name(args) OVER (...)` without the default parts
 /// of its window definition.
-fn resolve_window_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Expr>> {
+fn resolve_window_expr(
+    expr: &Expr,
+    input: &LogicalPlan,
+    cache: &mut TraceCache,
+) -> Result<Option<Expr>> {
     let Expr::WindowFunction(window_function) = expr else {
-        return resolve_expr(expr, input);
+        return resolve_expr(expr, input, cache);
     };
     let WindowFunction { fun, params } = window_function.as_ref();
     let WindowFunctionParams {
@@ -412,10 +468,10 @@ fn resolve_window_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Expr>>
 
     let frame_is_default =
         is_default_frame(window_frame, order_by, window_planning_schema(input));
-    let Some(args) = resolve_all(args, input)? else {
+    let Some(args) = resolve_all(args, input, cache)? else {
         return Ok(None);
     };
-    let Some(partition_by) = resolve_all(partition_by, input)? else {
+    let Some(partition_by) = resolve_all(partition_by, input, cache)? else {
         return Ok(None);
     };
     // The planner adds a constant sort key to a RANGE frame without
@@ -425,12 +481,12 @@ fn resolve_window_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Expr>>
         .filter(|sort| !matches!(sort.expr, Expr::Literal(..)))
         .cloned()
         .collect();
-    let Some(order_by) = resolve_sorts(&sort_keys, input)? else {
+    let Some(order_by) = resolve_sorts(&sort_keys, input, cache)? else {
         return Ok(None);
     };
     let filter = match filter
         .as_deref()
-        .map(|f| resolve_expr(f, input))
+        .map(|f| resolve_expr(f, input, cache))
         .transpose()?
     {
         Some(None) => return Ok(None),

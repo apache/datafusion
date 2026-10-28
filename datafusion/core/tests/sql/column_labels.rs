@@ -437,3 +437,17 @@ async fn column_labels_in_dataframe_display() -> Result<()> {
     ");
     Ok(())
 }
+
+#[tokio::test]
+async fn column_labels_explain_plan_unchanged() -> Result<()> {
+    let sql = "EXPLAIN SELECT a + 1 FROM t ORDER BY a LIMIT 1";
+    let ctx = labels_ctx().await?;
+    let with_labels = ctx.sql(sql).await?.to_string().await?;
+    ctx.sql("SET datafusion.sql_parser.column_labels = false")
+        .await?
+        .collect()
+        .await?;
+    let without_labels = ctx.sql(sql).await?.to_string().await?;
+    assert_eq!(with_labels, without_labels);
+    Ok(())
+}

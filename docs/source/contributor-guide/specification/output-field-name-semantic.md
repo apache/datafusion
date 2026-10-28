@@ -58,16 +58,13 @@ Labels follow these rules, which differ from the field name rules above:
   - `SELECT foo + bar` SHOULD result in label: `foo + bar`
 - Literals MUST NOT contain a type wrapper.
   - `SELECT 1` SHOULD result in label: `1`
-- String literals MUST be quoted as in SQL.
-  - `SELECT 'foo'` SHOULD result in label: `'foo'`
-- Operator expressions MUST be wrapped with parentheses only where operator
-  precedence needs them.
+- Operator and operand MUST be separated by spaces, and a binary operator
+  expression is not wrapped with parentheses. A label of a compound
+  expression can therefore be ambiguous.
   - `SELECT 1+2` SHOULD result in label: `1 + 2`
-  - `SELECT (a+b)*c` SHOULD result in label: `(a + b) * c`
-- Negation is wrapped with parentheses, and so is a negated operator
-  expression.
+  - `SELECT (a+b)*c` results in label: `a + b * c`
+- Negation is wrapped with parentheses.
   - `SELECT -a` SHOULD result in label: `(- a)`
-  - `SELECT -(a+b)` SHOULD result in label: `(- (a + b))`
 - Window functions use SQL `OVER (...)` syntax, without the parts that equal
   their defaults.
   - `SELECT row_number() OVER (ORDER BY a)` SHOULD result in label:
