@@ -86,8 +86,8 @@ unsafe extern "C" fn context_release_fn(ctx: &mut FFI_PhysicalOptimizerContext) 
 ///
 /// `StatisticsRegistry` is not plumbed because it contains trait object vtables
 /// that are only valid within the originating library.
-struct ForeignOptimizerContext {
-    config: ConfigOptions,
+pub(crate) struct ForeignOptimizerContext {
+    pub(crate) config: ConfigOptions,
 }
 
 impl PhysicalOptimizerContext for ForeignOptimizerContext {
