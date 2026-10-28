@@ -21,10 +21,11 @@ use super::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
     RecordOutput,
 };
+use crate::spill::gc_array;
 use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
 use arrow::array::{ArrayRef, RecordBatch, UInt32Array, UInt64Array};
-use arrow::datatypes::{FieldRef, Schema, SchemaRef};
+use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::utils::memory::RecordBatchMemoryTracker;
 use datafusion_common::{
     HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
@@ -1196,9 +1197,61 @@ struct RecordBatchStore {
     batches_size: usize,
     /// row count of all the batches
     total_rows: usize,
+    /// For each `Utf8View` / `BinaryView` column, what its stored arrays
+    /// charge and reference, by column index
+    view_columns: Vec<(usize, ViewColumnBytes)>,
+    /// What each entry's arrays in `view_columns` reference, by batch id, so
+    /// releasing an entry need not scan its views again
+    entry_referenced: HashMap<u32, Vec<usize>>,
+}
+
+/// One column's share of a [`RecordBatchStore`], for deciding whether to
+/// copy out the bytes of its view arrays.
+#[derive(Debug, Default)]
+struct ViewColumnBytes {
+    /// Counts the column's buffers, each shared one once
+    charge: RecordBatchMemoryTracker,
+    /// Bytes the column's views reference, summed over every view
+    referenced: usize,
+}
+
+impl ViewColumnBytes {
+    /// Whether copying out the bytes the column's views reference saves
+    /// memory: whether the column, charged `added` more bytes for an array
+    /// referencing `referenced`, would be charged over
+    /// [`STORE_COMPACTION_RATIO`]× what it references. Both sides count the
+    /// views themselves, which a copy keeps, so the comparison is between
+    /// what the column holds and what it would hold copied.
+    ///
+    /// A buffer the column's views share, as Parquet shares a dictionary page
+    /// across batches, is charged once but referenced by every view, so a
+    /// column sharing one is left as it is. Its first entries can still be
+    /// copied before the sharing shows: copying stops once the copies, which
+    /// the column fully references, outweigh the shared buffer, so a run
+    /// costs at most about that buffer's size.
+    fn copy_saves_memory(&self, added: usize, referenced: usize) -> bool {
+        (self.referenced + referenced) * STORE_COMPACTION_RATIO
+            < self.charge.memory_usage() + added
+    }
 }
 
 impl RecordBatchStore {
+    /// A store for batches of `schema` that copies out the view bytes it
+    /// would otherwise pin; see [`ViewColumnBytes`].
+    fn compacting_views(schema: &Schema) -> Self {
+        let mut store = Self::new();
+        store.view_columns = (0..schema.fields().len())
+            .filter(|&c| {
+                matches!(
+                    schema.field(c).data_type(),
+                    DataType::Utf8View | DataType::BinaryView
+                )
+            })
+            .map(|c| (c, ViewColumnBytes::default()))
+            .collect();
+        store
+    }
+
     fn new() -> Self {
         Self {
             next_id: 0,
@@ -1206,6 +1259,8 @@ impl RecordBatchStore {
             batch_memory: RecordBatchMemoryTracker::new(),
             batches_size: 0,
             total_rows: 0,
+            view_columns: Vec::new(),
+            entry_referenced: HashMap::new(),
         }
     }
 
@@ -1248,10 +1303,29 @@ impl RecordBatchStore {
     /// Insert a record batch entry into this store, tracking its
     /// memory use, if it has any uses
     pub fn insert(&mut self, entry: RecordBatchEntry) {
+        let referenced: Vec<usize> = self
+            .view_columns
+            .iter()
+            .map(|(c, _)| view_bytes_used(entry.batch.column(*c)))
+            .collect();
+        self.insert_referenced(entry, referenced);
+    }
+
+    /// [`Self::insert`], given what [`view_bytes_used`] returns for each of
+    /// `view_columns`.
+    fn insert_referenced(&mut self, entry: RecordBatchEntry, referenced: Vec<usize>) {
         // uses of 0 means that none of the rows in the batch were stored in the topk
         if entry.uses > 0 {
             self.batches_size += self.batch_memory.count_batch(&entry.batch);
             self.total_rows += entry.batch.num_rows();
+            for ((c, column), referenced) in self.view_columns.iter_mut().zip(&referenced)
+            {
+                column.charge.count_array(entry.batch.column(*c).as_ref());
+                column.referenced += referenced;
+            }
+            if !self.view_columns.is_empty() {
+                self.entry_referenced.insert(entry.id, referenced);
+            }
             self.batches.insert(entry.id, entry);
         }
     }
@@ -1275,13 +1349,38 @@ impl RecordBatchStore {
             return Ok(());
         }
         let gather_idx = UInt32Array::from_iter_values(rows.iter().copied());
-        let mut entry = self.register(take_record_batch(batch, &gather_idx)?);
+        let mut gathered = take_record_batch(batch, &gather_idx)?;
+        // `take` shares every data buffer of a view array, so a few rows can
+        // pin a whole input batch's bytes: copy theirs out of each column
+        // where that saves memory. See `ViewColumnBytes::copy_saves_memory`.
+        let mut copied = None;
+        // A copy keeps every view and the bytes it references.
+        let mut referenced = Vec::with_capacity(self.view_columns.len());
+        for (c, column) in &mut self.view_columns {
+            let array = &gathered.columns()[*c];
+            referenced.push(view_bytes_used(array));
+            // What holding it adds: a buffer the column holds already, such as
+            // a shared dictionary page, adds nothing.
+            let added = column.charge.count_array(array.as_ref());
+            column.charge.uncount_array(array.as_ref());
+            if column.copy_saves_memory(added, referenced[referenced.len() - 1]) {
+                let (compacted, mutated) = gc_array(array)?;
+                if mutated {
+                    copied.get_or_insert_with(|| gathered.columns().to_vec())[*c] =
+                        compacted;
+                }
+            }
+        }
+        if let Some(columns) = copied {
+            gathered = RecordBatch::try_new(gathered.schema(), columns)?;
+        }
+        let mut entry = self.register(gathered);
         debug_assert_eq!(
             entry.id, id,
             "the id handed to the slots must be the id the gather got"
         );
         entry.uses = uses;
-        self.insert(entry);
+        self.insert_referenced(entry, referenced);
         Ok(())
     }
 
@@ -1291,6 +1390,10 @@ impl RecordBatchStore {
         self.batch_memory = RecordBatchMemoryTracker::new();
         self.batches_size = 0;
         self.total_rows = 0;
+        for (_, column) in &mut self.view_columns {
+            *column = ViewColumnBytes::default();
+        }
+        self.entry_referenced.clear();
     }
 
     fn get(&self, id: u32) -> Option<&RecordBatchEntry> {
@@ -1347,6 +1450,19 @@ impl RecordBatchStore {
                 .total_rows
                 .checked_sub(old_entry.batch.num_rows())
                 .unwrap();
+            let referenced = if self.view_columns.is_empty() {
+                vec![]
+            } else {
+                self.entry_referenced
+                    .remove(&id)
+                    .expect("an entry with view columns has its referenced bytes")
+            };
+            for ((c, column), referenced) in self.view_columns.iter_mut().zip(referenced)
+            {
+                let array = old_entry.batch.column(*c);
+                column.charge.uncount_array(array.as_ref());
+                column.referenced = column.referenced.checked_sub(referenced).unwrap();
+            }
         }
     }
 
@@ -1386,10 +1502,10 @@ impl RecordBatchStore {
     /// `insert_batch` returns — so a pool sized at the steady-state bound can be
     /// exceeded transiently without erroring.
     ///
-    /// All-or-nothing: plan the move and interleave, which is the only fallible
-    /// step, before rewriting the slots and the store. A failing interleave
-    /// leaves the operator as it was rather than holding slots pointing at ids
-    /// the store never got.
+    /// All-or-nothing: plan the move, interleave and copy out view bytes, the
+    /// only fallible steps, before rewriting the slots and the store. A
+    /// failure there leaves the operator as it was rather than holding slots
+    /// pointing at ids the store never got.
     fn compact<P: StoreSlots>(
         &mut self,
         partitions: &mut HashMap<Vec<u8>, P>,
@@ -1443,8 +1559,29 @@ impl RecordBatchStore {
                 Vec::with_capacity(coords.len().div_ceil(batch_size));
             let mut remap = vec![usize::MAX; old.len()];
             for chunk in coords.chunks(batch_size) {
-                chunks
-                    .push((interleave_referenced(&old, chunk, &mut remap)?, chunk.len()));
+                let batch = interleave_referenced(&old, chunk, &mut remap)?;
+                chunks.push((batch, chunk.len()));
+            }
+            // The interleave shares the old entries' view buffers, dead rows'
+            // bytes included: copy the live rows' bytes out of each column the
+            // store charges for over twice what they reference, views
+            // included, as `insert_rows` does. See
+            // `ViewColumnBytes::copy_saves_memory`.
+            for (c, column) in &self.view_columns {
+                let live: usize = chunks
+                    .iter()
+                    .map(|(batch, _)| view_bytes_used(batch.column(*c)))
+                    .sum();
+                if live * STORE_COMPACTION_RATIO < column.charge.memory_usage() {
+                    for (batch, _) in &mut chunks {
+                        let (compacted, mutated) = gc_array(batch.column(*c))?;
+                        if mutated {
+                            let mut columns = batch.columns().to_vec();
+                            columns[*c] = compacted;
+                            *batch = RecordBatch::try_new(batch.schema(), columns)?;
+                        }
+                    }
+                }
             }
             chunks
         };
@@ -1481,6 +1618,17 @@ impl RecordBatchStore {
         }
         Ok(())
     }
+}
+
+/// Bytes a `Utf8View` / `BinaryView` array references: its views, and the
+/// data bytes those point at.
+fn view_bytes_used(array: &ArrayRef) -> usize {
+    let data = match array.data_type() {
+        DataType::Utf8View => array.as_string_view().total_buffer_bytes_used(),
+        DataType::BinaryView => array.as_binary_view().total_buffer_bytes_used(),
+        _ => 0,
+    };
+    array.len() * size_of::<u128>() + data
 }
 
 /// `interleave_record_batch` over only the `batches` that `indices`
@@ -1881,7 +2029,7 @@ impl<S: StoreSlots> PartitionedTopKCore<S> {
             partition_converter,
             partition_scratch_rows,
             partitions: HashMap::new(),
-            store: RecordBatchStore::new(),
+            store: RecordBatchStore::compacting_views(schema),
             admitted_rows: Vec::new(),
             live_slots: 0,
             heaps_bytes: 0,
@@ -3210,7 +3358,7 @@ mod tests {
     use crate::spill::get_record_batch_memory_size;
     use arrow::array::{
         AsArray, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray,
-        StringDictionaryBuilder,
+        StringDictionaryBuilder, StringViewArray,
     };
     use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, Schema, UInt64Type};
     use arrow_schema::SortOptions;
@@ -5354,6 +5502,371 @@ mod tests {
         Ok(())
     }
 
+    /// Bytes of each [`payload`] string: long enough that a `Utf8View`
+    /// stores it in a data buffer rather than inline in the view.
+    const PAYLOAD_LEN: usize = 100;
+
+    /// `rows` distinct [`PAYLOAD_LEN`]-byte strings, in the few data buffers
+    /// the builder allocates.
+    fn payload(rows: i32) -> StringViewArray {
+        StringViewArray::from_iter_values(
+            (0..rows).map(|v| format!("{v:0>PAYLOAD_LEN$}")),
+        )
+    }
+
+    /// A new array holding clones of `shared`'s data buffers, as the Parquet
+    /// reader builds each batch of a dictionary-encoded page.
+    fn sharing(shared: &StringViewArray) -> Result<StringViewArray> {
+        Ok(StringViewArray::try_new(
+            shared.views().clone(),
+            shared.data_buffers().to_vec(),
+            None,
+        )?)
+    }
+
+    /// A state built by `ctor` over `(pk Int32, val Int32, <payloads>
+    /// Utf8View...)`, partitioned by `pk` and ordered by `val`.
+    fn build_payload_state<T>(
+        ctor: StateCtor<T>,
+        k: usize,
+        payloads: &[&str],
+    ) -> Result<(Arc<Schema>, T)> {
+        let mut fields = vec![
+            Field::new("pk", DataType::Int32, false),
+            Field::new("val", DataType::Int32, false),
+        ];
+        fields.extend(
+            payloads
+                .iter()
+                .map(|n| Field::new(*n, DataType::Utf8View, false)),
+        );
+        let schema = Arc::new(Schema::new(fields));
+        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
+        let pk_sort_expr = PhysicalSortExpr {
+            expr: Arc::clone(&pk_expr),
+            options: SortOptions::default(),
+        };
+        let val_sort_expr = PhysicalSortExpr {
+            expr: col("val", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+        let state = ctor(
+            0,
+            &schema,
+            vec![pk_expr],
+            build_sort_fields(&[pk_sort_expr], &schema)?,
+            LexOrdering::from([val_sort_expr]),
+            k,
+            8, // batch_size
+            &Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+            None,
+        )?;
+        Ok((schema, state))
+    }
+
+    fn payload_batch(
+        schema: &Arc<Schema>,
+        pks: impl IntoIterator<Item = i32>,
+        vals: impl IntoIterator<Item = i32>,
+        payloads: Vec<StringViewArray>,
+    ) -> Result<RecordBatch> {
+        let mut columns: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from_iter_values(pks)),
+            Arc::new(Int32Array::from_iter_values(vals)),
+        ];
+        columns.extend(payloads.into_iter().map(|p| Arc::new(p) as ArrayRef));
+        Ok(RecordBatch::try_new(Arc::clone(schema), columns)?)
+    }
+
+    /// The bytes a store holding `rows` retained rows of one payload may
+    /// charge: their payloads, views and keys, with slack for rounding.
+    fn retained_bytes_bound(rows: usize) -> usize {
+        4 * rows * (PAYLOAD_LEN + size_of::<u128>() + 2 * size_of::<i32>())
+    }
+
+    /// The per-column view accounting must count what the store counts.
+    fn assert_view_accounting(store: &RecordBatchStore, reserved: usize, size: usize) {
+        let columns: usize = store
+            .view_columns
+            .iter()
+            .map(|(_, column)| column.charge.memory_usage())
+            .sum();
+        assert!(
+            columns <= store.batches_size,
+            "{columns} > {}",
+            store.batches_size
+        );
+        assert_eq!(reserved, size);
+    }
+
+    /// Feeds a K = 1 state 8 batches of 1024 payloads, each bringing 8 new
+    /// partitions that admit their first row and reject the rest.
+    fn insert_new_partition_batches<T>(
+        ctor: StateCtor<T>,
+        insert: fn(&mut T, &RecordBatch) -> Result<()>,
+    ) -> Result<T> {
+        let (schema, mut state) = build_payload_state(ctor, 1, &["payload"])?;
+        for b in 0..8 {
+            let batch = payload_batch(
+                &schema,
+                (0..1024).map(|i| b * 8 + i % 8),
+                0..1024,
+                vec![payload(1024)],
+            )?;
+            insert(&mut state, &batch)?;
+        }
+        Ok(state)
+    }
+
+    fn assert_retains_new_partition_payloads(
+        store: &RecordBatchStore,
+        reserved: usize,
+        size: usize,
+    ) {
+        assert_eq!(store.total_rows, 64, "nothing to compact");
+        let bound = retained_bytes_bound(64);
+        assert!(
+            store.batches_size <= bound,
+            "{} bytes charged to retain 64 rows, above {bound}",
+            store.batches_size
+        );
+        assert_view_accounting(store, reserved, size);
+    }
+
+    /// Retaining a few rows of a `Utf8View` batch must not pin the batch's
+    /// whole data buffer (#26381), for `ROW_NUMBER` and `RANK` alike.
+    ///
+    /// The gather shares every data buffer of the input batch, so each entry
+    /// would be charged for the 1024 payloads of its batch to retain 8. The
+    /// store never compacts this shape: each entry holds exactly its live rows.
+    #[tokio::test]
+    async fn test_partitioned_topk_store_does_not_pin_view_buffers() -> Result<()> {
+        let state = insert_new_partition_batches(
+            PartitionedTopK::try_new,
+            PartitionedTopK::insert_batch,
+        )?;
+        assert_retains_new_partition_payloads(
+            &state.core.store,
+            state.core.reservation.size(),
+            state.size(),
+        );
+
+        let state = insert_new_partition_batches(
+            PartitionedTopKRank::try_new,
+            PartitionedTopKRank::insert_batch,
+        )?;
+        assert_retains_new_partition_payloads(
+            &state.core.store,
+            state.core.reservation.size(),
+            state.size(),
+        );
+        Ok(())
+    }
+
+    /// Compaction must not pin the `Utf8View` data buffers of the entries it
+    /// rewrites (#26381).
+    ///
+    /// Descending values admit every row of the batch, so the gathered entry
+    /// legitimately holds all 1024 payloads. Compaction then rewrites it down to
+    /// the one live row, through an interleave that shares the entry's buffers.
+    #[tokio::test]
+    async fn test_partitioned_topk_store_compaction_does_not_pin_view_buffers()
+    -> Result<()> {
+        let (schema, mut state) =
+            build_payload_state(PartitionedTopK::try_new, 1, &["payload"])?;
+        state.insert_batch(&payload_batch(
+            &schema,
+            vec![0; 1024],
+            (0..1024).rev(),
+            vec![payload(1024)],
+        )?)?;
+
+        assert_eq!(state.core.store.total_rows, 1, "compacted to the live row");
+        let bound = retained_bytes_bound(1);
+        assert!(
+            state.core.store.batches_size <= bound,
+            "{} bytes charged to retain 1 row, above {bound}",
+            state.core.store.batches_size
+        );
+        assert_view_accounting(
+            &state.core.store,
+            state.core.reservation.size(),
+            state.size(),
+        );
+        Ok(())
+    }
+
+    /// Compaction keeps a buffer its live rows reference most of, rather than
+    /// a copy of it: the input may share it with other batches.
+    #[tokio::test]
+    async fn test_partitioned_topk_store_compaction_keeps_mostly_used_view_buffers()
+    -> Result<()> {
+        // 1024 descending rows over 300 distinct payloads, as a dictionary
+        // page's views repeat its values: every row is admitted, and the 500
+        // that survive reference the payload buffers over and over.
+        let (schema, mut state) =
+            build_payload_state(PartitionedTopK::try_new, 1, &["payload"])?;
+        let shared = payload(300);
+        let indices = UInt32Array::from_iter_values((0..1024).map(|i| i % 300));
+        let repeated = arrow::compute::take(&shared, &indices, None)?;
+        state.insert_batch(&payload_batch(
+            &schema,
+            (0..1024).map(|i| i % 500),
+            (0..1024).rev(),
+            vec![repeated.as_string_view().clone()],
+        )?)?;
+
+        assert_eq!(
+            state.core.store.total_rows, 500,
+            "compacted to the live rows"
+        );
+        for entry in state.core.store.batches.values() {
+            let kept = entry.batch.column(2).as_string_view().data_buffers();
+            assert!(
+                kept.iter()
+                    .all(|k| shared.data_buffers().iter().any(|s| s.ptr_eq(k))),
+                "compaction copied buffers its live rows mostly use"
+            );
+        }
+        assert_view_accounting(
+            &state.core.store,
+            state.core.reservation.size(),
+            state.size(),
+        );
+        Ok(())
+    }
+
+    /// A view column the input shares across batches, as Parquet shares a
+    /// dictionary page, keeps the shared buffer once its rows outweigh it,
+    /// while a column of unique payloads in the same batches is still copied
+    /// (#26381).
+    ///
+    /// Each of the 64 batches keeps 45 of its 1024 rows. Column `shared`
+    /// references the same buffers (~112 KB allocated) each time: early
+    /// entries are copied before the sharing shows, later ones keep the
+    /// buffers. Column `unique` has new buffers per batch, which each entry
+    /// would pin for ~5 KB of them: the column is charged at most twice what
+    /// it references, plus one batch's buffers.
+    #[tokio::test]
+    async fn test_partitioned_topk_store_keeps_shared_view_buffers_per_column()
+    -> Result<()> {
+        const BATCHES: i32 = 64;
+        const KEPT: i32 = 45;
+
+        let (schema, mut state) =
+            build_payload_state(PartitionedTopK::try_new, 1, &["shared", "unique"])?;
+        let shared = payload(1024);
+        let mut inputs = vec![];
+        for b in 0..BATCHES {
+            let batch = payload_batch(
+                &schema,
+                (0..1024).map(|i| b * KEPT + i % KEPT),
+                0..1024,
+                vec![sharing(&shared)?, payload(1024)],
+            )?;
+            state.insert_batch(&batch)?;
+            inputs.push(batch);
+        }
+
+        let store = &state.core.store;
+        assert_eq!(
+            store.total_rows,
+            (BATCHES * KEPT) as usize,
+            "nothing to compact"
+        );
+        let mut ids: Vec<_> = store.batches.keys().copied().collect();
+        ids.sort_unstable();
+        let holds_input: Vec<(bool, bool)> = ids
+            .iter()
+            .zip(&inputs)
+            .map(|(id, input)| {
+                let holds = |c: usize| {
+                    let kept = store.batches[id].batch.column(c).as_string_view();
+                    let input = input.column(c).as_string_view();
+                    kept.data_buffers()
+                        .iter()
+                        .any(|k| input.data_buffers().iter().any(|i| i.ptr_eq(k)))
+                };
+                (holds(2), holds(3))
+            })
+            .collect();
+        // Copied until the copies, which the column fully references, outweigh
+        // half of what holding the shared buffers as well would charge.
+        let first_kept = holds_input
+            .iter()
+            .position(|&(shared, _)| shared)
+            .expect("the shared buffer is kept once its rows outweigh it");
+        assert!(first_kept > 0, "the first entry cannot see the sharing yet");
+        assert!(
+            holds_input[first_kept..].iter().all(|&(shared, _)| shared),
+            "{holds_input:?}"
+        );
+        assert!(
+            !holds_input[0].1,
+            "the first entry pinned its unique payloads"
+        );
+        assert!(
+            holds_input.contains(&(true, false)),
+            "no entry kept the shared buffers while copying its unique payloads: \
+             {holds_input:?}"
+        );
+        let (_, unique) = &store.view_columns[1];
+        let one_buffer: usize = inputs[0]
+            .column(3)
+            .as_string_view()
+            .data_buffers()
+            .iter()
+            .map(|b| b.capacity())
+            .sum();
+        assert!(
+            unique.charge.memory_usage()
+                <= unique.referenced * STORE_COMPACTION_RATIO + one_buffer,
+            "{} charged for {} referenced: {holds_input:?}",
+            unique.charge.memory_usage(),
+            unique.referenced
+        );
+        assert_view_accounting(store, state.core.reservation.size(), state.size());
+        Ok(())
+    }
+
+    /// Views count on both sides of the copy decision: a copy keeps them, so
+    /// a shared buffer of strings barely longer than a view's inline 12 bytes
+    /// must still win out over copying once enough rows reference it.
+    #[tokio::test]
+    async fn test_partitioned_topk_store_keeps_shared_short_view_buffers() -> Result<()> {
+        let (schema, mut state) =
+            build_payload_state(PartitionedTopK::try_new, 1, &["shared"])?;
+        // 1024 distinct 16-byte strings, as one shared dictionary page.
+        let shared =
+            StringViewArray::from_iter_values((0..1024).map(|v| format!("{v:0>16}")));
+        let mut kept = vec![];
+        for b in 0..64 {
+            let batch = payload_batch(
+                &schema,
+                (0..1024).map(|i| b * 45 + i % 45),
+                0..1024,
+                vec![sharing(&shared)?],
+            )?;
+            state.insert_batch(&batch)?;
+            let id = *state.core.store.batches.keys().max().expect("an entry");
+            let array = state.core.store.batches[&id]
+                .batch
+                .column(2)
+                .as_string_view()
+                .clone();
+            kept.push(
+                array
+                    .data_buffers()
+                    .iter()
+                    .any(|k| shared.data_buffers().iter().any(|s| s.ptr_eq(k))),
+            );
+        }
+        assert!(kept.last().copied().unwrap_or(false), "{kept:?}");
+        assert_store_invariants(&state, "short shared strings");
+        Ok(())
+    }
+
     /// Every invariant the shared store's bookkeeping rests on, checked against
     /// a full recount of the heaps.
     ///
@@ -5450,6 +5963,19 @@ mod tests {
             bytes, store.batches_size,
             "{label}: store.batches_size drifted"
         );
+        for (c, column) in &store.view_columns {
+            let mut charge = RecordBatchMemoryTracker::new();
+            let mut referenced = 0;
+            for entry in store.batches.values() {
+                charge.count_array(entry.batch.column(*c).as_ref());
+                referenced += view_bytes_used(entry.batch.column(*c));
+            }
+            assert_eq!(
+                (charge.memory_usage(), referenced),
+                (column.charge.memory_usage(), column.referenced),
+                "{label}: column {c}'s view accounting drifted"
+            );
+        }
 
         // 4. The bound compaction exists to enforce. Without it, what stays
         //    pinned tracks the *input* rather than `partitions × K`.
@@ -5544,10 +6070,18 @@ mod tests {
             },
         ];
 
-        for case in cases {
+        // With a `Utf8View` payload, the store's per-column view accounting is
+        // recounted after every batch too.
+        for (case, with_payload) in
+            cases.iter().flat_map(|case| [(case, false), (case, true)])
+        {
             for seed in 0..4u64 {
                 let mut rng = StdRng::seed_from_u64(seed);
-                let (schema, mut state) = build_partitioned_topk(case.k)?;
+                let (schema, mut state) = if with_payload {
+                    build_payload_state(PartitionedTopK::try_new, case.k, &["payload"])?
+                } else {
+                    build_partitioned_topk(case.k)?
+                };
                 let mut all_rows: Vec<(i32, i32)> = Vec::new();
 
                 for b in 0..case.batches {
@@ -5566,10 +6100,21 @@ mod tests {
                     }
                     all_rows.extend(pks.iter().copied().zip(vals.iter().copied()));
 
-                    state.insert_batch(&pk_val_batch(&schema, pks, vals)?)?;
+                    let batch = if with_payload {
+                        let payloads = StringViewArray::from_iter_values(
+                            vals.iter().map(|v| format!("{v:0>256}")),
+                        );
+                        payload_batch(&schema, pks, vals, vec![payloads])?
+                    } else {
+                        pk_val_batch(&schema, pks, vals)?
+                    };
+                    state.insert_batch(&batch)?;
                     assert_store_invariants(
                         &state,
-                        &format!("{} seed {seed} batch {b}", case.name),
+                        &format!(
+                            "{} payload={with_payload} seed {seed} batch {b}",
+                            case.name
+                        ),
                     );
                 }
 
@@ -5593,7 +6138,7 @@ mod tests {
                 assert_eq!(
                     pk_val_rows(state.emit()?).await?,
                     expected,
-                    "{} seed {seed}",
+                    "{} payload={with_payload} seed {seed}",
                     case.name
                 );
             }
