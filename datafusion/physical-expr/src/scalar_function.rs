@@ -389,7 +389,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 mod tests {
     use super::*;
     use crate::expressions::Column;
-    use arrow::datatypes::{Field, TimeUnit};
+    use arrow::datatypes::{Field, IntervalUnit, TimeUnit};
     use datafusion_expr::sort_properties::SortProperties;
     use datafusion_expr::{ScalarUDFImpl, Signature};
     use datafusion_physical_expr_common::physical_expr::is_volatile;
@@ -421,65 +421,21 @@ mod tests {
         }
     }
 
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    struct LiteralLocalityUDF {
-        signature: Signature,
-        admitted_literal: ScalarValue,
-    }
-
-    impl LiteralLocalityUDF {
-        fn new(admitted_literal: ScalarValue) -> Self {
-            Self {
-                signature: Signature::exact(
-                    vec![DataType::Int32, DataType::Int32],
-                    Volatility::Immutable,
-                ),
-                admitted_literal,
-            }
-        }
-    }
-
-    impl ScalarUDFImpl for LiteralLocalityUDF {
-        fn name(&self) -> &str {
-            "literal_locality"
-        }
-
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Int32)
-        }
-
-        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            unreachable!("locality admission must not evaluate the function")
-        }
-
-        fn supports_range_key_locality_analysis_with_args(
-            &self,
-            argument_types: &[DataType],
-            literal_arguments: &[Option<&ScalarValue>],
-        ) -> bool {
-            argument_types == [DataType::Int32, DataType::Int32]
-                && matches!(
-                    literal_arguments,
-                    [Some(value), None] if **value == self.admitted_literal
-                )
-        }
-    }
-
-    fn supports_locality_with_parameter(
-        function: ScalarUDF,
-        parameter: Arc<dyn PhysicalExpr>,
+    fn date_bin_supports_locality_with_stride(
+        function: Arc<ScalarUDF>,
+        stride: Arc<dyn PhysicalExpr>,
     ) -> Result<bool> {
         let schema = Schema::new(vec![
-            Field::new("parameter", DataType::Int32, true),
-            Field::new("source", DataType::Int32, true),
+            Field::new(
+                "stride",
+                DataType::Interval(IntervalUnit::MonthDayNano),
+                true,
+            ),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
         ]);
         let expr = ScalarFunctionExpr::try_new(
-            Arc::new(function),
-            vec![parameter, Arc::new(Column::new("source", 1))],
+            function,
+            vec![stride, Arc::new(Column::new("ts", 1))],
             &schema,
             Arc::new(ConfigOptions::default()),
         )?;
@@ -488,32 +444,39 @@ mod tests {
 
     #[test]
     fn range_key_locality_analysis_receives_literal_values() -> Result<()> {
-        let function =
-            ScalarUDF::from(LiteralLocalityUDF::new(ScalarValue::Int32(Some(1))));
-        let admitted = Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
-        let different = Arc::new(Literal::new(ScalarValue::Int32(Some(2))));
+        let function = datafusion_functions::datetime::date_bin();
+        let hour = Arc::new(Literal::new(ScalarValue::new_interval_mdn(
+            0,
+            0,
+            3_600_000_000_000,
+        )));
+        let month = Arc::new(Literal::new(ScalarValue::new_interval_mdn(1, 0, 0)));
 
-        assert!(supports_locality_with_parameter(
-            function.clone(),
-            admitted
+        assert!(date_bin_supports_locality_with_stride(
+            Arc::clone(&function),
+            hour
         )?);
-        assert!(!supports_locality_with_parameter(function, different)?);
+        assert!(!date_bin_supports_locality_with_stride(function, month)?);
         Ok(())
     }
 
     #[test]
     fn range_key_locality_analysis_preserves_aliases() -> Result<()> {
+        let date_bin = datafusion_functions::datetime::date_bin();
         let function =
-            ScalarUDF::from(LiteralLocalityUDF::new(ScalarValue::Int32(Some(1))))
-                .with_aliases(["literal_locality_alias"]);
-        let admitted = Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
-        let different = Arc::new(Literal::new(ScalarValue::Int32(Some(2))));
+            Arc::new(date_bin.as_ref().clone().with_aliases(["date_bin_alias"]));
+        let hour = Arc::new(Literal::new(ScalarValue::new_interval_mdn(
+            0,
+            0,
+            3_600_000_000_000,
+        )));
+        let month = Arc::new(Literal::new(ScalarValue::new_interval_mdn(1, 0, 0)));
 
-        assert!(supports_locality_with_parameter(
-            function.clone(),
-            admitted
+        assert!(date_bin_supports_locality_with_stride(
+            Arc::clone(&function),
+            hour
         )?);
-        assert!(!supports_locality_with_parameter(function, different)?);
+        assert!(!date_bin_supports_locality_with_stride(function, month)?);
         Ok(())
     }
 
@@ -521,14 +484,24 @@ mod tests {
     fn range_key_locality_analysis_rejects_non_literal_parameters() -> Result<()> {
         use crate::expressions::CastExpr;
 
-        let function =
-            ScalarUDF::from(LiteralLocalityUDF::new(ScalarValue::Int32(Some(1))));
-        let column = Arc::new(Column::new("parameter", 0));
-        let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
-        let cast = Arc::new(CastExpr::new(literal, DataType::Int32, None));
+        let function = datafusion_functions::datetime::date_bin();
+        let column = Arc::new(Column::new("stride", 0));
+        let hour = Arc::new(Literal::new(ScalarValue::new_interval_mdn(
+            0,
+            0,
+            3_600_000_000_000,
+        )));
+        let cast = Arc::new(CastExpr::new(
+            hour,
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            None,
+        ));
 
-        assert!(!supports_locality_with_parameter(function.clone(), column)?);
-        assert!(!supports_locality_with_parameter(function, cast)?);
+        assert!(!date_bin_supports_locality_with_stride(
+            Arc::clone(&function),
+            column
+        )?);
+        assert!(!date_bin_supports_locality_with_stride(function, cast)?);
         Ok(())
     }
 
