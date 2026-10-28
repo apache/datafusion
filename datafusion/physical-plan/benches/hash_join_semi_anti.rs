@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Criterion benchmarks for Hash Join with RightSemi/RightAnti joins with Int32 keys.
 //!
@@ -378,6 +365,65 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
                 do_hash_join(left, right, JoinType::RightAnti, &rt)
             })
         });
+    }
+
+    // =========================================================================
+    // Build-side output benchmarks (LeftSemi / LeftAnti / Left)
+    // =========================================================================
+    //
+    // These join types emit build-side rows only after the probe side is
+    // exhausted, so they exercise the final "unmatched build rows" emission.
+    // Build side: 1M rows, Probe side: 100K rows, so most build rows stay
+    // unmatched and the final emission dominates.
+    let large_build_rows = 1_000_000;
+    let small_probe_rows = 100_000;
+
+    // LeftSemi - 10% of build rows matched -> 100K output rows
+    {
+        let left_batches = build_batches(large_build_rows, large_build_rows, 0, &s);
+        let right_batches = build_batches(small_probe_rows, small_probe_rows, 0, &s);
+        group.bench_function(
+            BenchmarkId::new("left_semi_build1m_h10", small_probe_rows),
+            |b| {
+                b.iter(|| {
+                    let left = make_exec(&left_batches, &s);
+                    let right = make_exec(&right_batches, &s);
+                    do_hash_join(left, right, JoinType::LeftSemi, &rt)
+                })
+            },
+        );
+    }
+
+    // LeftAnti - 10% of build rows matched -> 900K output rows
+    {
+        let left_batches = build_batches(large_build_rows, large_build_rows, 0, &s);
+        let right_batches = build_batches(small_probe_rows, small_probe_rows, 0, &s);
+        group.bench_function(
+            BenchmarkId::new("left_anti_build1m_h10", small_probe_rows),
+            |b| {
+                b.iter(|| {
+                    let left = make_exec(&left_batches, &s);
+                    let right = make_exec(&right_batches, &s);
+                    do_hash_join(left, right, JoinType::LeftAnti, &rt)
+                })
+            },
+        );
+    }
+
+    // Left - 10% of build rows matched -> 100K matched + 900K unmatched output rows
+    {
+        let left_batches = build_batches(large_build_rows, large_build_rows, 0, &s);
+        let right_batches = build_batches(small_probe_rows, small_probe_rows, 0, &s);
+        group.bench_function(
+            BenchmarkId::new("left_build1m_h10", small_probe_rows),
+            |b| {
+                b.iter(|| {
+                    let left = make_exec(&left_batches, &s);
+                    let right = make_exec(&right_batches, &s);
+                    do_hash_join(left, right, JoinType::Left, &rt)
+                })
+            },
+        );
     }
 
     group.finish();

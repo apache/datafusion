@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 pub mod ascii;
 pub mod base64;
@@ -21,6 +8,7 @@ pub mod char;
 pub mod concat;
 pub mod concat_ws;
 pub mod elt;
+pub mod encode;
 pub mod format_string;
 pub mod ilike;
 pub mod is_valid_utf8;
@@ -46,6 +34,7 @@ make_udf_function!(concat_ws::SparkConcatWs, concat_ws);
 make_udf_function!(ilike::SparkILike, ilike);
 make_udf_function!(length::SparkLengthFunc, length);
 make_udf_function!(elt::SparkElt, elt);
+make_udf_function!(encode::SparkEncode, encode);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 make_udf_function!(format_string::FormatStringFunc, format_string);
@@ -91,6 +80,11 @@ pub mod expr_fn {
         elt,
         "Returns the n-th input (1-indexed), e.g. returns 2nd input when n is 2. The function returns NULL if the index is 0 or exceeds the length of the array.",
         select_col arg1 arg2 argn
+    ));
+    export_functions!((
+        encode,
+        "Encodes a string or binary value into binary using the specified character encoding.",
+        string_or_binary charset
     ));
     export_functions!((
         ilike,
@@ -164,6 +158,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         concat(),
         concat_ws(),
         elt(),
+        encode(),
         ilike(),
         length(),
         like(),

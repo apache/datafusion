@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Execution plan for reading Arrow IPC files
 //!
@@ -179,7 +166,12 @@ impl FileOpener for ArrowFileOpener {
                     })?;
                     // build decoder according to footer & projection
                     let schema =
-                        arrow_ipc::convert::fb_to_schema(footer.schema().unwrap());
+                        arrow_ipc::convert::try_fb_to_schema(footer.schema().unwrap())
+                            .map_err(|err| {
+                                exec_datafusion_err!(
+                                    "Unable to convert IPC schema: {err:?}"
+                                )
+                            })?;
                     let mut decoder = FileDecoder::new(schema.into(), footer.version());
                     if let Some(projection) = projection {
                         decoder = decoder.with_projection(projection);
@@ -414,7 +406,20 @@ impl FileSource for ArrowSource {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
-        let format = match self.format {
+        // Exhaustive destructure: adding a field to `ArrowSource` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            format,
+            // Runtime metrics, not part of the plan.
+            metrics: _,
+            // Serialized in `base` and reapplied on decode.
+            projection: _,
+            // Serialized in `base` and used to rebuild the source on decode.
+            table_schema: _,
+        } = self;
+
+        let format = match format {
             ArrowFormat::File => protobuf::ArrowIpcFormat::File,
             ArrowFormat::Stream => protobuf::ArrowIpcFormat::Stream,
         };
@@ -452,16 +457,18 @@ impl ArrowSource {
             );
         };
 
-        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+        let protobuf::ArrowScanExecNode { base_conf, format } = scan;
+
+        let base_conf = base_conf.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "ArrowScanExecNode is missing required field 'base_conf'"
             )
         })?;
 
-        let format = protobuf::ArrowIpcFormat::try_from(scan.format).map_err(|_| {
+        let format = protobuf::ArrowIpcFormat::try_from(*format).map_err(|_| {
             datafusion_common::internal_datafusion_err!(
                 "Unknown ArrowIpcFormat: {}",
-                scan.format
+                format
             )
         })?;
 

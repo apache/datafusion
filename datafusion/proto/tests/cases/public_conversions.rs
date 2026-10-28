@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Compile-time guard for the `From` / `TryFrom` conversions between DataFusion
 //! types and `datafusion_proto::protobuf` messages that downstream crates call.
@@ -35,7 +22,8 @@ use datafusion_common::config::{
 };
 use datafusion_common::display::StringifiedPlan;
 use datafusion_common::{
-    JoinConstraint, JoinType, NullEquality, TableReference, UnnestOptions,
+    Constraint, Constraints, DataFusionError, JoinConstraint, JoinType, NullEquality,
+    TableReference, UnnestOptions,
 };
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
@@ -48,6 +36,7 @@ use datafusion_expr::expr::NullTreatment;
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_proto::protobuf;
+use datafusion_proto_common::protobuf_common;
 
 /// Asserts `T: From<F>` by naming the conversion.
 fn assert_from<F, T: From<F>>() {
@@ -57,6 +46,12 @@ fn assert_from<F, T: From<F>>() {
 /// Asserts `T: TryFrom<F>` by naming the conversion.
 fn assert_try_from<F, T: TryFrom<F>>() {
     let _: fn(F) -> Result<T, T::Error> = TryFrom::try_from;
+}
+
+/// Asserts `T: TryFrom<F, Error = DataFusionError>` rather than accepting the
+/// blanket `TryFrom` implementation provided for an infallible `From`.
+fn assert_datafusion_try_from<F, T: TryFrom<F, Error = DataFusionError>>() {
+    let _: fn(F) -> Result<T, DataFusionError> = TryFrom::try_from;
 }
 
 #[test]
@@ -112,16 +107,20 @@ fn common_type_conversions_are_std_traits() {
     assert_from::<JoinConstraint, protobuf::JoinConstraint>();
     assert_from::<protobuf::NullEquality, NullEquality>();
     assert_from::<NullEquality, protobuf::NullEquality>();
+    assert_datafusion_try_from::<protobuf_common::Constraint, Constraint>();
+    assert_datafusion_try_from::<&protobuf_common::Constraint, Constraint>();
+    assert_datafusion_try_from::<protobuf_common::Constraints, Constraints>();
+    assert_datafusion_try_from::<&protobuf_common::Constraints, Constraints>();
 }
 
 #[test]
 fn file_format_option_conversions_are_std_traits() {
-    assert_from::<&protobuf::CsvOptions, CsvOptions>();
-    assert_from::<&protobuf::JsonOptions, JsonOptions>();
-    assert_try_from::<&protobuf::ParquetOptions, ParquetOptions>();
+    assert_datafusion_try_from::<&protobuf::CsvOptions, CsvOptions>();
+    assert_datafusion_try_from::<&protobuf::JsonOptions, JsonOptions>();
+    assert_datafusion_try_from::<&protobuf::ParquetOptions, ParquetOptions>();
     assert_from::<protobuf::ParquetColumnOptions, ParquetColumnOptions>();
-    assert_from::<protobuf::ParquetCdcOptions, ParquetCdcOptions>();
-    assert_try_from::<&protobuf::TableParquetOptions, TableParquetOptions>();
+    assert_datafusion_try_from::<protobuf::ParquetCdcOptions, ParquetCdcOptions>();
+    assert_datafusion_try_from::<&protobuf::TableParquetOptions, TableParquetOptions>();
     assert_from::<&CsvFormatFactory, protobuf::CsvOptions>();
     assert_from::<&JsonFormatFactory, protobuf::JsonOptions>();
     assert_from::<&ParquetFormatFactory, protobuf::TableParquetOptions>();

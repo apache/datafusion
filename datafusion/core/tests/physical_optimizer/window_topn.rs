@@ -1,44 +1,45 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests for the WindowTopN physical optimizer rule.
 
+use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::array::{ArrayRef, RecordBatch};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::Operator;
-use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use datafusion_expr::{
+    PartitionEvaluator, Signature, Volatility, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowUDFImpl,
+};
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_functions_window::row_number::row_number_udwf;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, col, lit};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::window_topn::WindowTopN;
+use datafusion_physical_plan::collect;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::metrics::MetricValue;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::partitioned_topk::{
+    PartitionedTopKExec, WindowFnKind,
+};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_udwf_window_expr};
-use datafusion_physical_plan::{ExecutionPlan, InputOrderMode};
+use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, Partitioning};
 use insta::assert_snapshot;
 
 fn schema() -> Arc<Schema> {
@@ -218,9 +219,8 @@ fn basic_row_number_rn_lteq_3() -> Result<()> {
     let plan = build_window_topn_plan(3, Operator::LtEq)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-    BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
-        PlaceholderRowExec
+    PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[row_number]
+      PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -230,9 +230,8 @@ fn rn_lt_3_becomes_fetch_2() -> Result<()> {
     let plan = build_window_topn_plan(3, Operator::Lt)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-    BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      PartitionedTopKExec: fn=row_number, fetch=2, partition=[pk@0], order=[val@1 ASC]
-        PlaceholderRowExec
+    PartitionedTopKExec: fn=row_number, fetch=2, partition=[pk@0], order=[val@1 ASC], emit=[row_number]
+      PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -282,9 +281,8 @@ fn flipped_3_gteq_rn() -> Result<()> {
 
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-    BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
-        PlaceholderRowExec
+    PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[row_number]
+      PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -391,17 +389,211 @@ fn with_projection_between() -> Result<()> {
     let optimized = optimize(filter)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     ProjectionExec: expr=[pk@0 as pk, val@1 as val, row_number@2 as row_number]
-      BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-        PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[row_number]
+        PlaceholderRowExec
     "#);
+    Ok(())
+}
+
+/// Two `ROW_NUMBER()` expressions over the same keys: the operator can only
+/// append one column, so the window node has to stay and compute both.
+#[test]
+fn two_window_exprs_keep_the_window_node() -> Result<()> {
+    let s = schema();
+    let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+
+    let partition_by = vec![col("pk", &s)?];
+    let order_by = vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()];
+    let row_number_expr = |name: &str| -> Result<Arc<StandardWindowExpr>> {
+        Ok(Arc::new(StandardWindowExpr::new(
+            create_udwf_window_expr(
+                &row_number_udwf(),
+                &[],
+                &s,
+                name.to_string(),
+                false,
+            )?,
+            &partition_by,
+            &order_by,
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+        )))
+    };
+
+    let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
+        vec![row_number_expr("rn1")?, row_number_expr("rn2")?],
+        input,
+        InputOrderMode::Sorted,
+        true,
+    )?);
+
+    // Filter on the first of the two window columns (index 2).
+    let predicate = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("rn1", 2)),
+        Operator::LtEq,
+        lit(ScalarValue::UInt64(Some(3))),
+    ));
+    let filter: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(predicate, window)?);
+
+    let optimized = optimize(filter)?;
+    assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+    BoundedWindowAggExec: wdw=[rn1: Field { "rn1": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rn2: Field { "rn2": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
+    "#);
+    Ok(())
+}
+
+/// `ROW_NUMBER() AS rn, RANK() AS rk` over `PARTITION BY pk ORDER BY val`.
+/// Output: `[pk@0, val@1, rn@2, rk@3]`.
+fn build_rn_rk_window() -> Result<Arc<dyn ExecutionPlan>> {
+    let s = schema();
+    let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+    let partition_by = vec![col("pk", &s)?];
+    let order_by = vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()];
+    let window_expr = |udwf: Arc<datafusion_expr::WindowUDF>, name: &str| {
+        Ok::<_, datafusion_common::DataFusionError>(Arc::new(StandardWindowExpr::new(
+            create_udwf_window_expr(&udwf, &[], &s, name.to_string(), false)?,
+            &partition_by,
+            &order_by,
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+        )))
+    };
+    Ok(Arc::new(BoundedWindowAggExec::try_new(
+        vec![
+            window_expr(row_number_udwf(), "rn")?,
+            window_expr(rank_udwf(), "rk")?,
+        ],
+        input,
+        InputOrderMode::Sorted,
+        true,
+    )?))
+}
+
+/// A `ProjectionExec` passing through `input`'s columns at `indices`.
+fn project(
+    input: Arc<dyn ExecutionPlan>,
+    indices: &[usize],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = input.schema();
+    let exprs: Vec<(Arc<dyn datafusion_physical_expr::PhysicalExpr>, String)> = indices
+        .iter()
+        .map(|&i| {
+            let name = schema.field(i).name();
+            (
+                Arc::new(Column::new(name, i))
+                    as Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+                name.to_string(),
+            )
+        })
+        .collect();
+    Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+}
+
+/// `FilterExec(<column idx of input> <= 3)`, with the literal in the column's type.
+fn filter_lteq_3(
+    input: Arc<dyn ExecutionPlan>,
+    idx: usize,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = input.schema();
+    let field = schema.field(idx);
+    let predicate = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new(field.name(), idx)),
+        Operator::LtEq,
+        lit(ScalarValue::UInt64(Some(3)).cast_to(field.data_type())?),
+    ));
+    Ok(Arc::new(FilterExec::try_new(predicate, input)?))
+}
+
+/// The ranking function the rewrite chose, or `None` if it did not fire.
+fn rewritten_fn(plan: Arc<dyn ExecutionPlan>) -> Result<Option<WindowFnKind>> {
+    let optimized = optimize(plan)?;
+    Ok(find_partitioned_topk(&optimized).map(|p| {
+        p.downcast_ref::<PartitionedTopKExec>()
+            .expect("find_partitioned_topk returns a PartitionedTopKExec")
+            .fn_kind()
+    }))
+}
+
+/// Stacked projections are resolved top-down: each one maps an index into its
+/// output to one into its input. Bottom-up, `rk@0` would follow `pk@0` and then
+/// `rk@2` to `rn` in the window's output.
+#[test]
+fn stacked_projections_resolve_top_down() -> Result<()> {
+    let lower = project(build_rn_rk_window()?, &[0, 2, 3])?; // [pk, rn, rk]
+    let upper = project(lower, &[2, 0])?; // [rk, pk]
+    assert_eq!(
+        rewritten_fn(filter_lteq_3(upper, 0)?)?,
+        Some(WindowFnKind::Rank)
+    );
+    Ok(())
+}
+
+/// A `RepartitionExec` keeps its input's schema, so the index passes through it.
+#[test]
+fn repartition_between_passes_the_index_through() -> Result<()> {
+    let repartition: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        build_rn_rk_window()?,
+        Partitioning::RoundRobinBatch(4),
+    )?);
+    let projection = project(repartition, &[0, 3])?; // [pk, rk]
+    assert_eq!(
+        rewritten_fn(filter_lteq_3(projection, 1)?)?,
+        Some(WindowFnKind::Rank)
+    );
+    Ok(())
+}
+
+/// A projection that reorders the window's columns: the filter's `pk@2` maps
+/// back to `pk@0`, an input column, so the rule leaves the plan alone. Read as
+/// an index into the window's output, it would be `rn`.
+#[test]
+fn reordered_projection_input_column_no_change() -> Result<()> {
+    let projection = project(build_rn_rk_window()?, &[2, 3, 0])?; // [rn, rk, pk]
+    let plan = filter_lteq_3(projection, 2)?;
+    let before = plan_str(plan.as_ref());
+    assert_eq!(plan_str(optimize(plan)?.as_ref()), before);
+    Ok(())
+}
+
+/// A column the projection computes has no single window column behind it,
+/// so the rule leaves the plan alone. `x` sits at index 2 so that treating it
+/// as a pass-through would land on `rn` rather than be rejected as an input
+/// column.
+#[test]
+fn computed_projection_column_no_change() -> Result<()> {
+    let window = build_rn_rk_window()?;
+    let rk_plus_one: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("rk", 3)),
+            Operator::Plus,
+            lit(ScalarValue::UInt64(Some(1))),
+        ));
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![
+            (Arc::new(Column::new("pk", 0)) as _, "pk".to_string()),
+            (Arc::new(Column::new("val", 1)) as _, "val".to_string()),
+            (rk_plus_one, "x".to_string()),
+        ],
+        window,
+    )?);
+    let plan = filter_lteq_3(projection, 2)?;
+    let before = plan_str(plan.as_ref());
+    assert_eq!(plan_str(optimize(plan)?.as_ref()), before);
     Ok(())
 }
 
 // ----------------------------------------------------------------------
 // RANK rule tests
 // ----------------------------------------------------------------------
-
 /// Build: FilterExec(rk op limit) → BoundedWindowAggExec(<udwf> PBY pk OBY val)
 ///
 /// Matches the pre-`EnsureRequirements` plan shape (no `SortExec` under the window).
@@ -504,9 +696,8 @@ fn basic_rank_rk_lteq_3() -> Result<()> {
     let plan = build_ranking_topn_plan(rank_udwf, "rank", 3, Operator::LtEq)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-    BoundedWindowAggExec: wdw=[rank: Field { "rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-        PlaceholderRowExec
+    PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[rank]
+      PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -516,9 +707,8 @@ fn rank_rk_lt_4_becomes_fetch_3() -> Result<()> {
     let plan = build_ranking_topn_plan(rank_udwf, "rank", 4, Operator::Lt)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-    BoundedWindowAggExec: wdw=[rank: Field { "rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-        PlaceholderRowExec
+    PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[rank]
+      PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -528,9 +718,8 @@ fn rank_flipped_3_gteq_rk() -> Result<()> {
     let plan = build_ranking_topn_plan(rank_udwf, "rank", 3, Operator::GtEq)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-    BoundedWindowAggExec: wdw=[rank: Field { "rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-        PlaceholderRowExec
+    PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[rank]
+      PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -540,9 +729,8 @@ fn rank_flipped_4_gt_rk_becomes_fetch_3() -> Result<()> {
     let plan = build_ranking_topn_plan(rank_udwf, "rank", 4, Operator::Gt)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-    BoundedWindowAggExec: wdw=[rank: Field { "rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-        PlaceholderRowExec
+    PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[rank]
+      PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -572,9 +760,8 @@ fn basic_dense_rank_dr_lteq_3() -> Result<()> {
     let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 3, Operator::LtEq)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-        PlaceholderRowExec
+    PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[dense_rank]
+      PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -584,9 +771,8 @@ fn dense_rank_dr_lt_4_becomes_fetch_3() -> Result<()> {
     let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 4, Operator::Lt)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-        PlaceholderRowExec
+    PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[dense_rank]
+      PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -596,9 +782,8 @@ fn dense_rank_flipped_3_gteq_dr() -> Result<()> {
     let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 3, Operator::GtEq)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-        PlaceholderRowExec
+    PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[dense_rank]
+      PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -608,9 +793,8 @@ fn dense_rank_flipped_4_gt_dr_becomes_fetch_3() -> Result<()> {
     let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 4, Operator::Gt)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-        PlaceholderRowExec
+    PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[dense_rank]
+      PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -655,6 +839,494 @@ fn predicate_lt_1_no_change() -> Result<()> {
             before, after,
             "`{name} < 1` (limit 0) must not be rewritten"
         );
+    }
+    Ok(())
+}
+
+// ----------------------------------------------------------------------
+// Execution: metrics exposure
+// ----------------------------------------------------------------------
+
+/// Recursively finds the `PartitionedTopKExec` node in `plan`.
+fn find_partitioned_topk(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    if plan.is::<PartitionedTopKExec>() {
+        return Some(Arc::clone(plan));
+    }
+    plan.children().into_iter().find_map(find_partitioned_topk)
+}
+
+/// Regression test for #24470: `PartitionedTopKExec` builds an
+/// `ExecutionPlanMetricsSet` and hands it to the top-K state, but used to omit
+/// `ExecutionPlan::metrics()`, so nothing it recorded was ever observable (and
+/// `EXPLAIN ANALYZE` showed no metrics for the operator).
+///
+/// The `output_batches` assertion also covers the emit-side counting fixed for
+/// #24468: the per-partition heaps are coalesced into `batch_size` batches, so
+/// the metric must count the coalesced output, not the per-partition inputs.
+#[tokio::test]
+async fn partitioned_topk_exec_exposes_metrics() -> Result<()> {
+    let mut config = SessionConfig::new()
+        .with_batch_size(10)
+        .with_target_partitions(1);
+    config.options_mut().optimizer.enable_window_topn = true;
+    let ctx = SessionContext::new_with_config(config);
+
+    // 10 partition keys x 5 rows each; top-5 per key keeps all 50 rows, which
+    // at batch_size 10 must be emitted as 5 batches.
+    ctx.sql(
+        "CREATE TABLE t AS
+         SELECT v % 10 AS pk, v AS val FROM (SELECT unnest(range(0, 50)) AS v)",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let df = ctx
+        .sql(
+            "SELECT pk, val FROM (
+               SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) AS rn FROM t
+             ) WHERE rn <= 5",
+        )
+        .await?;
+    let plan = df.create_physical_plan().await?;
+    let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 50);
+
+    let topk = find_partitioned_topk(&plan).expect("plan has a PartitionedTopKExec");
+    let metrics = topk
+        .metrics()
+        .expect("PartitionedTopKExec should expose metrics");
+    assert_eq!(metrics.output_rows(), Some(50));
+    let output_batches = metrics
+        .sum(|m| matches!(m.value(), MetricValue::OutputBatches(_)))
+        .expect("output_batches metric")
+        .as_usize();
+    assert_eq!(output_batches, 5);
+
+    Ok(())
+}
+
+/// `FilterExec::fetch` is applied after the predicate, and the rewritten plan
+/// has nowhere to carry it — a `PartitionedTopKExec` bounds rows *per
+/// partition*, which is a different thing. The rule must decline rather than
+/// return more rows than were asked for.
+///
+/// Not reachable from the default rule list, which runs `LimitPushdown` after
+/// `WindowTopN`; this pins the behaviour for pipelines that reorder the two.
+#[test]
+fn filter_with_fetch_is_declined() -> Result<()> {
+    let filter = build_window_topn_plan(3, Operator::LtEq)?;
+
+    // Non-vacuity: without the fetch, this very shape is rewritten.
+    assert!(
+        find_partitioned_topk(&optimize(Arc::clone(&filter))?).is_some(),
+        "the fixture must be a shape the rule rewrites, or the assertion below \
+         would hold for the wrong reason"
+    );
+
+    let with_fetch = filter
+        .with_fetch(Some(1))
+        .expect("FilterExec accepts a fetch");
+    let optimized = optimize(Arc::clone(&with_fetch))?;
+    assert_eq!(
+        plan_str(optimized.as_ref()),
+        plan_str(with_fetch.as_ref()),
+        "a FilterExec carrying a fetch must be left alone"
+    );
+    Ok(())
+}
+
+/// The operator emits the `ROW_NUMBER()` column itself, so the plan holds no
+/// `BoundedWindowAggExec` at all — and the column's values still restart at 1
+/// in every partition, across several execution partitions and with ties in
+/// the ORDER BY column.
+#[tokio::test]
+async fn row_number_column_is_emitted_without_a_window_node() -> Result<()> {
+    let mut config = SessionConfig::new()
+        .with_batch_size(4)
+        .with_target_partitions(4);
+    config.options_mut().optimizer.enable_window_topn = true;
+    let ctx = SessionContext::new_with_config(config);
+
+    // 5 partition keys; `val` ties within each key, so rn has to break the tie
+    // by position rather than by value.
+    ctx.sql(
+        "CREATE TABLE t AS
+         SELECT v % 5 AS pk, (v % 3) * 10 AS val FROM (SELECT unnest(range(0, 60)) AS v)",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let sql = "SELECT pk, val, rn FROM (
+                 SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) AS rn FROM t
+               ) WHERE rn <= 5 ORDER BY pk, rn";
+    let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+    assert!(
+        !plan_str(plan.as_ref()).contains("BoundedWindowAggExec"),
+        "the window node should be gone:\n{}",
+        plan_str(plan.as_ref())
+    );
+
+    let batches = collect(plan, ctx.task_ctx()).await?;
+    assert_snapshot!(datafusion_common::test_util::batches_to_string(&batches), @r"
+    +----+-----+----+
+    | pk | val | rn |
+    +----+-----+----+
+    | 0  | 0   | 1  |
+    | 0  | 0   | 2  |
+    | 0  | 0   | 3  |
+    | 0  | 0   | 4  |
+    | 0  | 10  | 5  |
+    | 1  | 0   | 1  |
+    | 1  | 0   | 2  |
+    | 1  | 0   | 3  |
+    | 1  | 0   | 4  |
+    | 1  | 10  | 5  |
+    | 2  | 0   | 1  |
+    | 2  | 0   | 2  |
+    | 2  | 0   | 3  |
+    | 2  | 0   | 4  |
+    | 2  | 10  | 5  |
+    | 3  | 0   | 1  |
+    | 3  | 0   | 2  |
+    | 3  | 0   | 3  |
+    | 3  | 0   | 4  |
+    | 3  | 10  | 5  |
+    | 4  | 0   | 1  |
+    | 4  | 0   | 2  |
+    | 4  | 0   | 3  |
+    | 4  | 0   | 4  |
+    | 4  | 10  | 5  |
+    +----+-----+----+
+    ");
+
+    // Same query with the flag off must produce the same rows, so the emitted
+    // column agrees with `BoundedWindowAggExec`'s own output.
+    let off = SessionContext::new_with_config(
+        SessionConfig::new()
+            .with_batch_size(4)
+            .with_target_partitions(4),
+    );
+    off.sql(
+        "CREATE TABLE t AS
+         SELECT v % 5 AS pk, (v % 3) * 10 AS val FROM (SELECT unnest(range(0, 60)) AS v)",
+    )
+    .await?
+    .collect()
+    .await?;
+    let expected = off.sql(sql).await?.collect().await?;
+    assert_eq!(
+        datafusion_common::test_util::batches_to_string(&batches),
+        datafusion_common::test_util::batches_to_string(&expected),
+    );
+
+    Ok(())
+}
+
+/// `RANK` and `DENSE_RANK` are emitted by the operator too, so their plans hold
+/// no `BoundedWindowAggExec` either. The values are checked against the same
+/// query with the flag off — i.e. against `BoundedWindowAggExec`'s own output
+/// over the unpruned input — on a tie-heavy table, which is where the two
+/// policies diverge from each other and from `ROW_NUMBER`.
+#[tokio::test]
+async fn rank_and_dense_rank_columns_are_emitted_without_a_window_node() -> Result<()> {
+    // `val` takes 3 distinct values with 4 rows each per partition, so within a
+    // partition RANK is 1, 5, 9 and DENSE_RANK is 1, 2, 3. Each limit keeps the
+    // first two values' 8 rows, so both columns hold a rank above 1 and, at
+    // batch size 4, span several output batches.
+    let create = "CREATE TABLE t AS
+         SELECT v % 5 AS pk, (v % 3) * 10 AS val FROM (SELECT unnest(range(0, 60)) AS v)";
+
+    for (func, limit) in [("RANK", 5), ("DENSE_RANK", 2)] {
+        let sql = format!(
+            "SELECT pk, val, rk FROM (
+               SELECT *, {func}() OVER (PARTITION BY pk ORDER BY val) AS rk FROM t
+             ) WHERE rk <= {limit} ORDER BY pk, rk, val"
+        );
+
+        let mut on_config = SessionConfig::new()
+            .with_batch_size(4)
+            .with_target_partitions(4);
+        on_config.options_mut().optimizer.enable_window_topn = true;
+        let on = SessionContext::new_with_config(on_config);
+        on.sql(create).await?.collect().await?;
+
+        let plan = on.sql(&sql).await?.create_physical_plan().await?;
+        assert!(
+            !plan_str(plan.as_ref()).contains("BoundedWindowAggExec"),
+            "{func}: the window node should be gone:\n{}",
+            plan_str(plan.as_ref())
+        );
+        let actual = collect(plan, on.task_ctx()).await?;
+
+        let off = SessionContext::new_with_config(
+            SessionConfig::new()
+                .with_batch_size(4)
+                .with_target_partitions(4),
+        );
+        off.sql(create).await?.collect().await?;
+        let expected = off.sql(&sql).await?.collect().await?;
+
+        assert_eq!(
+            datafusion_common::test_util::batches_to_string(&actual),
+            datafusion_common::test_util::batches_to_string(&expected),
+            "{func}: emitted column disagrees with BoundedWindowAggExec"
+        );
+
+        // Pin the values themselves, so a column that is wrong in the same way
+        // with the flag off and on cannot pass: per partition, 4 rows at rank 1
+        // and 4 at the second value's rank.
+        let second_rank = if func == "RANK" { 5 } else { 2 };
+        let mut ranks: Vec<u64> = Vec::new();
+        for batch in &actual {
+            let col = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+                .expect("ranking column is UInt64");
+            ranks.extend(col.values().iter().copied());
+        }
+        let per_partition = [[1; 4], [second_rank; 4]].concat();
+        assert_eq!(ranks, per_partition.repeat(5), "{func}: unexpected ranks");
+    }
+
+    Ok(())
+}
+
+/// The deleted `BoundedWindowAggExec` published the ordering
+/// `[partition keys..., ranking column ASC NULLS LAST]` (from each ranking
+/// function's `sort_options`). `PartitionedTopKExec` has to publish it too, or
+/// `ORDER BY <partition keys>, <ranking column>` regains a `SortExec` that the
+/// un-rewritten plan did not need.
+#[tokio::test]
+async fn ranking_column_ordering_keeps_order_by_sort_free() -> Result<()> {
+    for func in ["ROW_NUMBER", "RANK", "DENSE_RANK"] {
+        let mut config = SessionConfig::new().with_target_partitions(4);
+        config.options_mut().optimizer.enable_window_topn = true;
+        let ctx = SessionContext::new_with_config(config);
+        ctx.sql(
+            "CREATE TABLE t AS
+             SELECT arrow_cast(v % 5, 'Int64') AS pk, (v % 3) * 10 AS val
+             FROM (SELECT unnest(range(0, 60)) AS v)",
+        )
+        .await?
+        .collect()
+        .await?;
+
+        // NULLS FIRST on the partition key matches the nulls placement the
+        // operator emits, so the only thing that could force a sort here is a
+        // missing ordering on the ranking column itself.
+        let sql = format!(
+            "SELECT pk, val, rn FROM (
+               SELECT *, {func}() OVER (PARTITION BY pk ORDER BY val) AS rn FROM t
+             ) WHERE rn <= 5 ORDER BY pk NULLS FIRST, rn"
+        );
+        let plan = ctx.sql(&sql).await?.create_physical_plan().await?;
+        let displayed = plan_str(plan.as_ref());
+        assert!(
+            !displayed.contains("SortExec"),
+            "{func}: the ranking column's ordering should make this sort-free:\n{displayed}"
+        );
+    }
+    Ok(())
+}
+
+/// A user-defined window function that shares a built-in ranking function's
+/// name but computes something else: the constant 7, or (`frame_len`) the
+/// number of rows in its window frame.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct SameNameWindowUdf {
+    name: String,
+    return_type: DataType,
+    frame_len: bool,
+    signature: Signature,
+}
+
+impl SameNameWindowUdf {
+    fn new_udwf(
+        name: &str,
+        return_type: DataType,
+        frame_len: bool,
+    ) -> datafusion_expr::WindowUDF {
+        datafusion_expr::WindowUDF::from(Self {
+            name: name.to_string(),
+            return_type,
+            frame_len,
+            signature: Signature::nullary(Volatility::Immutable),
+        })
+    }
+}
+
+impl WindowUDFImpl for SameNameWindowUdf {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn partition_evaluator(
+        &self,
+        _args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        Ok(Box::new(SameNameEvaluator {
+            return_type: self.return_type.clone(),
+            frame_len: self.frame_len,
+        }))
+    }
+
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), self.return_type.clone(), false).into())
+    }
+}
+
+#[derive(Debug)]
+struct SameNameEvaluator {
+    return_type: DataType,
+    frame_len: bool,
+}
+
+impl PartitionEvaluator for SameNameEvaluator {
+    fn evaluate(
+        &mut self,
+        _values: &[ArrayRef],
+        range: &Range<usize>,
+    ) -> Result<ScalarValue> {
+        let value = if self.frame_len {
+            range.len() as i64
+        } else {
+            7
+        };
+        ScalarValue::Int64(Some(value)).cast_to(&self.return_type)
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
+
+    fn uses_window_frame(&self) -> bool {
+        self.frame_len
+    }
+
+    fn is_causal(&self) -> bool {
+        !self.frame_len
+    }
+}
+
+/// Runs `sql` over the tie-heavy test table with the flag on and off, with
+/// `udwfs` registered, asserts the flag-on plan has no `PartitionedTopKExec`
+/// and returns both results.
+async fn run_with_custom_udwfs(
+    udwfs: &[datafusion_expr::WindowUDF],
+    sql: &str,
+) -> Result<(Vec<RecordBatch>, Vec<RecordBatch>)> {
+    let create = "CREATE TABLE t AS
+         SELECT v % 5 AS pk, (v % 3) * 10 AS val FROM (SELECT unnest(range(0, 60)) AS v)";
+    let mut results = Vec::new();
+    for enabled in [true, false] {
+        let mut config = SessionConfig::new()
+            .with_batch_size(4)
+            .with_target_partitions(4);
+        config.options_mut().optimizer.enable_window_topn = enabled;
+        let ctx = SessionContext::new_with_config(config);
+        for udwf in udwfs {
+            ctx.register_udwf(udwf.clone());
+        }
+        ctx.sql(create).await?.collect().await?;
+
+        let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+        assert!(
+            !plan_str(plan.as_ref()).contains("PartitionedTopKExec"),
+            "a custom window function must not be rewritten:\n{}",
+            plan_str(plan.as_ref())
+        );
+        results.push(collect(plan, ctx.task_ctx()).await?);
+    }
+    let off = results.pop().unwrap();
+    let on = results.pop().unwrap();
+    Ok((on, off))
+}
+
+/// A user-defined function registered under a built-in ranking function's name
+/// is not that function: the rule must leave it alone rather than prune its
+/// input and replace its evaluator with the operator's ranking column.
+#[tokio::test]
+async fn custom_udwf_with_ranking_name_is_not_rewritten() -> Result<()> {
+    for name in ["row_number", "rank", "dense_rank"] {
+        for return_type in [DataType::UInt64, DataType::Int64] {
+            let sql = format!(
+                "SELECT pk, val, rn FROM (
+                   SELECT *, {name}() OVER (PARTITION BY pk ORDER BY val) AS rn FROM t
+                 ) WHERE rn <= 7 ORDER BY pk, val"
+            );
+            let udwf = SameNameWindowUdf::new_udwf(name, return_type.clone(), false);
+            let (on, off) = run_with_custom_udwfs(&[udwf], &sql).await?;
+            assert_eq!(
+                datafusion_common::test_util::batches_to_string(&on),
+                datafusion_common::test_util::batches_to_string(&off),
+                "{name} ({return_type})"
+            );
+
+            // Every row passes `rn <= 7` and keeps the function's own value.
+            let rns = on
+                .iter()
+                .flat_map(|b| {
+                    let col =
+                        arrow::compute::cast(b.column(2), &DataType::Int64).unwrap();
+                    col.as_any()
+                        .downcast_ref::<arrow::array::Int64Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(rns, vec![7; 60], "{name} ({return_type})");
+        }
+    }
+    Ok(())
+}
+
+/// The built-in `ROW_NUMBER` is filtered on, but its sibling is a user-defined
+/// function named `rank` that counts the rows in a `CURRENT ROW AND 1
+/// FOLLOWING` frame. Its value at the last retained row depends on the first
+/// pruned one, so the sibling has to block the rewrite.
+#[tokio::test]
+async fn custom_udwf_sibling_with_ranking_name_blocks_rewrite() -> Result<()> {
+    let sql = "SELECT pk, val, rn, rk FROM (
+                 SELECT *,
+                   ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) AS rn,
+                   rank() OVER (
+                     PARTITION BY pk ORDER BY val
+                     ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING
+                   ) AS rk
+                 FROM t
+               ) WHERE rn <= 2 ORDER BY pk, rn";
+    for return_type in [DataType::UInt64, DataType::Int64] {
+        let udwf = SameNameWindowUdf::new_udwf("rank", return_type.clone(), true);
+        let (on, off) = run_with_custom_udwfs(&[udwf], sql).await?;
+        assert_eq!(
+            datafusion_common::test_util::batches_to_string(&on),
+            datafusion_common::test_util::batches_to_string(&off),
+            "{return_type}"
+        );
+
+        // Both retained rows of each partition have a following row.
+        let rks = on
+            .iter()
+            .flat_map(|b| {
+                let col = arrow::compute::cast(b.column(3), &DataType::Int64).unwrap();
+                col.as_any()
+                    .downcast_ref::<arrow::array::Int64Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rks, vec![2; 10], "{return_type}");
     }
     Ok(())
 }

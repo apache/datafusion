@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Fast membership tests for small, fixed-width primitive `IN` lists.
 //!
@@ -77,7 +64,7 @@ use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{Result, exec_datafusion_err, internal_datafusion_err};
 
 use super::result::build_result_from_contains;
-use super::static_filter::{StaticFilter, handle_dictionary};
+use super::static_filter::StaticFilter;
 
 pub(super) type BranchlessNative<T> =
     <<T as BranchlessFilterType>::CompareType as ArrowPrimitiveType>::Native;
@@ -256,8 +243,6 @@ where
     }
 
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-        handle_dictionary!(self, v, negated);
-
         // Arrow compatibility ignores timestamp timezone and decimal precision/scale
         // while still requiring the same primitive representation.
         if !PrimitiveArray::<T>::is_compatible(v.data_type()) {
@@ -315,6 +300,10 @@ where
 }
 
 #[inline]
+#[expect(
+    clippy::needless_bitwise_bool,
+    reason = "the non-short-circuiting `|` is the point of this branchless kernel"
+)]
 fn check_values<C, const N: usize>(
     in_list_values: &[C],
     input_values: &[C],
@@ -341,12 +330,9 @@ fn branchless_values<T>(array: &PrimitiveArray<T>) -> ScalarBuffer<BranchlessNat
 where
     T: BranchlessFilterType,
 {
-    let data = array.to_data();
-    ScalarBuffer::<BranchlessNative<T>>::new(
-        data.buffers()[0].clone(),
-        data.offset(),
-        data.len(),
-    )
+    let values = array.values();
+    // `values.inner()` already reflects any slice applied to the array.
+    ScalarBuffer::<BranchlessNative<T>>::new(values.inner().clone(), 0, values.len())
 }
 
 #[cfg(test)]

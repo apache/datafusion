@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::{ffi::c_void, sync::Arc};
 
@@ -126,7 +113,7 @@ impl FFI_TableProviderFactory {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -136,9 +123,9 @@ impl FFI_TableProviderFactory {
         unsafe { &(*private_data).factory }
     }
 
-    fn runtime(&self) -> &Option<Handle> {
+    fn runtime(&self) -> Option<&Handle> {
         let private_data = self.private_data as *const FactoryPrivateData;
-        unsafe { &(*private_data).runtime }
+        unsafe { (*private_data).runtime.as_ref() }
     }
 
     fn deserialize_cmd(
@@ -203,7 +190,7 @@ async fn create_fn_wrapper_impl(
     session: FFI_SessionRef,
     cmd_serialized: SVec<u8>,
 ) -> Result<FFI_TableProvider, DataFusionError> {
-    let runtime = factory.runtime().clone();
+    let runtime = factory.runtime().cloned();
     let ffi_logical_codec = factory.logical_codec.clone();
     let internal_factory = Arc::clone(factory.inner());
     let cmd = factory.deserialize_cmd(&cmd_serialized)?;
@@ -229,13 +216,14 @@ async fn create_fn_wrapper_impl(
 unsafe extern "C" fn clone_fn_wrapper(
     factory: &FFI_TableProviderFactory,
 ) -> FFI_TableProviderFactory {
-    let runtime = factory.runtime().clone();
+    let runtime = factory.runtime().cloned();
     let old_factory = Arc::clone(factory.inner());
 
     let private_data = Box::into_raw(Box::new(FactoryPrivateData {
         factory: old_factory,
         runtime,
-    })) as *mut c_void;
+    }))
+    .cast::<c_void>();
 
     FFI_TableProviderFactory {
         create: create_fn_wrapper,
@@ -251,7 +239,8 @@ unsafe extern "C" fn clone_fn_wrapper(
 unsafe extern "C" fn release_fn_wrapper(factory: &mut FFI_TableProviderFactory) {
     unsafe {
         debug_assert!(!factory.private_data.is_null());
-        let private_data = Box::from_raw(factory.private_data as *mut FactoryPrivateData);
+        let private_data =
+            Box::from_raw(factory.private_data.cast::<FactoryPrivateData>());
         drop(private_data);
         factory.private_data = std::ptr::null_mut();
     }

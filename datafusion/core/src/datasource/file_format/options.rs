@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! User facing options for the file formats readers
 
@@ -50,7 +37,7 @@ use futures::future::BoxFuture;
 /// Options that control the reading of CSV files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -246,7 +233,7 @@ impl<'a> CsvReadOptions<'a> {
 /// Options that control the reading of Parquet files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -357,7 +344,7 @@ impl<'a> ParquetReadOptions<'a> {
 /// Options that control the reading of ARROW files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -403,7 +390,7 @@ impl<'a> ArrowReadOptions<'a> {
 /// Options that control the reading of AVRO files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -581,7 +568,7 @@ impl<'a> JsonReadOptions<'a> {
 }
 
 #[async_trait]
-/// ['ReadOptions'] is implemented by Options like ['CsvReadOptions'] that control the reading of respective files/sources.
+/// [`ReadOptions`] is implemented by Options like [`CsvReadOptions`] that control the reading of respective files/sources.
 pub trait ReadOptions<'a> {
     /// Helper to convert these user facing options to `ListingTable` options
     fn to_listing_options(
@@ -821,7 +808,8 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
         _config: &SessionConfig,
         _table_options: TableOptions,
     ) -> ListingOptions {
-        let file_format = ArrowFormat;
+        // There are no read options for Arrow, so we can ignore the `TableOptions`
+        let file_format = ArrowFormat::default();
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)

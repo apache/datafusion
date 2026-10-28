@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
@@ -376,7 +363,7 @@ impl PlannerContext {
         match self.outer_from_schema.as_mut() {
             Some(from_schema) => Arc::make_mut(from_schema).merge(schema),
             None => self.outer_from_schema = Some(Arc::clone(schema)),
-        };
+        }
         Ok(())
     }
 
@@ -775,8 +762,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
-                    // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
-                    self.context_provider.options().execution.time_zone.clone()
+                    // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Time Zone>
+                    //
+                    // Note that the configured time zone is an `Option` that is
+                    // unset by default, so by default this yields the
+                    // timezone-naive `Timestamp<TimeUnit, None>`. Whether that
+                    // should remain the behavior is tracked in
+                    // https://github.com/apache/datafusion/issues/25166
+                    self.context_provider
+                        .options()
+                        .execution
+                        .time_zone
+                        .as_ref()
+                        .map(|tz| tz.as_str().to_string())
                 } else {
                     // Timestamp Without Time zone
                     None
@@ -838,7 +836,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(DataType::Struct(Fields::from(fields)))
             }
-            SQLDataType::Map(key_type, value_type) => {
+            SQLDataType::Map(key_type, value_type, _) => {
                 let key_field = Arc::new(Field::new(
                     "key", self.convert_data_type_to_field(key_type)?.data_type().clone(), false
                 ));

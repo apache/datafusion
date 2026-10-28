@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -28,6 +15,7 @@ use datafusion::datasource::memory::MemTable;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::config::ConfigOptions;
@@ -52,7 +40,11 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::common;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::operator_statistics::{
+    ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
+};
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::statistics::StatisticsArgs;
 
 /// Mock data using a MemorySourceConfig which has an exact count statistic
 fn mock_data() -> Result<Arc<DataSourceExec>> {
@@ -854,5 +846,49 @@ async fn test_sum_from_statistics() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// `AggregateStatistics` trusts an `Exact` row count from a registered
+/// provider: it answers `COUNT(*)` without scanning
+#[tokio::test]
+async fn aggregate_statistics_consults_statistics_providers() -> Result<()> {
+    let provider = ClosureStatisticsProvider::with_matches(
+        |plan| plan.is::<DataSourceExec>(),
+        |plan, child_stats| {
+            let child_stats = child_stats
+                .iter()
+                .map(|c| Arc::clone(c.base_arc()))
+                .collect::<Vec<_>>();
+            let mut stats = Arc::unwrap_or_clone(
+                plan.statistics_from_inputs(&child_stats, &StatisticsArgs::new())?,
+            );
+            stats.num_rows = Precision::Exact(42);
+            Ok(StatisticsResult::Computed(stats.into()))
+        },
+    );
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_statistics_registry(StatisticsRegistry::with_providers(vec![Arc::new(
+            provider,
+        )]))
+        .build();
+    let ctx = SessionContext::new_with_state(state);
+    ctx.sql("CREATE TABLE t AS VALUES (1), (2), (3)")
+        .await?
+        .collect()
+        .await?;
+
+    let batches = ctx.sql("SELECT COUNT(*) FROM t").await?.collect().await?;
+    assert_batches_eq!(
+        &[
+            "+----------+",
+            "| count(*) |",
+            "+----------+",
+            "| 42       |",
+            "+----------+"
+        ],
+        &batches
+    );
     Ok(())
 }

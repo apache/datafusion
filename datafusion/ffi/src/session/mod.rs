@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! FFI support for [`Session`].
 //!
@@ -21,10 +8,10 @@
 //!
 //! Consider a session owned by library A that uses a query planner owned by
 //! library C. After A installs C's planner, [`ForeignSession::query_planner`]
-//! returns C's planner and [`ForeignSession::create_physical_plan`] dispatches
-//! to C's planner. C must not call `create_physical_plan`, or invoke the planner
-//! returned by `query_planner`, to delegate planning back to A. Repeating either
-//! self-call recurses until the stack is exhausted.
+//! returns C's planner. Invoking it to delegate planning back to A is a direct
+//! self-call. [`ForeignSession::create_physical_plan`] is deliberately
+//! unsupported because dispatching through A's session would likewise re-enter
+//! C's planner.
 //!
 //! To delegate safely, A must export its original planner before installing C's
 //! planner, and C must retain and invoke that planner directly. See the
@@ -40,7 +27,7 @@ use arrow_schema::ffi::FFI_ArrowSchema;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigFileType, ConfigOptions, TableOptions};
-use datafusion_common::{DFSchema, DataFusionError};
+use datafusion_common::{DFSchema, DataFusionError, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -53,8 +40,8 @@ use datafusion_expr::{
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::bytes::{
-    logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
-    logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
+    logical_plan_from_bytes_with_extension_codec,
+    logical_plan_to_bytes_with_extension_codec,
 };
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
@@ -117,6 +104,8 @@ pub(crate) struct FFI_SessionRef {
         logical_plan_serialized: SVec<u8>,
     ) -> FFI_Result<SVec<u8>>,
 
+    /// Retained at its original position for ABI compatibility with consumers
+    /// compiled against DataFusion 55. Direct session planning is unsupported.
     create_physical_plan:
         unsafe extern "C" fn(
             &Self,
@@ -180,10 +169,10 @@ impl FFI_SessionRef {
         unsafe { (*private_data).session }
     }
 
-    unsafe fn runtime(&self) -> &Option<Handle> {
+    unsafe fn runtime(&self) -> Option<&Handle> {
         unsafe {
             let private_data = self.private_data as *const SessionPrivateData;
-            &(*private_data).runtime
+            (*private_data).runtime.as_ref()
         }
     }
 }
@@ -203,7 +192,7 @@ unsafe extern "C" fn catalog_list_fn_wrapper(
 ) -> FFI_CatalogProviderList {
     FFI_CatalogProviderList::new_with_ffi_codec(
         session.inner().catalog_list(),
-        unsafe { session.runtime() }.clone(),
+        unsafe { session.runtime() }.cloned(),
         session.logical_codec.clone(),
     )
 }
@@ -239,27 +228,15 @@ unsafe extern "C" fn optimize_fn_wrapper(
 }
 
 unsafe extern "C" fn create_physical_plan_fn_wrapper(
-    session: &FFI_SessionRef,
-    logical_plan_serialized: SVec<u8>,
+    _session: &FFI_SessionRef,
+    _logical_plan_serialized: SVec<u8>,
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
-    unsafe {
-        let runtime = session.runtime().clone();
-        let session = session.clone();
-        async move {
-            let session = session.inner();
-            let task_ctx = session.task_ctx();
-
-            let logical_plan = sresult_return!(logical_plan_from_bytes(
-                logical_plan_serialized.as_slice(),
-                task_ctx.as_ref(),
-            ));
-
-            let physical_plan = session.create_physical_plan(&logical_plan).await;
-
-            sresult!(physical_plan.map(|plan| FFI_ExecutionPlan::new(plan, runtime)))
-        }
-        .into_ffi()
+    async move {
+        sresult!(not_impl_err!(
+            "FFI_SessionRef::create_physical_plan is unsupported; export and invoke an FFI_QueryPlanner captured before installing a foreign planner"
+        ))
     }
+    .into_ffi()
 }
 
 unsafe extern "C" fn create_physical_expr_fn_wrapper(
@@ -339,6 +316,7 @@ fn table_options_to_rhash(mut options: TableOptions) -> SVec<(SString, SString)>
                 #[cfg(feature = "parquet")]
                 ConfigFileType::PARQUET => "parquet",
                 ConfigFileType::CSV => "csv",
+                ConfigFileType::ARROW => "arrow",
             }
             .into(),
         );
@@ -371,7 +349,7 @@ unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_SessionRef) -> FFI_TaskCo
 unsafe extern "C" fn physical_optimizers_fn_wrapper(
     session: &FFI_SessionRef,
 ) -> SVec<FFI_PhysicalOptimizerRule> {
-    let runtime = unsafe { session.runtime().clone() };
+    let runtime = unsafe { session.runtime().cloned() };
     session
         .inner()
         .physical_optimizers()
@@ -383,7 +361,7 @@ unsafe extern "C" fn physical_optimizers_fn_wrapper(
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SessionRef) {
     unsafe {
         let private_data =
-            Box::from_raw(provider.private_data as *mut SessionPrivateData);
+            Box::from_raw(provider.private_data.cast::<SessionPrivateData>());
         drop(private_data);
     }
 }
@@ -395,7 +373,8 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
         let private_data = Box::into_raw(Box::new(SessionPrivateData {
             session: (*old_private_data).session,
             runtime: (*old_private_data).runtime.clone(),
-        })) as *mut c_void;
+        }))
+        .cast::<c_void>();
 
         FFI_SessionRef {
             session_id: session_id_fn_wrapper,
@@ -510,7 +489,7 @@ impl FFI_SessionRef {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -524,11 +503,11 @@ impl FFI_SessionRef {
 /// # Query planner delegation
 ///
 /// If the session owner installed the current foreign query planner,
-/// [`Session::create_physical_plan`] dispatches back to that planner and
 /// [`Session::query_planner`] returns that planner. The planner must retain and
-/// invoke the session owner's previous planner instead of using either method to
-/// delegate back to the session. Otherwise, repeated delegation exhausts the
-/// stack. See [`crate::query_planner`] for details.
+/// invoke the session owner's previous planner rather than delegate back through
+/// the session. [`Session::create_physical_plan`] returns an error because such
+/// delegation would re-enter the installed planner. See [`crate::query_planner`]
+/// for details.
 #[derive(Debug)]
 pub struct ForeignSession {
     session: FFI_SessionRef,
@@ -642,6 +621,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
         ConfigFileType::JSON,
         #[cfg(feature = "parquet")]
         ConfigFileType::PARQUET,
+        ConfigFileType::ARROW,
     ];
     for format in formats {
         // It is imperative that if new enum variants are added below that they be
@@ -651,11 +631,12 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
             #[cfg(feature = "parquet")]
             ConfigFileType::PARQUET => "parquet",
             ConfigFileType::JSON => "json",
+            ConfigFileType::ARROW => "arrow",
         };
         let format_options: HashMap<String, String> = options
             .iter()
             .filter_map(|(k, v)| {
-                let (prefix, key) = k.split_once(".")?;
+                let (prefix, key) = k.split_once('.')?;
                 if prefix == format_name {
                     Some((format!("format.{key}"), v.to_owned()))
                 } else {
@@ -673,8 +654,8 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
     let extension_options: HashMap<String, String> = options
         .iter()
         .filter_map(|(k, v)| {
-            let (prefix, _) = k.split_once(".")?;
-            if !["json", "parquet", "csv"].contains(&prefix) {
+            let (prefix, _) = k.split_once('.')?;
+            if !["json", "parquet", "csv", "arrow"].contains(&prefix) {
                 Some((k.to_owned(), v.to_owned()))
             } else {
                 None
@@ -693,6 +674,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
             #[cfg(feature = "parquet")]
             "parquet" => Some(ConfigFileType::PARQUET),
             "json" => Some(ConfigFileType::JSON),
+            "arrow" => Some(ConfigFileType::ARROW),
             _ => None,
         });
     table_options
@@ -743,21 +725,11 @@ impl Session for ForeignSession {
 
     async fn create_physical_plan(
         &self,
-        logical_plan: &LogicalPlan,
+        _logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        unsafe {
-            let logical_plan = logical_plan_to_bytes(logical_plan)?;
-            let physical_plan = df_result!(
-                (self.session.create_physical_plan)(
-                    &self.session,
-                    logical_plan.as_ref().into()
-                )
-                .await
-            )?;
-            let physical_plan = <Arc<dyn ExecutionPlan>>::try_from(&physical_plan)?;
-
-            Ok(physical_plan)
-        }
+        not_impl_err!(
+            "ForeignSession::create_physical_plan is unsupported; export and invoke an FFI_QueryPlanner captured before installing a foreign planner"
+        )
     }
 
     fn create_physical_expr(
@@ -854,7 +826,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::catalog::MemoryCatalogProvider;
     use datafusion::execution::SessionStateBuilder;
-    use datafusion_common::DataFusionError;
+    use datafusion_common::{DataFusionError, Result, exec_err};
     use datafusion_expr::col;
     use datafusion_expr::registry::FunctionRegistry;
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
@@ -863,6 +835,25 @@ mod tests {
 
     static QUERY_PLANNER_CALLS: AtomicUsize = AtomicUsize::new(0);
     static PHYSICAL_OPTIMIZER_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static REENTERING_PLANNER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Debug)]
+    struct ReenteringQueryPlanner;
+
+    #[async_trait]
+    impl QueryPlanner for ReenteringQueryPlanner {
+        async fn create_physical_plan(
+            &self,
+            logical_plan: &LogicalPlan,
+            session: &dyn Session,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            if REENTERING_PLANNER_CALLS.fetch_add(1, Ordering::Relaxed) == 0 {
+                session.create_physical_plan(logical_plan).await
+            } else {
+                exec_err!("query planner was re-entered through the session")
+            }
+        }
+    }
 
     unsafe extern "C" fn counting_query_planner(
         session: &FFI_SessionRef,
@@ -922,7 +913,9 @@ mod tests {
         table_options.json.schema_infer_max_rec = Some(10);
         #[cfg(feature = "parquet")]
         {
-            table_options.parquet.global.coerce_int96 = Some("123456789".into());
+            table_options.parquet.global.coerce_int96 =
+                Some(datafusion_common::parquet_config::DFTimeUnit::Microsecond);
+            table_options.parquet.global.coerce_int96_tz = Some("UTC".parse()?);
         }
         table_options.current_format = Some(ConfigFileType::JSON);
 
@@ -973,12 +966,6 @@ mod tests {
             .await?;
         assert_eq!(planned.name(), "EmptyExec");
 
-        let physical_plan = foreign_session.create_physical_plan(&logical_plan).await?;
-        assert_eq!(
-            format!("{physical_plan:?}"),
-            "EmptyExec { schema: Schema { fields: [], metadata: {} }, partitions: 1, cache: PlanProperties { eq_properties: EquivalenceProperties { eq_group: EquivalenceGroup { map: {}, classes: [] }, oeq_class: OrderingEquivalenceClass { orderings: [] }, oeq_cache: OrderingEquivalenceCache { normal_cls: OrderingEquivalenceClass { orderings: [] }, leading_map: {} }, constraints: Constraints { inner: [] }, schema: Schema { fields: [], metadata: {} } }, partitioning: UnknownPartitioning(1), emission_type: Incremental, boundedness: Bounded, evaluation_type: Lazy, scheduling_type: Cooperative, output_ordering: None } }"
-        );
-
         assert_eq!(
             format!("{:?}", foreign_session.default_table_options()),
             format!("{:?}", state.default_table_options())
@@ -1003,5 +990,50 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_foreign_session_rejects_create_physical_plan() {
+        REENTERING_PLANNER_CALLS.store(0, Ordering::Relaxed);
+
+        let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let state = SessionStateBuilder::new_from_existing(ctx.state())
+            .with_query_planner(Arc::new(ReenteringQueryPlanner))
+            .build();
+        let logical_codec = FFI_LogicalExtensionCodec::new(
+            Arc::new(DefaultLogicalExtensionCodec {}),
+            None,
+            task_ctx_provider,
+        );
+        let local_session = FFI_SessionRef::new(&state, None, logical_codec);
+        let foreign_session = ForeignSession::try_from(&local_session).unwrap();
+
+        let error = foreign_session
+            .create_physical_plan(&LogicalPlan::default())
+            .await
+            .unwrap_err();
+
+        assert_eq!(REENTERING_PLANNER_CALLS.load(Ordering::Relaxed), 0);
+        assert!(matches!(error, DataFusionError::NotImplemented(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("export and invoke an FFI_QueryPlanner captured before")
+        );
+
+        // An already-compiled DataFusion 55 consumer calls this retained slot
+        // directly. It must receive the same safe failure without re-entering
+        // the installed planner.
+        let callback_error = unsafe {
+            (local_session.create_physical_plan)(&local_session, SVec::new())
+                .await
+                .unwrap_err()
+        };
+        assert_eq!(REENTERING_PLANNER_CALLS.load(Ordering::Relaxed), 0);
+        assert!(
+            callback_error
+                .as_str()
+                .contains("export and invoke an FFI_QueryPlanner captured before")
+        );
     }
 }

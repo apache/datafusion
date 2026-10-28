@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SessionState`]: information required to run queries in a session
 
@@ -23,7 +10,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
+use crate::catalog::{
+    CatalogProviderFactory, CatalogProviderList, SchemaProvider, TableProviderFactory,
+};
 use crate::datasource::file_format::FileFormatFactory;
 #[cfg(feature = "sql")]
 use crate::datasource::provider_as_source;
@@ -34,6 +23,8 @@ use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::DataType;
 use arrow_schema::FieldRef;
 use datafusion_catalog::MemoryCatalogProviderList;
+#[cfg(feature = "sql")]
+use datafusion_catalog::information_schema::INFORMATION_SCHEMA_TABLES;
 use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, InformationSchemaProvider,
 };
@@ -46,7 +37,7 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
-    exec_err, plan_datafusion_err,
+    exec_err, plan_datafusion_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -76,10 +67,12 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
-use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
+use datafusion_session::{
+    CatalogProvider, PhysicalOptimizerContext, PhysicalOptimizerRule, Session,
+};
 #[cfg(feature = "sql")]
 use datafusion_sql::{
-    parser::{DFParserBuilder, Statement},
+    parser::{DFParserBuilder, ExplainStatement, Statement},
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
 
@@ -91,7 +84,9 @@ use log::{debug, info};
 use object_store::ObjectStore;
 #[cfg(feature = "sql")]
 use sqlparser::{
-    ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias},
+    ast::{
+        Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, Statement as SQLStatement,
+    },
     dialect::dialect_from_str,
 };
 use url::Url;
@@ -202,6 +197,16 @@ struct SessionStateInner {
     ///
     /// [`TableProvider`]: crate::catalog::TableProvider
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
+    /// CatalogProviderFactories for different catalog implementations.
+    ///
+    /// Maps strings like "ICEBERG" to an instance of [`CatalogProviderFactory`]
+    ///
+    /// This is used to create [`CatalogProvider`] instances for the
+    /// `CREATE EXTERNAL CATALOG ... STORED AS <TYPE>` statement, for catalogs
+    /// backed by an external implementation.
+    ///
+    /// [`CatalogProvider`]: crate::catalog::CatalogProvider
+    catalog_factories: HashMap<String, Arc<dyn CatalogProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
     /// [FunctionFactory] to support pluggable user defined function handler.
@@ -246,6 +251,7 @@ impl Debug for SessionState {
             .field("execution_props", &self.execution_props)
             .field("table_options", &self.inner.table_options)
             .field("table_factories", &self.inner.table_factories)
+            .field("catalog_factories", &self.inner.catalog_factories)
             .field("function_factory", &self.inner.function_factory)
             .field("cache_factory", &self.inner.cache_factory)
             .field("expr_planners", &self.inner.expr_planners);
@@ -404,28 +410,73 @@ impl SessionState {
         table_ref: impl Into<TableReference>,
     ) -> datafusion_common::Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
-        if self.config().information_schema()
-            && *resolved_ref.schema == *INFORMATION_SCHEMA
+        let catalog_name = resolved_ref.catalog.as_ref();
+
+        // Special case handling for `information_schema`.
+        if *resolved_ref.schema == *INFORMATION_SCHEMA
+            && self.inner.config.information_schema()
         {
-            return Ok(Arc::new(
-                InformationSchemaProvider::new(Arc::clone(&self.inner.catalog_list))
-                    .with_table_functions(self.inner.table_functions.clone()),
-            ));
+            match self.inner.config.system_catalog() {
+                Some(system_catalog) => {
+                    if system_catalog == catalog_name {
+                        // Global catalog configured, catalog name references it
+                        //   => information schema provider for full catalog list
+                        return Ok(Arc::new(
+                            InformationSchemaProvider::new(Arc::clone(
+                                &self.inner.catalog_list,
+                            ))
+                            .with_table_functions(self.inner.table_functions.clone())
+                            .with_system_catalog(String::from(system_catalog)),
+                        ));
+                    } else {
+                        // Global catalog configured, catalog name is other catalog
+                        //   => information schema provider for named catalog
+                        let catalog = self.resolve_catalog(catalog_name)?;
+                        return Ok(Arc::new(
+                            InformationSchemaProvider::new_from_catalog(
+                                catalog_name.to_string(),
+                                catalog,
+                            )
+                            .with_table_functions(self.inner.table_functions.clone()),
+                        ));
+                    }
+                }
+                None => {
+                    // Global catalog not configured
+                    //   => information schema provider for full catalog list
+                    // Resolve the catalog (even though it's not needed for the InformationSchemaProvider)
+                    // so references to non-existent catalogs report an error.
+                    self.resolve_catalog(catalog_name)?;
+                    return Ok(Arc::new(
+                        InformationSchemaProvider::new(Arc::clone(
+                            &self.inner.catalog_list,
+                        ))
+                        .with_table_functions(self.inner.table_functions.clone()),
+                    ));
+                }
+            }
         }
 
-        self.inner
+        let catalog = self.resolve_catalog(catalog_name)?;
+        let Some(schema) = catalog.schema(&resolved_ref.schema) else {
+            return plan_err!("failed to resolve schema: {}", resolved_ref.schema);
+        };
+
+        Ok(schema)
+    }
+
+    fn resolve_catalog(
+        &self,
+        catalog_name: &str,
+    ) -> Result<Arc<dyn CatalogProvider>, DataFusionError> {
+        let catalog = self
+            .inner
             .catalog_list
-            .catalog(&resolved_ref.catalog)
+            .catalog(catalog_name)
             .ok_or_else(|| {
-                plan_datafusion_err!(
-                    "failed to resolve catalog: {}",
-                    resolved_ref.catalog
-                )
-            })?
-            .schema(&resolved_ref.schema)
-            .ok_or_else(|| {
-                plan_datafusion_err!("failed to resolve schema: {}", resolved_ref.schema)
-            })
+                plan_datafusion_err!("failed to resolve catalog: {catalog_name}")
+            })?;
+        Ok(catalog)
     }
 
     /// Add `analyzer_rule` to the end of the list of
@@ -487,11 +538,23 @@ impl SessionState {
         &self.inner.table_factories
     }
 
-    /// Get the table factories
+    /// Get the table factories mutably
     pub fn table_factories_mut(
         &mut self,
     ) -> &mut HashMap<String, Arc<dyn TableProviderFactory>> {
         &mut Arc::make_mut(&mut self.inner).table_factories
+    }
+
+    /// Get the catalog factories
+    pub fn catalog_factories(&self) -> &HashMap<String, Arc<dyn CatalogProviderFactory>> {
+        &self.inner.catalog_factories
+    }
+
+    /// Get the catalog factories mutably
+    pub fn catalog_factories_mut(
+        &mut self,
+    ) -> &mut HashMap<String, Arc<dyn CatalogProviderFactory>> {
+        &mut Arc::make_mut(&mut self.inner).catalog_factories
     }
 
     /// Parse an SQL string into an DataFusion specific AST
@@ -597,7 +660,23 @@ impl SessionState {
         &self,
         statement: Statement,
     ) -> datafusion_common::Result<LogicalPlan> {
-        let references = self.resolve_table_references(&statement)?;
+        let mut references = self.resolve_table_references(&statement)?;
+
+        if Self::requires_information_schema(&statement) {
+            let info_tables = INFORMATION_SCHEMA_TABLES.iter();
+            let info_table_refs: Vec<_> = if let Some(system_catalog) =
+                self.config().system_catalog()
+            {
+                info_tables
+                    .map(|n| TableReference::full(system_catalog, INFORMATION_SCHEMA, *n))
+                    .collect()
+            } else {
+                info_tables
+                    .map(|n| TableReference::partial(INFORMATION_SCHEMA, *n))
+                    .collect()
+            };
+            references.extend(info_table_refs);
+        }
 
         let mut provider = SessionContextProvider {
             state: self,
@@ -618,6 +697,24 @@ impl SessionState {
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.statement_to_plan(statement)
+    }
+
+    #[cfg(feature = "sql")]
+    fn requires_information_schema(statement: &Statement) -> bool {
+        match &statement {
+            Statement::Explain(ExplainStatement { statement, .. }) => {
+                Self::requires_information_schema(statement)
+            }
+            Statement::Statement(s) => matches!(
+                s.as_ref(),
+                SQLStatement::ShowCreate { .. }
+                    | SQLStatement::ShowTables { .. }
+                    | SQLStatement::ShowColumns { .. }
+                    | SQLStatement::ShowVariable { .. }
+                    | SQLStatement::ShowFunctions { .. }
+            ),
+            _ => false,
+        }
     }
 
     #[cfg(feature = "sql")]
@@ -990,7 +1087,7 @@ impl SessionState {
                     "File type already registered for extension {ext}. Set overwrite to true to replace this extension."
                 );
             }
-        };
+        }
         Ok(())
     }
 
@@ -1134,6 +1231,7 @@ pub struct SessionStateBuilder {
     table_options: Option<TableOptions>,
     execution_props: Option<ExecutionProps>,
     table_factories: Option<HashMap<String, Arc<dyn TableProviderFactory>>>,
+    catalog_factories: Option<HashMap<String, Arc<dyn CatalogProviderFactory>>>,
     runtime_env: Option<Arc<RuntimeEnv>>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
     cache_factory: Option<Arc<dyn CacheFactory>>,
@@ -1177,6 +1275,7 @@ impl SessionStateBuilder {
             config: None,
             execution_props: None,
             table_factories: None,
+            catalog_factories: None,
             runtime_env: None,
             function_factory: None,
             cache_factory: None,
@@ -1242,6 +1341,7 @@ impl SessionStateBuilder {
             table_options: Some(existing.table_options),
             execution_props: Some(execution_props),
             table_factories: Some(existing.table_factories),
+            catalog_factories: Some(existing.catalog_factories),
             runtime_env: Some(existing.runtime_env),
             function_factory: existing.function_factory,
             cache_factory: existing.cache_factory,
@@ -1538,11 +1638,11 @@ impl SessionStateBuilder {
     /// Add a [`TableProviderFactory`] to the map of factories
     pub fn with_table_factory(
         mut self,
-        key: String,
+        key: impl Into<String>,
         table_factory: Arc<dyn TableProviderFactory>,
     ) -> Self {
         let mut table_factories = self.table_factories.unwrap_or_default();
-        table_factories.insert(key, table_factory);
+        table_factories.insert(key.into(), table_factory);
         self.table_factories = Some(table_factories);
         self
     }
@@ -1553,6 +1653,27 @@ impl SessionStateBuilder {
         table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     ) -> Self {
         self.table_factories = Some(table_factories);
+        self
+    }
+
+    /// Add a [`CatalogProviderFactory`] to the map of factories
+    pub fn with_catalog_factory(
+        mut self,
+        key: impl Into<String>,
+        catalog_factory: Arc<dyn CatalogProviderFactory>,
+    ) -> Self {
+        let mut catalog_factories = self.catalog_factories.unwrap_or_default();
+        catalog_factories.insert(key.into(), catalog_factory);
+        self.catalog_factories = Some(catalog_factories);
+        self
+    }
+
+    /// Set the map of [`CatalogProviderFactory`]s
+    pub fn with_catalog_factories(
+        mut self,
+        catalog_factories: HashMap<String, Arc<dyn CatalogProviderFactory>>,
+    ) -> Self {
+        self.catalog_factories = Some(catalog_factories);
         self
     }
 
@@ -1655,6 +1776,7 @@ impl SessionStateBuilder {
             config,
             execution_props,
             table_factories,
+            catalog_factories,
             runtime_env,
             function_factory,
             cache_factory,
@@ -1683,19 +1805,30 @@ impl SessionStateBuilder {
                 Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>
             }),
             table_functions: table_functions.unwrap_or_default(),
-            scalar_functions: HashMap::new(),
-            higher_order_functions: HashMap::new(),
-            aggregate_functions: HashMap::new(),
-            window_functions: HashMap::new(),
+            scalar_functions: HashMap::with_capacity(
+                scalar_functions.as_ref().map_or(0, Vec::len),
+            ),
+            higher_order_functions: HashMap::with_capacity(
+                higher_order_functions.as_ref().map_or(0, Vec::len),
+            ),
+            aggregate_functions: HashMap::with_capacity(
+                aggregate_functions.as_ref().map_or(0, Vec::len),
+            ),
+            window_functions: HashMap::with_capacity(
+                window_functions.as_ref().map_or(0, Vec::len),
+            ),
             extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
             serializer_registry: serializer_registry
                 .unwrap_or_else(|| Arc::new(EmptySerializerRegistry)),
-            file_formats: HashMap::new(),
+            file_formats: HashMap::with_capacity(
+                file_formats.as_ref().map_or(0, Vec::len),
+            ),
             table_options: table_options.unwrap_or_else(|| {
                 TableOptions::default_from_session_config(config.options())
             }),
             config,
             table_factories: table_factories.unwrap_or_default(),
+            catalog_factories: catalog_factories.unwrap_or_default(),
             runtime_env,
             function_factory,
             cache_factory,
@@ -1712,7 +1845,7 @@ impl SessionStateBuilder {
             for file_format in file_formats {
                 if let Err(e) = state.register_file_format(file_format, false) {
                     info!("Unable to register file format: {e}")
-                };
+                }
             }
         }
 
@@ -1937,6 +2070,13 @@ impl SessionStateBuilder {
         &mut self.table_factories
     }
 
+    /// Returns the current catalog_factories value
+    pub fn catalog_factories(
+        &mut self,
+    ) -> &mut Option<HashMap<String, Arc<dyn CatalogProviderFactory>>> {
+        &mut self.catalog_factories
+    }
+
     /// Returns the current runtime_env value
     pub fn runtime_env(&mut self) -> &mut Option<Arc<RuntimeEnv>> {
         &mut self.runtime_env
@@ -1989,6 +2129,7 @@ impl Debug for SessionStateBuilder {
             .field("execution_props", &self.execution_props)
             .field("table_options", &self.table_options)
             .field("table_factories", &self.table_factories)
+            .field("catalog_factories", &self.catalog_factories)
             .field("function_factory", &self.function_factory)
             .field("cache_factory", &self.cache_factory)
             .field("expr_planners", &self.expr_planners);

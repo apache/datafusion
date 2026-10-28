@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
@@ -70,7 +57,7 @@ pub mod dml {
 }
 pub mod planner;
 /// Protobuf conversions for [`WindowFrame`], [`WindowFrameBound`],
-/// [`WindowFrameUnits`], [`MergeIntoClauseKind`](dml::MergeIntoClauseKind) and
+/// [`WindowFrameUnits`], [`MergeIntoClauseKind`] and
 /// [`NullTreatment`](expr::NullTreatment), gated on the `proto` feature.
 #[cfg(feature = "proto")]
 mod proto;
@@ -88,6 +75,12 @@ pub mod preimage;
 pub mod ptr_eq;
 #[cfg(not(feature = "sql"))]
 pub mod sql;
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub mod test;
 pub mod tree_node;
 pub mod type_coercion;
@@ -101,9 +94,13 @@ pub use datafusion_doc::{
     DocSection, Documentation, DocumentationBuilder, aggregate_doc_sections,
     scalar_doc_sections, window_doc_sections,
 };
-pub use datafusion_expr_common::accumulator::Accumulator;
+pub use datafusion_expr_common::accumulator::{
+    Accumulator, AggregateMetric, AggregateMetricRecorder, AggregateMetrics,
+};
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
-pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+pub use datafusion_expr_common::groups_accumulator::{
+    EmitTo, GroupSelection, GroupsAccumulator,
+};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::placement::ExpressionPlacement;
 pub use datafusion_expr_common::signature::{
@@ -135,10 +132,15 @@ pub use partition_evaluator::PartitionEvaluator;
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{
-    AggregateUDF, AggregateUDFImpl, ReversedUDAF, SetMonotonicity, StatisticsArgs,
-    udaf_default_display_name, udaf_default_human_display, udaf_default_return_field,
-    udaf_default_schema_name, udaf_default_window_function_display_name,
-    udaf_default_window_function_schema_name,
+    AggregateUDF, AggregateUDFImpl, DistinctHandling, ReversedUDAF, SetMonotonicity,
+    StatisticsArgs, UdafDisplayNameBuilder, UdafHumanDisplayBuilder,
+    UdafSchemaNameBuilder, UdafWindowFunctionDisplayNameBuilder,
+    UdafWindowFunctionSchemaNameBuilder, udaf_default_return_field,
+};
+#[expect(deprecated)]
+pub use udaf::{
+    udaf_default_display_name, udaf_default_human_display, udaf_default_schema_name,
+    udaf_default_window_function_display_name, udaf_default_window_function_schema_name,
 };
 pub use udf::{
     ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, StructFieldMapping,

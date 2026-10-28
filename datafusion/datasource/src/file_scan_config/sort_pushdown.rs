@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sort pushdown helpers for [`FileScanConfig`].
 //!
@@ -24,7 +11,7 @@
 //! Extracted from `file_scan_config.rs` to keep that module focused on
 //! core configuration and data-source plumbing.
 
-use super::FileScanConfig;
+use super::{FileScanConfig, partition_known_empty_files};
 use crate::file::FileSource;
 use crate::file_groups::FileGroup;
 use crate::source::DataSource;
@@ -32,7 +19,7 @@ use crate::statistics::MinMaxStatistics;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -328,7 +315,12 @@ pub(crate) fn sort_files_within_groups_by_statistics(
             continue;
         }
 
-        let files: Vec<_> = group.iter().collect();
+        let (files, empty_files) = partition_known_empty_files(group.iter());
+        if files.len() <= 1 {
+            new_groups.push(group.clone());
+            confirmed_non_overlapping += 1;
+            continue;
+        }
 
         let statistics = match MinMaxStatistics::new_from_files(
             sort_order,
@@ -353,17 +345,22 @@ pub(crate) fn sort_files_within_groups_by_statistics(
             .enumerate()
             .all(|(pos, (idx, _))| pos == *idx);
 
+        let sorted_files = sorted_indices
+            .iter()
+            .map(|(idx, _)| files[*idx])
+            .collect::<Vec<_>>();
+
         let sorted_group: FileGroup = if already_sorted {
             group.clone()
         } else {
             any_reordered = true;
-            sorted_indices
+            sorted_files
                 .iter()
-                .map(|(idx, _)| files[*idx].clone())
+                .map(|file| (**file).clone())
+                .chain(empty_files.iter().map(|file| (**file).clone()))
                 .collect()
         };
 
-        let sorted_files: Vec<_> = sorted_group.iter().collect();
         let is_non_overlapping = match MinMaxStatistics::new_from_files(
             sort_order,
             projected_schema,
@@ -406,6 +403,9 @@ pub(crate) fn any_file_has_nulls_in_sort_columns(
             let Some(stats) = file.statistics.as_ref() else {
                 return true; // No stats, assume nulls exist
             };
+            if is_known_empty(stats) {
+                continue;
+            }
             for col in &sort_columns {
                 let stat_idx = projection_indices
                     .map(|p| p[col.index()])
@@ -468,11 +468,11 @@ pub(crate) fn is_ordering_valid_for_file_groups(
     projection: Option<&[usize]>,
 ) -> bool {
     file_groups.iter().all(|group| {
-        if group.len() <= 1 {
+        let (files, _) = partition_known_empty_files(group.iter());
+        if files.len() <= 1 {
             return true; // single-file groups are trivially sorted
         }
-        match MinMaxStatistics::new_from_files(ordering, schema, projection, group.iter())
-        {
+        match MinMaxStatistics::new_from_files(ordering, schema, projection, files) {
             Ok(stats) => stats.is_sorted(),
             Err(_) => false, // can't prove sorted → reject
         }
@@ -618,5 +618,88 @@ pub(crate) fn get_projected_output_ordering(
                 vec![]
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PartitionedFile;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
+
+    fn file_with_stats(name: &str, min: f64, max: f64) -> PartitionedFile {
+        PartitionedFile::new(name.to_string(), 1024).with_statistics(Arc::new(
+            Statistics {
+                num_rows: Precision::Exact(100),
+                total_byte_size: Precision::Exact(1024),
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    min_value: Precision::Exact(ScalarValue::Float64(Some(min))),
+                    max_value: Precision::Exact(ScalarValue::Float64(Some(max))),
+                    ..Default::default()
+                }],
+            },
+        ))
+    }
+
+    fn exact_empty_file(name: &str) -> PartitionedFile {
+        PartitionedFile::new(name.to_string(), 1024).with_statistics(Arc::new(
+            Statistics {
+                num_rows: Precision::Exact(0),
+                ..Default::default()
+            },
+        ))
+    }
+
+    #[test]
+    fn exact_empty_files_are_ignored_and_preserved() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            false,
+        )]));
+        let sort_order = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+            Column::new("value", 0),
+        ))])
+        .unwrap();
+        let file_groups = vec![
+            FileGroup::new(vec![
+                file_with_stats("high", 20.0, 29.0),
+                exact_empty_file("empty"),
+                file_with_stats("low", 0.0, 9.0),
+            ]),
+            FileGroup::new(vec![exact_empty_file("empty1"), exact_empty_file("empty2")]),
+        ];
+
+        let sorted = sort_files_within_groups_by_statistics(
+            &file_groups,
+            &sort_order,
+            &schema,
+            None,
+        );
+
+        assert!(sorted.any_reordered);
+        assert!(sorted.all_non_overlapping);
+        assert_eq!(sorted.file_groups[0].len(), 3);
+        assert_eq!(sorted.file_groups[1].len(), 2);
+        let first_group_names = sorted.file_groups[0]
+            .iter()
+            .map(|file| file.object_meta.location.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(first_group_names, ["low", "high", "empty"]);
+
+        assert!(!any_file_has_nulls_in_sort_columns(
+            &sorted.file_groups,
+            sort_order.as_ref(),
+            &schema,
+            None,
+        ));
+        assert!(is_ordering_valid_for_file_groups(
+            &sorted.file_groups,
+            &sort_order,
+            &schema,
+            None,
+        ));
     }
 }

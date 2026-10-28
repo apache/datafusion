@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{Array, NullArray, UInt64Array};
 use arrow::array::{ArrayRef, BooleanArray};
@@ -67,12 +54,23 @@ pub trait PruningStatistics {
     /// returned array should have `null` in that row. If the minimum value is
     /// not known for any row, return `None`.
     ///
+    /// Each non-null entry must be a conservative lower bound for all non-null
+    /// values in its container, using Arrow's comparison order for the column
+    /// type. For strings, this is unsigned lexicographic UTF-8 byte order.
+    /// Bounds that cannot satisfy this contract must be reported as unknown.
+    /// Pruning relies on providers to uphold this contract; it does not validate
+    /// the ordering or bound guarantees of arbitrary statistics sources.
+    ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef>;
 
     /// Return the maximum values for the named column, if known.
     ///
     /// See [`Self::min_values`] for when to return `None` and null values.
+    ///
+    /// Each non-null entry must be a conservative upper bound for all non-null
+    /// values in its container, using the comparison order described in
+    /// [`Self::min_values`].
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
     fn max_values(&self, column: &Column) -> Option<ArrayRef>;

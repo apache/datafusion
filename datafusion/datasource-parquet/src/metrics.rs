@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -143,8 +130,8 @@ pub struct ParquetFileMetrics {
 /// The clamp and the final top-up also absorb two small inexactnesses in
 /// crediting by row group: a file is slightly larger than the sum of its row
 /// groups (the footer, the page index and any padding belong to no row group),
-/// and a row group is assigned to a byte range by the offset of its first page,
-/// so a range's row groups do not add up to precisely its length.
+/// and each row group is credited whole to the one range that reads it, so a
+/// range's row groups do not add up to precisely its length.
 ///
 /// The budget is held as a `usize` because [`Count`] is, so the two cannot
 /// disagree: on a 32-bit target a range longer than `usize::MAX` saturates once,
@@ -227,8 +214,7 @@ impl ParquetFileMetrics {
         let bytes_scanned = builder
             .clone()
             .with_type(MetricType::Summary)
-            .with_category(MetricCategory::Bytes)
-            .counter("bytes_scanned", partition);
+            .bytes_counter("bytes_scanned", partition);
 
         let metadata_load_time = builder
             .clone()
@@ -349,8 +335,7 @@ impl ParquetFileMetrics {
         MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .with_type(MetricType::Summary)
-            .with_category(MetricCategory::Bytes)
-            .counter("bytes_processed", partition)
+            .bytes_counter("bytes_processed", partition)
     }
 
     /// Record pages whose page-index pruning was skipped because the containing
@@ -374,6 +359,28 @@ impl ParquetFileMetrics {
             .with_type(MetricType::Summary)
             .with_category(MetricCategory::Rows)
             .counter("page_index_pages_skipped_by_fully_matched", partition);
+        count.add(n);
+    }
+
+    /// Record rows skipped by page-level limit pruning.
+    ///
+    /// This metric is registered lazily to avoid adding per-file metric setup
+    /// overhead when the optimization does not apply.
+    pub(crate) fn add_limit_pruned_rows(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        filename: &str,
+        n: usize,
+    ) {
+        if n == 0 {
+            return;
+        }
+
+        let count = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .with_category(MetricCategory::Rows)
+            .counter("limit_pruned_rows", partition);
         count.add(n);
     }
 

@@ -1,0 +1,3 @@
+template sql_benchmarks/projection_subquery/projection_subquery.benchmark.template
+QPAD=03
+NAME=q03_in_correlated_eq

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Physical expressions for window functions
 
@@ -33,7 +20,7 @@ use crate::{
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_schema::{FieldRef, SortOptions};
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, assert_or_internal_err, exec_err};
 use datafusion_expr::{
     LimitEffect, PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
@@ -295,7 +282,14 @@ impl StandardWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn limit_effect(&self) -> LimitEffect {
-        self.fun.inner().limit_effect(self.args.as_slice())
+        match self.fun.inner().limit_effect(self.args.as_slice()) {
+            // The function's offset counts non-null values, so it cannot bound
+            // the number of input rows needed when NULLs are skipped.
+            LimitEffect::Relative(_) | LimitEffect::Absolute(_) if self.ignore_nulls => {
+                LimitEffect::Unknown
+            }
+            effect => effect,
+        }
     }
 }
 
@@ -391,7 +385,7 @@ pub(crate) fn window_equivalence_properties(
         // Find "one" valid ordering for partition columns to avoid exponential complexity.
         // see https://github.com/apache/datafusion/issues/17401
         let mut all_satisfied_lexs = vec![];
-        let mut candidate_ordering = vec![];
+        let mut candidate_ordering = Vec::with_capacity(partitioning_exprs.len());
 
         for partition_expr in partitioning_exprs.iter() {
             let sort_options =
@@ -511,7 +505,7 @@ pub(crate) fn window_equivalence_properties(
                     // Find one valid ordering for aggregate arguments instead of
                     // checking all combinations
                     let aggregate_exprs = sliding_expr.get_aggregate_expr().expressions();
-                    let mut candidate_order = vec![];
+                    let mut candidate_order = Vec::with_capacity(aggregate_exprs.len());
                     let mut asc = false;
 
                     for (idx, expr) in aggregate_exprs.iter().enumerate() {
@@ -568,7 +562,7 @@ pub(crate) fn window_equivalence_properties(
                                 Arc::new(window_col),
                                 SortOptions::new(true, false),
                             )]);
-                        };
+                        }
                     }
                 }
             }
@@ -615,7 +609,7 @@ pub fn get_best_fitting_window(
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:
         return Ok(None);
-    };
+    }
 
     let window_expr = if should_reverse {
         if let Some(reversed_window_expr) = window_exprs
@@ -623,6 +617,20 @@ pub fn get_best_fitting_window(
             .map(|e| e.get_reverse_expr())
             .collect::<Option<Vec<_>>>()
         {
+            // The rebuilt exec derives its schema from `WindowExpr::field()`, so a
+            // reversal that renames the output field would silently change this
+            // node's schema while parent nodes still reference the old column
+            // names. Catch that here, where the culprit is identifiable.
+            for (reversed, original) in reversed_window_expr.iter().zip(window_exprs) {
+                let (reversed_field, original_field) =
+                    (reversed.field()?, original.field()?);
+                assert_or_internal_err!(
+                    reversed_field.name() == original_field.name(),
+                    "Reversing window expression changed its output field name from {} to {}",
+                    original_field.name(),
+                    reversed_field.name()
+                );
+            }
             reversed_window_expr
         } else {
             // Cannot take reverse of any of the window expr

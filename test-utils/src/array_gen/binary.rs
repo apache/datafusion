@@ -1,22 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{
-    ArrayRef, BinaryViewArray, GenericBinaryArray, OffsetSizeTrait, UInt32Array,
+    ArrayRef, BinaryViewArray, FixedSizeBinaryArray, GenericBinaryArray, OffsetSizeTrait,
+    UInt32Array,
 };
 use arrow::compute;
 use rand::Rng;
@@ -43,20 +31,20 @@ impl BinaryArrayGenerator {
             .map(|_| Some(random_binary(&mut self.rng, self.max_len)))
             .collect();
 
-        // Pick num_binaries randomly from the distinct binary table
-        let indices: UInt32Array = (0..self.num_binaries)
-            .map(|_| {
-                if self.rng.random::<f64>() < self.null_pct {
-                    None
-                } else if self.num_distinct_binaries > 1 {
-                    let range = 0..(self.num_distinct_binaries as u32);
-                    Some(self.rng.random_range(range))
-                } else {
-                    Some(0)
-                }
-            })
-            .collect();
+        let indices = self.gen_indices();
+        compute::take(&distinct_binaries, &indices, None).unwrap()
+    }
 
+    /// Creates a FixedSizeBinaryArray with random binary data.
+    pub fn gen_fixed_size_binary(&mut self) -> ArrayRef {
+        let width = self.max_len;
+        let distinct_binaries = FixedSizeBinaryArray::try_from_iter(
+            (0..self.num_distinct_binaries)
+                .map(|_| (0..width).map(|_| self.rng.random()).collect::<Vec<u8>>()),
+        )
+        .unwrap();
+
+        let indices = self.gen_indices();
         compute::take(&distinct_binaries, &indices, None).unwrap()
     }
 
@@ -66,7 +54,13 @@ impl BinaryArrayGenerator {
             .map(|_| Some(random_binary(&mut self.rng, self.max_len)))
             .collect();
 
-        let indices: UInt32Array = (0..self.num_binaries)
+        let indices = self.gen_indices();
+        compute::take(&distinct_binary_views, &indices, None).unwrap()
+    }
+
+    /// Generates nullable indices into the distinct binary values.
+    fn gen_indices(&mut self) -> UInt32Array {
+        (0..self.num_binaries)
             .map(|_| {
                 if self.rng.random::<f64>() < self.null_pct {
                     None
@@ -77,9 +71,7 @@ impl BinaryArrayGenerator {
                     Some(0)
                 }
             })
-            .collect();
-
-        compute::take(&distinct_binary_views, &indices, None).unwrap()
+            .collect()
     }
 }
 

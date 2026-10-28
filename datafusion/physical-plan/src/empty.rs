@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! EmptyRelation with produce_one_row=false execution plan
 
@@ -213,6 +200,7 @@ impl ExecutionPlan for EmptyExec {
         &self,
         _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
         // Destructure exhaustively (no `..`) so that adding a field to
         // `EmptyExec` is a compile error here until it is either serialized or
@@ -224,12 +212,13 @@ impl ExecutionPlan for EmptyExec {
             cache: _,
         } = self;
         let schema = schema.as_ref().try_into()?;
+        let partitions = usize_to_wire(*partitions, "EmptyExec", "partitions")?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Empty(
                     protobuf::EmptyExecNode {
                         schema: Some(schema),
-                        partitions: *partitions as u32,
+                        partitions,
                     },
                 ),
             ),

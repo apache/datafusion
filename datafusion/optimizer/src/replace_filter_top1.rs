@@ -75,10 +75,6 @@ impl ReplaceFilterTop1 {
 }
 
 impl OptimizerRule for ReplaceFilterTop1 {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,

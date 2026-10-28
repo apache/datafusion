@@ -91,7 +91,7 @@ There are several functions that can be used to create a new builder, such as
 - `empty` - create an empty plan with no fields
 - `values` - create a plan from a set of literal values
 - `scan` - create a plan representing a table scan
-- `scan_with_filters` - create a plan representing a table scan with filters
+- `table_scan` - create a plan representing a table scan with optional projection/filters/fetch/skip
 
 Once the builder is created, transformation methods can be called to declare that further operations should be
 performed on the plan. Note that all we are doing at this stage is building up the logical plan structure. No query

@@ -1,15 +1,7 @@
--- Mixed-cost dataset: cheap integer columns (`cN < k` ~ k% selectivity)
--- alongside one wide string column carrying three markers matched by expensive
--- `regexp_like`:
---
---   'rare' present in ~0.1% of rows  (value % 1009 = 5)
---   'ten'  present in ~10%  of rows  (value % 10   = 0)
---   'aaa'  present in ~90%  of rows  (value % 10  <> 0)
---
--- This lets a single table mix cheap integer compares with expensive regexp
--- scans at independently chosen selectivities (e.g. a cheap, unselective compare
--- next to an expensive, selective regexp). PRED_FILL is the string-width knob;
--- PRED_ROWS sizes the table.
+-- Mixed-cost dataset: cheap integer columns c0..c3 uniform on [0,100) (`cN < k`
+-- ~k%) alongside one wide string column `s` carrying three markers matched by an
+-- expensive `regexp_like`: 'rare' ~0.1%, 'ten' ~10%, 'aaa' ~90%. PRED_FILL is the
+-- string-width knob and PRED_ROWS sizes the table.
 CREATE TABLE t AS
 SELECT
   (value * 1)  % 100 AS c0,

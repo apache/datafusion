@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`BufferExec`] decouples production and consumption on messages by buffering the input in the
 //! background up to a certain capacity.
@@ -368,6 +355,7 @@ impl BufferExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let buffer = crate::expect_plan_variant!(
             node,
@@ -378,7 +366,8 @@ impl BufferExec {
         // compile error here rather than a silently dropped field.
         let protobuf::BufferExecNode { input, capacity } = &**buffer;
         let input = ctx.decode_required_child(input.as_deref(), "BufferExec", "input")?;
-        Ok(Arc::new(BufferExec::new(input, *capacity as usize)))
+        let capacity = usize_from_wire(*capacity, "BufferExec", "capacity")?;
+        Ok(Arc::new(BufferExec::new(input, capacity)))
     }
 }
 
@@ -476,7 +465,7 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
 
                 if batch_tx.send(Ok((item, permit))).is_err() {
                     break; // stream was closed
-                };
+                }
             }
         });
 

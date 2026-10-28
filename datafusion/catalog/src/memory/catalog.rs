@@ -1,26 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`MemoryCatalogProvider`], [`MemoryCatalogProviderList`]: In-memory
 //! implementations of [`CatalogProviderList`] and [`CatalogProvider`].
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider};
 use dashmap::DashMap;
-use datafusion_common::exec_err;
+use datafusion_common::{Result, exec_err};
 use std::sync::Arc;
 
 /// Simple in-memory list of catalogs
@@ -52,6 +39,24 @@ impl CatalogProviderList for MemoryCatalogProviderList {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         self.catalogs.insert(name, catalog)
+    }
+
+    fn deregister_catalog(
+        &self,
+        name: &str,
+        cascade: bool,
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        let Some(mut entry) = self.catalogs.get_mut(name) else {
+            return Ok(None);
+        };
+
+        let catalog = entry.value_mut();
+        catalog.prepare_deregister_catalog(cascade)?;
+
+        // Drop entry to release its lock
+        drop(entry);
+
+        Ok(self.catalogs.remove(name).map(|(_, catalog)| catalog))
     }
 
     fn catalog_names(&self) -> Vec<String> {
@@ -97,7 +102,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         &self,
         name: &str,
         schema: Arc<dyn SchemaProvider>,
-    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         Ok(self.schemas.insert(name.into(), schema))
     }
 
@@ -105,7 +110,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         &self,
         name: &str,
         cascade: bool,
-    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         if let Some(schema) = self.schema(name) {
             let table_names = schema.table_names();
             match (table_names.is_empty(), cascade) {
@@ -114,7 +119,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     Ok(Some(removed))
                 }
                 (false, false) => exec_err!(
-                    "Cannot drop schema {} because other tables depend on it: {}",
+                    "Cannot drop schema {} containing tables: {}",
                     name,
                     itertools::join(table_names.iter(), ", ")
                 ),
@@ -122,5 +127,17 @@ impl CatalogProvider for MemoryCatalogProvider {
         } else {
             Ok(None)
         }
+    }
+
+    fn prepare_deregister_catalog(&self, cascade: bool) -> Result<()> {
+        if !cascade && !self.schemas.is_empty() {
+            return exec_err!(
+                "Cannot drop catalog containing schemas: {}",
+                itertools::join(self.schema_names().iter(), ", ")
+            );
+        }
+
+        self.schemas.clear();
+        Ok(())
     }
 }

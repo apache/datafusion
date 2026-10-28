@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::fmt::Display;
@@ -245,7 +232,8 @@ impl EquivalenceClass {
     }
 
     /// Adds the given offset to all columns in the expressions inside this
-    /// class. This is used when schemas are appended, e.g. in joins.
+    /// class, keeping its constant value. This is used when schemas are
+    /// appended, e.g. in joins.
     pub fn try_with_offset(&self, offset: isize) -> Result<Self> {
         let mut cls = Self::default();
         for expr_result in self
@@ -256,6 +244,7 @@ impl EquivalenceClass {
         {
             cls.push(expr_result?);
         }
+        cls.constant.clone_from(&self.constant);
         Ok(cls)
     }
 }
@@ -624,8 +613,8 @@ impl EquivalenceGroup {
             .filter(|req| !self.is_uniform_constant(&req.expr))
     }
 
-    /// Perform an indirect projection of `expr` by consulting the equivalence
-    /// classes.
+    /// Projects `expr` through its children or an equivalent expression in the
+    /// mapping, preferring to preserve its structure.
     fn project_expr_indirect(
         aug_mapping: &AugmentedMapping,
         expr: &Arc<dyn PhysicalExpr>,
@@ -635,8 +624,32 @@ impl EquivalenceGroup {
             return Some(Arc::clone(expr));
         }
 
-        // The given expression is not inside the mapping, so we try to project
-        // indirectly using equivalence classes.
+        // Preserve expression structure when its children can be projected.
+        // Otherwise, projecting a class such as a + 1 = b can collapse it to
+        // b = b, losing the equivalence even when a survives the projection.
+        let children = expr.children();
+        if !children.is_empty() {
+            let projected_children = children
+                .into_iter()
+                .map(|child| {
+                    // First, we try to project children with an exact match. If
+                    // we are unable to do this, we consult equivalence classes.
+                    if let Some((targets, _)) = aug_mapping.get(child) {
+                        // If we match the source, we can project directly:
+                        let (target, _) = targets.first();
+                        Some(Arc::clone(target))
+                    } else {
+                        Self::project_expr_indirect(aug_mapping, child)
+                    }
+                })
+                .collect::<Option<Vec<_>>>();
+            if let Some(children) = projected_children {
+                return Some(Arc::clone(expr).with_new_children(children).unwrap());
+            }
+        }
+
+        // Project expressions whose children could not be projected by consulting
+        // equivalence classes.
         for (targets, eq_class) in aug_mapping.values() {
             // If we match an equivalent expression to a source expression in
             // the mapping, then we can project. For example, if we have the
@@ -647,27 +660,7 @@ impl EquivalenceGroup {
                 return Some(Arc::clone(target));
             }
         }
-        // Project a non-leaf expression by projecting its children.
-        let children = expr.children();
-        if children.is_empty() {
-            // A leaf expression should be inside the mapping.
-            return None;
-        }
-        children
-            .into_iter()
-            .map(|child| {
-                // First, we try to project children with an exact match. If
-                // we are unable to do this, we consult equivalence classes.
-                if let Some((targets, _)) = aug_mapping.get(child) {
-                    // If we match the source, we can project directly:
-                    let (target, _) = targets.first();
-                    Some(Arc::clone(target))
-                } else {
-                    Self::project_expr_indirect(aug_mapping, child)
-                }
-            })
-            .collect::<Option<Vec<_>>>()
-            .map(|children| Arc::clone(expr).with_new_children(children).unwrap())
+        None
     }
 
     fn augment_projection_mapping<'a>(
@@ -733,7 +726,8 @@ impl EquivalenceGroup {
         // The key is the source expression, and the value is the equivalence
         // class that contains the corresponding target expression.
         let mut new_constants = vec![];
-        let mut new_classes = IndexMap::<_, EquivalenceClass>::new();
+        let mut new_classes =
+            IndexMap::<_, EquivalenceClass>::with_capacity(mapping.len());
         for (source, targets) in mapping.iter() {
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and
@@ -818,7 +812,16 @@ impl EquivalenceGroup {
                     self.iter().cloned().chain(
                         right_equivalences
                             .iter()
-                            .map(|cls| cls.try_with_offset(left_size as _))
+                            .map(|cls| {
+                                let mut cls = cls.try_with_offset(left_size as _)?;
+                                // Rows without a match on the right side are
+                                // padded with NULLs, so its constants no
+                                // longer hold.
+                                if matches!(join_type, JoinType::Left | JoinType::Full) {
+                                    cls.constant = None;
+                                }
+                                Ok(cls)
+                            })
                             .collect::<Result<Vec<_>>>()?,
                     ),
                 );
@@ -1342,6 +1345,34 @@ mod tests {
             !group_of(&schema, &[("a", "b")])?
                 .has_same_classes(&group_of(&schema, &[("a", "b"), ("b", "c")])?)
         );
+
+        Ok(())
+    }
+
+    /// A constant on the right side of a join stays constant in the join
+    /// output, unless unmatched rows pad the right side with NULLs.
+    /// <https://github.com/apache/datafusion/issues/26283>
+    #[test]
+    fn test_join_keeps_right_constants() -> Result<()> {
+        let schema = abc_schema();
+        let mut right = EquivalenceGroup::default();
+        right.add_constant(ConstExpr::from(col("a", &schema)?));
+        // `a` of the right side is column 4 of the join output
+        let right_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 4));
+
+        for (join_type, expected) in [
+            (JoinType::Inner, true),
+            (JoinType::Right, true),
+            (JoinType::Left, false),
+            (JoinType::Full, false),
+        ] {
+            let joined = EquivalenceGroup::default().join(&right, &join_type, 4, &[])?;
+            assert_eq!(
+                joined.is_expr_constant(&right_a).is_some(),
+                expected,
+                "{join_type}"
+            );
+        }
 
         Ok(())
     }

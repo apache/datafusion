@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! See `main.rs` for how to run it.
 
@@ -31,7 +18,7 @@ use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::{TableProvider, TableType, provider_as_source};
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
-use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::logical_expr::{LogicalPlanBuilder, TableScanBuilder};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::memory::MemoryStream;
@@ -92,14 +79,10 @@ async fn search_accounts(
     // create local execution context
     let ctx = SessionContext::new();
 
+    let table_scan =
+        TableScanBuilder::new("accounts", provider_as_source(Arc::new(db))).build()?;
     // create logical plan composed of a single TableScan
-    let logical_plan = LogicalPlanBuilder::scan_with_filters(
-        "accounts",
-        provider_as_source(Arc::new(db)),
-        None,
-        vec![],
-    )?
-    .build()?;
+    let logical_plan = LogicalPlanBuilder::table_scan(table_scan)?.build()?;
 
     let mut dataframe = DataFrame::new(ctx.state(), logical_plan)
         .select_columns(&["id", "bank_account"])?;

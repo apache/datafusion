@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -23,15 +10,18 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_expr::Accumulator;
+use datafusion_expr::groups_accumulator::GroupsAccumulator;
 use datafusion_functions_aggregate::nth_value::{
     NthValueAccumulator, TrivialNthValueAccumulator,
 };
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::GroupsAccumulatorAdapter;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 
 const N_VALUES: [i64; 6] = [-100, -10, -1, 1, 10, 100];
 const BATCH_LEN: usize = 8192;
 const UPDATES_PER_ITER: usize = 10;
+const ADAPTER_GROUPS: usize = 8192;
 
 fn int64_array(values: impl IntoIterator<Item = i64>) -> ArrayRef {
     Arc::new(Int64Array::from_iter_values(values))
@@ -49,6 +39,34 @@ fn ordered_accumulator(n: i64) -> NthValueAccumulator {
     .unwrap();
     NthValueAccumulator::try_new(n, &DataType::Int64, &[DataType::Int64], ordering)
         .unwrap()
+}
+
+fn grouped_adapter_benchmark(c: &mut Criterion) {
+    let values = int64_array(0..ADAPTER_GROUPS as i64);
+    let n_values = int64_array(std::iter::repeat_n(1, ADAPTER_GROUPS));
+    let ordering_values = int64_array(0..ADAPTER_GROUPS as i64);
+    let group_indices: Vec<_> = (0..ADAPTER_GROUPS).collect();
+    let batch = vec![values, n_values, ordering_values];
+
+    c.bench_function(
+        "nth_value/ordered_groups_accumulator_adapter/8192_groups",
+        |b| {
+            b.iter_batched(
+                || {
+                    GroupsAccumulatorAdapter::new(|| {
+                        Ok(Box::new(ordered_accumulator(1)) as Box<dyn Accumulator>)
+                    })
+                },
+                |mut accumulator| {
+                    accumulator
+                        .update_batch(&batch, &group_indices, None, ADAPTER_GROUPS)
+                        .unwrap();
+                    black_box(accumulator);
+                },
+                BatchSize::SmallInput,
+            );
+        },
+    );
 }
 
 fn nth_value_benchmark(c: &mut Criterion) {
@@ -98,5 +116,5 @@ fn nth_value_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, nth_value_benchmark);
+criterion_group!(benches, nth_value_benchmark, grouped_adapter_benchmark);
 criterion_main!(benches);

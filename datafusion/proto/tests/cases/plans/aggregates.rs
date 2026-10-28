@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! `AggregateExec`.
 
@@ -27,7 +14,7 @@ use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
 use datafusion::physical_plan::aggregates::{
-    AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
+    AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{PhysicalSortExpr, col, lit};
@@ -44,6 +31,7 @@ use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_co
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::first_last::first_value_udaf;
+use datafusion_functions_aggregate::min_max::min_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
@@ -206,9 +194,9 @@ fn roundtrip_aggregate_with_limit() -> Result<()> {
         vec![(col("a", &schema)?, "unused".to_string())];
 
     let aggregates = vec![
-        AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+        AggregateExprBuilder::new(min_udaf(), vec![col("b", &schema)?])
             .schema(Arc::clone(&schema))
-            .alias("AVG(b)")
+            .alias("MIN(b)")
             .build()
             .map(Arc::new)?,
     ];
@@ -221,7 +209,10 @@ fn roundtrip_aggregate_with_limit() -> Result<()> {
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
     )?;
-    let agg = agg.with_limit_options(Some(LimitOptions::new_with_order(12, false)));
+    let agg = agg
+        .try_optimize_topk(12, "MIN(b)", SortOptions::new(false, false))
+        .unwrap()
+        .data;
     roundtrip_test(Arc::new(agg))
 }
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod dependency; // Submodule containing DependencyMap and Dependencies
 mod joins; // Submodule containing join_equivalence_properties
@@ -39,6 +26,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
@@ -169,9 +157,10 @@ impl OrderingEquivalenceCache {
     pub fn new(
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) -> Self {
+        let normal_cls = OrderingEquivalenceClass::new(orderings);
         let mut cache = Self {
-            normal_cls: OrderingEquivalenceClass::new(orderings),
-            leading_map: HashMap::new(),
+            leading_map: HashMap::with_capacity(normal_cls.len()),
+            normal_cls,
         };
         cache.update_map();
         cache
@@ -640,8 +629,13 @@ impl EquivalenceProperties {
             return Ok(true);
         }
         let schema = self.schema();
-        let mut eq_properties = self.clone();
-        for element in normal_reqs {
+        // Registering satisfied keys as constants mutates the state, so it
+        // needs an owned copy -- but only from the second requirement onwards.
+        // Single-element requirements (the common case) never pay for the clone.
+        let last_idx = normal_reqs.len() - 1;
+        let mut owned = None::<Self>;
+        for (idx, element) in normal_reqs.into_iter().enumerate() {
+            let eq_properties = owned.as_ref().unwrap_or(self);
             // Check whether given requirement is satisfied:
             let ExprProperties {
                 sort_properties, ..
@@ -658,10 +652,16 @@ impl EquivalenceProperties {
             if !satisfy {
                 return Ok(false);
             }
+            if idx == last_idx {
+                // Nothing left to check, so no need to update the state:
+                break;
+            }
             // Treat satisfied keys (and the sub-expressions they pin down) as
             // constants in subsequent iterations. See
             // [`Self::add_satisfied_key_constants`] for the rationale.
-            eq_properties.add_satisfied_key_constants(element.expr)?;
+            owned
+                .get_or_insert_with(|| self.clone())
+                .add_satisfied_key_constants(element.expr)?;
         }
         Ok(true)
     }
@@ -718,8 +718,12 @@ impl EquivalenceProperties {
             return Ok(full_length);
         }
         let schema = self.schema();
-        let mut eq_properties = self.clone();
+        // Registering satisfied keys as constants mutates the state, so it
+        // needs an owned copy -- but only from the second sort expression
+        // onwards. Single-element orderings never pay for the clone.
+        let mut owned = None::<Self>;
         for (idx, element) in normal_ordering.into_iter().enumerate() {
+            let eq_properties = owned.as_ref().unwrap_or(self);
             // Check whether given ordering is satisfied:
             let ExprProperties {
                 sort_properties, ..
@@ -739,10 +743,16 @@ impl EquivalenceProperties {
                 // many we've satisfied so far:
                 return Ok(idx);
             }
+            if idx + 1 == full_length {
+                // Nothing left to check, so no need to update the state:
+                break;
+            }
             // Treat satisfied keys (and the sub-expressions they pin down) as
             // constants in subsequent iterations. See
             // [`Self::add_satisfied_key_constants`] for the rationale.
-            eq_properties.add_satisfied_key_constants(Arc::clone(&element.expr))?;
+            owned
+                .get_or_insert_with(|| self.clone())
+                .add_satisfied_key_constants(Arc::clone(&element.expr))?;
         }
         // All sort expressions are satisfied, return full length:
         Ok(full_length)
@@ -1386,6 +1396,29 @@ impl EquivalenceProperties {
             .unwrap_or_else(|_| ExprProperties::new_unknown())
     }
 
+    /// Returns whether `transformed_expr` reports the same ordering direction
+    /// when `source_expr` is ordered and all other inputs are singleton.
+    pub(crate) fn is_same_direction_ordered_transform(
+        &self,
+        transformed_expr: &Arc<dyn PhysicalExpr>,
+        source_expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        if transformed_expr.eq(source_expr) {
+            return false;
+        }
+
+        let options = SortOptions::default();
+        let dependencies = Dependencies::new(std::iter::once(PhysicalSortExpr::new(
+            Arc::clone(source_expr),
+            options,
+        )));
+        matches!(
+            get_expr_properties(transformed_expr, &dependencies, &self.schema)
+                .map(|properties| properties.sort_properties),
+            Ok(SortProperties::Ordered(actual)) if actual == options
+        )
+    }
+
     /// Transforms this `EquivalenceProperties` by mapping columns in the
     /// original schema to columns in the new schema by index.
     pub fn with_new_schema(mut self, schema: SchemaRef) -> Result<Self> {
@@ -1410,7 +1443,7 @@ impl EquivalenceProperties {
         }
 
         // Rewrite equivalence classes according to the new schema:
-        let mut eq_classes = vec![];
+        let mut eq_classes = Vec::with_capacity(self.eq_group.len());
         for mut eq_class in self.eq_group {
             // Rewrite the expressions in the equivalence class:
             eq_class.exprs = eq_class

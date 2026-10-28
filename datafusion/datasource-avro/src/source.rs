@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Execution plan for reading line-delimited Avro files
 
@@ -189,6 +176,20 @@ impl FileSource for AvroSource {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        // Exhaustive destructure: adding a field to `AvroSource` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            // Serialized in `base` and used to rebuild the source on decode.
+            table_schema: _,
+            // Set from `FileScanConfig` when the scan is opened.
+            batch_size: _,
+            // Serialized in `base` and reapplied on decode.
+            projection: _,
+            // Runtime metrics, not part of the plan.
+            metrics: _,
+        } = self;
+
         let node = protobuf::AvroScanExecNode {
             base_conf: Some(base.try_to_proto(ctx)?),
         };
@@ -216,7 +217,9 @@ impl AvroSource {
             );
         };
 
-        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+        let protobuf::AvroScanExecNode { base_conf } = scan;
+
+        let base_conf = base_conf.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "AvroScanExecNode is missing required field 'base_conf'"
             )

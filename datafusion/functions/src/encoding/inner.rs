@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Encoding expressions
 
@@ -35,7 +22,7 @@ use datafusion_common::{
     types::{NativeType, logical_string},
     utils::{
         hex::{HexCase, encode_bytes, encode_bytes_to_slice},
-        take_function_args,
+        offset_span_len, take_function_args,
     },
 };
 use datafusion_expr::{
@@ -272,19 +259,13 @@ fn decode_scalar(value: &ScalarValue, encoding: Encoding) -> Result<ColumnarValu
     }
 }
 
-/// Estimate how many bytes are actually represented by the array; in case the
-/// the array slices it's internal buffer, this returns the byte size of that slice
-/// but not the byte size of the entire buffer.
+/// Estimates the number of input bytes covered by the array's visible rows.
 ///
-/// This is an estimation only as it can estimate higher if null slots are non-zero
-/// sized.
+/// Sliced arrays exclude bytes outside their visible offset span. This can
+/// overestimate the bytes processed because null rows may cover nonempty byte
+/// ranges.
 fn estimate_byte_data_size<O: OffsetSizeTrait>(array: &GenericBinaryArray<O>) -> usize {
-    let offsets = array.value_offsets();
-    // Unwraps are safe as should always have 1 element in offset buffer
-    let start = *offsets.first().unwrap();
-    let end = *offsets.last().unwrap();
-    let data_size = end - start;
-    data_size.as_usize()
+    offset_span_len(array.offsets())
 }
 
 fn decode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
@@ -544,7 +525,7 @@ mod tests {
         let size = estimate_byte_data_size(&array);
         assert_eq!(size, 15);
 
-        // Offsets starting at 0, but don't count entire data buffer size
+        // Nonzero starting offset, including bytes covered by null slots
         let array = BinaryArray::new(
             OffsetBuffer::new(vec![50, 51, 51, 60, 80, 81].into()),
             vec![0; 100].into(),

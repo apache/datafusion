@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! See `main.rs` for how to run it.
 //!
@@ -130,7 +117,7 @@ struct RemoteCatalogInterface {}
 
 impl RemoteCatalogInterface {
     /// Establish a connection to the remote catalog
-    #[expect(clippy::unused_async)]
+    #[expect(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn connect() -> Result<Self> {
         // In a real implementation this method might connect to a remote
         // catalog, validate credentials, cache basic information, etc
@@ -138,7 +125,7 @@ impl RemoteCatalogInterface {
     }
 
     /// Fetches information for a specific table
-    #[expect(clippy::unused_async)]
+    #[expect(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn table_info(&self, name: &str) -> Result<Option<SchemaRef>> {
         if name != "remote_table" {
             return Ok(None);
@@ -157,7 +144,7 @@ impl RemoteCatalogInterface {
     }
 
     /// Fetches data for a table from a remote data source
-    #[expect(clippy::unused_async)]
+    #[expect(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn read_data(&self, name: &str) -> Result<SendableRecordBatchStream> {
         if name != "remote_table" {
             return plan_err!("Remote table not found: {}", name);

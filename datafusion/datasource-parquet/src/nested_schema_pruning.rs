@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Schema-driven nested projection pruning.
 //!
@@ -192,7 +179,7 @@ const LINEAR_FIELD_SCAN_MAX: usize = 8;
 /// Duplicate names resolve to the first occurrence either way.
 fn lookup_field<'a>(
     fields: &'a Fields,
-    by_name: &Option<HashMap<&'a str, &'a FieldRef>>,
+    by_name: Option<&HashMap<&'a str, &'a FieldRef>>,
     name: &str,
 ) -> Option<&'a FieldRef> {
     match by_name {
@@ -227,7 +214,9 @@ fn clip_type(
             let kept_children: Fields = p_children
                 .iter()
                 .filter_map(|pc| {
-                    let Some(tc) = lookup_field(t_children, &t_by_name, pc.name()) else {
+                    let Some(tc) =
+                        lookup_field(t_children, t_by_name.as_ref(), pc.name())
+                    else {
                         skip_leaves(pc.data_type(), next_leaf);
                         return None;
                     };

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Simplify expressions optimizer rule and implementation
 
@@ -21,17 +8,17 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     columnize_expr, find_aggregate_exprs, grouping_set_to_exprlist, merge_schema,
 };
-use datafusion_expr::{DmlStatement, Expr, WriteOp};
 
 use super::ExprSimplifier;
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::linear_aggregates::rewrite_multiple_linear_aggregates;
-use crate::utils::NamePreserver;
+use crate::utils::{NamePreserver, merge_into_schema};
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
@@ -59,10 +46,6 @@ impl OptimizerRule for SimplifyExpressions {
         Some(ApplyOrder::BottomUp)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -77,19 +60,8 @@ impl SimplifyExpressions {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let schema = if let LogicalPlan::Dml(DmlStatement {
-            op: WriteOp::MergeInto(_),
-            table_name,
-            target,
-            ..
-        }) = &plan
-        {
-            let mut schema = merge_schema(&plan.inputs());
-            schema.merge(&DFSchema::try_from_qualified_schema(
-                table_name.clone(),
-                &target.schema(),
-            )?);
-            DFSchemaRef::new(schema)
+        let schema = if let Some(merge_schema) = merge_into_schema(&plan)? {
+            DFSchemaRef::new(merge_schema)
         } else if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(&plan.inputs()))
         } else if let LogicalPlan::TableScan(scan) = &plan {

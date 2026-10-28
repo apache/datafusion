@@ -1,22 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #[cfg(test)]
 pub mod test {
+    use arrow::array::{Array, ArrayRef, StringArray};
+    use arrow::datatypes::DataType;
+    use datafusion_common::Result;
+
     /// $FUNC ScalarUDFImpl to test
     /// $ARGS arguments (vec) to pass to function
     /// $EXPECTED a Result<ColumnarValue>
@@ -142,4 +133,28 @@ pub mod test {
     }
 
     pub(crate) use test_scalar_function;
+
+    /// Runs `run` on small slices of a string array that retains a large
+    /// values buffer, and checks that the output is sized for the visible rows.
+    pub(crate) fn check_sliced_string_capacity(
+        visible: &str,
+        run: impl Fn(ArrayRef) -> Result<ArrayRef>,
+    ) -> Result<()> {
+        let padding = "x".repeat(65536);
+        let input = StringArray::from(vec![
+            Some(padding.as_str()),
+            Some(visible),
+            None,
+            Some(padding.as_str()),
+        ]);
+        for data_type in [DataType::Utf8, DataType::LargeUtf8] {
+            let input = arrow::compute::cast(&input, &data_type)?;
+            for len in [0, 2] {
+                let result = run(input.slice(1, len))?;
+                assert_eq!(result.len(), len);
+                assert!(result.get_buffer_memory_size() < 1024);
+            }
+        }
+        Ok(())
+    }
 }

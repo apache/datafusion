@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::binary::binary_numeric_coercion;
 use crate::{
@@ -365,7 +352,7 @@ pub fn value_fields_with_higher_order_udf_and_lambdas(
                 ValueOrLambda::Lambda(_) => {}
             }
         }
-    };
+    }
 
     Ok(new_fields)
 }
@@ -559,9 +546,13 @@ fn get_valid_types_with_udf<F: UDFCoercionExt>(
                 }
             }
 
-            // Every signature failed, return the joined error
+            // Every signature failed. That means the caller passed the wrong
+            // number or types of arguments, which is a user mistake rather than
+            // a bug in DataFusion, so report it as a planning error. Reporting it
+            // as an internal error told users to file a bug report for their own
+            // typo, and the caller appends the candidate signatures anyway.
             if res.is_empty() {
-                return internal_err!(
+                return plan_err!(
                     "Function '{}' failed to match any signature, errors: {}",
                     func.name(),
                     errors.join(",")
@@ -688,7 +679,7 @@ fn get_valid_types(
 
         if !fixed_size {
             list_sizes.clear()
-        };
+        }
 
         let mut list_sizes = list_sizes.into_iter();
         let valid_types = arguments
@@ -816,13 +807,21 @@ fn get_valid_types(
         TypeSignature::Numeric(number) => {
             function_length_check(function_name, current_types.len(), *number)?;
 
+            let non_nulls = current_types
+                .iter()
+                .filter(|&t| NativeType::from(t) != NativeType::Null)
+                .collect::<Vec<_>>();
+            let mut valid_type = non_nulls
+                .first()
+                .copied()
+                .cloned()
+                // Fallback to default type if we don't know which type to coerced to
+                // f64 is chosen since most of the math functions utilize Signature::numeric,
+                // and their default type is double precision
+                .unwrap_or(DataType::Float64);
             // Find common numeric type among given types except string
-            let mut valid_type = current_types.first().unwrap().to_owned();
-            for t in current_types.iter().skip(1) {
+            for &t in non_nulls.iter().skip(1) {
                 let logical_data_type: NativeType = t.into();
-                if logical_data_type == NativeType::Null {
-                    continue;
-                }
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
@@ -840,12 +839,7 @@ fn get_valid_types(
             }
 
             let logical_data_type: NativeType = valid_type.clone().into();
-            // Fallback to default type if we don't know which type to coerced to
-            // f64 is chosen since most of the math functions utilize Signature::numeric,
-            // and their default type is double precision
-            if logical_data_type == NativeType::Null {
-                valid_type = DataType::Float64;
-            } else if !logical_data_type.is_numeric() {
+            if !logical_data_type.is_numeric() {
                 return plan_err!(
                     "Function '{function_name}' expects Numeric but received {logical_data_type}"
                 );
@@ -1158,6 +1152,16 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
+        (_, RunEndEncoded(_, value_type))
+            if coerced_from(type_into, value_type.data_type()).is_some() =>
+        {
+            Some(type_into.clone())
+        }
+        (RunEndEncoded(_, value_type), _)
+            if coerced_from(value_type.data_type(), type_from).is_some() =>
+        {
+            Some(type_into.clone())
+        }
         // coerced into type_into
         (Int8, Null | Int8) => Some(type_into.clone()),
         (Int16, Null | Int8 | Int16 | UInt8) => Some(type_into.clone()),
@@ -1441,6 +1445,13 @@ mod tests {
         );
         assert_eq!(got, [DataType::Float64]);
 
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Null, DataType::Null],
+        );
+        assert_eq!(got, [DataType::Float64, DataType::Float64]);
+
         // Rejects non-numeric arg.
         let got = get_valid_types(
             "test",
@@ -1452,6 +1463,21 @@ mod tests {
             got.to_string(),
             "Function 'test' expects Numeric but received Timestamp(s)"
         );
+
+        // Nulls should get ignored among other valid types
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Null, DataType::Int32],
+        );
+        assert_eq!(got, [DataType::Int32, DataType::Int32]);
+
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Int32, DataType::Null],
+        );
+        assert_eq!(got, [DataType::Int32, DataType::Int32]);
 
         Ok(())
     }
@@ -1611,6 +1637,50 @@ mod tests {
         let type_from =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::UInt32));
         let type_into = DataType::Int64;
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+    }
+
+    #[test]
+    fn test_coerced_from_run_end_encoded() {
+        let run_end_encoded_of = |value_type: DataType| {
+            DataType::RunEndEncoded(
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Field::new("values", value_type, true).into(),
+            )
+        };
+
+        let type_into = run_end_encoded_of(DataType::UInt32);
+        let type_from = DataType::Int64;
+        assert_eq!(coerced_from(&type_into, &type_from), None);
+
+        let type_from = run_end_encoded_of(DataType::UInt32);
+        let type_into = DataType::Int64;
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+
+        // Signature candidates for functions like `date_bin` are plain
+        // Timestamp, but a REE-encoded column (e.g. a segment written with
+        // REE-dict encoding for that field) should still coerce against
+        // them via the wrapped value type.
+        let type_from =
+            run_end_encoded_of(DataType::Timestamp(TimeUnit::Nanosecond, None));
+        let type_into = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+
+        // The reverse direction: a plain type coercing into an REE target
+        // (e.g. a signature that happens to require RunEndEncoded) should
+        // succeed whenever the plain type coerces into the wrapped value
+        // type.
+        let type_into = run_end_encoded_of(DataType::Int64);
+        let type_from = DataType::Int32;
         assert_eq!(
             coerced_from(&type_into, &type_from),
             Some(type_into.clone())

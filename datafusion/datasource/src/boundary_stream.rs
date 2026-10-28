@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Streaming boundary-aligned wrapper for newline-delimited JSON and CSV range reads.
 //!
@@ -84,6 +71,10 @@ pub struct AlignedBoundaryStream {
 }
 
 /// Fetch a bounded byte range from `store` and return it as a stream
+#[expect(
+    clippy::result_large_err,
+    reason = "error type is dictated by the object_store API"
+)]
 async fn get_stream(
     store: Arc<dyn ObjectStore>,
     location: object_store::path::Path,
@@ -148,6 +139,10 @@ impl AlignedBoundaryStream {
     /// newline is not found within that window, `ScanningLastTerminator`
     /// automatically issues additional `END_SCAN_LOOKAHEAD`-sized GETs
     /// via `store` until the newline is found or EOF is reached.
+    #[expect(
+        clippy::result_large_err,
+        reason = "error type is dictated by the object_store API"
+    )]
     pub async fn new(
         store: Arc<dyn ObjectStore>,
         location: object_store::path::Path,
@@ -239,27 +234,25 @@ impl Stream for AlignedBoundaryStream {
                         }
                         Poll::Ready(Some(Ok(chunk))) => {
                             this.bytes_consumed += chunk.len() as u64;
-                            match chunk.iter().position(|&b| b == this.terminator) {
-                                Some(pos) => {
-                                    let remainder = chunk.slice((pos + 1)..);
-                                    // The aligned start position is where
-                                    // data begins after the newline.
-                                    let aligned_start =
-                                        this.abs_pos() - remainder.len() as u64;
-                                    if aligned_start >= this.end {
-                                        // Start alignment landed at or past
-                                        // the end boundary — no complete
-                                        // lines in this partition's range.
-                                        this.phase = Phase::Done;
-                                        return Poll::Ready(None);
-                                    }
-                                    if !remainder.is_empty() {
-                                        this.pending = Some(remainder);
-                                    }
-                                    this.phase = Phase::FetchingChunks;
-                                    continue;
+                            if let Some(pos) =
+                                chunk.iter().position(|&b| b == this.terminator)
+                            {
+                                let remainder = chunk.slice((pos + 1)..);
+                                // The aligned start position is where
+                                // data begins after the newline.
+                                let aligned_start =
+                                    this.abs_pos() - remainder.len() as u64;
+                                if aligned_start >= this.end {
+                                    // Start alignment landed at or past
+                                    // the end boundary — no complete
+                                    // lines in this partition's range.
+                                    this.phase = Phase::Done;
+                                    return Poll::Ready(None);
                                 }
-                                None => continue,
+                                if !remainder.is_empty() {
+                                    this.pending = Some(remainder);
+                                }
+                                this.phase = Phase::FetchingChunks;
                             }
                         }
                     }

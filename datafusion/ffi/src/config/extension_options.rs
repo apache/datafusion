@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -69,7 +56,7 @@ pub struct ExtensionOptionsPrivateData {
 impl FFI_ExtensionOptions {
     #[inline]
     fn inner_mut(&mut self) -> &mut HashMap<String, String> {
-        let private_data = self.private_data as *mut ExtensionOptionsPrivateData;
+        let private_data = self.private_data.cast::<ExtensionOptionsPrivateData>();
         unsafe { &mut (*private_data).options }
     }
 
@@ -116,7 +103,7 @@ unsafe extern "C" fn release_fn_wrapper(options: &mut FFI_ExtensionOptions) {
     unsafe {
         debug_assert!(!options.private_data.is_null());
         let private_data =
-            Box::from_raw(options.private_data as *mut ExtensionOptionsPrivateData);
+            Box::from_raw(options.private_data.cast::<ExtensionOptionsPrivateData>());
         drop(private_data);
         options.private_data = std::ptr::null_mut();
     }
@@ -137,7 +124,7 @@ impl From<HashMap<String, String>> for FFI_ExtensionOptions {
             set: set_fn_wrapper,
             entries: entries_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
+            private_data: Box::into_raw(Box::new(private_data)).cast::<c_void>(),
         }
     }
 }
@@ -176,7 +163,7 @@ impl ExtensionOptions for FFI_ExtensionOptions {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         if key.split_once('.').is_none() {
             return exec_err!("Unable to set FFI config value without namespace set");
-        };
+        }
 
         df_result!(unsafe { (self.set)(self, key.into(), value.into()) })
     }

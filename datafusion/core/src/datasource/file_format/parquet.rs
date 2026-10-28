@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Re-exports the [`datafusion_datasource_parquet::file_format`] module, and contains tests for it.
 
@@ -91,7 +78,7 @@ pub(crate) mod test_util {
                     write_in_chunks(&mut writer, &batch, ROWS_PER_PAGE);
                 } else {
                     writer.write(&batch).expect("Writing batch");
-                };
+                }
                 writer.close().unwrap();
                 output
             })
@@ -165,10 +152,8 @@ mod tests {
     };
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
-    use parquet::file::metadata::{
-        KeyValue, PageIndexPolicy, ParquetColumnIndex, ParquetMetaData,
-        ParquetOffsetIndex,
-    };
+    use parquet::file::metadata::page_index::PageIndexProvider;
+    use parquet::file::metadata::{KeyValue, PageIndexPolicy, ParquetMetaData};
     use parquet::file::page_index::column_index::ColumnIndexMetaData;
     use tokio::fs::File;
 
@@ -1116,7 +1101,7 @@ mod tests {
                 .await?
                 .metadata()
                 .clone();
-        check_page_index_validation(builder.column_index(), builder.offset_index());
+        check_page_index_validation(builder.page_index());
 
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let file = File::open(path).await?;
@@ -1125,34 +1110,28 @@ mod tests {
             .await?
             .metadata()
             .clone();
-        check_page_index_validation(builder.column_index(), builder.offset_index());
+        check_page_index_validation(builder.page_index());
 
         Ok(())
     }
 
-    fn check_page_index_validation(
-        page_index: Option<&ParquetColumnIndex>,
-        offset_index: Option<&ParquetOffsetIndex>,
-    ) {
-        assert!(page_index.is_some());
-        assert!(offset_index.is_some());
-
+    fn check_page_index_validation(page_index: Option<&Arc<dyn PageIndexProvider>>) {
         let page_index = page_index.unwrap();
-        let offset_index = offset_index.unwrap();
+        assert!(page_index.is_complete());
 
-        // there is only one row group in one file.
-        assert_eq!(page_index.len(), 1);
-        assert_eq!(offset_index.len(), 1);
-        let page_index = page_index.first().unwrap();
-        let offset_index = offset_index.first().unwrap();
-
-        // 13 col in one row group
-        assert_eq!(page_index.len(), 13);
-        assert_eq!(offset_index.len(), 13);
+        // there is only one row group in one file, with 13 columns.
+        // All columns have an offset index; all except column 10 also have a
+        // column index.
+        for col in 0..13 {
+            assert_eq!(page_index.column_index(0, col).is_some(), col != 10);
+            assert!(page_index.offset_index(0, col).is_some());
+        }
+        assert!(page_index.column_index(1, 0).is_none());
+        assert!(page_index.offset_index(1, 0).is_none());
 
         // test result in int_col
-        let int_col_index = page_index.get(4).unwrap();
-        let int_col_offset = offset_index.get(4).unwrap().page_locations();
+        let int_col_index = page_index.column_index(0, 4).unwrap();
+        let int_col_offset = page_index.offset_index(0, 4).unwrap().page_locations();
 
         // 325 pages in int_col
         assert_eq!(int_col_offset.len(), 325);

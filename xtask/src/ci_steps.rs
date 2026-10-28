@@ -1,25 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! CI steps that can be inspected or run through `cargo xtask`.
 
 use crate::Result;
 use std::env;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -29,6 +17,8 @@ type StepRunner = fn(&StepContext, &[String]) -> StepResult<CiCommand>;
 const CI_COMMAND: &str = "cargo xtask ci step";
 const CI_SHORTCUT: &str = "cargo ci-step";
 const TPCH_DATA_DIR: &str = "datafusion/sqllogictest/test_files/tpch/data";
+/// The `datafusion-physical-plan` unit test that the `spill-pool-fuzz` step runs.
+const SPILL_POOL_FUZZ_TEST: &str = "spill::spill_pool::tests::spill_pool_scenario_fuzz";
 
 /// Metadata and implementation for one CI step.
 ///
@@ -54,7 +44,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait> [--explain]",
+        help_usage: "test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         error_message: "Cargo test step failed",
@@ -68,10 +58,10 @@ pub(crate) fn help() -> String {
     );
     for step in CI_STEPS {
         if let Some(example) = step.help_examples.first() {
-            help.push_str(&format!("  {CI_COMMAND} {example}\n"));
+            writeln!(help, "  {CI_COMMAND} {example}").ok();
         }
     }
-    help.push_str(&format!("  {CI_COMMAND} test workspace --explain\n"));
+    writeln!(help, "  {CI_COMMAND} test workspace --explain").ok();
 
     let command_width = CI_STEPS
         .iter()
@@ -80,15 +70,17 @@ pub(crate) fn help() -> String {
         .unwrap_or_default();
     help.push_str("\nAvailable steps:\n");
     for step in CI_STEPS {
-        help.push_str(&format!(
-            "  {:command_width$}  {}\n",
+        writeln!(
+            help,
+            "  {:command_width$}  {}",
             step.command, step.help_description
-        ));
+        )
+        .ok();
     }
 
-    help.push_str(&format!(
+    write!(help,
         "\nShortcut:\n  # `{CI_SHORTCUT}` is short for `{CI_COMMAND}`.\n  {CI_SHORTCUT} check workspace\n\nFor more details:\n  {CI_COMMAND} check --help\n"
-    ));
+    ).ok();
     help
 }
 
@@ -98,12 +90,12 @@ fn step_help(step: &StepInfo) -> String {
         step.command, step.help_description, step.help_usage,
     );
     for example in step.help_examples {
-        help.push_str(&format!("  {CI_COMMAND} {example}\n"));
+        writeln!(help, "  {CI_COMMAND} {example}").ok();
     }
     if let Some(example) = step.help_examples.first() {
-        help.push_str(&format!(
+        write!(help,
             "\nUse '--explain' to show the full command:\n  {CI_COMMAND} {example} --explain\n"
-        ));
+        ).ok();
     }
     help
 }
@@ -279,10 +271,44 @@ impl StepContext {
                     "ci",
                     "-p",
                     "datafusion-ffi",
+                    "-p",
+                    "datafusion-ffi-integration-tests",
                     "--lib",
                     "--tests",
                     "--features",
                     "integration-tests",
+                ]);
+            }
+            "microbenchmarks" => {
+                // The SQL benchmark harness needs separately generated datasets
+                // and is covered by the benchmark result verification job.
+                // Select only bench targets (not lib/bin unit tests), and tell
+                // Criterion to execute each benchmark once instead of timing it.
+                // Keep debug assertions and overflow checks enabled without the
+                // cost of unoptimized execution on the larger benchmark datasets.
+                command.env(
+                    "CLICKBENCH_DATA_PATH",
+                    self.root
+                        .join("datafusion/core/tests/data/clickbench_hits_10.parquet"),
+                );
+                command.args([
+                    "test",
+                    "--profile",
+                    "ci-bench",
+                    "--no-fail-fast",
+                    "--workspace",
+                    "--exclude",
+                    "datafusion-examples",
+                    "--exclude",
+                    "datafusion-benchmarks",
+                    "--exclude",
+                    "datafusion-cli",
+                    "--bench",
+                    "*",
+                    "--features",
+                    "datafusion-physical-plan/test_utils",
+                    "--",
+                    "--test",
                 ]);
             }
             "benchmark-plan" => {
@@ -341,7 +367,7 @@ impl StepContext {
                     .env("PG_COMPAT", "true")
                     .env("PG_URI", uri);
             }
-            "substrait" => {
+            "substrait" | "substrait-optimized" => {
                 command.args([
                     "test",
                     "-p",
@@ -352,7 +378,86 @@ impl StepContext {
                     "substrait",
                     "--",
                     "--substrait-round-trip",
-                    "limit.slt",
+                ]);
+                if variant == "substrait-optimized" {
+                    command.args(["--substrait-optimize", "joins_conditionless.slt"]);
+                } else {
+                    command.args(["limit.slt"]);
+                }
+            }
+            "extended" => {
+                // Tests behind the `extended_tests` feature. The `workspace`
+                // step runs everything else.
+                command
+                    .args([
+                        "test",
+                        "--profile",
+                        "ci",
+                        "-p",
+                        "datafusion",
+                        "--test",
+                        "extended_tests",
+                        "--features",
+                        "avro,backtrace,extended_tests,parquet_encryption",
+                    ])
+                    .env("RUST_BACKTRACE", "1");
+            }
+            "spill-pool-fuzz" => {
+                // Run more random scenarios of the spill pool fuzzer than the
+                // `workspace` step does (about a minute).
+                command
+                    .args([
+                        "test",
+                        "--profile",
+                        "ci",
+                        "-p",
+                        "datafusion-physical-plan",
+                        "--lib",
+                        "--",
+                        "--exact",
+                        SPILL_POOL_FUZZ_TEST,
+                    ])
+                    .env("RUST_BACKTRACE", "1")
+                    .env("DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS", "1000");
+            }
+            "hash-collisions" => {
+                // Check answers are correct when hash values collide. The CI job
+                // runs from the `datafusion` directory with the builder setup,
+                // which sets `RUST_BACKTRACE=1`.
+                command
+                    .args([
+                        "test",
+                        "--profile",
+                        "ci",
+                        "--exclude",
+                        "datafusion-examples",
+                        "--exclude",
+                        "datafusion-benchmarks",
+                        "--exclude",
+                        "datafusion-sqllogictest",
+                        "--exclude",
+                        "datafusion-cli",
+                        "--workspace",
+                        "--lib",
+                        "--tests",
+                        "--features=force_hash_collisions,avro",
+                    ])
+                    .current_dir(self.root.join("datafusion"))
+                    .env("RUST_BACKTRACE", "1");
+            }
+            "sqlite" => {
+                // The CI job skips the builder setup because backtraces make this
+                // suite expensive, so `RUST_BACKTRACE` is deliberately not set.
+                command.args([
+                    "test",
+                    "--features",
+                    "backtrace,parquet_encryption",
+                    "--profile",
+                    "ci-optimized",
+                    "--test",
+                    "sqllogictests",
+                    "--",
+                    "--include-sqlite",
                 ]);
             }
             _ => return Err(StepError::Usage),
@@ -543,6 +648,8 @@ fn required_env(name: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]";
+
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
     }
@@ -587,10 +694,67 @@ mod tests {
             .err()
             .unwrap();
 
-        assert_eq!(
-            error,
-            "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait> [--explain]"
+        assert_eq!(error, TEST_USAGE);
+    }
+
+    /// A filter that matches no test passes without running anything, so a
+    /// renamed or moved spill pool fuzzer would silently stop running in CI.
+    #[test]
+    fn spill_pool_fuzz_test_exists() {
+        let (module, test) = SPILL_POOL_FUZZ_TEST
+            .rsplit_once("::tests::")
+            .expect("test path has a `tests` module");
+        let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../datafusion/physical-plan/src")
+            .join(format!("{}.rs", module.replace("::", "/")));
+        let source = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+        assert!(
+            source.contains("mod tests {") && source.contains(&format!("fn {test}(")),
+            "{} has no test `{test}` in `mod tests`; update SPILL_POOL_FUZZ_TEST",
+            file.display()
         );
+    }
+
+    /// The `extended` step runs only the `extended_tests` test target, which
+    /// requires the `extended_tests` feature. A test gated on the feature with a
+    /// `cfg` in any other target would never run in CI.
+    #[test]
+    fn extended_tests_feature_only_gates_whole_targets() {
+        fn visit(dir: &Path, found: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    visit(&path, found);
+                } else if path.extension() == Some(OsStr::new("rs"))
+                    && std::fs::read_to_string(&path)
+                        .unwrap()
+                        .contains("feature = \"extended_tests\"")
+                {
+                    found.push(path);
+                }
+            }
+        }
+        let mut found = vec![];
+        visit(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../datafusion"),
+            &mut found,
+        );
+        assert!(
+            found.is_empty(),
+            "put tests behind `extended_tests` in the `extended_tests` test target \
+             (see datafusion/core/Cargo.toml), not behind a `cfg` in {found:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_test_variant_is_rejected() {
+        let error = context()
+            .ci_step(&args(&["test", "extended_tests", "--explain"]))
+            .err()
+            .unwrap();
+
+        assert_eq!(error, TEST_USAGE);
     }
 
     // Test all available commands, ensure their executed command is expected
@@ -710,9 +874,29 @@ cd /workspace && \
 cargo test \
 --profile ci \
 -p datafusion-ffi \
+-p datafusion-ffi-integration-tests \
 --lib \
 --tests \
 --features integration-tests
+")
+                },
+            },
+            Cmd {
+                command: &["test", "microbenchmarks"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+CLICKBENCH_DATA_PATH=/workspace/datafusion/core/tests/data/clickbench_hits_10.parquet \
+cargo test \
+--profile ci-bench \
+--no-fail-fast \
+--workspace \
+--exclude datafusion-examples \
+--exclude datafusion-benchmarks \
+--exclude datafusion-cli \
+--bench '*' \
+--features datafusion-physical-plan/test_utils \
+-- --test
 ")
                 },
             },
@@ -772,6 +956,80 @@ cargo test \
 --test sqllogictests \
 --features substrait \
 -- --substrait-round-trip limit.slt
+")
+                },
+            },
+            Cmd {
+                command: &["test", "substrait-optimized"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo test \
+-p datafusion-sqllogictest \
+--test sqllogictests \
+--features substrait \
+-- --substrait-round-trip --substrait-optimize joins_conditionless.slt
+")
+                },
+            },
+            Cmd {
+                command: &["test", "extended"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo test \
+--profile ci \
+-p datafusion \
+--test extended_tests \
+--features avro,backtrace,extended_tests,parquet_encryption
+")
+                },
+            },
+            Cmd {
+                command: &["test", "spill-pool-fuzz"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS=1000 \
+RUST_BACKTRACE=1 \
+cargo test \
+--profile ci \
+-p datafusion-physical-plan \
+--lib \
+-- --exact spill::spill_pool::tests::spill_pool_scenario_fuzz
+")
+                },
+            },
+            Cmd {
+                command: &["test", "hash-collisions"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace/datafusion && \
+RUST_BACKTRACE=1 \
+cargo test \
+--profile ci \
+--exclude datafusion-examples \
+--exclude datafusion-benchmarks \
+--exclude datafusion-sqllogictest \
+--exclude datafusion-cli \
+--workspace \
+--lib \
+--tests \
+--features=force_hash_collisions,avro
+")
+                },
+            },
+            Cmd {
+                command: &["test", "sqlite"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo test \
+--features backtrace,parquet_encryption \
+--profile ci-optimized \
+--test sqllogictests \
+-- --include-sqlite
 ")
                 },
             },

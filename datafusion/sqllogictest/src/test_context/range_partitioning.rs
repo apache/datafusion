@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fs::{File, create_dir_all, remove_dir_all};
 use std::path::Path;
@@ -70,6 +57,12 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         &[(10, 1, 100)],
         &[(20, 1, 200)],
         &[(30, 1, 300), (40, 4, 400)],
+    ];
+    const COMPOSITE_RANGE_PARTITIONS: [&[(i32, i32, i32)]; 4] = [
+        &[(1, 1, 10), (10, 0, 90)],
+        &[(10, 1, 100), (10, 1, 101), (20, 0, 190)],
+        &[(20, 1, 200), (30, 0, 290)],
+        &[(30, 1, 300), (35, 2, 350)],
     ];
 
     let schema = Arc::new(Schema::new(vec![
@@ -187,6 +180,37 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         sparse_output_partitioning,
         None,
     );
+    let composite_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![
+                col("range_key").sort(true, true),
+                col("non_range_key").sort(true, true),
+            ],
+            [10, 20, 30]
+                .into_iter()
+                .map(|key| {
+                    SplitPoint::new(vec![
+                        ScalarValue::Int32(Some(key)),
+                        ScalarValue::Int32(Some(1)),
+                    ])
+                })
+                .collect(),
+        )
+        .expect("composite range partitioning should be valid"),
+    );
+
+    register_parquet_listing_table(
+        ctx,
+        "range_partitioned_composite",
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files/scratch_range_partitioning/range_partitioned_composite"),
+        Arc::clone(&schema),
+        range_batches(&schema, COMPOSITE_RANGE_PARTITIONS),
+        composite_partitioning,
+        None,
+    );
+
+    register_sampled_range_stream_table(ctx, schema);
 }
 
 fn register_parquet_listing_table(
@@ -278,6 +302,48 @@ fn register_unbounded_range_stream_table(
     .expect("test stream table registration should succeed");
 }
 
+/// A finite source with more retained samples than effective range boundaries.
+/// The physical metadata is needed because logical listing tables currently
+/// describe only their effective split points.
+fn register_sampled_range_stream_table(ctx: &SessionContext, schema: Arc<Schema>) {
+    const PARTITIONS: [&[(i32, i32, i32)]; 3] = [
+        &[(1, 1, 10), (10, 1, 100)],
+        &[(20, 1, 200), (30, 1, 300)],
+        &[(40, 1, 400), (50, 1, 500)],
+    ];
+
+    let output_partitioning = PhysicalPartitioning::Range(
+        PhysicalRangePartitioning::try_new_with_samples(
+            [PhysicalSortExpr {
+                expr: physical_col("range_key", &schema)
+                    .expect("range key should exist in stream schema"),
+                options: SortOptions::default(),
+            }]
+            .into(),
+            [10, 20, 30, 40, 50]
+                .into_iter()
+                .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+                .collect(),
+            PARTITIONS.len(),
+        )
+        .expect("sampled range partitioning should be valid"),
+    );
+    let partitions = PARTITIONS
+        .into_iter()
+        .map(|rows| range_stream_partition(Arc::clone(&schema), rows))
+        .collect();
+
+    ctx.register_table(
+        "sampled_range_partitioned",
+        Arc::new(
+            StreamingTable::try_new(schema, partitions)
+                .expect("sampled range table should be valid")
+                .with_output_partitioning(output_partitioning),
+        ),
+    )
+    .expect("sampled range table registration should succeed");
+}
+
 fn range_stream_partition(
     schema: SchemaRef,
     rows: &[(i32, i32, i32)],
@@ -344,9 +410,9 @@ type TimeBinRow = (
 /// - partition 1: `[2024-01-01 01:00, 02:00)`
 ///
 /// Files are range-partitioned on `timestamp` and sorted on `(key, timestamp)`.
-/// Because `date_bin(60 seconds, timestamp)` does not straddle the hour split,
-/// grouping by `(key, time_bin)` is partition-disjoint. Today's planner still
-/// inserts a hash shuffle; the test pins that plan so a follow-up can remove it.
+/// The hour split permits partition-local `date_trunc('hour')` aggregation,
+/// but `date_trunc('day')` straddles it. Aligned `date_bin` remains a negative
+/// control because the function is not admitted to range analysis.
 pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("key", DataType::Utf8, false),

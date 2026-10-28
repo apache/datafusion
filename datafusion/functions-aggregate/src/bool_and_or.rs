@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
@@ -29,6 +16,7 @@ use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::internal_err;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{downcast_value, not_impl_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
@@ -183,6 +171,11 @@ impl AggregateUDFImpl for BoolAnd {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Boolean AND/OR are idempotent: duplicates cannot change the result.
+        DistinctHandling::Insensitive
+    }
 }
 
 #[derive(Debug, Default)]
@@ -221,12 +214,12 @@ impl Accumulator for BoolAndAccumulator {
 
 #[user_doc(
     doc_section(label = "General Functions"),
-    description = "Returns true if all non-null input values are true, otherwise false.",
-    syntax_example = "bool_and(expression)",
+    description = "Returns true if any non-null input value is true, otherwise false.",
+    syntax_example = "bool_or(expression)",
     sql_example = r#"```sql
-> SELECT bool_and(column_name) FROM table_name;
+> SELECT bool_or(column_name) FROM table_name;
 +----------------------------+
-| bool_and(column_name)      |
+| bool_or(column_name)       |
 +----------------------------+
 | true                       |
 +----------------------------+
@@ -312,6 +305,11 @@ impl AggregateUDFImpl for BoolOr {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Boolean AND/OR are idempotent: duplicates cannot change the result.
+        DistinctHandling::Insensitive
     }
 }
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -53,6 +40,8 @@ use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
 Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use `date_bin` to downsample time series data by grouping rows into time-based "bins" or "windows" and applying an aggregate or selector function to each window.
 
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
+
+For timestamp inputs, binning beyond the supported numeric or calendar range returns an error. A NULL source or interval still produces NULL.
 "#,
     syntax_example = "date_bin(interval, expression[, origin_timestamp])",
     sql_example = r#"```sql
@@ -89,7 +78,10 @@ FROM VALUES (TIME '02:18:18'), (TIME '19:00:03')  t(time);
 +----------+
 2 row(s) fetched.
 ```"#,
-    argument(name = "interval", description = "Bin interval."),
+    argument(
+        name = "interval",
+        description = "Bin interval. Must be greater than zero."
+    ),
     argument(
         name = "expression",
         description = "Time expression to operate on. Can be a constant, column, or function."
@@ -268,14 +260,14 @@ impl ScalarUDFImpl for DateBinFunc {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        // The DATE_BIN function preserves the order of its second argument.
         let step = &input[0];
         let date_value = &input[1];
         let reference = input.get(2);
 
-        if step.sort_properties.eq(&SortProperties::Singleton)
+        // DATE_BIN preserves the order of its second argument.
+        if step.sort_properties == SortProperties::Singleton
             && reference
-                .map(|r| r.sort_properties.eq(&SortProperties::Singleton))
+                .map(|r| r.sort_properties == SortProperties::Singleton)
                 .unwrap_or(true)
         {
             Ok(date_value.sort_properties)
@@ -283,6 +275,7 @@ impl ScalarUDFImpl for DateBinFunc {
             Ok(SortProperties::Unordered)
         }
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -300,6 +293,21 @@ const NANOS_PER_SEC: i64 = NANOSECONDS;
 ///
 /// Returns: Binned timestamp in nanoseconds, or error if out of range
 type BinFunction = fn(i64, i64, i64) -> Result<i64>;
+
+/// Same as [`BinFunction`], but with an `i128` source and result so that
+/// coarse-precision values beyond the `i64` nanosecond range can be binned.
+///
+/// Returns: Binned timestamp in nanoseconds, or `None` if out of range
+type WideBinFunction = fn(i64, i128, i64) -> Option<i128>;
+
+/// The `i64` binning function, used first, and its `i128` counterpart, used
+/// only when the `i64` computation overflows.
+#[derive(Clone, Copy)]
+struct BinFunctions {
+    narrow: BinFunction,
+    wide: WideBinFunction,
+}
+
 enum Interval {
     Nanoseconds(i64),
     Months(i64),
@@ -309,15 +317,27 @@ impl Interval {
     /// Returns (`stride_nanos`, `fn`) where
     ///
     /// 1. `stride_nanos` is a width, in nanoseconds
-    /// 2. `fn` is a function that takes (stride_nanos, source, origin)
+    /// 2. `fn` holds functions that take (stride_nanos, source, origin)
     ///
     /// `source` is the timestamp being binned
     ///
     /// `origin`  is the time, in nanoseconds, where windows are measured from
-    fn bin_fn(&self) -> (i64, BinFunction) {
+    fn bin_fn(&self) -> (i64, BinFunctions) {
         match self {
-            Interval::Nanoseconds(nanos) => (*nanos, date_bin_nanos_interval),
-            Interval::Months(months) => (*months, date_bin_months_interval),
+            Interval::Nanoseconds(nanos) => (
+                *nanos,
+                BinFunctions {
+                    narrow: date_bin_nanos_interval,
+                    wide: date_bin_nanos_interval_wide,
+                },
+            ),
+            Interval::Months(months) => (
+                *months,
+                BinFunctions {
+                    narrow: date_bin_months_interval,
+                    wide: date_bin_months_interval_wide,
+                },
+            ),
         }
     }
 }
@@ -341,30 +361,34 @@ fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> Resul
     })
 }
 
-// distance from origin to bin
+// distance from origin to bin, rounded down to a multiple of the positive
+// `stride`, so a source before the origin falls into the previous bin
 fn compute_distance(time_diff: i64, stride: i64) -> Result<i64> {
-    let remainder = time_diff.checked_rem(stride).ok_or_else(|| {
-        ArrowError::InvalidArgumentError(format!(
-            "date_bin compute_distance time_diff {time_diff} % stride {stride} overflows i64"
-        ))
-    })?;
-    let time_delta = time_diff.checked_sub(remainder).ok_or_else(|| {
+    let remainder = time_diff.rem_euclid(stride);
+    time_diff.checked_sub(remainder).ok_or_else(|| {
         ArrowError::InvalidArgumentError(format!(
             "date_bin compute_distance time_diff {time_diff} - remainder {remainder} overflows i64"
         ))
-    })?;
+        .into()
+    })
+}
 
-    if time_diff < 0 && stride > 1 && time_delta != time_diff {
-        // The origin is later than the source timestamp, round down to the previous bin
-        time_delta.checked_sub(stride).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "date_bin compute_distance time_delta {time_delta} - stride {stride} overflows i64"
-            ))
-            .into()
-        })
-    } else {
-        Ok(time_delta)
-    }
+// `date_bin_nanos_interval` in i128, which cannot overflow for an i64 source
+// scaled to nanoseconds.
+fn date_bin_nanos_interval_wide(
+    stride_nanos: i64,
+    source: i128,
+    origin: i64,
+) -> Option<i128> {
+    let origin = i128::from(origin);
+    let time_delta = compute_distance_wide(source - origin, i128::from(stride_nanos));
+    Some(origin + time_delta)
+}
+
+// `compute_distance` in i128. `stride` is positive, and `time_diff` is far
+// from i128::MIN, so none of these operations can overflow.
+fn compute_distance_wide(time_diff: i128, stride: i128) -> i128 {
+    time_diff - time_diff.rem_euclid(stride)
 }
 
 // Shift `origin_date` by `month_delta` months, mapping an out-of-range result to
@@ -389,6 +413,39 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> Res
     let source_date = to_utc_date_time(source)?;
     let origin_date = to_utc_date_time(origin)?;
 
+    let bin_time = bin_months(stride_months, source_date, origin_date)?;
+    match bin_time.timestamp_nanos_opt() {
+        Some(nanos) => Ok(nanos),
+        None => exec_err!("DATE_BIN result timestamp out of range"),
+    }
+}
+
+// `date_bin_months_interval` with i128 nanoseconds, limited by the range of
+// `DateTime<Utc>` instead of i64 nanoseconds.
+fn date_bin_months_interval_wide(
+    stride_months: i64,
+    source: i128,
+    origin: i64,
+) -> Option<i128> {
+    let nanos_per_sec = i128::from(NANOS_PER_SEC);
+    let secs = i64::try_from(source.div_euclid(nanos_per_sec)).ok()?;
+    let nsec = source.rem_euclid(nanos_per_sec) as u32;
+    let source_date = DateTime::from_timestamp(secs, nsec)?;
+    let origin_date = to_utc_date_time(origin).ok()?;
+
+    let bin_time = bin_months(stride_months, source_date, origin_date).ok()?;
+    Some(
+        i128::from(bin_time.timestamp()) * nanos_per_sec
+            + i128::from(bin_time.timestamp_subsec_nanos()),
+    )
+}
+
+// return the start of the month bin that `source_date` falls into
+fn bin_months(
+    stride_months: i64,
+    source_date: DateTime<Utc>,
+    origin_date: DateTime<Utc>,
+) -> Result<DateTime<Utc>> {
     // calculate the number of months between the source and origin
     let month_diff = (source_date.year() - origin_date.year()) * 12
         + source_date.month() as i32
@@ -405,10 +462,7 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> Res
         let month_delta = month_delta - stride_months;
         bin_time = shift_months(origin_date, month_delta)?;
     }
-    match bin_time.timestamp_nanos_opt() {
-        Some(nanos) => Ok(nanos),
-        None => exec_err!("DATE_BIN result timestamp out of range"),
-    }
+    Ok(bin_time)
 }
 
 fn to_utc_date_time(nanos: i64) -> Result<DateTime<Utc>> {
@@ -438,7 +492,7 @@ fn checked_scale_to_nanos(x: i64, scale: i64) -> Result<i64> {
     }
 }
 
-// Per-row failures map to NULL, so use Option in the hot path.
+// Return None when binning needs the wider arithmetic path.
 #[inline]
 fn scale_and_bin_to_nanos(
     value: i64,
@@ -453,17 +507,36 @@ fn scale_and_bin_to_nanos(
 }
 
 // Per-row timestamp binning shared by scalar and array paths.
-// Source-value failures become None, which callers map to NULL.
 #[inline]
 fn date_bin_timestamp_value<T: ArrowTimestampType>(
     value: i64,
     origin: i64,
     stride: i64,
-    stride_fn: BinFunction,
-) -> Option<i64> {
+    stride_fn: BinFunctions,
+) -> Result<i64> {
     let scale = timestamp_scale::<T>();
-    scale_and_bin_to_nanos(value, scale, origin, stride, stride_fn)
-        .map(|binned| binned / scale)
+    match scale_and_bin_to_nanos(value, scale, origin, stride, stride_fn.narrow) {
+        Some(binned) => Ok(binned / scale),
+        None => {
+            date_bin_timestamp_value_wide(value, scale, origin, stride, stride_fn.wide)
+                .ok_or_else(|| exec_datafusion_err!("DATE_BIN timestamp out of range"))
+        }
+    }
+}
+
+// Slow path for values whose i64 nanosecond computation overflows. Binning in
+// i128 avoids rejecting valid results outside the i64 nanosecond range.
+#[cold]
+#[inline(never)]
+fn date_bin_timestamp_value_wide(
+    value: i64,
+    scale: i64,
+    origin: i64,
+    stride: i64,
+    stride_fn: WideBinFunction,
+) -> Option<i64> {
+    let binned = stride_fn(stride, i128::from(value) * i128::from(scale), origin)?;
+    i64::try_from(binned / i128::from(scale)).ok()
 }
 
 // Per-row TIME binning shared by scalar and array paths.
@@ -474,10 +547,26 @@ fn date_bin_time_value(
     scale: i64,
     origin: i64,
     stride: i64,
-    stride_fn: BinFunction,
+    stride_fn: BinFunctions,
 ) -> Option<i64> {
-    scale_and_bin_to_nanos(value, scale, origin, stride, stride_fn)
-        .map(|binned| (binned % NANOSECONDS_IN_DAY) / scale)
+    match scale_and_bin_to_nanos(value, scale, origin, stride, stride_fn.narrow) {
+        Some(binned) => Some((binned % NANOSECONDS_IN_DAY) / scale),
+        None => date_bin_time_value_wide(value, scale, origin, stride, stride_fn.wide),
+    }
+}
+
+// Slow path of `date_bin_time_value`, like `date_bin_timestamp_value_wide`.
+#[cold]
+#[inline(never)]
+fn date_bin_time_value_wide(
+    value: i64,
+    scale: i64,
+    origin: i64,
+    stride: i64,
+    stride_fn: WideBinFunction,
+) -> Option<i64> {
+    let binned = stride_fn(stride, i128::from(value) * i128::from(scale), origin)?;
+    i64::try_from((binned % i128::from(NANOSECONDS_IN_DAY)) / i128::from(scale)).ok()
 }
 
 fn validate_time_stride(stride: &Interval) -> Result<()> {
@@ -593,13 +682,14 @@ fn date_bin_impl(
 
     let (stride, stride_fn) = stride.bin_fn();
 
-    // Return error if stride is 0
-    if stride == 0 {
-        return exec_err!("DATE_BIN stride must be non-zero");
+    // Like PostgreSQL, only positive strides are supported. The binning
+    // functions rely on this to round down to the bin start.
+    if stride <= 0 {
+        return exec_err!("DATE_BIN stride must be greater than zero");
     }
 
     // A TIME source requires a TIME origin. This shared-input check is ordered
-    // after stride/origin parsing and the zero-stride check so error ordering is
+    // after stride/origin parsing and the stride check so error ordering is
     // unchanged, and replaces the per-arm guards in the TIME branches below.
     if !is_time {
         match array.data_type() {
@@ -616,41 +706,45 @@ fn date_bin_impl(
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                v.and_then(|x| {
+                v.map(|x| {
                     date_bin_timestamp_value::<TimestampNanosecondType>(
                         x, origin, stride, stride_fn,
                     )
-                }),
+                })
+                .transpose()?,
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                v.and_then(|x| {
+                v.map(|x| {
                     date_bin_timestamp_value::<TimestampMicrosecondType>(
                         x, origin, stride, stride_fn,
                     )
-                }),
+                })
+                .transpose()?,
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
             ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                v.and_then(|x| {
+                v.map(|x| {
                     date_bin_timestamp_value::<TimestampMillisecondType>(
                         x, origin, stride, stride_fn,
                     )
-                }),
+                })
+                .transpose()?,
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-                v.and_then(|x| {
+                v.map(|x| {
                     date_bin_timestamp_value::<TimestampSecondType>(
                         x, origin, stride, stride_fn,
                     )
-                }),
+                })
+                .transpose()?,
                 tz_opt.clone(),
             ))
         }
@@ -683,43 +777,58 @@ fn date_bin_impl(
             fn transform_array_with_stride<T>(
                 origin: i64,
                 stride: i64,
-                stride_fn: BinFunction,
+                stride_fn: BinFunctions,
                 array: &ArrayRef,
-                tz_opt: &Option<Arc<str>>,
+                tz_opt: Option<&Arc<str>>,
             ) -> Result<ColumnarValue>
             where
                 T: ArrowTimestampType,
             {
                 let array = as_primitive_array::<T>(array)?;
 
-                // Per-row errors become NULL, matching scalar behavior.
-                let result: PrimitiveArray<T> = array.unary_opt(|val| {
+                let result: PrimitiveArray<T> = array.try_unary(|val| {
                     date_bin_timestamp_value::<T>(val, origin, stride, stride_fn)
-                });
+                })?;
 
-                let array = result.with_timezone_opt(tz_opt.clone());
+                let array = result.with_timezone_opt(tz_opt.cloned());
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
 
             match array.data_type() {
                 Timestamp(Nanosecond, tz_opt) => {
                     transform_array_with_stride::<TimestampNanosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Microsecond, tz_opt) => {
                     transform_array_with_stride::<TimestampMicrosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Millisecond, tz_opt) => {
                     transform_array_with_stride::<TimestampMillisecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Second, tz_opt) => {
                     transform_array_with_stride::<TimestampSecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Time32(Millisecond) => {
@@ -794,8 +903,13 @@ mod tests {
     use std::sync::Arc;
 
     use crate::datetime::date_bin::{DateBinFunc, date_bin_nanos_interval};
-    use arrow::array::types::TimestampNanosecondType;
-    use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
+    use arrow::array::types::{
+        ArrowTimestampType, TimestampMicrosecondType, TimestampMillisecondType,
+        TimestampNanosecondType, TimestampSecondType,
+    };
+    use arrow::array::{
+        Array, IntervalDayTimeArray, PrimitiveArray, TimestampNanosecondArray,
+    };
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 
@@ -826,21 +940,34 @@ mod tests {
         DateBinFunc::new().invoke_with_args(args)
     }
 
-    fn assert_null_scalar(value: ColumnarValue, expected_type: DataType) {
-        let ColumnarValue::Scalar(value) = value else {
-            panic!("expected scalar, got {value:?}");
-        };
-        assert_eq!(value.data_type(), expected_type);
-        assert!(value.is_null(), "expected NULL, got {value:?}");
-    }
-
-    fn assert_array_null_then_valid(value: ColumnarValue, expected_type: DataType) {
-        let ColumnarValue::Array(array) = value else {
-            panic!("expected array, got {value:?}");
-        };
-        assert_eq!(array.data_type(), &expected_type);
-        assert!(array.is_null(0), "expected NULL at row 0");
-        assert!(array.is_valid(1), "expected valid value at row 1");
+    // Check `date_bin` against `expected` for a scalar source and for the
+    // same source as a one-row array.
+    fn assert_date_bin(
+        stride: ScalarValue,
+        source: ScalarValue,
+        origin: ScalarValue,
+        expected: ScalarValue,
+    ) {
+        let return_field = Arc::new(Field::new("f", source.data_type(), true));
+        let sources = [
+            ColumnarValue::Scalar(source.clone()),
+            ColumnarValue::Array(source.to_array().unwrap()),
+        ];
+        for source in sources {
+            let args = vec![
+                ColumnarValue::Scalar(stride.clone()),
+                source,
+                ColumnarValue::Scalar(origin.clone()),
+            ];
+            let actual = match invoke_date_bin_with_args(args, 1, &return_field).unwrap()
+            {
+                ColumnarValue::Scalar(value) => value,
+                ColumnarValue::Array(array) => {
+                    ScalarValue::try_from_array(&array, 0).unwrap()
+                }
+            };
+            assert_eq!(actual, expected, "stride {stride:?}");
+        }
     }
 
     fn assert_overflow_error(result: Result<ColumnarValue, DataFusionError>) {
@@ -848,6 +975,45 @@ mod tests {
         assert!(
             err.strip_backtrace().contains("overflows i64"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn output_ordering_requires_constant_stride() {
+        use arrow::compute::SortOptions;
+        use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+
+        let literal = |value: ScalarValue| {
+            ExprProperties::new_unknown()
+                .with_order(SortProperties::Singleton)
+                .with_range(value.into())
+        };
+        let ordered = SortProperties::Ordered(SortOptions::default());
+        let source = ExprProperties::new_unknown().with_order(ordered);
+        let ordering = |stride: ExprProperties| {
+            DateBinFunc::new()
+                .output_ordering(&[stride, source.clone()])
+                .unwrap()
+        };
+
+        assert_eq!(
+            ordering(literal(ScalarValue::new_interval_dt(0, 1000))),
+            ordered
+        );
+        assert_eq!(
+            ordering(literal(ScalarValue::new_interval_mdn(1, 0, 0))),
+            ordered
+        );
+        // Strides that are not positive are rejected at execution, so a
+        // constant stride preserves the order whatever its value.
+        assert_eq!(
+            ordering(ExprProperties::new_unknown().with_order(SortProperties::Singleton)),
+            ordered
+        );
+        // A stride that is not constant does not.
+        assert_eq!(
+            ordering(ExprProperties::new_unknown().with_order(ordered)),
+            SortProperties::Unordered
         );
     }
 
@@ -951,8 +1117,25 @@ mod tests {
         let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN stride must be non-zero"
+            "Execution error: DATE_BIN stride must be greater than zero"
         );
+
+        // A negative day-time stride, which SQL interval literals cannot produce
+        for stride in [
+            ScalarValue::new_interval_dt(-1, 0),
+            ScalarValue::new_interval_dt(1, -86_400_001),
+        ] {
+            args = vec![
+                ColumnarValue::Scalar(stride),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ];
+            let res = invoke_date_bin_with_args(args, 1, return_field);
+            assert_eq!(
+                res.err().unwrap().strip_backtrace(),
+                "Execution error: DATE_BIN stride must be greater than zero"
+            );
+        }
 
         // stride: overflow of day-time interval
         args = vec![
@@ -1300,13 +1483,11 @@ mod tests {
             )),
         ];
 
-        let result = invoke_date_bin_with_args(args, 1, return_field);
-        assert!(result.is_ok());
-        if let ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(val, _)) =
-            result.unwrap()
-        {
-            assert!(val.is_none(), "Expected None for out of range operation");
-        }
+        let error = invoke_date_bin_with_args(args, 1, return_field).unwrap_err();
+        assert_eq!(
+            error.strip_backtrace(),
+            "Execution error: DATE_BIN timestamp out of range"
+        );
         let args = vec![
             ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1637426858, 0, 0)),
             ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
@@ -1319,20 +1500,18 @@ mod tests {
             )),
         ];
 
-        let result = invoke_date_bin_with_args(args, 1, return_field);
-        assert!(result.is_ok());
-        if let ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(val, _)) =
-            result.unwrap()
-        {
-            assert!(val.is_none(), "Expected None for out of range operation");
-        }
+        let error = invoke_date_bin_with_args(args, 1, return_field).unwrap_err();
+        assert_eq!(
+            error.strip_backtrace(),
+            "Execution error: DATE_BIN timestamp out of range"
+        );
     }
 
     #[test]
     fn test_date_bin_compute_distance_i64_min() {
         // Regression for #22215: date_bin_nanos_interval on a source near i64::MIN
         // previously panicked inside compute_distance with "attempt to subtract with overflow".
-        // Now it must return a normal Err that the scalar pipeline maps to NULL.
+        // It must return an execution error rather than panic.
         let result = date_bin_nanos_interval(3, i64::MIN, 0);
         assert!(
             result.is_err(),
@@ -1349,69 +1528,213 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(i64::MIN), None)),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(0), None)),
         ];
-        let result = invoke_date_bin_with_args(args, 1, return_field);
-        assert!(result.is_ok(), "expected Ok with NULL, got {result:?}");
-        if let ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(val, _)) =
-            result.unwrap()
-        {
-            assert!(
-                val.is_none(),
-                "Expected None for compute_distance overflow, got {val:?}"
-            );
-        } else {
-            panic!("Expected TimestampNanosecond scalar");
+        let error = invoke_date_bin_with_args(args, 1, return_field).unwrap_err();
+        assert_eq!(
+            error.strip_backtrace(),
+            "Execution error: DATE_BIN timestamp out of range"
+        );
+    }
+
+    #[test]
+    fn test_date_bin_beyond_nanosecond_range() {
+        // Values whose nanosecond scaling or binning overflows i64 are binned
+        // in i128, so they keep a valid result in their own precision.
+        let day = || ScalarValue::new_interval_dt(1, 0);
+        let second = || ScalarValue::new_interval_dt(0, 1000);
+        let month = || ScalarValue::new_interval_mdn(1, 0, 0);
+        let epoch = || ScalarValue::TimestampNanosecond(Some(0), None);
+        let secs = |v| ScalarValue::TimestampSecond(Some(v), None);
+        let month_start = |year, month| {
+            chrono::NaiveDate::from_ymd_opt(year, month, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc()
+                .timestamp()
+        };
+
+        let cases = [
+            (day(), secs(i64::MAX), secs(i64::MAX - i64::MAX % 86_400)),
+            (
+                day(),
+                ScalarValue::TimestampMillisecond(Some(i64::MAX), None),
+                ScalarValue::TimestampMillisecond(
+                    Some(i64::MAX - i64::MAX % 86_400_000),
+                    None,
+                ),
+            ),
+            (
+                day(),
+                ScalarValue::TimestampMicrosecond(Some(i64::MAX), None),
+                ScalarValue::TimestampMicrosecond(
+                    Some(i64::MAX - i64::MAX % 86_400_000_000),
+                    None,
+                ),
+            ),
+            // Around 1653 and 2286, outside the nanosecond range.
+            (second(), secs(-10_000_000_000), secs(-10_000_000_000)),
+            (second(), secs(10_000_000_000), secs(10_000_000_000)),
+            (day(), secs(-10_000_000_001), secs(-10_000_022_400)),
+            (month(), secs(-10_000_000_000), secs(month_start(1653, 2))),
+            (month(), secs(10_000_000_000), secs(month_start(2286, 11))),
+            // An exact bin at the minimum value.
+            (second(), secs(i64::MIN), secs(i64::MIN)),
+        ];
+        for (stride, source, expected) in cases {
+            assert_date_bin(stride, source, epoch(), expected);
+        }
+
+        // `source - origin` overflows i64 nanoseconds.
+        let hour = ScalarValue::new_interval_dt(0, 3_600_000);
+        assert_date_bin(
+            hour,
+            ScalarValue::TimestampNanosecond(Some(-9_000_000_000_000_000_000 + 1), None),
+            ScalarValue::TimestampNanosecond(Some(3_600_000_000_000_000_000), None),
+            ScalarValue::TimestampNanosecond(Some(-9_000_000_000_000_000_000), None),
+        );
+    }
+
+    #[test]
+    fn test_date_bin_unrepresentable_result_returns_error() {
+        let epoch = || ScalarValue::TimestampNanosecond(Some(0), None);
+        let cases = [
+            // The bin starts before the minimum value.
+            (
+                ScalarValue::new_interval_dt(1, 0),
+                ScalarValue::TimestampSecond(Some(i64::MIN), None),
+            ),
+            (
+                ScalarValue::new_interval_dt(1, 0),
+                ScalarValue::TimestampMillisecond(Some(i64::MIN), None),
+            ),
+            (
+                ScalarValue::new_interval_dt(1, 0),
+                ScalarValue::TimestampMicrosecond(Some(i64::MIN), None),
+            ),
+            (
+                ScalarValue::new_interval_mdn(0, 0, 3),
+                ScalarValue::TimestampNanosecond(Some(i64::MIN), None),
+            ),
+            // Month bins are limited by the range of `DateTime<Utc>`.
+            (
+                ScalarValue::new_interval_mdn(1, 0, 0),
+                ScalarValue::TimestampSecond(Some(i64::MAX), None),
+            ),
+        ];
+        for (stride, source) in cases {
+            let return_field = Arc::new(Field::new("f", source.data_type(), true));
+            for source in [
+                ColumnarValue::Scalar(source.clone()),
+                ColumnarValue::Array(source.to_array().unwrap()),
+            ] {
+                let args = vec![
+                    ColumnarValue::Scalar(stride.clone()),
+                    source,
+                    ColumnarValue::Scalar(epoch()),
+                ];
+                let error = invoke_date_bin_with_args(args, 1, &return_field)
+                    .expect_err("out-of-range timestamp binning must fail");
+                assert_eq!(
+                    error.strip_backtrace(),
+                    "Execution error: DATE_BIN timestamp out of range"
+                );
+            }
+        }
+    }
+
+    fn timestamp_binning_strides() -> [(&'static str, ScalarValue); 5] {
+        [
+            ("three nanoseconds", ScalarValue::new_interval_mdn(0, 0, 3)),
+            ("one second", ScalarValue::new_interval_dt(0, 1000)),
+            ("one hour", ScalarValue::new_interval_dt(0, 3_600_000)),
+            ("one day", ScalarValue::new_interval_dt(1, 0)),
+            ("one month", ScalarValue::new_interval_mdn(1, 0, 0)),
+        ]
+    }
+
+    fn assert_timestamp_nullness_preserved<T: ArrowTimestampType>() {
+        let input = PrimitiveArray::<T>::from_iter([Some(-1), None, Some(0), Some(1)]);
+        let return_field = Arc::new(Field::new("f", input.data_type().clone(), true));
+
+        for (stride_name, stride) in timestamp_binning_strides() {
+            for origin in [0, 1_234_567] {
+                let origin = ScalarValue::TimestampNanosecond(Some(origin), None);
+                let args = vec![
+                    ColumnarValue::Scalar(stride.clone()),
+                    ColumnarValue::Array(Arc::new(input.clone())),
+                    ColumnarValue::Scalar(origin.clone()),
+                ];
+                let ColumnarValue::Array(output) =
+                    invoke_date_bin_with_args(args, input.len(), &return_field).unwrap()
+                else {
+                    panic!("expected array output");
+                };
+                assert_eq!(
+                    input.nulls(),
+                    output.nulls(),
+                    "stride {stride_name}, origin {origin:?}, unit {:?}",
+                    T::UNIT,
+                );
+            }
+        }
+    }
+
+    fn assert_timestamp_scalar_and_array_agree<T: ArrowTimestampType>() {
+        let input = PrimitiveArray::<T>::from_iter([Some(-1), None, Some(0), Some(1)]);
+        let return_field = Arc::new(Field::new("f", input.data_type().clone(), true));
+
+        for (stride_name, stride) in timestamp_binning_strides() {
+            for origin in [0, 1_234_567] {
+                let origin = ScalarValue::TimestampNanosecond(Some(origin), None);
+                let array_args = vec![
+                    ColumnarValue::Scalar(stride.clone()),
+                    ColumnarValue::Array(Arc::new(input.clone())),
+                    ColumnarValue::Scalar(origin.clone()),
+                ];
+                let ColumnarValue::Array(array_output) =
+                    invoke_date_bin_with_args(array_args, input.len(), &return_field)
+                        .unwrap()
+                else {
+                    panic!("expected array output");
+                };
+
+                for index in 0..input.len() {
+                    let source = ScalarValue::try_from_array(&input, index).unwrap();
+                    let scalar_args = vec![
+                        ColumnarValue::Scalar(stride.clone()),
+                        ColumnarValue::Scalar(source),
+                        ColumnarValue::Scalar(origin.clone()),
+                    ];
+                    let ColumnarValue::Scalar(scalar_output) =
+                        invoke_date_bin_with_args(scalar_args, 1, &return_field).unwrap()
+                    else {
+                        panic!("expected scalar output");
+                    };
+                    assert_eq!(
+                        scalar_output,
+                        ScalarValue::try_from_array(&array_output, index).unwrap(),
+                        "stride {stride_name}, origin {origin:?}, unit {:?}, index {index}",
+                        T::UNIT,
+                    );
+                }
+            }
         }
     }
 
     #[test]
-    fn test_date_bin_scale_overflow_returns_null() {
-        // Scaling non-nanosecond timestamps to nanoseconds can overflow.
-        use arrow::array::{
-            ArrayRef, TimestampMicrosecondArray, TimestampMillisecondArray,
-            TimestampSecondArray,
-        };
+    fn test_date_bin_preserves_timestamp_nullness() {
+        assert_timestamp_nullness_preserved::<TimestampSecondType>();
+        assert_timestamp_nullness_preserved::<TimestampMillisecondType>();
+        assert_timestamp_nullness_preserved::<TimestampMicrosecondType>();
+        assert_timestamp_nullness_preserved::<TimestampNanosecondType>();
+    }
 
-        let scalar_cases = [
-            ScalarValue::TimestampSecond(Some(i64::MAX), None),
-            ScalarValue::TimestampMillisecond(Some(i64::MAX), None),
-            ScalarValue::TimestampMicrosecond(Some(i64::MAX), None),
-        ];
-        for source in scalar_cases {
-            let expected_type = source.data_type();
-            let return_field = Arc::new(Field::new("f", expected_type.clone(), true));
-            let args = vec![
-                ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
-                ColumnarValue::Scalar(source),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(0), None)),
-            ];
-            let result = invoke_date_bin_with_args(args, 1, &return_field)
-                .unwrap_or_else(|e| panic!("expected Ok for {expected_type}, got {e:?}"));
-            assert_null_scalar(result, expected_type);
-        }
-
-        let array_cases: Vec<ArrayRef> = vec![
-            Arc::new(TimestampSecondArray::from(vec![Some(i64::MAX), Some(0)])),
-            Arc::new(TimestampMillisecondArray::from(vec![
-                Some(i64::MAX),
-                Some(0),
-            ])),
-            Arc::new(TimestampMicrosecondArray::from(vec![
-                Some(i64::MAX),
-                Some(0),
-            ])),
-        ];
-        for array in array_cases {
-            let dt = array.data_type().clone();
-            let return_field = Arc::new(Field::new("f", dt.clone(), true));
-            let args = vec![
-                ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
-                ColumnarValue::Array(array),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(0), None)),
-            ];
-            let result = invoke_date_bin_with_args(args, 2, &return_field)
-                .unwrap_or_else(|e| panic!("expected Ok for {dt:?}, got {e:?}"));
-            assert_array_null_then_valid(result, dt);
-        }
+    #[test]
+    fn test_date_bin_timestamp_scalar_and_array_agree() {
+        assert_timestamp_scalar_and_array_agree::<TimestampSecondType>();
+        assert_timestamp_scalar_and_array_agree::<TimestampMillisecondType>();
+        assert_timestamp_scalar_and_array_agree::<TimestampMicrosecondType>();
+        assert_timestamp_scalar_and_array_agree::<TimestampNanosecondType>();
     }
 
     #[test]
@@ -1422,21 +1745,17 @@ mod tests {
         let data_type = DataType::Time64(TimeUnit::Microsecond);
         let return_field = &Arc::new(Field::new("f", data_type.clone(), true));
         let stride = || ColumnarValue::Scalar(ScalarValue::new_interval_dt(0, 1000));
-        let origin = || ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(0)));
 
-        // Out-of-range source values are per-row data, so they become NULL.
-        let args = vec![
-            stride(),
-            ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(i64::MAX))),
-            origin(),
-        ];
-        let result = invoke_date_bin_with_args(args, 1, return_field).unwrap();
-        assert_null_scalar(result, data_type.clone());
-
-        let array = Arc::new(Time64MicrosecondArray::from(vec![Some(i64::MAX), Some(0)]));
-        let args = vec![stride(), ColumnarValue::Array(array), origin()];
-        let result = invoke_date_bin_with_args(args, 2, return_field).unwrap();
-        assert_array_null_then_valid(result, data_type);
+        // Out-of-range source values are binned in i128 and reduced to a day,
+        // like in-range values.
+        assert_date_bin(
+            ScalarValue::new_interval_dt(0, 1000),
+            ScalarValue::Time64Microsecond(Some(i64::MAX)),
+            ScalarValue::Time64Microsecond(Some(0)),
+            ScalarValue::Time64Microsecond(Some(
+                (i64::MAX - i64::MAX % 1_000_000) % 86_400_000_000,
+            )),
+        );
 
         let bad_origin =
             || ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(i64::MAX)));
@@ -1454,7 +1773,7 @@ mod tests {
         assert_overflow_error(invoke_date_bin_with_args(args, 2, return_field));
     }
 
-    // Compare scalar execution with a one-row array for the same input.
+    // Compare values or errors from scalar execution and a one-row array.
     fn assert_scalar_array_parity(
         stride: ScalarValue,
         source: ScalarValue,
@@ -1467,11 +1786,7 @@ mod tests {
             ColumnarValue::Scalar(source.clone()),
             ColumnarValue::Scalar(origin.clone()),
         ];
-        let scalar_result = invoke_date_bin_with_args(scalar_args, 1, &return_field)
-            .expect("scalar path should not error");
-        let ColumnarValue::Scalar(scalar_value) = scalar_result else {
-            panic!("expected scalar result, got {scalar_result:?}");
-        };
+        let scalar_result = invoke_date_bin_with_args(scalar_args, 1, &return_field);
 
         let source_array = source.to_array().expect("source value to array");
         let array_args = vec![
@@ -1479,18 +1794,34 @@ mod tests {
             ColumnarValue::Array(source_array),
             ColumnarValue::Scalar(origin),
         ];
-        let array_result = invoke_date_bin_with_args(array_args, 1, &return_field)
-            .expect("array path should not error");
-        let ColumnarValue::Array(array) = array_result else {
-            panic!("expected array result, got {array_result:?}");
-        };
-        let array_value =
-            ScalarValue::try_from_array(&array, 0).expect("array row to scalar");
+        let array_result = invoke_date_bin_with_args(array_args, 1, &return_field);
 
-        assert_eq!(
-            scalar_value, array_value,
-            "scalar and array results diverged for source {source:?}"
-        );
+        match (scalar_result, array_result) {
+            (
+                Ok(ColumnarValue::Scalar(scalar_value)),
+                Ok(ColumnarValue::Array(array)),
+            ) => {
+                let array_value =
+                    ScalarValue::try_from_array(&array, 0).expect("array row to scalar");
+                assert_eq!(
+                    scalar_value, array_value,
+                    "scalar and array values diverged for source {source:?}"
+                );
+            }
+            (Err(scalar_error), Err(array_error)) => {
+                assert_eq!(
+                    scalar_error.strip_backtrace(),
+                    array_error.strip_backtrace(),
+                    "scalar and array errors diverged for source {source:?}"
+                );
+            }
+            (scalar_result, array_result) => {
+                panic!(
+                    "scalar and array outcomes diverged for source {source:?}: \
+                     scalar {scalar_result:?}, array {array_result:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1504,14 +1835,14 @@ mod tests {
             ScalarValue::TimestampNanosecond(Some(0), None),
         );
 
-        // Source scaling overflow -> NULL in both paths.
+        // Coarse timestamps use wide arithmetic when nanosecond scaling overflows.
         assert_scalar_array_parity(
             ScalarValue::new_interval_dt(1, 0),
             ScalarValue::TimestampSecond(Some(i64::MAX), None),
             ScalarValue::TimestampNanosecond(Some(0), None),
         );
 
-        // Month interval out-of-range binning -> NULL in both paths.
+        // Month interval out-of-range binning must return the same error.
         assert_scalar_array_parity(
             ScalarValue::new_interval_mdn(1637426858, 0, 0),
             ScalarValue::TimestampMillisecond(Some(1040292460), None),
@@ -1589,19 +1920,6 @@ mod tests {
             ],
             DataType::Time64(TimeUnit::Nanosecond),
             time64_msg,
-        );
-    }
-
-    #[test]
-    fn test_date_bin_compute_distance_rem_overflow() {
-        // Regression for #22215: `time_diff % stride` panics with "attempt to
-        // calculate the remainder with overflow" when `time_diff == i64::MIN`
-        // and `stride == -1`. Now it must return a normal Err that the scalar
-        // pipeline maps to NULL.
-        let result = date_bin_nanos_interval(-1, i64::MIN, 0);
-        assert!(
-            result.is_err(),
-            "expected Err for time_diff=i64::MIN, stride=-1, got {result:?}"
         );
     }
 }

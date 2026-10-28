@@ -1,26 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+mod clustered_final_table;
+mod clustered_partial_table;
+mod clustered_single_table;
 mod common;
-mod common_ordered;
+mod common_clustered;
 mod final_table;
-mod ordered_final_table;
-mod ordered_partial_table;
-mod ordered_single_table;
 mod partial_reduce_table;
 mod partial_table;
 mod single_table;
@@ -29,9 +16,10 @@ use std::sync::Arc;
 
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics,
+    GroupByMetrics, aggregate_sub_metrics,
 };
 use crate::aggregates::{AggregateExec, AggregateMode, aggregate_metric_label};
+use datafusion_expr::AggregateMetrics;
 
 pub(super) fn accumulator_phases(mode: &AggregateMode) -> &'static [AccumulatorPhase] {
     match mode {
@@ -63,18 +51,24 @@ pub(super) struct AggregateTableMetrics {
     pub(super) group_by: GroupByMetrics,
     pub(super) aggregate_arguments: AggregateArgumentMetrics,
     pub(super) accumulator: Arc<AggregateAccumulatorMetrics>,
+    pub(super) submetrics: Vec<Arc<dyn AggregateMetrics>>,
 }
 
 impl AggregateTableMetrics {
     pub(super) fn new(agg: &AggregateExec, partition: usize) -> Self {
         let aggregate_labels = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .map(|agg_expr| aggregate_metric_label(agg_expr))
             .collect::<Vec<_>>();
 
         Self {
             group_by: GroupByMetrics::new(&agg.metrics, partition),
+            submetrics: aggregate_sub_metrics(
+                &agg.metrics,
+                partition,
+                aggregate_labels.iter().cloned(),
+            ),
             aggregate_arguments: AggregateArgumentMetrics::new(
                 &agg.metrics,
                 partition,
@@ -92,9 +86,11 @@ impl AggregateTableMetrics {
 
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
-    PartialSkipMarker, SingleMarker,
+    PartialSkipMarker, SingleMarker, create_group_accumulator,
 };
-pub(super) use common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
+pub(super) use common_clustered::{
+    ClusteredAggregateTable, ClusteredAggregateTableMetrics,
+};
 
 #[cfg(test)]
 mod tests {

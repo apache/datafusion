@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Value representation of metrics
 
@@ -201,6 +188,15 @@ impl Time {
     pub fn add_duration(&self, duration: Duration) {
         let more_nanos = duration.as_nanos() as usize;
         self.nanos.fetch_add(more_nanos.max(1), Ordering::Relaxed);
+    }
+
+    /// Adds a duration without rounding it up to one nanosecond.
+    ///
+    /// Use only for metrics that record many independent operations, where a
+    /// minimum per recording would materially inflate the total.
+    pub fn add_duration_exact(&self, duration: Duration) {
+        self.nanos
+            .fetch_add(duration.as_nanos() as usize, Ordering::Relaxed);
     }
 
     /// Add the number of nanoseconds of other `Time` to self
@@ -1050,11 +1046,9 @@ impl MetricValue {
             Self::SpilledRows(_) => 12,
             Self::CurrentMemoryUsage(_) => 13,
             Self::Count { name, .. } => match name.as_ref() {
-                // This Parquet page-index metric is a plain Count because it
-                // records pages that skipped page-index evaluation, not a
-                // pruned/matched pair. Keep it grouped with the other
+                // Keep lazy Parquet pruning counters grouped with the other
                 // page-index pruning metrics in EXPLAIN output.
-                "page_index_pages_skipped_by_fully_matched" => 8,
+                "page_index_pages_skipped_by_fully_matched" | "limit_pruned_rows" => 8,
                 _ => 14,
             },
             Self::PeakMemoryUsage { .. } => 13,
@@ -1276,6 +1270,14 @@ mod tests {
         for value in &values {
             assert_eq!("1.04µs", value.to_string(), "value {value:?}");
         }
+    }
+
+    #[test]
+    fn test_time_merge_marks_a_zero_duration_measurement_as_recorded() {
+        let merged = Time::new();
+        merged.add(&Time::new());
+
+        assert_eq!(merged.value(), 1);
     }
 
     #[test]

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Conversions from the protobuf messages in this crate to their
 //! `datafusion-common` counterparts.
@@ -30,7 +17,9 @@ use datafusion_common::config::{
     ParquetOptions, TableParquetOptions,
 };
 use datafusion_common::display::{PlanType, StringifiedPlan};
+use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::parsers::{CompressionTypeVariant, CsvQuoteStyle};
+use datafusion_common::utils::usize_from_wire;
 use datafusion_common::{
     JoinConstraint, JoinType, NullEquality, RecursionUnnestOption, TableReference,
     UnnestOptions,
@@ -188,9 +177,11 @@ impl From<protobuf::NullEquality> for NullEquality {
     }
 }
 
-impl From<&CsvOptionsProto> for CsvOptions {
-    fn from(proto: &CsvOptionsProto) -> Self {
-        CsvOptions {
+impl TryFrom<&CsvOptionsProto> for CsvOptions {
+    type Error = datafusion_common::DataFusionError;
+
+    fn try_from(proto: &CsvOptionsProto) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(CsvOptions {
             has_header: if !proto.has_header.is_empty() {
                 Some(proto.has_header[0] != 0)
             } else {
@@ -220,7 +211,10 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 3 => CompressionTypeVariant::ZSTD,
                 _ => CompressionTypeVariant::UNCOMPRESSED,
             },
-            schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
+            schema_infer_max_rec: proto
+                .schema_infer_max_rec
+                .map(|value| usize_from_wire(value, "CsvOptions", "schema_infer_max_rec"))
+                .transpose()?,
             date_format: if proto.date_format.is_empty() {
                 None
             } else {
@@ -289,13 +283,17 @@ impl From<&CsvOptionsProto> for CsvOptions {
             } else {
                 Some(proto.ignore_trailing_whitespace[0] != 0)
             },
-        }
+        })
     }
 }
 
-impl From<&JsonOptionsProto> for JsonOptions {
-    fn from(proto: &JsonOptionsProto) -> Self {
-        JsonOptions {
+impl TryFrom<&JsonOptionsProto> for JsonOptions {
+    type Error = datafusion_common::DataFusionError;
+
+    fn try_from(
+        proto: &JsonOptionsProto,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(JsonOptions {
             compression: match proto.compression {
                 0 => CompressionTypeVariant::GZIP,
                 1 => CompressionTypeVariant::BZIP2,
@@ -303,21 +301,32 @@ impl From<&JsonOptionsProto> for JsonOptions {
                 3 => CompressionTypeVariant::ZSTD,
                 _ => CompressionTypeVariant::UNCOMPRESSED,
             },
-            schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
+            schema_infer_max_rec: proto
+                .schema_infer_max_rec
+                .map(|value| {
+                    usize_from_wire(value, "JsonOptions", "schema_infer_max_rec")
+                })
+                .transpose()?,
             compression_level: proto.compression_level,
             newline_delimited: proto.newline_delimited.unwrap_or(true),
-        }
+        })
     }
 }
 
-impl From<ParquetCdcOptionsProto> for ParquetCdcOptions {
-    fn from(value: ParquetCdcOptionsProto) -> Self {
-        ParquetCdcOptions {
+impl TryFrom<ParquetCdcOptionsProto> for ParquetCdcOptions {
+    type Error = datafusion_common::DataFusionError;
+
+    fn try_from(
+        value: ParquetCdcOptionsProto,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        let to_usize =
+            |value: u64, field: &str| usize_from_wire(value, "ParquetCdcOptions", field);
+        Ok(ParquetCdcOptions {
             enabled: value.enabled,
-            min_chunk_size: value.min_chunk_size as usize,
-            max_chunk_size: value.max_chunk_size as usize,
+            min_chunk_size: to_usize(value.min_chunk_size, "min_chunk_size")?,
+            max_chunk_size: to_usize(value.max_chunk_size, "max_chunk_size")?,
             norm_level: value.norm_level,
-        }
+        })
     }
 }
 
@@ -334,6 +343,8 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             "" => ParquetOptions::default().writer_version,
             version => version.parse()?,
         };
+        let to_usize =
+            |value: u64, field: &str| usize_from_wire(value, "ParquetOptions", field);
 
         Ok(ParquetOptions {
             enable_page_index: proto.enable_page_index,
@@ -344,20 +355,29 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .as_ref()
                 .map(|opt| match opt {
                     parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size) => {
-                        *size as usize
+                        to_usize(*size, "metadata_size_hint")
                     }
-                }),
+                })
+                .transpose()?,
             pushdown_filters: proto.pushdown_filters,
             reorder_filters: proto.reorder_filters,
             force_filter_selections: proto.force_filter_selections,
-            data_pagesize_limit: proto.data_pagesize_limit as usize,
-            write_batch_size: proto.write_batch_size as usize,
+            data_pagesize_limit: to_usize(
+                proto.data_pagesize_limit,
+                "data_pagesize_limit",
+            )?,
+            write_batch_size: to_usize(proto.write_batch_size, "write_batch_size")?,
             writer_version,
-            compression: proto.compression_opt.as_ref().map(|opt| match opt {
-                parquet_options::CompressionOpt::Compression(compression) => {
-                    compression.clone()
-                }
-            }),
+            compression: proto
+                .compression_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::CompressionOpt::Compression(compression) => {
+                        compression.parse()
+                    }
+                })
+                .transpose()?,
+            enable_rle_to_dictionary: proto.enable_rle_to_dictionary,
             dictionary_enabled: proto.dictionary_enabled_opt.as_ref().map(|opt| {
                 match opt {
                     parquet_options::DictionaryEnabledOpt::DictionaryEnabled(
@@ -365,35 +385,54 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                     ) => *enabled,
                 }
             }),
-            dictionary_page_size_limit: proto.dictionary_page_size_limit as usize,
-            statistics_enabled: proto.statistics_enabled_opt.as_ref().map(
-                |opt| match opt {
+            dictionary_page_size_limit: to_usize(
+                proto.dictionary_page_size_limit,
+                "dictionary_page_size_limit",
+            )?,
+            statistics_enabled: proto
+                .statistics_enabled_opt
+                .as_ref()
+                .map(|opt| match opt {
                     parquet_options::StatisticsEnabledOpt::StatisticsEnabled(
                         statistics,
-                    ) => statistics.clone(),
-                },
-            ),
-            max_row_group_size: proto.max_row_group_size as usize,
-            max_in_list_size: proto.max_in_list_size as usize,
+                    ) => statistics.parse(),
+                })
+                .transpose()?,
+            max_row_group_size: to_usize(proto.max_row_group_size, "max_row_group_size")?,
+            max_in_list_size: to_usize(proto.max_in_list_size, "max_in_list_size")?,
+            row_group_range_assignment: RowGroupRangeAssignment::from_proto_str(
+                &proto.row_group_range_assignment,
+            )?,
             created_by: proto.created_by.clone(),
             column_index_truncate_length: proto
                 .column_index_truncate_length_opt
                 .as_ref()
                 .map(|opt| match opt {
-                    parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length) => *length as usize,
-                }),
+                    parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length) => {
+                        to_usize(*length, "column_index_truncate_length")
+                    }
+                })
+                .transpose()?,
             statistics_truncate_length: proto
                 .statistics_truncate_length_opt
                 .as_ref()
                 .map(|opt| match opt {
-                    parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length) => *length as usize,
-                }),
-            data_page_row_count_limit: proto.data_page_row_count_limit as usize,
-            encoding: proto.encoding_opt.as_ref().map(|opt| match opt {
-                parquet_options::EncodingOpt::Encoding(encoding) => {
-                    encoding.clone()
-                }
-            }),
+                    parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length) => {
+                        to_usize(*length, "statistics_truncate_length")
+                    }
+                })
+                .transpose()?,
+            data_page_row_count_limit: to_usize(
+                proto.data_page_row_count_limit,
+                "data_page_row_count_limit",
+            )?,
+            encoding: proto
+                .encoding_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::EncodingOpt::Encoding(encoding) => encoding.parse(),
+                })
+                .transpose()?,
             bloom_filter_on_read: proto.bloom_filter_on_read,
             bloom_filter_on_write: proto.bloom_filter_on_write,
             bloom_filter_fpp: proto
@@ -409,47 +448,57 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                     parquet_options::BloomFilterNdvOpt::BloomFilterNdv(ndv) => *ndv,
                 }),
             allow_single_file_parallelism: proto.allow_single_file_parallelism,
-            maximum_parallel_row_group_writers: proto
-                .maximum_parallel_row_group_writers
-                as usize,
-            maximum_buffered_record_batches_per_stream: proto
-                .maximum_buffered_record_batches_per_stream
-                as usize,
+            maximum_parallel_row_group_writers: to_usize(
+                proto.maximum_parallel_row_group_writers,
+                "maximum_parallel_row_group_writers",
+            )?,
+            maximum_buffered_record_batches_per_stream: to_usize(
+                proto.maximum_buffered_record_batches_per_stream,
+                "maximum_buffered_record_batches_per_stream",
+            )?,
             schema_force_view_types: proto.schema_force_view_types,
             binary_as_string: proto.binary_as_string,
             skip_arrow_metadata: proto.skip_arrow_metadata,
-            coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
-                parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => {
-                    coerce_int96.clone()
-                }
-            }),
+            write_row_group_number_distinct_values: proto
+                .write_row_group_number_distinct_values,
+            coerce_int96: proto
+                .coerce_int96_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => {
+                        coerce_int96.parse()
+                    }
+                })
+                .transpose()?,
             coerce_int96_tz: proto
                 .coerce_int96_tz_opt
                 .as_ref()
                 .map(|opt| match opt {
-                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => {
-                        tz.clone()
-                    }
-                }),
+                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => tz.parse(),
+                })
+                .transpose()?,
             max_predicate_cache_size: proto
                 .max_predicate_cache_size_opt
                 .as_ref()
                 .map(|opt| match opt {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(
                         size,
-                    ) => *size as usize,
-                }),
+                    ) => to_usize(*size, "max_predicate_cache_size"),
+                })
+                .transpose()?,
             max_row_group_bytes: proto
                 .max_row_group_bytes_opt
                 .as_ref()
-                .and_then(|opt| match opt {
+                .map(|opt| match opt {
                     parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size) => {
-                        MaxRowGroupBytes::try_new(*size as usize).ok()
+                        MaxRowGroupBytes::try_new(to_usize(*size, "max_row_group_bytes")?)
                     }
-                }),
+                })
+                .transpose()?,
             content_defined_chunking: proto
                 .content_defined_chunking
-                .map(ParquetCdcOptions::from)
+                .map(ParquetCdcOptions::try_from)
+                .transpose()?
                 .unwrap_or_default(),
         })
     }
@@ -515,5 +564,78 @@ impl TryFrom<&TableParquetOptionsProto> for TableParquetOptions {
                 .collect(),
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_invalid_parquet_encoding() {
+        let proto = ParquetOptionsProto {
+            encoding_opt: Some(parquet_options::EncodingOpt::Encoding(
+                "invalid".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unknown or unsupported parquet encoding: invalid")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_parquet_statistics() {
+        let proto = ParquetOptionsProto {
+            statistics_enabled_opt: Some(
+                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(
+                    "invalid".to_string(),
+                ),
+            ),
+            ..Default::default()
+        };
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid parquet statistics setting: invalid")
+        );
+    }
+
+    #[test]
+    fn accepts_parquet_coerce_int96_tz_without_unit() {
+        let proto = ParquetOptionsProto {
+            coerce_int96_tz_opt: Some(parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(
+                "+08".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let options = ParquetOptions::try_from(&proto).unwrap();
+        assert_eq!(options.coerce_int96, None);
+        assert_eq!(
+            options.coerce_int96_tz.as_ref().map(|tz| tz.as_str()),
+            Some("+08")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_parquet_coerce_int96_tz() {
+        let proto = ParquetOptionsProto {
+            coerce_int96_tz_opt: Some(parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(
+                "Not/A_Timezone".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid time zone: Not/A_Timezone."),
+            "unexpected error: {err}"
+        );
     }
 }
