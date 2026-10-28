@@ -1014,5 +1014,7 @@ set datafusion.execution.target_partitions = 4;
 statement ok
 reset datafusion.execution.planning_concurrency;
 
+# The SLT runner pins `created_by` to `datafusion` instead of using the default
+# (which includes the DataFusion version), so set it back explicitly.
 statement ok
-reset datafusion.execution.parquet.created_by;
+set datafusion.execution.parquet.created_by = datafusion;
