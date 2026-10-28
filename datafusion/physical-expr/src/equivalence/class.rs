@@ -12,6 +12,7 @@ use super::ProjectionMapping;
 use crate::expressions::Literal;
 use crate::physical_expr::add_offset_to_expr;
 use crate::projection::ProjectionTargets;
+use crate::scalar_subquery::ScalarSubqueryExpr;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -619,8 +620,10 @@ impl EquivalenceGroup {
         aug_mapping: &AugmentedMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        // Literals don't need to be projected
-        if expr.downcast_ref::<Literal>().is_some() {
+        // Literals and scalar subqueries don't need to be projected
+        if expr.downcast_ref::<Literal>().is_some()
+            || expr.downcast_ref::<ScalarSubqueryExpr>().is_some()
+        {
             return Some(Arc::clone(expr));
         }
 
@@ -730,7 +733,18 @@ impl EquivalenceGroup {
     pub fn project(&self, mapping: &ProjectionMapping) -> Self {
         let projected_classes = self.iter().map(|cls| {
             let new_exprs = self.project_expressions(mapping, cls.iter());
-            EquivalenceClass::new(new_exprs.flatten())
+            let mut new_cls = EquivalenceClass::new(new_exprs.flatten());
+            match (&new_cls.constant, &cls.constant) {
+                (None, Some(_)) => new_cls.constant.clone_from(&cls.constant),
+                (
+                    Some(AcrossPartitions::Heterogeneous),
+                    Some(AcrossPartitions::Uniform(_)),
+                ) => {
+                    new_cls.constant.clone_from(&cls.constant);
+                }
+                _ => {}
+            }
+            new_cls
         });
 
         // The key is the source expression, and the value is the equivalence
@@ -1498,6 +1512,84 @@ mod tests {
 
         assert_eq!(bridged.len(), 1, "expected a single bridged class");
         assert!(bridged.has_same_classes(&direct));
+
+        Ok(())
+    }
+
+    /// Regression test for <https://github.com/apache/datafusion/issues/26624>:
+    /// Preserving constant equivalence class across projection when an expression
+    /// (such as `b + 1 = 2` or `b + (scalar subquery) = 2`) is constant and only its child
+    /// column `b` is mapped in the projection.
+    #[test]
+    fn test_project_preserves_constant_equivalence_class() -> Result<()> {
+        use crate::scalar_subquery::ScalarSubqueryExpr;
+        use arrow_schema::DataType;
+        use datafusion_expr::physical_planning_context::{
+            ScalarSubqueryResults, SubqueryIndex,
+        };
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        // Expression `b + 1 = 2`
+        let b_plus_1 = binary(col("b", &schema)?, Operator::Plus, lit(1), &schema)?;
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(Arc::clone(&b_plus_1), lit(2));
+
+        // Scalar subquery expression: `b + (scalar_subquery) = 2`
+        let subquery: Arc<dyn PhysicalExpr> = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            false,
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        ));
+        let b_plus_subquery = binary(
+            col("b", &schema)?,
+            Operator::Plus,
+            Arc::clone(&subquery),
+            &schema,
+        )?;
+        group.add_equal_conditions(Arc::clone(&b_plus_subquery), lit(2));
+
+        // Projection mapping only projects `b` from input (index 1) to output (index 0)
+        let projected_schema = Arc::new(Schema::new(vec![Field::new(
+            "b_new",
+            DataType::Int32,
+            false,
+        )]));
+        let mapping = std::iter::once((
+            col("b", &schema)?,
+            vec![(col("b_new", &projected_schema)?, 0)].into(),
+        ))
+        .collect::<ProjectionMapping>();
+
+        let projected = group.project(&mapping);
+
+        // Verify `b_new + 1` remains constant with value 2
+        let projected_b_plus_1 = binary(
+            col("b_new", &projected_schema)?,
+            Operator::Plus,
+            lit(1),
+            &projected_schema,
+        )?;
+        assert_eq!(
+            projected.is_expr_constant(&projected_b_plus_1),
+            Some(AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(2)))))
+        );
+
+        // Verify `b_new + (scalar_subquery)` remains constant with value 2
+        let projected_b_plus_subquery = binary(
+            col("b_new", &projected_schema)?,
+            Operator::Plus,
+            subquery,
+            &projected_schema,
+        )?;
+        assert_eq!(
+            projected.is_expr_constant(&projected_b_plus_subquery),
+            Some(AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(2)))))
+        );
 
         Ok(())
     }
