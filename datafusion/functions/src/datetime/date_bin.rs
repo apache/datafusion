@@ -1098,18 +1098,6 @@ mod tests {
     }
 
     #[test]
-    fn range_key_locality_requires_literal_argument_values() {
-        use arrow::datatypes::IntervalUnit::MonthDayNano;
-
-        let function = DateBinFunc::new();
-        let argument_types = [
-            DataType::Interval(MonthDayNano),
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-        ];
-        assert!(!function.supports_range_key_locality_analysis(&argument_types));
-    }
-
-    #[test]
     fn range_key_locality_rejects_non_literal_stride() {
         use arrow::datatypes::IntervalUnit::MonthDayNano;
 

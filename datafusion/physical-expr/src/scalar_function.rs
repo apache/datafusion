@@ -518,25 +518,16 @@ mod tests {
     }
 
     #[test]
-    fn range_key_locality_analysis_rejects_column_parameters() -> Result<()> {
-        let function =
-            ScalarUDF::from(LiteralLocalityUDF::new(ScalarValue::Int32(Some(1))));
-        let column = Arc::new(Column::new("parameter", 0));
-
-        assert!(!supports_locality_with_parameter(function, column)?);
-        Ok(())
-    }
-
-    #[test]
-    fn range_key_locality_analysis_does_not_evaluate_non_literal_parameters() -> Result<()>
-    {
+    fn range_key_locality_analysis_rejects_non_literal_parameters() -> Result<()> {
         use crate::expressions::CastExpr;
 
         let function =
             ScalarUDF::from(LiteralLocalityUDF::new(ScalarValue::Int32(Some(1))));
+        let column = Arc::new(Column::new("parameter", 0));
         let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
         let cast = Arc::new(CastExpr::new(literal, DataType::Int32, None));
 
+        assert!(!supports_locality_with_parameter(function.clone(), column)?);
         assert!(!supports_locality_with_parameter(function, cast)?);
         Ok(())
     }
