@@ -60,6 +60,7 @@ pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
 pub mod extract_leaf_expressions;
 pub mod filter_null_join_keys;
+pub mod inline_automatic_ctes;
 pub mod optimize_projections;
 pub mod optimize_unions;
 pub mod optimizer;

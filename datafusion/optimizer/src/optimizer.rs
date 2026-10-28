@@ -55,6 +55,7 @@ use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::extract_leaf_expressions::{ExtractLeafExpressions, PushDownLeafProjections};
 use crate::filter_null_join_keys::FilterNullJoinKeys;
+use crate::inline_automatic_ctes::InlineAutomaticCtes;
 use crate::optimize_projections::OptimizeProjections;
 use crate::optimize_unions::OptimizeUnions;
 use crate::plan_signature::LogicalPlanSignature;
@@ -286,6 +287,7 @@ impl Optimizer {
         //   (e.g. if the plan doesn't contain any of the nodes you are looking for
         //    return `Transformed::no`; only works if you control the traversal).
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            Arc::new(InlineAutomaticCtes::new()),
             Arc::new(RewriteSetComparison::new()),
             Arc::new(OptimizeUnions::new()),
             Arc::new(UnionsToFilter::new()),
