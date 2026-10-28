@@ -27,6 +27,7 @@ use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::{Alias, AliasKind};
+use datafusion_expr::logical_plan::column_ids::NodeDefinedIds;
 use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{
     Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScanBuilder, Unnest,
@@ -136,6 +137,9 @@ fn optimize_projections(
                 .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::Aggregate(aggregate) => {
+            // The new aggregate defines the same grouping set columns
+            let defined =
+                NodeDefinedIds::of_aggregate(&aggregate.group_expr, &aggregate.schema);
             // Split parent requirements to GROUP BY and aggregate sections:
             let n_group_exprs = aggregate.group_expr_len()?;
             // Offset aggregate indices so that they point to valid indices at
@@ -214,12 +218,11 @@ fn optimize_projections(
             .map_data(|aggregate_input| {
                 // Create a new aggregate plan with the updated input and only the
                 // absolutely necessary fields:
-                Aggregate::try_new(
+                defined.restore(LogicalPlan::Aggregate(Aggregate::try_new(
                     Arc::new(aggregate_input),
                     new_group_bys,
                     new_aggr_expr,
-                )
-                .map(LogicalPlan::Aggregate)
+                )?))
             })?
             .transform_data(|plan| optimize_subqueries(plan, config));
         }

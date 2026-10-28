@@ -26,53 +26,25 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 /// does not change when the column is renamed, requalified, or moved below
 /// another node by an optimizer rule.
 ///
-/// There are two kinds of ids:
-///
-/// * An *allocated* id ([`ColumnId::next`]) identifies a column that is
-///   defined in one place: a table scan field, a `VALUES` column, an alias
-///   (which also names every computed output of a projection, aggregate or
-///   window), or a union output. Two scans of the same table define different
-///   columns, so each gets new ids.
-/// * A *derived* id ([`ColumnId::derived`]) identifies a column that a node
-///   computes from one input column, with no expression to hold an id: the
-///   mark column of a join, a grouping set column, an unnested column. It is a
-///   hash of the node kind and the input column's id, so a node rebuilt from
-///   the same input gets the same id. This is value numbering, as in a
-///   compiler.
+/// An id is allocated ([`ColumnId::next`]) where its column is defined, and
+/// stored with the definition: a table scan field, a `VALUES` column, an
+/// alias (which also names every computed output of a projection, aggregate or
+/// window), or a column that a node defines itself (a union output, a grouping
+/// set column, the mark column of a join, an unnested column). Two scans of the
+/// same table define different columns, so each gets new ids. A node that is
+/// rebuilt keeps the ids of the columns it defines.
 ///
 /// Ids are unique within a process. They are not stable across processes and
 /// are not shown in `EXPLAIN` output.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct ColumnId(NonZeroU64);
 
-/// Derived ids have this bit set, allocated ids do not, so the two never
-/// collide
-const DERIVED_ID_BIT: u64 = 1 << 63;
-
 impl ColumnId {
     /// Allocate a new, unique [`ColumnId`]
     pub fn next() -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         let id = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
-        assert!(id < DERIVED_ID_BIT, "ColumnId overflow");
         Self(NonZeroU64::new(id).expect("ColumnId overflow"))
-    }
-
-    /// The [`ColumnId`] of a column computed from `key`.
-    ///
-    /// Equal keys give equal ids. The key should identify both what the
-    /// column computes and the ids of the columns it reads.
-    pub fn derived(key: impl Hash) -> Self {
-        use std::hash::DefaultHasher;
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        let id = hasher.finish() | DERIVED_ID_BIT;
-        Self(NonZeroU64::new(id).expect("derived id has its high bit set"))
-    }
-
-    /// Is this a derived id, see [`ColumnId::derived`]?
-    pub fn is_derived(&self) -> bool {
-        self.0.get() & DERIVED_ID_BIT != 0
     }
 
     /// The numeric value of this id

@@ -715,6 +715,12 @@ impl LogicalPlan {
     ///
     /// * Does not recursively recompute schema for input (child) plans.
     pub fn recompute_schema(self) -> Result<Self> {
+        // The rebuilt node keeps defining the same columns
+        let defined = column_ids::NodeDefinedIds::of(&self);
+        defined.restore(self.recompute_schema_inner()?)
+    }
+
+    fn recompute_schema_inner(self) -> Result<Self> {
         match self {
             // Since expr may be different than the previous expr, schema of the projection
             // may change. We need to use try_new method instead of try_new_with_schema method.
@@ -912,6 +918,16 @@ impl LogicalPlan {
     /// let new_plan = plan.new_with_exprs(rewritten_exprs, new_inputs);
     /// ```
     pub fn with_new_exprs(
+        &self,
+        expr: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<LogicalPlan> {
+        // The rebuilt node keeps defining the same columns
+        let defined = column_ids::NodeDefinedIds::of(self);
+        defined.restore(self.with_new_exprs_inner(expr, inputs)?)
+    }
+
+    fn with_new_exprs_inner(
         &self,
         mut expr: Vec<Expr>,
         inputs: Vec<LogicalPlan>,
@@ -4420,8 +4436,8 @@ impl Aggregate {
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
 
         // Every output is a column or an alias with the column's id. The
-        // expressions of a grouping set stay as they are: their output columns
-        // get derived ids.
+        // expressions of a grouping set stay as they are: the aggregate
+        // defines their output columns, with new ids.
         let group_expr = if is_grouping_set {
             group_expr
         } else {
@@ -4459,6 +4475,7 @@ impl Aggregate {
                 &group_expr,
                 &aggr_expr,
                 input.schema(),
+                None,
             )?,
             input.schema().metadata().clone(),
         )?;
@@ -4515,6 +4532,7 @@ impl Aggregate {
             &group_expr,
             &aggr_expr,
             input.schema(),
+            Some(&schema),
         )?;
         let schema = schema_with_field_ids(schema, ids)?;
 
@@ -5580,20 +5598,15 @@ impl Unnest {
 
         let metadata = input_schema.metadata().clone();
         // A column that is not unnested passes its input column (and id)
-        // through. An unnested column is defined by the unnest: its id is
-        // derived from the input column and its position among the columns
-        // unnested from it, so a rebuilt unnest gets the same ids.
-        let mut unnested_counts: HashMap<usize, usize> = HashMap::new();
+        // through. An unnested column is defined by the unnest, with a new id
+        // (kept when the unnest is rebuilt, see `NodeDefinedIds`).
         let ids = dependency_indices
             .iter()
             .map(|input_index| {
-                let input_id = input_schema.field_id(*input_index);
                 if indices_to_unnest.contains_key(input_index) {
-                    let position = unnested_counts.entry(*input_index).or_insert(0);
-                    *position += 1;
-                    Some(ColumnId::derived(("unnest", input_id, *position)))
+                    Some(ColumnId::next())
                 } else {
-                    input_id
+                    input_schema.field_id(*input_index)
                 }
             })
             .collect();

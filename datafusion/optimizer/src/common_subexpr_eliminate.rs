@@ -24,6 +24,7 @@ use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, HigherOrderFunction,
     ScalarFunction, WindowFunction, WindowFunctionParams,
 };
+use datafusion_expr::logical_plan::column_ids::NodeDefinedIds;
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
@@ -239,6 +240,8 @@ impl CommonSubexprEliminate {
             schema,
             ..
         } = aggregate;
+        // A rebuilt aggregate defines the same grouping set columns
+        let defined = NodeDefinedIds::of_aggregate(&group_expr, &schema);
         let input = Arc::unwrap_or_clone(input);
         // Extract common sub-expressions from the aggregate and grouping expressions.
         let ids = CommonExprIds::default();
@@ -387,8 +390,9 @@ impl CommonSubexprEliminate {
                             }
                         }
 
-                        let agg =
-                            Aggregate::try_new(new_input, new_group_expr, agg_exprs)?;
+                        let agg = defined.clone().restore_aggregate(
+                            Aggregate::try_new(new_input, new_group_expr, agg_exprs)?,
+                        )?;
                         let group_columns = agg
                             .schema
                             .columns()
@@ -435,6 +439,7 @@ impl CommonSubexprEliminate {
                             // Since `group_expr` may have changed, schema may also.
                             // Use `try_new()` method.
                             Aggregate::try_new(new_input, new_group_expr, new_aggr_expr)
+                                .and_then(|agg| defined.restore_aggregate(agg))
                                 .map(LogicalPlan::Aggregate)
                                 .map(Transformed::no)
                         } else {

@@ -16,15 +16,12 @@
 //!   in an alias named after it ([`named_output_expr`]). So the id of a
 //!   computed column is part of its expression, and survives when an optimizer
 //!   rule rewrites the expression or rebuilds the node.
-//! * A [`Union`] (and a `RecursiveQuery`) defines its output columns: each
-//!   gets a new id when the node is built, stored in the node's schema, and
-//!   kept when the node is rebuilt (also when an optimizer rule replaces,
-//!   removes or flattens its inputs).
-//! * A column that a node computes from one input column, without an
-//!   expression to hold an id (the mark column of a join, a grouping set
-//!   column, an unnested column), gets a derived ([`ColumnId::derived`]) id: a
-//!   hash of the node kind and the id of the input column. A node rebuilt from
-//!   the same input gets the same ids.
+//! * A node defines the columns it computes without an expression to hold an
+//!   id: the outputs of a [`Union`] (and a `RecursiveQuery`), the mark column
+//!   of a [`Join`], the grouping set columns and grouping id of an
+//!   [`Aggregate`], the unnested columns of an `Unnest`. Each gets a new id
+//!   when the node is built, stored in the node's schema, and kept when the
+//!   node is rebuilt (see [`NodeDefinedIds`]).
 //!
 //! Every other node ([`Filter`], [`Sort`], [`Join`], [`SubqueryAlias`], ...)
 //! passes the ids of its input columns through.
@@ -44,10 +41,8 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-use datafusion_common::cse::HashNode;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -58,7 +53,7 @@ use datafusion_common::{
 use crate::Expr;
 use crate::expr::{Alias, AliasKind, Exists, InSubquery, SetComparison};
 use crate::logical_plan::Subquery;
-use crate::logical_plan::{Distinct, LogicalPlan};
+use crate::logical_plan::{Distinct, LogicalPlan, MaterializedCtePlan};
 use crate::utils::grouping_set_to_exprlist;
 
 /// Returns `expr` as an output of a [`Projection`], [`Aggregate`] or
@@ -142,13 +137,13 @@ pub fn with_output_ids(exprs: Vec<Expr>, schema: &DFSchema) -> Vec<Expr> {
 ///
 /// * an [`Expr::Alias`] defines a column with the alias's id
 /// * an [`Expr::Column`] passes through the input column it refers to
-/// * any other expression (an output that is not named yet) gets a derived
-///   id, see [`derived_expr_id`]
+/// * any other expression is an output that is not named yet: it has no id
+///   until a node names it (see [`named_output_expr`])
 pub fn output_column_id(expr: &Expr, input_schema: &DFSchema) -> Option<ColumnId> {
     match expr {
         Expr::Alias(alias) => Some(alias.id),
         Expr::Column(col) => resolve_column_id(col, input_schema),
-        _ => derived_expr_id(expr, input_schema),
+        _ => None,
     }
 }
 
@@ -171,38 +166,6 @@ fn resolve_column_id(col: &Column, schema: &DFSchema) -> Option<ColumnId> {
         .and_then(|idx| schema.field_id(idx))
 }
 
-/// Returns the derived [`ColumnId`] of the value that `expr` computes from the
-/// columns of `input_schema`: a hash of the expression, with each column
-/// reference replaced by the id of the column it reads.
-///
-/// Returns `None` if the expression is volatile (two evaluations are different
-/// values), or reads a column whose id is not known.
-pub fn derived_expr_id(expr: &Expr, input_schema: &DFSchema) -> Option<ColumnId> {
-    if expr.is_volatile() {
-        return None;
-    }
-    let mut hasher = DefaultHasher::new();
-    let mut complete = true;
-    expr.apply(|expr| {
-        match expr {
-            Expr::Column(col) => {
-                match col.id.or_else(|| resolve_column_id(col, input_schema)) {
-                    Some(id) => id.hash(&mut hasher),
-                    None => complete = false,
-                }
-            }
-            Expr::OuterReferenceColumn(_, col) => match col.id {
-                Some(id) => id.hash(&mut hasher),
-                None => complete = false,
-            },
-            _ => expr.hash_node(&mut hasher),
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })
-    .expect("infallible");
-    complete.then(|| ColumnId::derived(("expr", hasher.finish())))
-}
-
 /// Returns the [`ColumnId`]s of the output columns of a join, in the order of
 /// [`build_join_schema`](crate::logical_plan::builder::build_join_schema)
 pub fn join_output_column_ids(
@@ -212,9 +175,8 @@ pub fn join_output_column_ids(
 ) -> Vec<Option<ColumnId>> {
     let left_ids = left.field_ids().iter().copied();
     let right_ids = right.field_ids().iter().copied();
-    // the mark column is computed from the rows of the other side
-    let mark_id =
-        |marked: &DFSchema| Some(ColumnId::derived(("join_mark", marked.field_ids())));
+    // the join defines the mark column (see `NodeDefinedIds` for rebuilds)
+    let mark_id = |_marked: &DFSchema| Some(ColumnId::next());
     match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
             left_ids.chain(right_ids).collect()
@@ -230,33 +192,203 @@ pub fn join_output_column_ids(
 ///
 /// A grouping column keeps the id of its input column, unless the aggregate
 /// has grouping sets: there, a grouping column is NULL in the rows of the sets
-/// that do not group by it, so it is a different column, with an id derived
-/// from the input column's (see [`grouping_set_column_id`]). The internal
-/// grouping id column also gets a derived id.
+/// that do not group by it, so the aggregate defines a different column. The
+/// aggregate also defines the internal grouping id column. Such a column takes
+/// its id from `schema` (the schema the aggregate is built with) if it has
+/// one, and a new id otherwise.
 pub fn aggregate_output_column_ids(
     group_expr: &[Expr],
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
+    schema: Option<&DFSchema>,
 ) -> Result<Vec<Option<ColumnId>>> {
     let is_grouping_set = matches!(group_expr, [Expr::GroupingSet(_)]);
     let grouping_expr = grouping_set_to_exprlist(group_expr)?;
-    let mut ids = output_column_ids(grouping_expr, input_schema);
-    if is_grouping_set {
-        let grouping_id = ColumnId::derived(("grouping_id", &ids));
-        ids = ids
-            .into_iter()
-            .map(|id| id.map(grouping_set_column_id))
-            .collect();
-        ids.push(Some(grouping_id));
-    }
+    let mut ids = if is_grouping_set {
+        // the grouping set columns, then the grouping id
+        (0..=grouping_expr.len())
+            .map(|i| {
+                schema
+                    .and_then(|schema| schema.field_id(i))
+                    .or_else(|| Some(ColumnId::next()))
+            })
+            .collect()
+    } else {
+        output_column_ids(grouping_expr, input_schema)
+    };
     ids.extend(output_column_ids(aggr_expr, input_schema));
     Ok(ids)
 }
 
-/// The id of the output column of an aggregate with grouping sets that groups
-/// by the input column `input_id`
-pub fn grouping_set_column_id(input_id: ColumnId) -> ColumnId {
-    ColumnId::derived(("grouping_set", input_id))
+/// The ids of the columns that a node defines itself, without an expression
+/// to hold them: the mark column of a [`Join`], the grouping set columns and
+/// the grouping id of an [`Aggregate`], and the unnested columns of an
+/// `Unnest`.
+///
+/// They are allocated when the node is built. A rule (or
+/// [`LogicalPlan::with_new_exprs`], [`LogicalPlan::recompute_schema`]) that
+/// rebuilds such a node with its constructor captures them from the old node
+/// ([`Self::of`]) and restores them on the new one ([`Self::restore`]), so that
+/// the new node defines the same columns, which its parent references.
+///
+/// [`Join`]: crate::logical_plan::Join
+/// [`Aggregate`]: crate::logical_plan::Aggregate
+#[derive(Debug, Clone)]
+pub struct NodeDefinedIds(DefinedIds);
+
+#[derive(Debug, Clone)]
+enum DefinedIds {
+    None,
+    JoinMark(Option<ColumnId>),
+    /// The grouping set expressions, the ids of the columns that group by
+    /// them, and the id of the grouping id column
+    GroupingSets {
+        exprs: Vec<Expr>,
+        ids: Vec<Option<ColumnId>>,
+        grouping_id: Option<ColumnId>,
+    },
+    /// The output columns: name and id
+    Unnest(Vec<(String, Option<ColumnId>)>),
+}
+
+fn is_mark_join(join_type: JoinType) -> bool {
+    matches!(join_type, JoinType::LeftMark | JoinType::RightMark)
+}
+
+impl NodeDefinedIds {
+    /// The ids of the columns that `plan` defines itself
+    pub fn of(plan: &LogicalPlan) -> Self {
+        Self(match plan {
+            LogicalPlan::Join(join) if is_mark_join(join.join_type) => {
+                DefinedIds::JoinMark(join.schema.field_ids().last().copied().flatten())
+            }
+            LogicalPlan::Aggregate(aggregate) => {
+                return Self::of_aggregate(&aggregate.group_expr, &aggregate.schema);
+            }
+            LogicalPlan::Unnest(unnest) => return Self::of_unnest(&unnest.schema),
+            _ => DefinedIds::None,
+        })
+    }
+
+    /// The ids of the columns that an unnest with this output schema defines
+    /// itself
+    pub fn of_unnest(schema: &DFSchema) -> Self {
+        Self(DefinedIds::Unnest(
+            schema
+                .fields()
+                .iter()
+                .zip(schema.field_ids())
+                .map(|(field, id)| (field.name().clone(), *id))
+                .collect(),
+        ))
+    }
+
+    /// The ids of the columns that an aggregate with these group expressions
+    /// and output schema defines itself
+    pub fn of_aggregate(group_expr: &[Expr], schema: &DFSchema) -> Self {
+        if !matches!(group_expr, [Expr::GroupingSet(_)]) {
+            return Self(DefinedIds::None);
+        }
+        Self(match grouping_set_to_exprlist(group_expr) {
+            Ok(exprs) => {
+                let ids = schema.field_ids();
+                DefinedIds::GroupingSets {
+                    ids: ids[..exprs.len().min(ids.len())].to_vec(),
+                    grouping_id: ids.get(exprs.len()).copied().flatten(),
+                    exprs: exprs.into_iter().cloned().collect(),
+                }
+            }
+            Err(_) => DefinedIds::None,
+        })
+    }
+
+    /// [`Self::restore`] for an aggregate
+    pub fn restore_aggregate(
+        self,
+        aggregate: crate::logical_plan::Aggregate,
+    ) -> Result<crate::logical_plan::Aggregate> {
+        match self.restore(LogicalPlan::Aggregate(aggregate))? {
+            LogicalPlan::Aggregate(aggregate) => Ok(aggregate),
+            _ => unreachable!("restoring ids keeps the node"),
+        }
+    }
+
+    /// Returns `plan`, a rebuilt node, defining the columns that the node it
+    /// replaces defined with the same ids
+    pub fn restore(self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        let with_ids = |schema: &DFSchemaRef, ids: Vec<Option<ColumnId>>| {
+            Ok::<_, datafusion_common::DataFusionError>(Arc::new(
+                schema.as_ref().clone().with_field_ids(ids)?,
+            ))
+        };
+        Ok(match (self.0, plan) {
+            (DefinedIds::JoinMark(Some(id)), LogicalPlan::Join(mut join))
+                if is_mark_join(join.join_type) =>
+            {
+                let mut ids = join.schema.field_ids().to_vec();
+                if let Some(last) = ids.last_mut() {
+                    *last = Some(id);
+                }
+                join.schema = with_ids(&join.schema, ids)?;
+                LogicalPlan::Join(join)
+            }
+            (
+                DefinedIds::GroupingSets {
+                    exprs,
+                    ids: old_ids,
+                    grouping_id,
+                },
+                LogicalPlan::Aggregate(mut aggregate),
+            ) if matches!(aggregate.group_expr.as_slice(), [Expr::GroupingSet(_)]) => {
+                let new_exprs = grouping_set_to_exprlist(&aggregate.group_expr)?;
+                let mut ids = aggregate.schema.field_ids().to_vec();
+                if new_exprs.len() == exprs.len() && exprs.len() == old_ids.len() {
+                    // the same grouping columns, in the same order (a rule may
+                    // have rewritten their expressions, e.g. with a cast)
+                    ids[..old_ids.len()].copy_from_slice(&old_ids);
+                } else {
+                    // a column that groups by the same expression keeps its id
+                    for (i, expr) in new_exprs.iter().enumerate() {
+                        if let Some(j) = exprs.iter().position(|old| old == *expr)
+                            && let Some(id) = old_ids.get(j)
+                        {
+                            ids[i] = *id;
+                        }
+                    }
+                }
+                if grouping_id.is_some() {
+                    ids[new_exprs.len()] = grouping_id;
+                }
+                aggregate.schema = with_ids(&aggregate.schema, ids)?;
+                LogicalPlan::Aggregate(aggregate)
+            }
+            (DefinedIds::Unnest(old), LogicalPlan::Unnest(mut unnest)) => {
+                // The columns the unnest defines are the ones whose ids are
+                // not the ids of input columns. Each keeps the id of the old
+                // column with the same name (the unnest may have been pruned).
+                let input = Arc::clone(unnest.input.schema());
+                let old: HashMap<String, Option<ColumnId>> =
+                    old.into_iter().rev().collect();
+                let ids = unnest
+                    .schema
+                    .fields()
+                    .iter()
+                    .zip(unnest.schema.field_ids())
+                    .map(|(field, id)| {
+                        let defined =
+                            id.is_none_or(|id| input.index_of_column_id(id).is_none());
+                        match old.get(field.name()) {
+                            Some(old_id) if defined => *old_id,
+                            _ => *id,
+                        }
+                    })
+                    .collect();
+                unnest.schema = with_ids(&unnest.schema, ids)?;
+                LogicalPlan::Unnest(unnest)
+            }
+            (_, plan) => plan,
+        })
+    }
 }
 
 /// Returns new [`ColumnId`]s for the `len` output columns of a node that
@@ -560,38 +692,6 @@ fn check_column_ref(
     }
 }
 
-/// Records in `new_ids` the new derived ids of the outputs of `node`, which
-/// is about to be renamed: the ids its outputs get when they are derived again
-/// from its (renamed) inputs. Ids that `new_ids` already renames are kept.
-fn rederive_output_ids(
-    node: &LogicalPlan,
-    new_ids: &mut HashMap<ColumnId, ColumnId>,
-) -> Result<()> {
-    let defines_derived_ids = matches!(
-        node,
-        LogicalPlan::Unnest(_) | LogicalPlan::Join(_) | LogicalPlan::Aggregate(_)
-    );
-    let old_ids = node.schema().field_ids();
-    if !defines_derived_ids
-        || !old_ids
-            .iter()
-            .flatten()
-            .any(|id| id.is_derived() && !new_ids.contains_key(id))
-    {
-        return Ok(());
-    }
-    let rederived = node.clone().recompute_schema()?;
-    for (old, new) in old_ids.iter().zip(rederived.schema().field_ids()) {
-        if let (Some(old), Some(new)) = (old, new)
-            && old.is_derived()
-            && old != new
-        {
-            new_ids.entry(*old).or_insert(*new);
-        }
-    }
-    Ok(())
-}
-
 /// Returns `plan` with the field ids of its own output schema (if it has
 /// one) replaced by `f`
 fn map_output_ids(
@@ -651,22 +751,36 @@ fn map_output_ids(
             r.schema = remap(&r.schema)?;
             LogicalPlan::RecursiveQuery(r)
         }
+        // A scan of a materialized CTE is a leaf that defines its columns
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(mut scan)) => {
+            scan.schema = remap(&scan.schema)?;
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+        }
         plan => plan,
     })
+}
+
+/// The `n`-th canonical column id (see [`LogicalPlan::with_canonical_column_ids`]):
+/// an id allocated the first time it is asked for, and the same for every
+/// plan afterwards
+fn canonical_column_id(n: usize) -> ColumnId {
+    static IDS: std::sync::Mutex<Vec<ColumnId>> = std::sync::Mutex::new(Vec::new());
+    let mut ids = IDS.lock().unwrap_or_else(|e| e.into_inner());
+    while ids.len() <= n {
+        ids.push(ColumnId::next());
+    }
+    ids[n]
 }
 
 impl LogicalPlan {
     /// The ids of the columns this plan (or one of its subqueries) defines,
     /// in the order the nodes are visited (top down), without repetitions.
-    ///
-    /// Derived ids ([`ColumnId::derived`]) are not included: they are
-    /// computed from the ids of the node's inputs, and change with them.
     pub fn defined_column_ids(&self) -> Vec<ColumnId> {
         let mut ids = vec![];
         let mut seen = std::collections::HashSet::new();
         let _ = self.apply_with_subqueries(|node| {
             for id in node.schema().field_ids().iter().flatten() {
-                if !id.is_derived() && seen.insert(*id) {
+                if seen.insert(*id) {
                     ids.push(*id);
                 }
             }
@@ -696,16 +810,11 @@ impl LogicalPlan {
         if new_ids.is_empty() {
             return Ok(self);
         }
-        // The derived ids of a node are computed again from its renamed
-        // inputs, and the references to them renamed to match: nodes are
-        // visited bottom up, so a node's inputs are renamed before it
-        let new_ids = std::cell::RefCell::new(new_ids.clone());
-        let new_id =
-            |id: Option<ColumnId>| id.map(|id| *new_ids.borrow().get(&id).unwrap_or(&id));
+        let new_id = |id: Option<ColumnId>| id.map(|id| *new_ids.get(&id).unwrap_or(&id));
         self.transform_up_with_subqueries(|node| {
             let node = node.map_expressions(|expr| {
                 Ok(Transformed::yes(
-                    remap_column_ids(expr, |id| new_ids.borrow().get(&id).copied())
+                    remap_column_ids(expr, |id| new_ids.get(&id).copied())
                         .transform_up(|expr| match expr {
                             Expr::Alias(alias) => {
                                 let id = new_id(Some(alias.id)).expect("alias has an id");
@@ -716,10 +825,7 @@ impl LogicalPlan {
                         .data,
                 ))
             })?;
-            node.transform_data(|node| {
-                rederive_output_ids(&node, &mut new_ids.borrow_mut())?;
-                map_output_ids(node, new_id).map(Transformed::yes)
-            })
+            node.transform_data(|node| map_output_ids(node, new_id).map(Transformed::yes))
         })
         .data()
     }
@@ -745,7 +851,8 @@ impl LogicalPlan {
     /// Returns this plan with the ids of the columns it defines replaced by
     /// ids that depend only on the plan's structure: the n-th id defined (in
     /// the order of [`Self::defined_column_ids`]) becomes the same id in every
-    /// plan.
+    /// plan, the n-th of a sequence of ids allocated once per process (see
+    /// `canonical_column_id`).
     ///
     /// Two plans that compute the same columns, but give them different ids
     /// (such as two scans of the same table), are equal after this: compare
@@ -755,7 +862,7 @@ impl LogicalPlan {
             .defined_column_ids()
             .into_iter()
             .enumerate()
-            .map(|(n, id)| (id, ColumnId::derived(("canonical", n))))
+            .map(|(n, id)| (id, canonical_column_id(n)))
             .collect();
         self.rename_column_ids(&new_ids)
     }
@@ -983,27 +1090,49 @@ mod tests {
     }
 
     #[test]
-    fn derived_ids_depend_on_input_ids() -> Result<()> {
-        let t1 = scan("t")?.build()?;
-        let t2 = scan("t")?.build()?;
-        let a_plus_1 = col("t.a") + lit(1);
-        let id1 = derived_expr_id(&a_plus_1, t1.schema());
-        let id2 = derived_expr_id(&a_plus_1, t2.schema());
-        assert!(id1.is_some());
-        // the same expression over the same scan is the same value
-        assert_eq!(id1, derived_expr_id(&a_plus_1, t1.schema()));
-        // over another scan of the same table, it is another value
-        assert_ne!(id1, id2);
-        // a volatile expression has no derived id
-        let random_udf = crate::create_udf(
-            "random",
-            vec![],
-            DataType::Float64,
-            crate::Volatility::Volatile,
-            Arc::new(|_| unimplemented!()),
+    fn rebuilt_nodes_keep_the_ids_of_the_columns_they_define() -> Result<()> {
+        // a grouping set aggregate defines its grouping columns and grouping id
+        let plan = scan("t")?
+            .aggregate(
+                vec![Expr::GroupingSet(crate::GroupingSet::Rollup(vec![
+                    col("a"),
+                    col("b"),
+                ]))],
+                vec![crate::test::function_stub::count(col("a"))],
+            )?
+            .build()?;
+        let input_ids = plan.inputs()[0].schema().field_ids().to_vec();
+        let agg_ids = ids(&plan);
+        // `a` and `b` are new columns (NULL in some rows), and so is the grouping id
+        assert!(
+            agg_ids[..3]
+                .iter()
+                .all(|id| id.is_some() && !input_ids.contains(id))
         );
-        let random = random_udf.call(vec![]);
-        assert_eq!(derived_expr_id(&random, t1.schema()), None);
+
+        // rebuilding the aggregate keeps them
+        assert_eq!(ids(&plan.clone().recompute_schema()?), agg_ids);
+        let rebuilt =
+            plan.with_new_exprs(plan.expressions(), vec![plan.inputs()[0].clone()])?;
+        assert_eq!(rebuilt.schema().field_ids(), agg_ids.as_slice());
+
+        // a mark join defines its mark column
+        let join = scan("l")?
+            .join_on(
+                scan("r")?.build()?,
+                JoinType::LeftMark,
+                vec![col("l.a").eq(col("r.a"))],
+            )?
+            .build()?;
+        let mark = ids(&join).last().copied().flatten();
+        assert!(mark.is_some());
+        assert_eq!(
+            ids(&join.clone().recompute_schema()?)
+                .last()
+                .copied()
+                .flatten(),
+            mark
+        );
         Ok(())
     }
 
