@@ -54,7 +54,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rustup
       - name: Setup uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
       - name: Install doc dependencies
         run: uv sync --package datafusion-docs
       - name: Install Graphviz
@@ -63,7 +63,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y graphviz
       - name: Install cargo-depgraph
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2.87.29
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91  # v2.87.31
         with:
           tool: cargo-depgraph@1.6
       - name: Build docs html and check for warnings
