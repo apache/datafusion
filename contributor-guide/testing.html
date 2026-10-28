@@ -796,6 +796,17 @@ for the tools it needs and the files it writes.</p>
 <p>A full list of benchmarks can be found <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/core/benches">here</a>.</p>
 <p><em><a class="reference external" href="https://github.com/bheisler/cargo-criterion">cargo-criterion</a> may also be used for more advanced reporting.</em></p>
 </section>
+<section id="microbenchmark-health-checks-local-only">
+<h3>Microbenchmark health checks (local-only)<a class="headerlink" href="#microbenchmark-health-checks-local-only" title="Link to this heading">#</a></h3>
+<p>Runs each microbenchmark case once to catch runtime panics, without measuring performance:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>xtask<span class="w"> </span>ci<span class="w"> </span>step<span class="w"> </span><span class="nb">test</span><span class="w"> </span>microbenchmarks
+</pre></div>
+</div>
+<p>The suite took about 10 minutes in CI, so execution is local-only, including on
+release branches; no hosted workflow or required check is provided. Runtime failures
+may go unnoticed until a local run. When changing benchmark fixtures, setup, or APIs,
+run the affected benchmarks and include the commands and results in your PR.</p>
+</section>
 <section id="parquet-sql-benchmarks">
 <h3>Parquet SQL Benchmarks<a class="headerlink" href="#parquet-sql-benchmarks" title="Link to this heading">#</a></h3>
 <p>The parquet SQL benchmarks can be run with</p>
@@ -901,6 +912,7 @@ for the tools it needs and the files it writes.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-html-build">Documentation HTML Build</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmarks">Benchmarks</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#criterion-benchmarks">Criterion Benchmarks</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#microbenchmark-health-checks-local-only">Microbenchmark health checks (local-only)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-sql-benchmarks">Parquet SQL Benchmarks</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#comparing-baselines">Comparing Baselines</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#upstream-benchmark-suites">Upstream Benchmark Suites</a></li>
