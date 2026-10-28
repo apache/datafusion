@@ -1548,7 +1548,13 @@ fn update_properties(
     if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
         let children_props = node.children.iter().map(|c| c.data.clone()).collect_vec();
-        node.data = node.expr.get_properties(&children_props)?;
+        // Properties that cannot be derived from the children, for example of a
+        // function whose input may be outside its domain, are unknown. The
+        // ordering of the node itself can still be known, so do not fail here.
+        node.data = node
+            .expr
+            .get_properties(&children_props)
+            .unwrap_or_else(|_| ExprProperties::new_unknown());
     } else if node.expr.is::<Literal>() {
         // We have a Literal, which is one of the two possible leaf node types:
         node.data = node.expr.get_properties(&[])?;

@@ -592,6 +592,28 @@ mod tests {
         Ok(())
     }
 
+    /// `sqrt(a)` has no ordering that can be derived from `a`, which may be
+    /// negative, so its ordering function fails. A plan sorted on `sqrt(a)`
+    /// still satisfies a requirement on `sqrt(a)`.
+    #[test]
+    fn test_known_ordering_when_expr_properties_fail() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        let sqrt_a: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            datafusion_functions::math::sqrt(),
+            vec![col("a", &schema)?],
+            &schema,
+            Arc::new(ConfigOptions::default()),
+        )?);
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::clone(&sqrt_a)).asc()].into();
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        eq_properties.add_ordering(ordering.clone());
+
+        assert!(eq_properties.ordering_satisfy(ordering)?);
+        Ok(())
+    }
+
     #[test]
     fn test_update_properties() -> Result<()> {
         let schema = Schema::new(vec![
