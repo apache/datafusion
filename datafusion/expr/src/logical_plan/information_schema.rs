@@ -840,4 +840,3 @@ pub fn show_functions_schema() -> Schema {
         Field::new("syntax_example", DataType::Utf8, true),
     ])
 }
-
