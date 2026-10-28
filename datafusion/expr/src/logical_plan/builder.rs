@@ -43,10 +43,10 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    Column, Constraints, DFSchema, DFSchemaRef, FunctionalDependencies, NullEquality,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions, exec_err,
-    get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
-    plan_err,
+    Column, ColumnId, Constraints, DFSchema, DFSchemaRef, FunctionalDependencies,
+    NullEquality, Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    exec_err, get_target_functional_dependencies, internal_datafusion_err,
+    plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::{
     type_union_coercion, type_union_resolution,
@@ -469,7 +469,10 @@ impl LogicalPlanBuilder {
             }
         }
 
-        let dfschema = DFSchema::from_unqualified_fields(fields, HashMap::new())?;
+        // `VALUES` defines its columns
+        let ids = fields.iter().map(|_| Some(ColumnId::next())).collect();
+        let dfschema = DFSchema::from_unqualified_fields(fields, HashMap::new())?
+            .with_field_ids(ids)?;
         let schema = DFSchemaRef::new(dfschema);
 
         Ok(Self::new(LogicalPlan::Values(Values { schema, values })))
@@ -625,9 +628,7 @@ impl LogicalPlanBuilder {
             if let Some(proj) = table_scan.projection {
                 let projection_exprs = proj
                     .into_iter()
-                    .map(|i| {
-                        Expr::Column(Column::from(sub_plan.schema().qualified_field(i)))
-                    })
+                    .map(|i| Expr::Column(sub_plan.schema().column(i)))
                     .collect::<Vec<_>>();
                 return Self::new(sub_plan)
                     .project(projection_exprs)?
@@ -718,7 +719,7 @@ impl LogicalPlanBuilder {
     pub fn select(self, indices: impl IntoIterator<Item = usize>) -> Result<Self> {
         let exprs: Vec<_> = indices
             .into_iter()
-            .map(|x| Expr::Column(Column::from(self.plan.schema().qualified_field(x))))
+            .map(|x| Expr::Column(self.plan.schema().column(x)))
             .collect();
         self.project(exprs)
     }
@@ -1617,17 +1618,10 @@ impl LogicalPlanBuilder {
         let left_plan = left_builder.build()?;
         let right_plan = right_builder.build()?;
 
-        let join_keys = left_plan
-            .schema()
-            .fields()
-            .iter()
-            .zip(right_plan.schema().fields().iter())
-            .map(|(left_field, right_field)| {
-                (
-                    (Column::from_name(left_field.name())),
-                    (Column::from_name(right_field.name())),
-                )
-            })
+        // each column of the left side with the column at the same position
+        // of the right side, with their ids
+        let join_keys = (0..left_len)
+            .map(|i| (left_plan.schema().column(i), right_plan.schema().column(i)))
             .unzip();
         let mut left_builder = LogicalPlanBuilder::from(left_plan);
         if !is_all {
@@ -1967,7 +1961,10 @@ pub fn build_join_schema(
     let mut metadata = schema1.metadata().clone();
     metadata.extend(schema2.metadata().clone());
 
-    let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
+    // Check the names with the ids: two unqualified fields with the same name
+    // are distinct columns when their ids differ
+    let ids = super::column_ids::join_output_column_ids(left, right, join_type);
+    let dfschema = DFSchema::new_with_field_ids(qualified_fields, ids, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
 }
 
@@ -2096,7 +2093,7 @@ pub fn add_group_by_exprs_from_dependencies(
         for idx in target_indices {
             if !group_by_input_indices.contains(&Some(idx)) {
                 group_by_input_indices.push(Some(idx));
-                group_expr.push(Expr::Column(Column::from(schema.qualified_field(idx))));
+                group_expr.push(Expr::Column(schema.column(idx)));
             }
         }
     }
@@ -2112,12 +2109,25 @@ pub fn validate_unique_names<'a>(
     let mut unique_names = HashMap::with_capacity(expressions.size_hint().0);
 
     expressions.enumerate().try_for_each(|(position, expr)| {
-        let name = expr.schema_name().to_string();
+        // Compare the qualifier and name of the output field, as `DFSchema`
+        // does: the output of `CAST(t.a AS ...)` is an unqualified field named
+        // `t.a`, a different field than `a` qualified by `t`.
+        let name = expr.qualified_name();
         match unique_names.get(&name) {
             None => {
                 unique_names.insert(name, (position, expr));
                 Ok(())
             },
+            // Two outputs that define (or pass through) different columns are
+            // told apart by their ids, although they have the same name
+            Some((_, existing_expr))
+                if matches!(
+                    (output_id(existing_expr), output_id(expr)),
+                    (Some(a), Some(b)) if a != b
+                ) =>
+            {
+                Ok(())
+            }
             Some((existing_position, existing_expr)) => {
                 plan_err!("{node_name} require unique expression names \
                              but the expression \"{existing_expr}\" at position {existing_position} and \"{expr}\" \
@@ -2126,6 +2136,16 @@ pub fn validate_unique_names<'a>(
             }
         }
     })
+}
+
+/// The id of the column that an output expression defines (an alias) or
+/// passes through (a column), if known
+fn output_id(expr: &Expr) -> Option<ColumnId> {
+    match expr {
+        Expr::Alias(alias) => Some(alias.id),
+        Expr::Column(col) => col.id,
+        _ => None,
+    }
 }
 
 /// Union two [`LogicalPlan`]s.
@@ -2784,6 +2804,7 @@ mod tests {
                         relation,
                         name,
                         spans: _,
+                        id: _,
                     } = *field;
                     let Some(TableReference::Bare { table }) = relation else {
                         return plan_err!(

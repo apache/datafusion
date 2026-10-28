@@ -894,7 +894,7 @@ GROUP BY x, CAST(y AS BIGINT) % 2
 ORDER BY x, CAST(y AS BIGINT) % 2;
 ----
 logical_plan
-01)Sort: agg_expr_parquet.x ASC NULLS LAST, agg_expr_parquet.y % Int64(2) ASC NULLS LAST
+01)Sort: agg_expr_parquet.x ASC NULLS LAST, "agg_expr_parquet.y % Int64(2)" ASC NULLS LAST
 02)--Aggregate: groupBy=[[agg_expr_parquet.x, CAST(agg_expr_parquet.y AS Int64) % Int64(2)]], aggr=[[sum(CAST(agg_expr_parquet.v AS Int64))]]
 03)----TableScan: agg_expr_parquet projection=[x, y, v]
 physical_plan
@@ -929,7 +929,7 @@ GROUP BY x, CAST(y AS BIGINT)
 ORDER BY x, CAST(y AS BIGINT);
 ----
 logical_plan
-01)Sort: agg_expr_parquet.x ASC NULLS LAST, agg_expr_parquet.y ASC NULLS LAST
+01)Sort: agg_expr_parquet.x ASC NULLS LAST, "agg_expr_parquet.y" ASC NULLS LAST
 02)--Aggregate: groupBy=[[agg_expr_parquet.x, CAST(agg_expr_parquet.y AS Int64)]], aggr=[[sum(CAST(agg_expr_parquet.v AS Int64))]]
 03)----TableScan: agg_expr_parquet projection=[x, y, v]
 physical_plan
@@ -960,7 +960,7 @@ GROUP BY x
 ORDER BY SUM(v);
 ----
 logical_plan
-01)Sort: sum(agg_expr_parquet.v) ASC NULLS LAST
+01)Sort: "sum(agg_expr_parquet.v)" ASC NULLS LAST
 02)--Aggregate: groupBy=[[agg_expr_parquet.x]], aggr=[[sum(CAST(agg_expr_parquet.v AS Int64))]]
 03)----TableScan: agg_expr_parquet projection=[x, v]
 physical_plan

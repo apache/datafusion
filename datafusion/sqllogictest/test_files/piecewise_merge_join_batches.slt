@@ -24,7 +24,7 @@ query TT
 EXPLAIN SELECT count(*) FROM pb_l l WHERE EXISTS (SELECT 1 FROM range(3, 8) r WHERE l.v > r.value);
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----Projection:
 04)------LeftSemi Join:  Filter: CAST(l.v AS Int64) > __correlated_sq_1.value
@@ -57,7 +57,7 @@ query TT
 EXPLAIN SELECT count(*) FROM pb_l l JOIN range(3, 8) r ON l.v < r.value;
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----Projection:
 04)------Inner Join:  Filter: CAST(l.v AS Int64) < r.value

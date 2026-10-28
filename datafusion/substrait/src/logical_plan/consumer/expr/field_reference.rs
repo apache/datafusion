@@ -34,9 +34,9 @@ pub(crate) fn from_substrait_field_reference(
                 }
                 let field_idx = struct_field.field as usize;
                 match &field_ref.root_type {
-                    Some(RootType::RootReference(_)) | None => Ok(Expr::Column(
-                        Column::from(input_schema.qualified_field(field_idx)),
-                    )),
+                    Some(RootType::RootReference(_)) | None => {
+                        Ok(Expr::Column(input_schema.column(field_idx)))
+                    }
                     Some(RootType::OuterReference(outer_ref)) => {
                         resolve_outer_reference(consumer, outer_ref, field_idx)
                     }

@@ -18,7 +18,7 @@ query TT
 EXPLAIN SELECT COUNT() FROM (SELECT 1 AS a, 2 AS b) AS t;
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count()
+01)Projection: "count(Int64(1))" AS count()
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: t
 04)------EmptyRelation: rows=1
@@ -30,7 +30,7 @@ query TT
 EXPLAIN SELECT t1.a, COUNT() FROM t1 GROUP BY t1.a;
 ----
 logical_plan
-01)Projection: t1.a, count(Int64(1)) AS count()
+01)Projection: t1.a, "count(Int64(1))" AS count()
 02)--Aggregate: groupBy=[[t1.a]], aggr=[[count(Int64(1))]]
 03)----TableScan: t1 projection=[a]
 physical_plan
@@ -44,8 +44,8 @@ query TT
 EXPLAIN SELECT t1.a, COUNT() AS cnt FROM t1 GROUP BY t1.a HAVING COUNT() > 0;
 ----
 logical_plan
-01)Projection: t1.a, count(Int64(1)) AS count() AS cnt
-02)--Filter: count(Int64(1)) > Int64(0)
+01)Projection: t1.a, "count(Int64(1))" AS count() AS cnt
+02)--Filter: "count(Int64(1))" > Int64(0)
 03)----Aggregate: groupBy=[[t1.a]], aggr=[[count(Int64(1))]]
 04)------TableScan: t1 projection=[a]
 physical_plan
@@ -65,7 +65,7 @@ query TT
 EXPLAIN SELECT a, COUNT() OVER (PARTITION BY a) AS count_a FROM t1;
 ----
 logical_plan
-01)Projection: t1.a, count(Int64(1)) PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count() PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count_a
+01)Projection: t1.a, "count(Int64(1)) PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS count() PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count_a
 02)--WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 03)----TableScan: t1 projection=[a]
 physical_plan

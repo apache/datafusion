@@ -6,6 +6,7 @@
 
 use datafusion_common::HashMap;
 use datafusion_expr::expr::AggregateFunctionParams;
+use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::{BinaryExpr, Expr};
 use datafusion_expr_common::operator::Operator;
 
@@ -48,7 +49,7 @@ pub(super) fn rewrite_multiple_linear_aggregates(
     // First pass -- figure out any aggregates that can be split and have common
     // expressions.
     for agg in agg_expr.iter() {
-        let Expr::AggregateFunction(agg_function) = agg else {
+        let Expr::AggregateFunction(agg_function) = agg.strip_implicit_alias() else {
             continue;
         };
 
@@ -70,7 +71,7 @@ pub(super) fn rewrite_multiple_linear_aggregates(
     // Second pass, actually rewrite any aggregates that have a common
     // expression and enough duplicates.
     for (idx, agg) in agg_expr.iter().enumerate() {
-        let Expr::AggregateFunction(agg_function) = agg else {
+        let Expr::AggregateFunction(agg_function) = agg.strip_implicit_alias() else {
             continue;
         };
 
@@ -105,8 +106,9 @@ pub(super) fn rewrite_multiple_linear_aggregates(
     // Otherwise replace the aggregate expressions
     drop(common_args); // release borrow
     for (idx, new_agg) in new_aggs {
-        let orig_name = agg_expr[idx].name_for_alias()?;
-        agg_expr[idx] = new_agg.alias_if_changed(orig_name)?
+        // keep the output's name, and the id of the column it defines
+        let saved = NamePreserver::new_for_projection().save(&agg_expr[idx]);
+        agg_expr[idx] = saved.restore(new_agg);
     }
 
     Ok(true)

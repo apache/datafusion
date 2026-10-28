@@ -105,12 +105,12 @@ query TT
 explain select array_transform([t.number], v -> v*2), array_transform([t.number], v -> v*2-1) from t;
 ----
 logical_plan
-01)Projection: array_transform(__common_expr_1 AS make_array(t.number), (v) -> CAST(v AS Int64) * Int64(2)), array_transform(__common_expr_1 AS make_array(t.number), (v) -> CAST(v AS Int64) * Int64(2) - Int64(1))
-02)--Projection: make_array(t.number) AS __common_expr_1
+01)Projection: array_transform("make_array(t.number)", (v) -> CAST(v AS Int64) * Int64(2)), array_transform("make_array(t.number)", (v) -> CAST(v AS Int64) * Int64(2) - Int64(1))
+02)--Projection: make_array(t.number)
 03)----TableScan: t projection=[number]
 physical_plan
-01)ProjectionExec: expr=[array_transform(__common_expr_1@0, (v) -> CAST(v@1 AS Int64) * 2) as array_transform(make_array(t.number),(v) -> v * Int64(2)), array_transform(__common_expr_1@0, (v) -> CAST(v@1 AS Int64) * 2 - 1) as array_transform(make_array(t.number),(v) -> v * Int64(2) - Int64(1))]
-02)--ProjectionExec: expr=[make_array(number@0) as __common_expr_1]
+01)ProjectionExec: expr=[array_transform(make_array(t.number)@0, (v) -> CAST(v@1 AS Int64) * 2) as array_transform(make_array(t.number),(v) -> v * Int64(2)), array_transform(make_array(t.number)@0, (v) -> CAST(v@1 AS Int64) * 2 - 1) as array_transform(make_array(t.number),(v) -> v * Int64(2) - Int64(1))]
+02)--ProjectionExec: expr=[make_array(number@0) as make_array(t.number)]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 

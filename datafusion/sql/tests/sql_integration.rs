@@ -389,11 +389,11 @@ fn try_cast_from_aggregation() {
     let plan = logical_plan("SELECT TRY_CAST(sum(age) AS FLOAT) FROM person").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: TRY_CAST(sum(person.age) AS Float32)
+        @r#"
+    Projection: TRY_CAST("sum(person.age)" AS Float32)
       Aggregate: groupBy=[[]], aggr=[[sum(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -805,7 +805,7 @@ fn plan_update() {
         plan,
         @r#"
     Dml: op=[Update] table=[person]
-      Projection: person.id AS id, person.first_name AS first_name, Utf8("Kay") AS last_name, person.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+      Projection: person.id AS id, person.first_name AS first_name, Utf8("Kay") AS last_name, person.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person."😀" AS 😀
         Filter: person.id = Int64(1)
           TableScan: person
     "#
@@ -1293,12 +1293,12 @@ fn select_aggregate_with_having_that_reuses_aggregate() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: max(person.age)
-      Filter: max(person.age) < Int64(30)
+        @r#"
+    Projection: "max(person.age)"
+      Filter: "max(person.age)" < Int64(30)
         Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -1311,8 +1311,8 @@ fn select_aggregate_with_having_with_aggregate_not_in_select() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: max(person.age)
-      Filter: max(person.first_name) > Utf8("M")
+    Projection: "max(person.age)"
+      Filter: "max(person.first_name)" > Utf8("M")
         Aggregate: groupBy=[[]], aggr=[[max(person.age), max(person.first_name)]]
           TableScan: person
     "#
@@ -1341,12 +1341,12 @@ fn select_aggregate_aliased_with_having_referencing_aggregate_by_its_alias() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: max(person.age) AS max_age
-      Filter: max(person.age) < Int64(30)
+        @r#"
+    Projection: "max(person.age)" AS max_age
+      Filter: "max(person.age)" < Int64(30)
         Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -1358,12 +1358,12 @@ fn select_aggregate_aliased_with_having_that_reuses_aggregate_but_not_by_its_ali
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: max(person.age) AS max_age
-      Filter: max(person.age) < Int64(30)
+        @r#"
+    Projection: "max(person.age)" AS max_age
+      Filter: "max(person.age)" < Int64(30)
         Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -1377,7 +1377,7 @@ fn select_aggregate_with_group_by_with_having() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: person.first_name, max(person.age)
+    Projection: person.first_name, "max(person.age)"
       Filter: person.first_name = Utf8("M")
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]
           TableScan: person
@@ -1395,13 +1395,13 @@ fn select_aggregate_with_group_by_with_having_and_where() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.first_name, max(person.age)
-      Filter: max(person.age) < Int64(100)
+        @r#"
+    Projection: person.first_name, "max(person.age)"
+      Filter: "max(person.age)" < Int64(100)
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]
           Filter: person.id > Int64(5)
             TableScan: person
-    "
+    "#
     );
 }
 
@@ -1415,13 +1415,13 @@ fn select_aggregate_with_group_by_with_having_and_where_filtering_on_aggregate_c
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.first_name, max(person.age)
-      Filter: max(person.age) < Int64(100)
+        @r#"
+    Projection: person.first_name, "max(person.age)"
+      Filter: "max(person.age)" < Int64(100)
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]
           Filter: person.id > Int64(5) AND person.age > Int64(18)
             TableScan: person
-    "
+    "#
     );
 }
 
@@ -1435,8 +1435,8 @@ fn select_aggregate_with_group_by_with_having_using_column_by_alias() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: person.first_name AS fn, max(person.age)
-      Filter: max(person.age) > Int64(2) AND person.first_name = Utf8("M")
+    Projection: person.first_name AS fn, "max(person.age)"
+      Filter: "max(person.age)" > Int64(2) AND person.first_name = Utf8("M")
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]
           TableScan: person
     "#
@@ -1454,8 +1454,8 @@ fn select_aggregate_with_group_by_with_having_using_columns_with_and_without_the
     assert_snapshot!(
         plan,
         @r#"
-    Projection: person.first_name AS fn, max(person.age) AS max_age
-      Filter: max(person.age) > Int64(2) AND max(person.age) < Int64(5) AND person.first_name = Utf8("M") AND person.first_name = Utf8("N")
+    Projection: person.first_name AS fn, "max(person.age)" AS max_age
+      Filter: "max(person.age)" > Int64(2) AND "max(person.age)" < Int64(5) AND person.first_name = Utf8("M") AND person.first_name = Utf8("N")
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]
           TableScan: person
     "#
@@ -1471,12 +1471,12 @@ fn select_aggregate_with_group_by_with_having_that_reuses_aggregate() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.first_name, max(person.age)
-      Filter: max(person.age) > Int64(100)
+        @r#"
+    Projection: person.first_name, "max(person.age)"
+      Filter: "max(person.age)" > Int64(100)
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -1503,12 +1503,12 @@ fn select_aggregate_with_group_by_with_having_that_reuses_aggregate_multiple_tim
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.first_name, max(person.age)
-      Filter: max(person.age) > Int64(100) AND max(person.age) < Int64(200)
+        @r#"
+    Projection: person.first_name, "max(person.age)"
+      Filter: "max(person.age)" > Int64(100) AND "max(person.age)" < Int64(200)
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -1521,12 +1521,12 @@ fn select_aggregate_with_group_by_with_having_using_aggregate_not_in_select() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.first_name, max(person.age)
-      Filter: max(person.age) > Int64(100) AND min(person.id) < Int64(50)
+        @r#"
+    Projection: person.first_name, "max(person.age)"
+      Filter: "max(person.age)" > Int64(100) AND "min(person.id)" < Int64(50)
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age), min(person.id)]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -1540,12 +1540,12 @@ fn select_aggregate_aliased_with_group_by_with_having_referencing_aggregate_by_i
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.first_name, max(person.age) AS max_age
-      Filter: max(person.age) > Int64(100)
+        @r#"
+    Projection: person.first_name, "max(person.age)" AS max_age
+      Filter: "max(person.age)" > Int64(100)
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -1559,12 +1559,12 @@ fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compo
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.first_name, max(person.age) + Int64(1) AS max_age_plus_one
-      Filter: max(person.age) + Int64(1) > Int64(100)
+        @r#"
+    Projection: person.first_name, "max(person.age)" + Int64(1) AS max_age_plus_one
+      Filter: "max(person.age)" + Int64(1) > Int64(100)
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -1578,12 +1578,12 @@ fn select_aggregate_with_group_by_with_having_using_derived_column_aggregate_not
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.first_name, max(person.age)
-      Filter: max(person.age) > Int64(100) AND min(person.id - Int64(2)) < Int64(50)
+        @r#"
+    Projection: person.first_name, "max(person.age)"
+      Filter: "max(person.age)" > Int64(100) AND "min(person.id - Int64(2))" < Int64(50)
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age), min(person.id - Int64(2))]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -1596,12 +1596,12 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.first_name, max(person.age)
-      Filter: max(person.age) > Int64(100) AND count(*) < Int64(50)
+        @r#"
+    Projection: person.first_name, "max(person.age)"
+      Filter: "max(person.age)" > Int64(100) AND "count(*)" < Int64(50)
         Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age), count(*)]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -1625,7 +1625,7 @@ fn select_aggregate_with_group_by_placeholder_expression() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+    Projection: "CASE WHEN person.age < $1 THEN Utf8(""young"") ELSE Utf8(""old"") END", "count(*)"
       Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
         TableScan: person
     "#
@@ -1644,8 +1644,8 @@ fn select_aggregate_with_having_placeholder_expression() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
-      Filter: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END = Utf8("young")
+    Projection: "CASE WHEN person.age < $1 THEN Utf8(""young"") ELSE Utf8(""old"") END", "count(*)"
+      Filter: "CASE WHEN person.age < $1 THEN Utf8(""young"") ELSE Utf8(""old"") END" = Utf8("young")
         Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
           TableScan: person
     "#
@@ -1664,8 +1664,8 @@ fn select_aggregate_with_order_by_placeholder_expression() {
     assert_snapshot!(
         plan,
         @r#"
-    Sort: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END ASC NULLS LAST
-      Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+    Sort: "CASE WHEN person.age < $1 THEN Utf8(""young"") ELSE Utf8(""old"") END" ASC NULLS LAST
+      Projection: "CASE WHEN person.age < $1 THEN Utf8(""young"") ELSE Utf8(""old"") END", "count(*)"
         Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
           TableScan: person
     "#
@@ -1686,8 +1686,8 @@ fn select_window_with_qualify_placeholder_expression() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: person.first_name, row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-      Filter: row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING = Int64(1)
+    Projection: person.first_name, "row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8(""young"") ELSE Utf8(""old"") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+      Filter: "row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8(""young"") ELSE Utf8(""old"") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" = Int64(1)
         WindowAggr: windowExpr=[[row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           TableScan: person
     "#
@@ -1743,11 +1743,11 @@ fn select_simple_aggregate() {
     let plan = logical_plan("SELECT MIN(age) FROM person").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: min(person.age)
+        @r#"
+    Projection: "min(person.age)"
       Aggregate: groupBy=[[]], aggr=[[min(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -1756,11 +1756,11 @@ fn test_sum_aggregate() {
     let plan = logical_plan("SELECT sum(age) from person").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: sum(person.age)
+        @r#"
+    Projection: "sum(person.age)"
       Aggregate: groupBy=[[]], aggr=[[sum(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -1787,11 +1787,11 @@ fn select_simple_aggregate_repeated_aggregate_with_single_alias() {
     let plan = logical_plan("SELECT MIN(age), MIN(age) AS a FROM person").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: min(person.age), min(person.age) AS a
+        @r#"
+    Projection: "min(person.age)", "min(person.age)" AS a
       Aggregate: groupBy=[[]], aggr=[[min(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -1800,11 +1800,11 @@ fn select_simple_aggregate_repeated_aggregate_with_unique_aliases() {
     let plan = logical_plan("SELECT MIN(age) AS a, MIN(age) AS b FROM person").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: min(person.age) AS a, min(person.age) AS b
+        @r#"
+    Projection: "min(person.age)" AS a, "min(person.age)" AS b
       Aggregate: groupBy=[[]], aggr=[[min(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -1826,12 +1826,18 @@ fn select_from_typed_string_values() {
 
 #[test]
 fn select_simple_aggregate_repeated_aggregate_with_repeated_aliases() {
+    // Two outputs with the same name are allowed: they define different
+    // columns (https://github.com/apache/datafusion/issues/6543)
     let sql = "SELECT MIN(age) AS a, MIN(age) AS a FROM person";
-    let err = logical_plan(sql).expect_err("query should have failed");
+    let plan = logical_plan(sql).unwrap();
 
     assert_snapshot!(
-        err.strip_backtrace(),
-        @r#"Error during planning: Projections require unique expression names but the expression "min(person.age) AS a" at position 0 and "min(person.age) AS a" at position 1 have the same name. Consider aliasing ("AS") one of them."#
+        plan,
+        @r#"
+    Projection: "min(person.age)" AS a, "min(person.age)" AS a
+      Aggregate: groupBy=[[]], aggr=[[min(person.age)]]
+        TableScan: person
+    "#
     );
 }
 
@@ -1842,11 +1848,11 @@ fn select_simple_aggregate_with_groupby() {
             .unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state, min(person.age), max(person.age)
+        @r#"
+    Projection: person.state, "min(person.age)", "max(person.age)"
       Aggregate: groupBy=[[person.state]], aggr=[[min(person.age), max(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -1857,22 +1863,28 @@ fn select_simple_aggregate_with_groupby_with_aliases() {
             .unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state AS a, min(person.age) AS b
+        @r#"
+    Projection: person.state AS a, "min(person.age)" AS b
       Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
 #[test]
 fn select_simple_aggregate_with_groupby_with_aliases_repeated() {
+    // Two outputs with the same name are allowed: they define different
+    // columns (https://github.com/apache/datafusion/issues/6543)
     let sql = "SELECT state AS a, MIN(age) AS a FROM person GROUP BY state";
-    let err = logical_plan(sql).expect_err("query should have failed");
+    let plan = logical_plan(sql).unwrap();
 
     assert_snapshot!(
-        err.strip_backtrace(),
-        @r#"Error during planning: Projections require unique expression names but the expression "person.state AS a" at position 0 and "min(person.age) AS a" at position 1 have the same name. Consider aliasing ("AS") one of them."#
+        plan,
+        @r#"
+    Projection: person.state AS a, "min(person.age)" AS a
+      Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
+        TableScan: person
+    "#
     );
 }
 
@@ -1882,11 +1894,11 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
         logical_plan("SELECT MIN(age), MAX(age) FROM person GROUP BY state").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: min(person.age), max(person.age)
+        @r#"
+    Projection: "min(person.age)", "max(person.age)"
       Aggregate: groupBy=[[person.state]], aggr=[[min(person.age), max(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -1928,11 +1940,11 @@ fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby()
         logical_plan("SELECT MAX(first_name) FROM person GROUP BY first_name").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: max(person.first_name)
+        @r#"
+    Projection: "max(person.first_name)"
       Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.first_name)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -1942,21 +1954,21 @@ fn select_simple_aggregate_with_groupby_can_use_positions() {
         .unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state, person.age AS b, count(Int64(1))
+        @r#"
+    Projection: person.state, person.age AS b, "count(Int64(1))"
       Aggregate: groupBy=[[person.state, person.age]], aggr=[[count(Int64(1))]]
         TableScan: person
-    "
+    "#
     );
     let plan = logical_plan("SELECT state, age AS b, count(1) FROM person GROUP BY 2, 1")
         .unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state, person.age AS b, count(Int64(1))
+        @r#"
+    Projection: person.state, person.age AS b, "count(Int64(1))"
       Aggregate: groupBy=[[person.age, person.state]], aggr=[[count(Int64(1))]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2053,16 +2065,16 @@ fn select_window_function_in_where() {
     .unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: person.id
       Filter: person.id IN (<subquery>)
         Subquery:
           Projection: person.id
-            Filter: sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Int64(0)
+            Filter: "sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" > Int64(0)
               WindowAggr: windowExpr=[[sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
                 TableScan: person
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2095,13 +2107,13 @@ fn select_window_function_in_having() {
     .unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state, sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS total
-      Filter: sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Int64(0)
-        WindowAggr: windowExpr=[[sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+        @r#"
+    Projection: person.state, "sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS total
+      Filter: "sum(count(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" > Int64(0)
+        WindowAggr: windowExpr=[[sum("count(person.age)") ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Aggregate: groupBy=[[person.state]], aggr=[[count(person.age)]]
             TableScan: person
-    "
+    "#
     );
 }
 
@@ -2124,17 +2136,17 @@ fn select_window_function_in_join_on() {
     .unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: p.id
       Inner Join:  Filter: p.id = q.id
         SubqueryAlias: p
           TableScan: person
         SubqueryAlias: q
           Projection: person.id
-            Filter: sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Int64(0)
+            Filter: "sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" > Int64(0)
               WindowAggr: windowExpr=[[sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
                 TableScan: person
-    "
+    "#
     );
 }
 
@@ -2186,12 +2198,12 @@ fn select_aggregate_inside_window_function() {
             .unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state, sum(sum(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-      WindowAggr: windowExpr=[[sum(sum(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+        @r#"
+    Projection: person.state, "sum(sum(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+      WindowAggr: windowExpr=[[sum("sum(person.age)") ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         Aggregate: groupBy=[[person.state]], aggr=[[sum(person.age)]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -2201,11 +2213,11 @@ fn select_simple_aggregate_with_groupby_can_use_alias() {
         logical_plan("SELECT state AS a, MIN(age) AS b FROM person GROUP BY a").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state AS a, min(person.age) AS b
+        @r#"
+    Projection: person.state AS a, "min(person.age)" AS b
       Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2227,11 +2239,11 @@ fn select_simple_aggregate_with_groupby_aggregate_repeated_and_one_has_alias() {
             .unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state, min(person.age), min(person.age) AS ma
+        @r#"
+    Projection: person.state, "min(person.age)", "min(person.age)" AS ma
       Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2241,11 +2253,11 @@ fn select_simple_aggregate_with_groupby_non_column_expression_unselected() {
         logical_plan("SELECT MIN(first_name) FROM person GROUP BY age + 1").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: min(person.first_name)
+        @r#"
+    Projection: "min(person.first_name)"
       Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2256,22 +2268,22 @@ fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resol
             .unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.age + Int64(1), min(person.first_name)
+        @r#"
+    Projection: "person.age + Int64(1)", "min(person.first_name)"
       Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]
         TableScan: person
-    "
+    "#
     );
     let plan =
         logical_plan("SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1")
             .unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: min(person.first_name), person.age + Int64(1)
+        @r#"
+    Projection: "min(person.first_name)", "person.age + Int64(1)"
       Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2282,11 +2294,11 @@ fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_resolva
     ).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.age + Int64(1) / Int64(2) * person.age + Int64(1), min(person.first_name)
+        @r#"
+    Projection: "person.age + Int64(1)" / Int64(2) * "person.age + Int64(1)", "min(person.first_name)"
       Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2320,11 +2332,11 @@ fn select_simple_aggregate_nested_in_binary_expr_with_groupby() {
         logical_plan("SELECT state, MIN(age) < 10 FROM person GROUP BY state").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state, min(person.age) < Int64(10)
+        @r#"
+    Projection: person.state, "min(person.age)" < Int64(10)
       Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2334,11 +2346,11 @@ fn select_simple_aggregate_and_nested_groupby_column() {
         logical_plan("SELECT MAX(first_name), age + 1 FROM person GROUP BY age").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: max(person.first_name), person.age + Int64(1)
+        @r#"
+    Projection: "max(person.first_name)", person.age + Int64(1)
       Aggregate: groupBy=[[person.age]], aggr=[[max(person.first_name)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2347,11 +2359,11 @@ fn select_aggregate_compounded_with_groupby_column() {
     let plan = logical_plan("SELECT age + MIN(salary) FROM person GROUP BY age").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.age + min(person.salary)
+        @r#"
+    Projection: person.age + "min(person.salary)"
       Aggregate: groupBy=[[person.age]], aggr=[[min(person.salary)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2361,11 +2373,11 @@ fn select_aggregate_with_non_column_inner_expression_with_groupby() {
         logical_plan("SELECT state, MIN(age + 1) FROM person GROUP BY state").unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state, min(person.age + Int64(1))
+        @r#"
+    Projection: person.state, "min(person.age + Int64(1))"
       Aggregate: groupBy=[[person.state]], aggr=[[min(person.age + Int64(1))]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2375,11 +2387,11 @@ fn select_count_one() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: count(Int64(1))
+        @r#"
+    Projection: "count(Int64(1))"
       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2389,11 +2401,11 @@ fn select_count_column() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: count(person.id)
+        @r#"
+    Projection: "count(person.id)"
       Aggregate: groupBy=[[]], aggr=[[count(person.id)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2403,11 +2415,11 @@ fn select_approx_median() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: approx_median(person.age)
+        @r#"
+    Projection: "approx_median(person.age)"
       Aggregate: groupBy=[[]], aggr=[[approx_median(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2631,11 +2643,11 @@ fn select_group_by_columns_not_in_select() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: max(person.age)
+        @r#"
+    Projection: "max(person.age)"
       Aggregate: groupBy=[[person.state]], aggr=[[max(person.age)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2645,11 +2657,11 @@ fn select_group_by_count_star() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state, count(*)
+        @r#"
+    Projection: person.state, "count(*)"
       Aggregate: groupBy=[[person.state]], aggr=[[count(*)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2659,11 +2671,11 @@ fn select_group_by_needs_projection() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: count(person.state), person.state
+        @r#"
+    Projection: "count(person.state)", person.state
       Aggregate: groupBy=[[person.state]], aggr=[[count(person.state)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -2673,11 +2685,11 @@ fn select_7480_1() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: aggregate_test_100.c1, min(aggregate_test_100.c12)
+        @r#"
+    Projection: aggregate_test_100.c1, "min(aggregate_test_100.c12)"
       Aggregate: groupBy=[[aggregate_test_100.c1, aggregate_test_100.c13]], aggr=[[min(aggregate_test_100.c12)]]
         TableScan: aggregate_test_100
-    "
+    "#
     );
 }
 
@@ -3066,16 +3078,16 @@ fn union_by_name_different_columns() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Distinct:
       Union
         Projection: order_id, NULL AS Int64(1)
           Projection: orders.order_id
             TableScan: orders
-        Projection: order_id, Int64(1)
+        Projection: order_id, "Int64(1)"
           Projection: orders.order_id, Int64(1)
             TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3119,15 +3131,15 @@ fn union_all_by_name_different_columns() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Union
       Projection: order_id, NULL AS Int64(1)
         Projection: orders.order_id
           TableScan: orders
-      Projection: order_id, Int64(1)
+      Projection: order_id, "Int64(1)"
         Projection: orders.order_id, Int64(1)
           TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3158,17 +3170,17 @@ fn union_all_with_duplicate_expressions() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Union
       Union
         Projection: Int64(0) AS a, Int64(0) AS b
           EmptyRelation: rows=1
         Projection: Int64(1) AS a, Int64(1) AS b
           EmptyRelation: rows=1
-      Projection: count(*) AS a, count(*) AS b
+      Projection: "count(*)" AS a, "count(*)" AS b
         Aggregate: groupBy=[[]], aggr=[[count(*)]]
           TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3200,7 +3212,7 @@ fn intersect_with_duplicate_expressions() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     LeftSemi Join: left.a = right.a, left.b = right.b
       Distinct:
         SubqueryAlias: left
@@ -3213,10 +3225,10 @@ fn intersect_with_duplicate_expressions() {
               Projection: Int64(1) AS a, Int64(1) AS b
                 EmptyRelation: rows=1
       SubqueryAlias: right
-        Projection: count(*) AS a, count(*) AS b
+        Projection: "count(*)" AS a, "count(*)" AS b
           Aggregate: groupBy=[[]], aggr=[[count(*)]]
             TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3229,7 +3241,7 @@ fn except_with_duplicate_expressions() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     LeftAnti Join: left.a = right.a, left.b = right.b
       Distinct:
         SubqueryAlias: left
@@ -3242,10 +3254,10 @@ fn except_with_duplicate_expressions() {
               Projection: Int64(1) AS a, Int64(1) AS b
                 EmptyRelation: rows=1
       SubqueryAlias: right
-        Projection: count(*) AS a, count(*) AS b
+        Projection: "count(*)" AS a, "count(*)" AS b
           Aggregate: groupBy=[[]], aggr=[[count(*)]]
             TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3255,11 +3267,11 @@ fn empty_over() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        @r#"
+    Projection: orders.order_id, "max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
       WindowAggr: windowExpr=[[max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3269,11 +3281,11 @@ fn empty_over_with_alias() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id AS oid, max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS max_oid
+        @r#"
+    Projection: orders.order_id AS oid, "max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS max_oid
       WindowAggr: windowExpr=[[max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3283,11 +3295,11 @@ fn empty_over_dup_with_alias() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id AS oid, max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS max_oid, max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS max_oid_dup
+        @r#"
+    Projection: orders.order_id AS oid, "max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS max_oid, "max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS max_oid_dup
       WindowAggr: windowExpr=[[max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3297,12 +3309,12 @@ fn empty_over_dup_with_different_sort() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id AS oid, max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, max(orders.order_id) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id AS oid, "max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", "max(orders.order_id) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         WindowAggr: windowExpr=[[max(orders.order_id) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3312,11 +3324,11 @@ fn empty_over_plus() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty * Float64(1.1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        @r#"
+    Projection: orders.order_id, "max(orders.qty * Float64(1.1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
       WindowAggr: windowExpr=[[max(orders.qty * Float64(1.1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3326,11 +3338,11 @@ fn empty_over_multiple() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, min(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, avg(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", "min(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", "avg(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
       WindowAggr: windowExpr=[[max(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, min(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, avg(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3349,11 +3361,11 @@ fn over_partition_by() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
       WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3375,12 +3387,12 @@ fn over_order_by() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
         WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3390,12 +3402,12 @@ fn over_order_by_with_window_frame_double_end() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING, min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING", "min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING]]
         WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3405,13 +3417,13 @@ fn window_function_only_in_order_by() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: orders.order_id
-      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
-        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      Sort: "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" ASC NULLS LAST
+        Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
           WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3421,12 +3433,12 @@ fn window_function_in_select_and_order_by() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
-      Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Sort: "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" ASC NULLS LAST
+      Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
         WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3437,13 +3449,13 @@ fn window_function_in_order_by_nested_expr() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: orders.order_id
-      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW + Int64(1) ASC NULLS LAST
-        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      Sort: "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" + Int64(1) ASC NULLS LAST
+        Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
           WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3454,13 +3466,13 @@ fn window_function_in_order_by_desc() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: orders.order_id
-      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW DESC NULLS FIRST
-        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      Sort: "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" DESC NULLS FIRST
+        Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
           WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3470,14 +3482,14 @@ fn multiple_window_functions_in_order_by() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: orders.order_id
-      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST, min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
-        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      Sort: "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" ASC NULLS LAST, "min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" ASC NULLS LAST
+        Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
           WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
               TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3487,14 +3499,14 @@ fn window_function_in_order_by_with_group_by() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, sum(orders.qty)
-      Sort: max(sum(orders.qty)) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
-        Projection: orders.order_id, sum(orders.qty), max(sum(orders.qty)) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-          WindowAggr: windowExpr=[[max(sum(orders.qty)) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        @r#"
+    Projection: orders.order_id, "sum(orders.qty)"
+      Sort: "max(sum(orders.qty)) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" ASC NULLS LAST
+        Projection: orders.order_id, "sum(orders.qty)", "max(sum(orders.qty)) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
+          WindowAggr: windowExpr=[[max("sum(orders.qty)") ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             Aggregate: groupBy=[[orders.order_id]], aggr=[[sum(orders.qty)]]
               TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3504,13 +3516,13 @@ fn window_function_in_order_by_with_qualify() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Sort: rn ASC NULLS LAST
-      Projection: person.id, row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
-        Filter: row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = Int64(1)
+      Projection: person.id, "row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
+        Filter: "row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" = Int64(1)
           WindowAggr: windowExpr=[[row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: person
-    "
+    "#
     );
 }
 
@@ -3521,13 +3533,13 @@ fn window_function_in_order_by_not_in_select() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: orders.order_id
-      Sort: min(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING ASC NULLS LAST
-        Projection: orders.order_id, min(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+      Sort: "min(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" ASC NULLS LAST
+        Projection: orders.order_id, "min(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
           WindowAggr: windowExpr=[[min(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
             TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3537,12 +3549,12 @@ fn over_order_by_with_window_frame_single_end() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW, min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW", "min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW]]
         WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3552,12 +3564,12 @@ fn over_order_by_with_window_frame_single_end_groups() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW, min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW", "min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW]]
         WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3579,12 +3591,12 @@ fn over_order_by_two_sort_keys() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(orders.qty) ORDER BY [orders.order_id + Int64(1) ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "min(orders.qty) ORDER BY [orders.order_id + Int64(1) ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
         WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id + Int64(1) ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3607,13 +3619,13 @@ fn over_order_by_sort_keys_sorting() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", "min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3634,13 +3646,13 @@ fn over_order_by_sort_keys_sorting_prefix_compacting() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", "min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3666,14 +3678,14 @@ fn over_order_by_sort_keys_sorting_global_order_compacting() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Sort: orders.order_id ASC NULLS LAST
-      Projection: orders.order_id, max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      Projection: orders.order_id, "max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", "min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
         WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
               TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3693,11 +3705,11 @@ fn over_partition_by_order_by() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
         TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3716,11 +3728,11 @@ fn over_partition_by_order_by_no_dup() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
         TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3742,12 +3754,12 @@ fn over_partition_by_order_by_mix_up() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(orders.qty) PARTITION BY [orders.qty] ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "min(orders.qty) PARTITION BY [orders.qty] ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[min(orders.qty) PARTITION BY [orders.qty] ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
         WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3768,12 +3780,12 @@ fn over_partition_by_order_by_mix_up_prefix() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.price ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "min(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.price ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
         WindowAggr: windowExpr=[[min(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.price ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3784,11 +3796,11 @@ fn approx_median_window() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, approx_median(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        @r#"
+    Projection: orders.order_id, "approx_median(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
       WindowAggr: windowExpr=[[approx_median(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         TableScan: orders
-    "
+    "#
     );
 }
 
@@ -3824,10 +3836,10 @@ fn select_multibyte_column() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.😀
+        @r#"
+    Projection: person."😀"
       TableScan: person
-    "
+    "#
     );
 }
 
@@ -3873,7 +3885,7 @@ fn select_groupby_orderby() {
                 // expect that this is not an ambiguous reference
                 @r#"
             Sort: birth_date ASC NULLS LAST
-              Projection: avg(person.age) AS value, date_trunc(Utf8("month"), person.birth_date) AS birth_date
+              Projection: "avg(person.age)" AS value, date_trunc(Utf8("month"), person.birth_date) AS birth_date
                 Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
                   TableScan: person
             "#
@@ -3892,8 +3904,8 @@ fn select_groupby_orderby() {
     assert_snapshot!(
         plan,
         @r#"
-    Sort: avg(person.age) + avg(person.age) ASC NULLS LAST
-      Projection: avg(person.age) + avg(person.age), date_trunc(Utf8("month"), person.birth_date) AS birth_date
+    Sort: "avg(person.age) + avg(person.age)" ASC NULLS LAST
+      Projection: "avg(person.age)" + "avg(person.age)", date_trunc(Utf8("month"), person.birth_date) AS birth_date
         Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
           TableScan: person
     "#
@@ -3906,13 +3918,13 @@ fn select_groupby_orderby_aggregate_on_non_selected_column() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: person.state
-      Sort: min(person.age) ASC NULLS LAST
-        Projection: person.state, min(person.age)
+      Sort: "min(person.age)" ASC NULLS LAST
+        Projection: person.state, "min(person.age)"
           Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
             TableScan: person
-    "
+    "#
     );
 }
 
@@ -3923,13 +3935,13 @@ fn select_groupby_orderby_multiple_aggregates_on_non_selected_columns() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: person.state
-      Sort: min(person.age) ASC NULLS LAST, max(person.salary) DESC NULLS FIRST
-        Projection: person.state, min(person.age), max(person.salary)
+      Sort: "min(person.age)" ASC NULLS LAST, "max(person.salary)" DESC NULLS FIRST
+        Projection: person.state, "min(person.age)", "max(person.salary)"
           Aggregate: groupBy=[[person.state]], aggr=[[min(person.age), max(person.salary)]]
             TableScan: person
-    "
+    "#
     );
 }
 
@@ -3939,13 +3951,13 @@ fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: person.id
-      Sort: min(person.age) ASC NULLS LAST
-        Projection: person.id, min(person.age)
+      Sort: "min(person.age)" ASC NULLS LAST
+        Projection: person.id, "min(person.age)"
           Aggregate: groupBy=[[person.id]], aggr=[[min(person.age)]]
             TableScan: person
-    "
+    "#
     );
 }
 
@@ -4554,16 +4566,16 @@ fn scalar_subquery() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: p.id, (<subquery>)
       Subquery:
-        Projection: max(person.id)
+        Projection: "max(person.id)"
           Aggregate: groupBy=[[]], aggr=[[max(person.id)]]
             Filter: person.last_name = outer_ref(p.last_name)
               TableScan: person
       SubqueryAlias: p
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -4579,11 +4591,11 @@ fn scalar_subquery_reference_outer_field() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: j1.j1_string, j2.j2_string
       Filter: j1.j1_id = j2.j2_id - Int64(1) AND j2.j2_id < (<subquery>)
         Subquery:
-          Projection: count(*)
+          Projection: "count(*)"
             Aggregate: groupBy=[[]], aggr=[[count(*)]]
               Filter: outer_ref(j2.j2_id) = j1.j1_id AND j1.j1_id = j3.j3_id
                 Cross Join:
@@ -4592,7 +4604,7 @@ fn scalar_subquery_reference_outer_field() {
         Cross Join:
           TableScan: j1
           TableScan: j2
-    "
+    "#
     );
 }
 
@@ -4603,11 +4615,11 @@ fn aggregate_with_rollup() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.id, person.state, person.age, count(*)
+        @r#"
+    Projection: person.id, person.state, person.age, "count(*)"
       Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[count(*)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -4618,11 +4630,11 @@ fn aggregate_with_rollup_with_grouping() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.id, person.state, person.age, grouping(person.state), grouping(person.age), grouping(person.state) + grouping(person.age), count(*)
+        @r#"
+    Projection: person.id, person.state, person.age, "grouping(person.state)", "grouping(person.age)", "grouping(person.state)" + "grouping(person.age)", "count(*)"
       Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[grouping(person.state), grouping(person.age), count(*)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -4644,12 +4656,12 @@ fn rank_partition_grouping() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: sum(person.age) AS total_sum, person.state, person.last_name, grouping(person.state) + grouping(person.last_name) AS x, rank() PARTITION BY [grouping(person.state) + grouping(person.last_name), CASE WHEN grouping(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS the_rank
-      WindowAggr: windowExpr=[[rank() PARTITION BY [grouping(person.state) + grouping(person.last_name), CASE WHEN grouping(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        @r#"
+    Projection: "sum(person.age)" AS total_sum, person.state, person.last_name, "grouping(person.state)" + "grouping(person.last_name)" AS x, "rank() PARTITION BY [grouping(person.state) + grouping(person.last_name), CASE WHEN grouping(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS the_rank
+      WindowAggr: windowExpr=[[rank() PARTITION BY ["grouping(person.state)" + "grouping(person.last_name)", CASE WHEN "grouping(person.last_name)" = Int64(0) THEN person.state END] ORDER BY ["sum(person.age)" DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank() PARTITION BY [grouping(person.state) + grouping(person.last_name), CASE WHEN grouping(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
         Aggregate: groupBy=[[ROLLUP (person.state, person.last_name)]], aggr=[[sum(person.age), grouping(person.state), grouping(person.last_name)]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -4660,11 +4672,11 @@ fn aggregate_with_cube() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.id, person.state, person.age, count(*)
+        @r#"
+    Projection: person.id, person.state, person.age, "count(*)"
       Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[count(*)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -4687,11 +4699,11 @@ fn aggregate_with_grouping_sets() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.id, person.state, person.age, count(*)
+        @r#"
+    Projection: person.id, person.state, person.age, "count(*)"
       Aggregate: groupBy=[[GROUPING SETS ((person.id, person.state), (person.id, person.state, person.age), (person.id, person.id, person.state))]], aggr=[[count(*)]]
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -4737,11 +4749,11 @@ fn hive_aggregate_with_filter() -> Result<()> {
 
     assert_snapshot!(
         plan,
-        @r"
-    Projection: sum(person.age) FILTER (WHERE person.age > Int64(4))
+        @r#"
+    Projection: "sum(person.age) FILTER (WHERE person.age > Int64(4))"
       Aggregate: groupBy=[[]], aggr=[[sum(person.age) FILTER (WHERE person.age > Int64(4))]]
         TableScan: person
-    "
+    "#
     );
 
     Ok(())
@@ -4757,13 +4769,13 @@ fn order_by_unaliased_name() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Sort: z ASC NULLS LAST
-      Projection: p.state AS z, sum(p.age) AS q
+      Projection: p.state AS z, "sum(p.age)" AS q
         Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]
           SubqueryAlias: p
             TableScan: person
-    "
+    "#
     );
 }
 
@@ -5114,7 +5126,7 @@ fn test_select_order_by() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: Utf8("1")
+    Projection: "Utf8(""1"")"
       Sort: person.id ASC NULLS LAST
         Projection: Utf8("1"), person.id
           TableScan: person
@@ -5143,12 +5155,12 @@ fn test_select_qualify_basic() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.id, row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
-      Filter: row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = Int64(1)
+        @r#"
+    Projection: person.id, "row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
+      Filter: "row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" = Int64(1)
         WindowAggr: windowExpr=[[row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -5165,13 +5177,13 @@ fn test_select_qualify_aggregate_reference() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.id, row_number() PARTITION BY [person.id] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
-      Filter: row_number() PARTITION BY [person.id] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = Int64(1) AND sum(person.age) > Int64(0)
+        @r#"
+    Projection: person.id, "row_number() PARTITION BY [person.id] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
+      Filter: "row_number() PARTITION BY [person.id] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" = Int64(1) AND "sum(person.age)" > Int64(0)
         WindowAggr: windowExpr=[[row_number() PARTITION BY [person.id] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
             TableScan: person
-    "
+    "#
     );
 }
 
@@ -5187,13 +5199,13 @@ fn test_select_qualify_aggregate_reference_within_window_function() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @r#"
     Projection: person.id
-      Filter: row_number() PARTITION BY [person.id] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = Int64(1)
-        WindowAggr: windowExpr=[[row_number() PARTITION BY [person.id] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+      Filter: "row_number() PARTITION BY [person.id] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" = Int64(1)
+        WindowAggr: windowExpr=[[row_number() PARTITION BY [person.id] ORDER BY ["sum(person.age)" DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() PARTITION BY [person.id] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
             TableScan: person
-    "
+    "#
     );
 }
 
@@ -5239,13 +5251,13 @@ fn test_select_qualify_complex_condition() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.id, person.age, row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, rank() ORDER BY [person.salary ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank
-      Filter: row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= Int64(2) AND rank() ORDER BY [person.salary ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= Int64(5)
+        @r#"
+    Projection: person.id, person.age, "row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn, "rank() ORDER BY [person.salary ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rank
+      Filter: "row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= Int64(2) AND "rank() ORDER BY [person.salary ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= Int64(5)
         WindowAggr: windowExpr=[[rank() ORDER BY [person.salary ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           WindowAggr: windowExpr=[[row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: person
-    "
+    "#
     );
 }
 
@@ -5451,11 +5463,11 @@ fn test_field_not_found_window_function() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        @r#"
+    Projection: orders.order_id, "max(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
       WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
         TableScan: orders
-    "
+    "#
     );
 }
 
@@ -5506,7 +5518,7 @@ fn test_parse_quoted_column_name_with_at_sign() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: @quoted_identifier_names_table.@column
+    Projection: @quoted_identifier_names_table."@column"
       TableScan: @quoted_identifier_names_table
     "#
     );
@@ -5516,7 +5528,7 @@ fn test_parse_quoted_column_name_with_at_sign() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: @quoted_identifier_names_table.@column
+    Projection: @quoted_identifier_names_table."@column"
       TableScan: @quoted_identifier_names_table
     "#
     );
@@ -5959,21 +5971,21 @@ fn test_correlated_recursive_scalar_subquery_with_level_3_scalar_subquery_refere
     assert_snapshot!(
          plan,
          @r#"
-Sort: customer.c_custkey ASC NULLS LAST
-  Projection: customer.c_custkey
-    Filter: customer.c_acctbal < (<subquery>)
-      Subquery:
-        Projection: sum(orders.o_totalprice)
-          Aggregate: groupBy=[[]], aggr=[[sum(orders.o_totalprice)]]
-            Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND orders.o_totalprice < (<subquery>)
-              Subquery:
-                Projection: sum(lineitem.l_extendedprice) AS price
-                  Aggregate: groupBy=[[]], aggr=[[sum(lineitem.l_extendedprice)]]
-                    Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
-                      TableScan: lineitem
-              TableScan: orders
-      TableScan: customer
-"#
+    Sort: customer.c_custkey ASC NULLS LAST
+      Projection: customer.c_custkey
+        Filter: customer.c_acctbal < (<subquery>)
+          Subquery:
+            Projection: "sum(orders.o_totalprice)"
+              Aggregate: groupBy=[[]], aggr=[[sum(orders.o_totalprice)]]
+                Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND orders.o_totalprice < (<subquery>)
+                  Subquery:
+                    Projection: "sum(lineitem.l_extendedprice)" AS price
+                      Aggregate: groupBy=[[]], aggr=[[sum(lineitem.l_extendedprice)]]
+                        Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+                          TableScan: lineitem
+                  TableScan: orders
+          TableScan: customer
+    "#
     );
 }
 
@@ -5990,8 +6002,9 @@ fn test_progressive_lambda_parameters() {
     // taking into account the user defined coercion that coerced the List(Float64) to List(Float32),
     // test that merge accumulator parameter and finish parameter correctly got the type of the merge
     // lambda output (Float32 instead of Float64), and not the initial value type (Int64)
+    // the output is named by an implicit alias
     assert_eq!(
-        expr,
+        expr.into_unaliased_implicit(),
         Expr::HigherOrderFunction(HigherOrderFunction::new(
             Arc::new(HigherOrderUDF::new_from_impl(MockArrayReduce::new())),
             vec![

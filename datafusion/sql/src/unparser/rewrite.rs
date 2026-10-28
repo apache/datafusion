@@ -350,19 +350,14 @@ pub(super) fn subquery_alias_inner_query_and_columns(
         return (plan, vec![]);
     }
 
-    for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
+    for i in 0..inner_projection.expr.len() {
         let Expr::Alias(outer_alias) = &outer_projections.expr[i] else {
             return (plan, vec![]);
         };
 
-        // Inner projection schema fields store the projection name which is used in outer
-        // projection expr
-        let inner_expr_string = match inner_expr {
-            Expr::Column(_) => inner_expr.to_string(),
-            _ => inner_projection.schema.field(i).name().clone(),
-        };
-
-        if outer_alias.expr.to_string() != inner_expr_string {
+        // The outer alias must rename output `i` of the inner projection
+        let inner_column = inner_projection.schema.column(i);
+        if !matches!(outer_alias.expr.as_ref(), Expr::Column(c) if *c == inner_column) {
             return (plan, vec![]);
         }
 
@@ -468,6 +463,8 @@ pub(super) fn inject_column_aliases(
                 relation,
                 name: col_alias.value,
                 metadata: None,
+                id: datafusion_common::ColumnId::next(),
+                kind: Default::default(),
             })
         })
         .collect::<Vec<_>>();

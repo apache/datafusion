@@ -28,8 +28,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, ExprSchema, HashMap, Result, ScalarValue, Spans, TableReference,
-    plan_err,
+    Column, ColumnId, DFSchema, ExprSchema, HashMap, Result, ScalarValue, Spans,
+    TableReference, plan_err,
 };
 use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -204,7 +204,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
 ///
 /// // Form Vec<Expr> with an expression for each column in the schema
-/// let exprs: Vec<_> = df_schema.iter().map(Expr::from).collect();
+/// let exprs: Vec<_> = df_schema.columns().into_iter().map(Expr::Column).collect();
 ///
 /// assert_eq!(
 ///     exprs,
@@ -700,12 +700,65 @@ impl Unnest {
 }
 
 /// Alias expression
-#[derive(Clone, PartialEq, Eq, Debug)]
+///
+/// An alias in the output list of a plan node (for example a [`Projection`])
+/// defines a new column. Its [`ColumnId`] identifies that column, so that
+/// references to it keep resolving when the aliased expression is rewritten.
+/// The id is not considered by equality, ordering or hashing.
+///
+/// [`Projection`]: crate::logical_plan::Projection
+#[derive(Clone)]
 pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
     pub name: String,
     pub metadata: Option<FieldMetadata>,
+    /// The identity of the column this alias defines
+    pub id: ColumnId,
+    /// Why the alias is there, see [`AliasKind`]. Not considered by equality,
+    /// ordering or hashing.
+    pub kind: AliasKind,
+}
+
+/// The kind of an [`Alias`]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AliasKind {
+    /// Written by the user, or added by a rule to give an expression a name
+    #[default]
+    Explicit,
+    /// Added only to name an output with its own name and give it an id, see
+    /// [`named_output_expr`]
+    ///
+    /// [`named_output_expr`]: crate::logical_plan::column_ids::named_output_expr
+    Implicit,
+    /// Like [`Self::Implicit`], defining a column that an optimizer rule
+    /// extracted from the node that uses it, to compute it closer to the
+    /// leaves (see `ExtractLeafExpressions`). Rules move such an alias
+    /// towards the leaves as is.
+    Extraction,
+}
+
+impl PartialEq for Alias {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr == other.expr
+            && self.relation == other.relation
+            && self.name == other.name
+            && self.metadata == other.metadata
+    }
+}
+
+impl Eq for Alias {}
+
+// Debug output omits `id`, which differs between runs
+impl fmt::Debug for Alias {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Alias")
+            .field("expr", &self.expr)
+            .field("relation", &self.relation)
+            .field("name", &self.name)
+            .field("metadata", &self.metadata)
+            .finish()
+    }
 }
 
 impl Hash for Alias {
@@ -745,11 +798,48 @@ impl Alias {
             relation: relation.map(|r| r.into()),
             name: name.into(),
             metadata: None,
+            id: ColumnId::next(),
+            kind: AliasKind::Explicit,
         }
     }
 
     pub fn with_metadata(mut self, metadata: Option<FieldMetadata>) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    /// Is this an implicit alias: one that only gives an output expression
+    /// its own name, so that the output has a [`ColumnId`]? See
+    /// [`named_output_expr`](crate::logical_plan::column_ids::named_output_expr).
+    ///
+    /// Such an alias is not displayed, and rules treat the output as the
+    /// expression it names.
+    pub fn is_implicit(&self) -> bool {
+        self.kind != AliasKind::Explicit
+            && self.relation.is_none()
+            && self.metadata.is_none()
+            && self.name == self.expr.schema_name().to_string()
+    }
+
+    /// Marks this alias as implicit, see [`Self::is_implicit`]
+    pub fn with_implicit(mut self, implicit: bool) -> Self {
+        self.kind = if implicit {
+            AliasKind::Implicit
+        } else {
+            AliasKind::Explicit
+        };
+        self
+    }
+
+    /// Sets the kind of this alias
+    pub fn with_kind(mut self, kind: AliasKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Sets the [`ColumnId`] of the column this alias defines
+    pub fn with_id(mut self, id: ColumnId) -> Self {
+        self.id = id;
         self
     }
 
@@ -766,12 +856,16 @@ impl Alias {
             relation,
             name,
             metadata,
+            id,
+            kind,
         } = self;
         Ok(Expr::Alias(Alias {
             expr: Box::new(f(*expr)?),
             relation,
             name,
             metadata,
+            id,
+            kind,
         }))
     }
 }
@@ -1676,6 +1770,7 @@ impl Expr {
                 relation,
                 name,
                 spans: _,
+                id: _,
             }) => (relation.clone(), name.clone()),
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
@@ -1841,7 +1936,12 @@ impl Expr {
 
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        Expr::Alias(Alias::new(self, None::<&str>, name.into()))
+        // renaming replaces an implicit alias, which only named the output
+        Expr::Alias(Alias::new(
+            self.into_unaliased_implicit(),
+            None::<&str>,
+            name.into(),
+        ))
     }
 
     /// Return `self AS name` alias expression with metadata
@@ -1863,7 +1963,10 @@ impl Expr {
         name: impl Into<String>,
         metadata: Option<FieldMetadata>,
     ) -> Expr {
-        Expr::Alias(Alias::new(self, None::<&str>, name.into()).with_metadata(metadata))
+        Expr::Alias(
+            Alias::new(self.into_unaliased_implicit(), None::<&str>, name.into())
+                .with_metadata(metadata),
+        )
     }
 
     /// Return `self AS name` alias expression with a specific qualifier
@@ -1872,7 +1975,11 @@ impl Expr {
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
-        Expr::Alias(Alias::new(self, relation, name.into()))
+        Expr::Alias(Alias::new(
+            self.into_unaliased_implicit(),
+            relation,
+            name.into(),
+        ))
     }
 
     /// Return `self AS name` alias expression with a specific qualifier and metadata
@@ -1896,7 +2003,36 @@ impl Expr {
         name: impl Into<String>,
         metadata: Option<FieldMetadata>,
     ) -> Expr {
-        Expr::Alias(Alias::new(self, relation, name.into()).with_metadata(metadata))
+        Expr::Alias(
+            Alias::new(self.into_unaliased_implicit(), relation, name.into())
+                .with_metadata(metadata),
+        )
+    }
+
+    /// Returns the expression that an alias names, or `self` if it is not an
+    /// alias
+    pub fn unalias_ref(&self) -> &Expr {
+        match self {
+            Expr::Alias(alias) => alias.expr.as_ref(),
+            _ => self,
+        }
+    }
+
+    /// Returns the expression that an implicit alias names (see
+    /// [`Alias::is_implicit`]), or `self` otherwise
+    pub fn strip_implicit_alias(&self) -> &Expr {
+        match self {
+            Expr::Alias(alias) if alias.is_implicit() => alias.expr.as_ref(),
+            _ => self,
+        }
+    }
+
+    /// Like [`Self::strip_implicit_alias`], by value
+    pub fn into_unaliased_implicit(self) -> Expr {
+        match self {
+            Expr::Alias(alias) if alias.is_implicit() => *alias.expr,
+            expr => expr,
+        }
     }
 
     /// Remove an alias from an expression if one exists.
@@ -3062,13 +3198,18 @@ struct SchemaDisplay<'a>(&'a Expr);
 impl Display for SchemaDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
+            // A column is named by its own (unquoted) name: `Display` quotes
+            // a name that is not an identifier, and names do not depend on
+            // how a plan is displayed
+            Expr::Column(c) => write!(f, "{c}"),
+            Expr::OuterReferenceColumn(_, c) => {
+                write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")
+            }
             // The same as Display
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
-            Expr::Column(_)
-            | Expr::Literal(_, _)
+            Expr::Literal(_, _)
             | Expr::ScalarVariable(..)
-            | Expr::OuterReferenceColumn(..)
             | Expr::Placeholder(_)
             | Expr::Wildcard { .. } => write!(f, "{}", self.0),
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
@@ -3610,15 +3751,75 @@ pub fn schema_name_from_sorts(sorts: &[Sort]) -> Result<String, fmt::Error> {
 pub const OUTER_REFERENCE_COLUMN_PREFIX: &str = "outer_ref";
 pub const UNNEST_COLUMN_PREFIX: &str = "UNNEST";
 
+/// Displays a column reference, with its name quoted as in SQL (`"t.a + t.b"`)
+/// when it is not a plain identifier.
+///
+/// A column can be named after the expression that computes it (an output of
+/// a projection or aggregate, a column a rule defines for a common
+/// subexpression). Unquoted, a reference to the column `t.a + t.b` in
+/// `"t.a + t.b" * 2` would read as `t.a + (t.b * 2)`, and a reference to the
+/// column `t.ts` that holds `CAST(t.ts AS ...)` would read as the table column
+/// `t.ts`.
+///
+/// Only while a [`LogicalPlan`] is displayed (see [`quote_column_names`]):
+/// elsewhere, such as in names that are built from the display of an
+/// expression, a column displays as its plain name.
+///
+/// [`LogicalPlan`]: crate::LogicalPlan
+struct ColumnRefDisplay<'a>(&'a Column);
+
+thread_local! {
+    static QUOTE_COLUMN_NAMES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Quotes column references that are not plain identifiers in the display of
+/// expressions (see [`ColumnRefDisplay`]) until the returned guard is dropped
+pub(crate) fn quote_column_names() -> impl Drop {
+    struct Guard(bool);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            QUOTE_COLUMN_NAMES.with(|quote| quote.set(self.0));
+        }
+    }
+    Guard(QUOTE_COLUMN_NAMES.with(|quote| quote.replace(true)))
+}
+
+impl Display for ColumnRefDisplay<'_> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        if !QUOTE_COLUMN_NAMES.with(|quote| quote.get()) {
+            return write!(f, "{}", self.0);
+        }
+        let Column { relation, name, .. } = self.0;
+        if let Some(relation) = relation {
+            write!(f, "{relation}.")?;
+        }
+        let mut chars = name.chars();
+        let is_identifier = chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            && chars.all(|c| c.is_alphanumeric() || c == '_');
+        if is_identifier {
+            write!(f, "{name}")
+        } else {
+            write!(f, "\"{}\"", name.replace('"', "\"\""))
+        }
+    }
+}
+
 /// Format expressions for display as part of a logical plan. In many cases, this will produce
 /// similar output to `Expr.name()` except that column names will be prefixed with '#'.
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
+            // An alias that only gives an output its own name, and an id (see
+            // `named_output_expr`), is not shown
+            Expr::Alias(alias) if alias.is_implicit() => write!(f, "{}", alias.expr),
             Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
-            Expr::Column(c) => write!(f, "{c}"),
+            Expr::Column(c) => write!(f, "{}", ColumnRefDisplay(c)),
             Expr::OuterReferenceColumn(_, c) => {
-                write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")
+                write!(
+                    f,
+                    "{OUTER_REFERENCE_COLUMN_PREFIX}({})",
+                    ColumnRefDisplay(c)
+                )
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v, metadata) => {
@@ -4613,7 +4814,8 @@ mod test {
         // If this test fails when you change `Expr`, please try
         // `Box`ing the fields to make `Expr` smaller
         // See https://github.com/apache/datafusion/issues/16199 for details
-        assert_eq!(size_of::<Expr>(), 112);
+        // 128 since `Column` and `Alias` gained an `Option<ColumnId>`; was 112
+        assert_eq!(size_of::<Expr>(), 128);
         assert_eq!(size_of::<ScalarValue>(), 64);
         assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
         assert_eq!(size_of::<Vec<Expr>>(), 24);

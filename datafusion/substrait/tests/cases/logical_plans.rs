@@ -70,11 +70,11 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
-        Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR
+        @r#"
+        Projection: "sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING" AS LEAD_EXPR
           WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
             TableScan: DATA
-        "
+        "#
                 );
 
         // Trigger execution to ensure plan validity
@@ -95,11 +95,11 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
-        Projection: Int64(1) + count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS EXPR$0
+        @r#"
+        Projection: Int64(1) + "count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS EXPR$0
           WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
             TableScan: DATA
-        "
+        "#
                 );
 
         // Trigger execution to ensure the nested window is physically plannable
@@ -122,11 +122,11 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
-        Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED
+        @r#"
+        Projection: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS EXPR$0, "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED
           WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: DATA
-        "
+        "#
                 );
 
         // Trigger execution to ensure plan validity
@@ -151,12 +151,12 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
-        Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$1
+        @r#"
+        Projection: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS EXPR$0, "row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS EXPR$1
           WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             WindowAggr: windowExpr=[[row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
               TableScan: DATA
-        "
+        "#
                 );
 
         // Trigger execution to ensure plan validity
@@ -180,8 +180,8 @@ mod tests {
 
         assert_snapshot!(
             plan,
-            @r"
-        Projection: left.A, left.Utf8(NULL) AS C, right.D, Utf8(NULL) AS Utf8(NULL)__temp__0 AS E
+            @r#"
+        Projection: left.A, left."Utf8(NULL)" AS C, right.D, Utf8(NULL) AS Utf8(NULL)__temp__0 AS E
           Left Join: left.A = right.A
             SubqueryAlias: left
               Union
@@ -191,7 +191,7 @@ mod tests {
                   TableScan: B
             SubqueryAlias: right
               TableScan: C
-        "
+        "#
         );
 
         // Trigger execution to ensure plan validity
@@ -452,12 +452,12 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
-        Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count
-          Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]
+        @r#"
+        Projection: lower(sales.product) AS lower(product), "sum(count(sales.product))" AS product_count
+          Aggregate: groupBy=[[sales.product]], aggr=[[sum("count(sales.product)")]]
             Aggregate: groupBy=[[sales.product]], aggr=[[count(sales.product)]]
               TableScan: sales
-        "
+        "#
                 );
 
         // Trigger execution to ensure plan validity

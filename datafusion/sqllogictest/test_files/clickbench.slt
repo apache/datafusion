@@ -51,7 +51,7 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM hits;
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: hits
 04)------TableScan: hits_raw projection=[]
@@ -69,7 +69,7 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM hits WHERE "AdvEngineID" <> 0;
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: hits
 04)------Projection:
@@ -93,7 +93,7 @@ query TT
 EXPLAIN SELECT SUM("AdvEngineID"), COUNT(*), AVG("ResolutionWidth") FROM hits;
 ----
 logical_plan
-01)Projection: sum(hits.AdvEngineID), count(Int64(1)) AS count(*), avg(hits.ResolutionWidth)
+01)Projection: "sum(hits.AdvEngineID)", "count(Int64(1))" AS count(*), "avg(hits.ResolutionWidth)"
 02)--Aggregate: groupBy=[[]], aggr=[[sum(CAST(hits.AdvEngineID AS Int64)), count(Int64(1)), avg(CAST(hits.ResolutionWidth AS Float64))]]
 03)----SubqueryAlias: hits
 04)------TableScan: hits_raw projection=[ResolutionWidth, AdvEngineID]
@@ -129,7 +129,7 @@ query TT
 EXPLAIN SELECT COUNT(DISTINCT "UserID") FROM hits;
 ----
 logical_plan
-01)Projection: count(alias1) AS count(DISTINCT hits.UserID)
+01)Projection: "count(alias1)" AS count(DISTINCT hits.UserID)
 02)--Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
 03)----Aggregate: groupBy=[[hits.UserID AS alias1]], aggr=[[]]
 04)------SubqueryAlias: hits
@@ -154,7 +154,7 @@ query TT
 EXPLAIN SELECT COUNT(DISTINCT "SearchPhrase") FROM hits;
 ----
 logical_plan
-01)Projection: count(alias1) AS count(DISTINCT hits.SearchPhrase)
+01)Projection: "count(alias1)" AS count(DISTINCT hits.SearchPhrase)
 02)--Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
 03)----Aggregate: groupBy=[[hits.SearchPhrase AS alias1]], aggr=[[]]
 04)------SubqueryAlias: hits
@@ -197,8 +197,8 @@ query TT
 EXPLAIN SELECT "AdvEngineID", COUNT(*) FROM hits WHERE "AdvEngineID" <> 0 GROUP BY "AdvEngineID" ORDER BY COUNT(*) DESC;
 ----
 logical_plan
-01)Sort: count(*) DESC NULLS FIRST
-02)--Projection: hits.AdvEngineID, count(Int64(1)) AS count(*)
+01)Sort: "count(*)" DESC NULLS FIRST
+02)--Projection: hits.AdvEngineID, "count(Int64(1))" AS count(*)
 03)----Aggregate: groupBy=[[hits.AdvEngineID]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: hits
 05)--------Filter: hits_raw.AdvEngineID != Int16(0)
@@ -224,7 +224,7 @@ EXPLAIN SELECT "RegionID", COUNT(DISTINCT "UserID") AS u FROM hits GROUP BY "Reg
 ----
 logical_plan
 01)Sort: u DESC NULLS FIRST, fetch=10
-02)--Projection: hits.RegionID, count(alias1) AS u
+02)--Projection: hits.RegionID, "count(alias1)" AS u
 03)----Aggregate: groupBy=[[hits.RegionID]], aggr=[[count(alias1)]]
 04)------Aggregate: groupBy=[[hits.RegionID, hits.UserID AS alias1]], aggr=[[]]
 05)--------SubqueryAlias: hits
@@ -255,7 +255,7 @@ EXPLAIN SELECT "RegionID", SUM("AdvEngineID"), COUNT(*) AS c, AVG("ResolutionWid
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.RegionID, sum(hits.AdvEngineID), count(Int64(1)) AS count(*) AS c, avg(hits.ResolutionWidth), count(DISTINCT hits.UserID)
+02)--Projection: hits.RegionID, "sum(hits.AdvEngineID)", "count(Int64(1))" AS count(*) AS c, "avg(hits.ResolutionWidth)", "count(DISTINCT hits.UserID)"
 03)----Aggregate: groupBy=[[hits.RegionID]], aggr=[[sum(CAST(hits.AdvEngineID AS Int64)), count(Int64(1)), avg(CAST(hits.ResolutionWidth AS Float64)), count(DISTINCT hits.UserID)]]
 04)------SubqueryAlias: hits
 05)--------TableScan: hits_raw projection=[RegionID, UserID, ResolutionWidth, AdvEngineID]
@@ -282,7 +282,7 @@ EXPLAIN SELECT "MobilePhoneModel", COUNT(DISTINCT "UserID") AS u FROM hits WHERE
 ----
 logical_plan
 01)Sort: u DESC NULLS FIRST, fetch=10
-02)--Projection: hits.MobilePhoneModel, count(alias1) AS u
+02)--Projection: hits.MobilePhoneModel, "count(alias1)" AS u
 03)----Aggregate: groupBy=[[hits.MobilePhoneModel]], aggr=[[count(alias1)]]
 04)------Aggregate: groupBy=[[hits.MobilePhoneModel, hits.UserID AS alias1]], aggr=[[]]
 05)--------SubqueryAlias: hits
@@ -298,7 +298,7 @@ physical_plan
 07)------------AggregateExec: mode=FinalPartitioned, gby=[MobilePhoneModel@0 as MobilePhoneModel, alias1@1 as alias1], aggr=[]
 08)--------------RepartitionExec: partitioning=Hash([MobilePhoneModel@0, alias1@1], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[MobilePhoneModel@1 as MobilePhoneModel, UserID@0 as alias1], aggr=[]
-10)------------------FilterExec: MobilePhoneModel@1 !=
+10)------------------FilterExec: MobilePhoneModel@1 != 
 11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
 
@@ -312,7 +312,7 @@ EXPLAIN SELECT "MobilePhone", "MobilePhoneModel", COUNT(DISTINCT "UserID") AS u 
 ----
 logical_plan
 01)Sort: u DESC NULLS FIRST, fetch=10
-02)--Projection: hits.MobilePhone, hits.MobilePhoneModel, count(alias1) AS u
+02)--Projection: hits.MobilePhone, hits.MobilePhoneModel, "count(alias1)" AS u
 03)----Aggregate: groupBy=[[hits.MobilePhone, hits.MobilePhoneModel]], aggr=[[count(alias1)]]
 04)------Aggregate: groupBy=[[hits.MobilePhone, hits.MobilePhoneModel, hits.UserID AS alias1]], aggr=[[]]
 05)--------SubqueryAlias: hits
@@ -328,7 +328,7 @@ physical_plan
 07)------------AggregateExec: mode=FinalPartitioned, gby=[MobilePhone@0 as MobilePhone, MobilePhoneModel@1 as MobilePhoneModel, alias1@2 as alias1], aggr=[]
 08)--------------RepartitionExec: partitioning=Hash([MobilePhone@0, MobilePhoneModel@1, alias1@2], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[MobilePhone@1 as MobilePhone, MobilePhoneModel@2 as MobilePhoneModel, UserID@0 as alias1], aggr=[]
-10)------------------FilterExec: MobilePhoneModel@2 !=
+10)------------------FilterExec: MobilePhoneModel@2 != 
 11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, MobilePhone, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
 
@@ -342,7 +342,7 @@ EXPLAIN SELECT "SearchPhrase", COUNT(*) AS c FROM hits WHERE "SearchPhrase" <> '
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.SearchPhrase, count(Int64(1)) AS count(*) AS c
+02)--Projection: hits.SearchPhrase, "count(Int64(1))" AS count(*) AS c
 03)----Aggregate: groupBy=[[hits.SearchPhrase]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: hits
 05)--------Filter: hits_raw.SearchPhrase != Utf8View("")
@@ -354,7 +354,7 @@ physical_plan
 04)------AggregateExec: mode=FinalPartitioned, gby=[SearchPhrase@0 as SearchPhrase], aggr=[count(Int64(1))]
 05)--------RepartitionExec: partitioning=Hash([SearchPhrase@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[SearchPhrase@0 as SearchPhrase], aggr=[count(Int64(1))]
-07)------------FilterExec: SearchPhrase@0 !=
+07)------------FilterExec: SearchPhrase@0 != 
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
@@ -368,7 +368,7 @@ EXPLAIN SELECT "SearchPhrase", COUNT(DISTINCT "UserID") AS u FROM hits WHERE "Se
 ----
 logical_plan
 01)Sort: u DESC NULLS FIRST, fetch=10
-02)--Projection: hits.SearchPhrase, count(alias1) AS u
+02)--Projection: hits.SearchPhrase, "count(alias1)" AS u
 03)----Aggregate: groupBy=[[hits.SearchPhrase]], aggr=[[count(alias1)]]
 04)------Aggregate: groupBy=[[hits.SearchPhrase, hits.UserID AS alias1]], aggr=[[]]
 05)--------SubqueryAlias: hits
@@ -384,7 +384,7 @@ physical_plan
 07)------------AggregateExec: mode=FinalPartitioned, gby=[SearchPhrase@0 as SearchPhrase, alias1@1 as alias1], aggr=[]
 08)--------------RepartitionExec: partitioning=Hash([SearchPhrase@0, alias1@1], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[SearchPhrase@1 as SearchPhrase, UserID@0 as alias1], aggr=[]
-10)------------------FilterExec: SearchPhrase@1 !=
+10)------------------FilterExec: SearchPhrase@1 != 
 11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
@@ -398,7 +398,7 @@ EXPLAIN SELECT "SearchEngineID", "SearchPhrase", COUNT(*) AS c FROM hits WHERE "
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.SearchEngineID, hits.SearchPhrase, count(Int64(1)) AS count(*) AS c
+02)--Projection: hits.SearchEngineID, hits.SearchPhrase, "count(Int64(1))" AS count(*) AS c
 03)----Aggregate: groupBy=[[hits.SearchEngineID, hits.SearchPhrase]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: hits
 05)--------Filter: hits_raw.SearchPhrase != Utf8View("")
@@ -410,7 +410,7 @@ physical_plan
 04)------AggregateExec: mode=FinalPartitioned, gby=[SearchEngineID@0 as SearchEngineID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))]
 05)--------RepartitionExec: partitioning=Hash([SearchEngineID@0, SearchPhrase@1], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[SearchEngineID@0 as SearchEngineID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))]
-07)------------FilterExec: SearchPhrase@1 !=
+07)------------FilterExec: SearchPhrase@1 != 
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchEngineID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
@@ -423,8 +423,8 @@ query TT
 EXPLAIN SELECT "UserID", COUNT(*) FROM hits GROUP BY "UserID" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
 logical_plan
-01)Sort: count(*) DESC NULLS FIRST, fetch=10
-02)--Projection: hits.UserID, count(Int64(1)) AS count(*)
+01)Sort: "count(*)" DESC NULLS FIRST, fetch=10
+02)--Projection: hits.UserID, "count(Int64(1))" AS count(*)
 03)----Aggregate: groupBy=[[hits.UserID]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: hits
 05)--------TableScan: hits_raw projection=[UserID]
@@ -451,8 +451,8 @@ query TT
 EXPLAIN SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
 logical_plan
-01)Sort: count(*) DESC NULLS FIRST, fetch=10
-02)--Projection: hits.UserID, hits.SearchPhrase, count(Int64(1)) AS count(*)
+01)Sort: "count(*)" DESC NULLS FIRST, fetch=10
+02)--Projection: hits.UserID, hits.SearchPhrase, "count(Int64(1))" AS count(*)
 03)----Aggregate: groupBy=[[hits.UserID, hits.SearchPhrase]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: hits
 05)--------TableScan: hits_raw projection=[UserID, SearchPhrase]
@@ -479,7 +479,7 @@ query TT
 EXPLAIN SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" LIMIT 10;
 ----
 logical_plan
-01)Projection: hits.UserID, hits.SearchPhrase, count(Int64(1)) AS count(*)
+01)Projection: hits.UserID, hits.SearchPhrase, "count(Int64(1))" AS count(*)
 02)--Limit: skip=0, fetch=10
 03)----Aggregate: groupBy=[[hits.UserID, hits.SearchPhrase]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: hits
@@ -506,8 +506,8 @@ query TT
 EXPLAIN SELECT "UserID", extract(minute FROM to_timestamp_seconds("EventTime")) AS m, "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", m, "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
 logical_plan
-01)Sort: count(*) DESC NULLS FIRST, fetch=10
-02)--Projection: hits.UserID, date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime)) AS m, hits.SearchPhrase, count(Int64(1)) AS count(*)
+01)Sort: "count(*)" DESC NULLS FIRST, fetch=10
+02)--Projection: hits.UserID, "date_part(Utf8(""MINUTE""),to_timestamp_seconds(hits.EventTime))" AS m, hits.SearchPhrase, "count(Int64(1))" AS count(*)
 03)----Aggregate: groupBy=[[hits.UserID, date_part(Utf8("MINUTE"), to_timestamp_seconds(hits.EventTime)), hits.SearchPhrase]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: hits
 05)--------TableScan: hits_raw projection=[EventTime, UserID, SearchPhrase]
@@ -556,7 +556,7 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM hits WHERE "URL" LIKE '%google%';
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: hits
 04)------Projection:
@@ -582,7 +582,7 @@ EXPLAIN SELECT "SearchPhrase", MIN("URL"), COUNT(*) AS c FROM hits WHERE "URL" L
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.SearchPhrase, min(hits.URL), count(Int64(1)) AS count(*) AS c
+02)--Projection: hits.SearchPhrase, "min(hits.URL)", "count(Int64(1))" AS count(*) AS c
 03)----Aggregate: groupBy=[[hits.SearchPhrase]], aggr=[[min(hits.URL), count(Int64(1))]]
 04)------SubqueryAlias: hits
 05)--------Filter: hits_raw.SearchPhrase != Utf8View("") AND hits_raw.URL LIKE Utf8View("%google%")
@@ -608,7 +608,7 @@ EXPLAIN SELECT "SearchPhrase", MIN("URL"), MIN("Title"), COUNT(*) AS c, COUNT(DI
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.SearchPhrase, min(hits.URL), min(hits.Title), count(Int64(1)) AS count(*) AS c, count(DISTINCT hits.UserID)
+02)--Projection: hits.SearchPhrase, "min(hits.URL)", "min(hits.Title)", "count(Int64(1))" AS count(*) AS c, "count(DISTINCT hits.UserID)"
 03)----Aggregate: groupBy=[[hits.SearchPhrase]], aggr=[[min(hits.URL), min(hits.Title), count(Int64(1)), count(DISTINCT hits.UserID)]]
 04)------SubqueryAlias: hits
 05)--------Filter: hits_raw.SearchPhrase != Utf8View("") AND hits_raw.Title LIKE Utf8View("%Google%") AND hits_raw.URL NOT LIKE Utf8View("%.google.%")
@@ -724,8 +724,8 @@ EXPLAIN SELECT "CounterID", AVG(octet_length("URL")) AS l, COUNT(*) AS c FROM hi
 ----
 logical_plan
 01)Sort: l DESC NULLS FIRST, fetch=25
-02)--Projection: hits.CounterID, avg(octet_length(hits.URL)) AS l, count(Int64(1)) AS count(*) AS c
-03)----Filter: count(Int64(1)) > Int64(100000)
+02)--Projection: hits.CounterID, "avg(octet_length(hits.URL))" AS l, "count(Int64(1))" AS count(*) AS c
+03)----Filter: "count(Int64(1))" > Int64(100000)
 04)------Aggregate: groupBy=[[hits.CounterID]], aggr=[[avg(CAST(octet_length(hits.URL) AS Float64)), count(Int64(1))]]
 05)--------SubqueryAlias: hits
 06)----------Filter: hits_raw.URL != Utf8View("")
@@ -738,7 +738,7 @@ physical_plan
 05)--------AggregateExec: mode=FinalPartitioned, gby=[CounterID@0 as CounterID], aggr=[avg(octet_length(hits.URL)), count(Int64(1))]
 06)----------RepartitionExec: partitioning=Hash([CounterID@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[CounterID@0 as CounterID], aggr=[avg(octet_length(hits.URL)), count(Int64(1))]
-08)--------------FilterExec: URL@1 !=
+08)--------------FilterExec: URL@1 != 
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CounterID, URL], file_type=parquet, predicate=URL@13 != , pruning_predicate=URL_null_count@2 != row_count@3 AND (URL_min@0 !=  OR  != URL_max@1), required_guarantees=[URL not in ()]
 
@@ -752,8 +752,8 @@ EXPLAIN SELECT REGEXP_REPLACE("Referer", '^https?://(?:www\.)?([^/]+)/.*$', '\1'
 ----
 logical_plan
 01)Sort: l DESC NULLS FIRST, fetch=25
-02)--Projection: regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1")) AS k, avg(octet_length(hits.Referer)) AS l, count(Int64(1)) AS count(*) AS c, min(hits.Referer)
-03)----Filter: count(Int64(1)) > Int64(100000)
+02)--Projection: "regexp_replace(hits.Referer,Utf8(""^https?://(?:www\.)?([^/]+)/.*$""),Utf8(""\1""))" AS k, "avg(octet_length(hits.Referer))" AS l, "count(Int64(1))" AS count(*) AS c, "min(hits.Referer)"
+03)----Filter: "count(Int64(1))" > Int64(100000)
 04)------Aggregate: groupBy=[[regexp_replace(hits.Referer, Utf8View("^https?://(?:www\.)?([^/]+)/.*$"), Utf8View("\1")) AS regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))]], aggr=[[avg(CAST(octet_length(hits.Referer) AS Float64)), count(Int64(1)), min(hits.Referer)]]
 05)--------SubqueryAlias: hits
 06)----------Filter: hits_raw.Referer != Utf8View("")
@@ -766,7 +766,7 @@ physical_plan
 05)--------AggregateExec: mode=FinalPartitioned, gby=[regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0 as regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))], aggr=[avg(octet_length(hits.Referer)), count(Int64(1)), min(hits.Referer)]
 06)----------RepartitionExec: partitioning=Hash([regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[regexp_replace(Referer@0, ^https?://(?:www\.)?([^/]+)/.*$, \1) as regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))], aggr=[avg(octet_length(hits.Referer)), count(Int64(1)), min(hits.Referer)]
-08)--------------FilterExec: Referer@0 !=
+08)--------------FilterExec: Referer@0 != 
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[Referer], file_type=parquet, predicate=Referer@14 != , pruning_predicate=Referer_null_count@2 != row_count@3 AND (Referer_min@0 !=  OR  != Referer_max@1), required_guarantees=[Referer not in ()]
 
@@ -779,16 +779,16 @@ query TT
 EXPLAIN SELECT SUM("ResolutionWidth"), SUM("ResolutionWidth" + 1), SUM("ResolutionWidth" + 2), SUM("ResolutionWidth" + 3), SUM("ResolutionWidth" + 4), SUM("ResolutionWidth" + 5), SUM("ResolutionWidth" + 6), SUM("ResolutionWidth" + 7), SUM("ResolutionWidth" + 8), SUM("ResolutionWidth" + 9), SUM("ResolutionWidth" + 10), SUM("ResolutionWidth" + 11), SUM("ResolutionWidth" + 12), SUM("ResolutionWidth" + 13), SUM("ResolutionWidth" + 14), SUM("ResolutionWidth" + 15), SUM("ResolutionWidth" + 16), SUM("ResolutionWidth" + 17), SUM("ResolutionWidth" + 18), SUM("ResolutionWidth" + 19), SUM("ResolutionWidth" + 20), SUM("ResolutionWidth" + 21), SUM("ResolutionWidth" + 22), SUM("ResolutionWidth" + 23), SUM("ResolutionWidth" + 24), SUM("ResolutionWidth" + 25), SUM("ResolutionWidth" + 26), SUM("ResolutionWidth" + 27), SUM("ResolutionWidth" + 28), SUM("ResolutionWidth" + 29), SUM("ResolutionWidth" + 30), SUM("ResolutionWidth" + 31), SUM("ResolutionWidth" + 32), SUM("ResolutionWidth" + 33), SUM("ResolutionWidth" + 34), SUM("ResolutionWidth" + 35), SUM("ResolutionWidth" + 36), SUM("ResolutionWidth" + 37), SUM("ResolutionWidth" + 38), SUM("ResolutionWidth" + 39), SUM("ResolutionWidth" + 40), SUM("ResolutionWidth" + 41), SUM("ResolutionWidth" + 42), SUM("ResolutionWidth" + 43), SUM("ResolutionWidth" + 44), SUM("ResolutionWidth" + 45), SUM("ResolutionWidth" + 46), SUM("ResolutionWidth" + 47), SUM("ResolutionWidth" + 48), SUM("ResolutionWidth" + 49), SUM("ResolutionWidth" + 50), SUM("ResolutionWidth" + 51), SUM("ResolutionWidth" + 52), SUM("ResolutionWidth" + 53), SUM("ResolutionWidth" + 54), SUM("ResolutionWidth" + 55), SUM("ResolutionWidth" + 56), SUM("ResolutionWidth" + 57), SUM("ResolutionWidth" + 58), SUM("ResolutionWidth" + 59), SUM("ResolutionWidth" + 60), SUM("ResolutionWidth" + 61), SUM("ResolutionWidth" + 62), SUM("ResolutionWidth" + 63), SUM("ResolutionWidth" + 64), SUM("ResolutionWidth" + 65), SUM("ResolutionWidth" + 66), SUM("ResolutionWidth" + 67), SUM("ResolutionWidth" + 68), SUM("ResolutionWidth" + 69), SUM("ResolutionWidth" + 70), SUM("ResolutionWidth" + 71), SUM("ResolutionWidth" + 72), SUM("ResolutionWidth" + 73), SUM("ResolutionWidth" + 74), SUM("ResolutionWidth" + 75), SUM("ResolutionWidth" + 76), SUM("ResolutionWidth" + 77), SUM("ResolutionWidth" + 78), SUM("ResolutionWidth" + 79), SUM("ResolutionWidth" + 80), SUM("ResolutionWidth" + 81), SUM("ResolutionWidth" + 82), SUM("ResolutionWidth" + 83), SUM("ResolutionWidth" + 84), SUM("ResolutionWidth" + 85), SUM("ResolutionWidth" + 86), SUM("ResolutionWidth" + 87), SUM("ResolutionWidth" + 88), SUM("ResolutionWidth" + 89) FROM hits;
 ----
 logical_plan
-01)Projection: sum(hits.ResolutionWidth), sum(hits.ResolutionWidth) + __common_expr_1 AS sum(hits.ResolutionWidth + Int64(1)), sum(hits.ResolutionWidth) + Int64(2) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(2)), sum(hits.ResolutionWidth) + Int64(3) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(3)), sum(hits.ResolutionWidth) + Int64(4) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(4)), sum(hits.ResolutionWidth) + Int64(5) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(5)), sum(hits.ResolutionWidth) + Int64(6) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(6)), sum(hits.ResolutionWidth) + Int64(7) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(7)), sum(hits.ResolutionWidth) + Int64(8) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(8)), sum(hits.ResolutionWidth) + Int64(9) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(9)), sum(hits.ResolutionWidth) + Int64(10) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(10)), sum(hits.ResolutionWidth) + Int64(11) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(11)), sum(hits.ResolutionWidth) + Int64(12) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(12)), sum(hits.ResolutionWidth) + Int64(13) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(13)), sum(hits.ResolutionWidth) + Int64(14) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(14)), sum(hits.ResolutionWidth) + Int64(15) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(15)), sum(hits.ResolutionWidth) + Int64(16) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(16)), sum(hits.ResolutionWidth) + Int64(17) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(17)), sum(hits.ResolutionWidth) + Int64(18) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(18)), sum(hits.ResolutionWidth) + Int64(19) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(19)), sum(hits.ResolutionWidth) + Int64(20) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(20)), sum(hits.ResolutionWidth) + Int64(21) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(21)), sum(hits.ResolutionWidth) + Int64(22) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(22)), sum(hits.ResolutionWidth) + Int64(23) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(23)), sum(hits.ResolutionWidth) + Int64(24) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(24)), sum(hits.ResolutionWidth) + Int64(25) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(25)), sum(hits.ResolutionWidth) + Int64(26) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(26)), sum(hits.ResolutionWidth) + Int64(27) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(27)), sum(hits.ResolutionWidth) + Int64(28) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(28)), sum(hits.ResolutionWidth) + Int64(29) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(29)), sum(hits.ResolutionWidth) + Int64(30) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(30)), sum(hits.ResolutionWidth) + Int64(31) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(31)), sum(hits.ResolutionWidth) + Int64(32) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(32)), sum(hits.ResolutionWidth) + Int64(33) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(33)), sum(hits.ResolutionWidth) + Int64(34) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(34)), sum(hits.ResolutionWidth) + Int64(35) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(35)), sum(hits.ResolutionWidth) + Int64(36) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(36)), sum(hits.ResolutionWidth) + Int64(37) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(37)), sum(hits.ResolutionWidth) + Int64(38) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(38)), sum(hits.ResolutionWidth) + Int64(39) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(39)), sum(hits.ResolutionWidth) + Int64(40) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(40)), sum(hits.ResolutionWidth) + Int64(41) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(41)), sum(hits.ResolutionWidth) + Int64(42) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(42)), sum(hits.ResolutionWidth) + Int64(43) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(43)), sum(hits.ResolutionWidth) + Int64(44) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(44)), sum(hits.ResolutionWidth) + Int64(45) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(45)), sum(hits.ResolutionWidth) + Int64(46) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(46)), sum(hits.ResolutionWidth) + Int64(47) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(47)), sum(hits.ResolutionWidth) + Int64(48) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(48)), sum(hits.ResolutionWidth) + Int64(49) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(49)), sum(hits.ResolutionWidth) + Int64(50) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(50)), sum(hits.ResolutionWidth) + Int64(51) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(51)), sum(hits.ResolutionWidth) + Int64(52) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(52)), sum(hits.ResolutionWidth) + Int64(53) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(53)), sum(hits.ResolutionWidth) + Int64(54) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(54)), sum(hits.ResolutionWidth) + Int64(55) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(55)), sum(hits.ResolutionWidth) + Int64(56) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(56)), sum(hits.ResolutionWidth) + Int64(57) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(57)), sum(hits.ResolutionWidth) + Int64(58) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(58)), sum(hits.ResolutionWidth) + Int64(59) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(59)), sum(hits.ResolutionWidth) + Int64(60) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(60)), sum(hits.ResolutionWidth) + Int64(61) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(61)), sum(hits.ResolutionWidth) + Int64(62) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(62)), sum(hits.ResolutionWidth) + Int64(63) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(63)), sum(hits.ResolutionWidth) + Int64(64) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(64)), sum(hits.ResolutionWidth) + Int64(65) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(65)), sum(hits.ResolutionWidth) + Int64(66) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(66)), sum(hits.ResolutionWidth) + Int64(67) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(67)), sum(hits.ResolutionWidth) + Int64(68) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(68)), sum(hits.ResolutionWidth) + Int64(69) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(69)), sum(hits.ResolutionWidth) + Int64(70) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(70)), sum(hits.ResolutionWidth) + Int64(71) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(71)), sum(hits.ResolutionWidth) + Int64(72) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(72)), sum(hits.ResolutionWidth) + Int64(73) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(73)), sum(hits.ResolutionWidth) + Int64(74) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(74)), sum(hits.ResolutionWidth) + Int64(75) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(75)), sum(hits.ResolutionWidth) + Int64(76) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(76)), sum(hits.ResolutionWidth) + Int64(77) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(77)), sum(hits.ResolutionWidth) + Int64(78) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(78)), sum(hits.ResolutionWidth) + Int64(79) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(79)), sum(hits.ResolutionWidth) + Int64(80) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(80)), sum(hits.ResolutionWidth) + Int64(81) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(81)), sum(hits.ResolutionWidth) + Int64(82) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(82)), sum(hits.ResolutionWidth) + Int64(83) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(83)), sum(hits.ResolutionWidth) + Int64(84) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(84)), sum(hits.ResolutionWidth) + Int64(85) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(85)), sum(hits.ResolutionWidth) + Int64(86) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(86)), sum(hits.ResolutionWidth) + Int64(87) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(87)), sum(hits.ResolutionWidth) + Int64(88) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(88)), sum(hits.ResolutionWidth) + Int64(89) * __common_expr_1 AS sum(hits.ResolutionWidth + Int64(89))
-02)--Projection: CAST(count(hits.ResolutionWidth) AS Int64) AS __common_expr_1, sum(hits.ResolutionWidth)
-03)----Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_2 AS hits.ResolutionWidth), count(__common_expr_2 AS hits.ResolutionWidth)]]
-04)------Projection: CAST(hits.ResolutionWidth AS Int64) AS __common_expr_2
+01)Projection: "sum(hits.ResolutionWidth)", "sum(hits.ResolutionWidth)" + "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(1)), "sum(hits.ResolutionWidth)" + Int64(2) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(2)), "sum(hits.ResolutionWidth)" + Int64(3) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(3)), "sum(hits.ResolutionWidth)" + Int64(4) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(4)), "sum(hits.ResolutionWidth)" + Int64(5) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(5)), "sum(hits.ResolutionWidth)" + Int64(6) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(6)), "sum(hits.ResolutionWidth)" + Int64(7) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(7)), "sum(hits.ResolutionWidth)" + Int64(8) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(8)), "sum(hits.ResolutionWidth)" + Int64(9) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(9)), "sum(hits.ResolutionWidth)" + Int64(10) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(10)), "sum(hits.ResolutionWidth)" + Int64(11) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(11)), "sum(hits.ResolutionWidth)" + Int64(12) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(12)), "sum(hits.ResolutionWidth)" + Int64(13) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(13)), "sum(hits.ResolutionWidth)" + Int64(14) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(14)), "sum(hits.ResolutionWidth)" + Int64(15) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(15)), "sum(hits.ResolutionWidth)" + Int64(16) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(16)), "sum(hits.ResolutionWidth)" + Int64(17) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(17)), "sum(hits.ResolutionWidth)" + Int64(18) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(18)), "sum(hits.ResolutionWidth)" + Int64(19) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(19)), "sum(hits.ResolutionWidth)" + Int64(20) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(20)), "sum(hits.ResolutionWidth)" + Int64(21) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(21)), "sum(hits.ResolutionWidth)" + Int64(22) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(22)), "sum(hits.ResolutionWidth)" + Int64(23) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(23)), "sum(hits.ResolutionWidth)" + Int64(24) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(24)), "sum(hits.ResolutionWidth)" + Int64(25) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(25)), "sum(hits.ResolutionWidth)" + Int64(26) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(26)), "sum(hits.ResolutionWidth)" + Int64(27) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(27)), "sum(hits.ResolutionWidth)" + Int64(28) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(28)), "sum(hits.ResolutionWidth)" + Int64(29) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(29)), "sum(hits.ResolutionWidth)" + Int64(30) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(30)), "sum(hits.ResolutionWidth)" + Int64(31) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(31)), "sum(hits.ResolutionWidth)" + Int64(32) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(32)), "sum(hits.ResolutionWidth)" + Int64(33) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(33)), "sum(hits.ResolutionWidth)" + Int64(34) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(34)), "sum(hits.ResolutionWidth)" + Int64(35) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(35)), "sum(hits.ResolutionWidth)" + Int64(36) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(36)), "sum(hits.ResolutionWidth)" + Int64(37) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(37)), "sum(hits.ResolutionWidth)" + Int64(38) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(38)), "sum(hits.ResolutionWidth)" + Int64(39) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(39)), "sum(hits.ResolutionWidth)" + Int64(40) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(40)), "sum(hits.ResolutionWidth)" + Int64(41) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(41)), "sum(hits.ResolutionWidth)" + Int64(42) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(42)), "sum(hits.ResolutionWidth)" + Int64(43) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(43)), "sum(hits.ResolutionWidth)" + Int64(44) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(44)), "sum(hits.ResolutionWidth)" + Int64(45) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(45)), "sum(hits.ResolutionWidth)" + Int64(46) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(46)), "sum(hits.ResolutionWidth)" + Int64(47) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(47)), "sum(hits.ResolutionWidth)" + Int64(48) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(48)), "sum(hits.ResolutionWidth)" + Int64(49) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(49)), "sum(hits.ResolutionWidth)" + Int64(50) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(50)), "sum(hits.ResolutionWidth)" + Int64(51) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(51)), "sum(hits.ResolutionWidth)" + Int64(52) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(52)), "sum(hits.ResolutionWidth)" + Int64(53) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(53)), "sum(hits.ResolutionWidth)" + Int64(54) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(54)), "sum(hits.ResolutionWidth)" + Int64(55) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(55)), "sum(hits.ResolutionWidth)" + Int64(56) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(56)), "sum(hits.ResolutionWidth)" + Int64(57) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(57)), "sum(hits.ResolutionWidth)" + Int64(58) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(58)), "sum(hits.ResolutionWidth)" + Int64(59) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(59)), "sum(hits.ResolutionWidth)" + Int64(60) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(60)), "sum(hits.ResolutionWidth)" + Int64(61) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(61)), "sum(hits.ResolutionWidth)" + Int64(62) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(62)), "sum(hits.ResolutionWidth)" + Int64(63) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(63)), "sum(hits.ResolutionWidth)" + Int64(64) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(64)), "sum(hits.ResolutionWidth)" + Int64(65) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(65)), "sum(hits.ResolutionWidth)" + Int64(66) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(66)), "sum(hits.ResolutionWidth)" + Int64(67) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(67)), "sum(hits.ResolutionWidth)" + Int64(68) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(68)), "sum(hits.ResolutionWidth)" + Int64(69) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(69)), "sum(hits.ResolutionWidth)" + Int64(70) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(70)), "sum(hits.ResolutionWidth)" + Int64(71) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(71)), "sum(hits.ResolutionWidth)" + Int64(72) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(72)), "sum(hits.ResolutionWidth)" + Int64(73) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(73)), "sum(hits.ResolutionWidth)" + Int64(74) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(74)), "sum(hits.ResolutionWidth)" + Int64(75) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(75)), "sum(hits.ResolutionWidth)" + Int64(76) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(76)), "sum(hits.ResolutionWidth)" + Int64(77) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(77)), "sum(hits.ResolutionWidth)" + Int64(78) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(78)), "sum(hits.ResolutionWidth)" + Int64(79) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(79)), "sum(hits.ResolutionWidth)" + Int64(80) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(80)), "sum(hits.ResolutionWidth)" + Int64(81) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(81)), "sum(hits.ResolutionWidth)" + Int64(82) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(82)), "sum(hits.ResolutionWidth)" + Int64(83) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(83)), "sum(hits.ResolutionWidth)" + Int64(84) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(84)), "sum(hits.ResolutionWidth)" + Int64(85) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(85)), "sum(hits.ResolutionWidth)" + Int64(86) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(86)), "sum(hits.ResolutionWidth)" + Int64(87) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(87)), "sum(hits.ResolutionWidth)" + Int64(88) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(88)), "sum(hits.ResolutionWidth)" + Int64(89) * "count(hits.ResolutionWidth)" AS sum(hits.ResolutionWidth + Int64(89))
+02)--Projection: CAST("count(hits.ResolutionWidth)" AS Int64), "sum(hits.ResolutionWidth)"
+03)----Aggregate: groupBy=[[]], aggr=[[sum("hits.ResolutionWidth"), count("hits.ResolutionWidth")]]
+04)------Projection: CAST(hits.ResolutionWidth AS Int64)
 05)--------SubqueryAlias: hits
 06)----------TableScan: hits_raw projection=[ResolutionWidth]
 physical_plan
 01)ProjectionExec: expr=[sum(hits.ResolutionWidth)@0 as sum(hits.ResolutionWidth), sum(hits.ResolutionWidth)@0 + count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(1)), sum(hits.ResolutionWidth)@0 + 2 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(2)), sum(hits.ResolutionWidth)@0 + 3 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(3)), sum(hits.ResolutionWidth)@0 + 4 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(4)), sum(hits.ResolutionWidth)@0 + 5 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(5)), sum(hits.ResolutionWidth)@0 + 6 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(6)), sum(hits.ResolutionWidth)@0 + 7 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(7)), sum(hits.ResolutionWidth)@0 + 8 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(8)), sum(hits.ResolutionWidth)@0 + 9 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(9)), sum(hits.ResolutionWidth)@0 + 10 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(10)), sum(hits.ResolutionWidth)@0 + 11 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(11)), sum(hits.ResolutionWidth)@0 + 12 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(12)), sum(hits.ResolutionWidth)@0 + 13 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(13)), sum(hits.ResolutionWidth)@0 + 14 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(14)), sum(hits.ResolutionWidth)@0 + 15 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(15)), sum(hits.ResolutionWidth)@0 + 16 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(16)), sum(hits.ResolutionWidth)@0 + 17 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(17)), sum(hits.ResolutionWidth)@0 + 18 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(18)), sum(hits.ResolutionWidth)@0 + 19 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(19)), sum(hits.ResolutionWidth)@0 + 20 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(20)), sum(hits.ResolutionWidth)@0 + 21 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(21)), sum(hits.ResolutionWidth)@0 + 22 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(22)), sum(hits.ResolutionWidth)@0 + 23 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(23)), sum(hits.ResolutionWidth)@0 + 24 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(24)), sum(hits.ResolutionWidth)@0 + 25 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(25)), sum(hits.ResolutionWidth)@0 + 26 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(26)), sum(hits.ResolutionWidth)@0 + 27 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(27)), sum(hits.ResolutionWidth)@0 + 28 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(28)), sum(hits.ResolutionWidth)@0 + 29 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(29)), sum(hits.ResolutionWidth)@0 + 30 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(30)), sum(hits.ResolutionWidth)@0 + 31 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(31)), sum(hits.ResolutionWidth)@0 + 32 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(32)), sum(hits.ResolutionWidth)@0 + 33 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(33)), sum(hits.ResolutionWidth)@0 + 34 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(34)), sum(hits.ResolutionWidth)@0 + 35 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(35)), sum(hits.ResolutionWidth)@0 + 36 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(36)), sum(hits.ResolutionWidth)@0 + 37 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(37)), sum(hits.ResolutionWidth)@0 + 38 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(38)), sum(hits.ResolutionWidth)@0 + 39 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(39)), sum(hits.ResolutionWidth)@0 + 40 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(40)), sum(hits.ResolutionWidth)@0 + 41 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(41)), sum(hits.ResolutionWidth)@0 + 42 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(42)), sum(hits.ResolutionWidth)@0 + 43 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(43)), sum(hits.ResolutionWidth)@0 + 44 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(44)), sum(hits.ResolutionWidth)@0 + 45 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(45)), sum(hits.ResolutionWidth)@0 + 46 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(46)), sum(hits.ResolutionWidth)@0 + 47 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(47)), sum(hits.ResolutionWidth)@0 + 48 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(48)), sum(hits.ResolutionWidth)@0 + 49 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(49)), sum(hits.ResolutionWidth)@0 + 50 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(50)), sum(hits.ResolutionWidth)@0 + 51 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(51)), sum(hits.ResolutionWidth)@0 + 52 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(52)), sum(hits.ResolutionWidth)@0 + 53 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(53)), sum(hits.ResolutionWidth)@0 + 54 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(54)), sum(hits.ResolutionWidth)@0 + 55 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(55)), sum(hits.ResolutionWidth)@0 + 56 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(56)), sum(hits.ResolutionWidth)@0 + 57 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(57)), sum(hits.ResolutionWidth)@0 + 58 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(58)), sum(hits.ResolutionWidth)@0 + 59 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(59)), sum(hits.ResolutionWidth)@0 + 60 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(60)), sum(hits.ResolutionWidth)@0 + 61 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(61)), sum(hits.ResolutionWidth)@0 + 62 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(62)), sum(hits.ResolutionWidth)@0 + 63 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(63)), sum(hits.ResolutionWidth)@0 + 64 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(64)), sum(hits.ResolutionWidth)@0 + 65 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(65)), sum(hits.ResolutionWidth)@0 + 66 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(66)), sum(hits.ResolutionWidth)@0 + 67 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(67)), sum(hits.ResolutionWidth)@0 + 68 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(68)), sum(hits.ResolutionWidth)@0 + 69 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(69)), sum(hits.ResolutionWidth)@0 + 70 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(70)), sum(hits.ResolutionWidth)@0 + 71 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(71)), sum(hits.ResolutionWidth)@0 + 72 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(72)), sum(hits.ResolutionWidth)@0 + 73 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(73)), sum(hits.ResolutionWidth)@0 + 74 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(74)), sum(hits.ResolutionWidth)@0 + 75 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(75)), sum(hits.ResolutionWidth)@0 + 76 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(76)), sum(hits.ResolutionWidth)@0 + 77 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(77)), sum(hits.ResolutionWidth)@0 + 78 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(78)), sum(hits.ResolutionWidth)@0 + 79 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(79)), sum(hits.ResolutionWidth)@0 + 80 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(80)), sum(hits.ResolutionWidth)@0 + 81 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(81)), sum(hits.ResolutionWidth)@0 + 82 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(82)), sum(hits.ResolutionWidth)@0 + 83 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(83)), sum(hits.ResolutionWidth)@0 + 84 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(84)), sum(hits.ResolutionWidth)@0 + 85 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(85)), sum(hits.ResolutionWidth)@0 + 86 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(86)), sum(hits.ResolutionWidth)@0 + 87 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(87)), sum(hits.ResolutionWidth)@0 + 88 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(88)), sum(hits.ResolutionWidth)@0 + 89 * count(hits.ResolutionWidth)@1 as sum(hits.ResolutionWidth + Int64(89))]
 02)--AggregateExec: mode=Single, gby=[], aggr=[sum(hits.ResolutionWidth), count(hits.ResolutionWidth)]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CAST(ResolutionWidth@20 AS Int64) as __common_expr_2], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CAST(ResolutionWidth@20 AS Int64) as hits.ResolutionWidth], file_type=parquet
 
 query IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
 SELECT SUM("ResolutionWidth"), SUM("ResolutionWidth" + 1), SUM("ResolutionWidth" + 2), SUM("ResolutionWidth" + 3), SUM("ResolutionWidth" + 4), SUM("ResolutionWidth" + 5), SUM("ResolutionWidth" + 6), SUM("ResolutionWidth" + 7), SUM("ResolutionWidth" + 8), SUM("ResolutionWidth" + 9), SUM("ResolutionWidth" + 10), SUM("ResolutionWidth" + 11), SUM("ResolutionWidth" + 12), SUM("ResolutionWidth" + 13), SUM("ResolutionWidth" + 14), SUM("ResolutionWidth" + 15), SUM("ResolutionWidth" + 16), SUM("ResolutionWidth" + 17), SUM("ResolutionWidth" + 18), SUM("ResolutionWidth" + 19), SUM("ResolutionWidth" + 20), SUM("ResolutionWidth" + 21), SUM("ResolutionWidth" + 22), SUM("ResolutionWidth" + 23), SUM("ResolutionWidth" + 24), SUM("ResolutionWidth" + 25), SUM("ResolutionWidth" + 26), SUM("ResolutionWidth" + 27), SUM("ResolutionWidth" + 28), SUM("ResolutionWidth" + 29), SUM("ResolutionWidth" + 30), SUM("ResolutionWidth" + 31), SUM("ResolutionWidth" + 32), SUM("ResolutionWidth" + 33), SUM("ResolutionWidth" + 34), SUM("ResolutionWidth" + 35), SUM("ResolutionWidth" + 36), SUM("ResolutionWidth" + 37), SUM("ResolutionWidth" + 38), SUM("ResolutionWidth" + 39), SUM("ResolutionWidth" + 40), SUM("ResolutionWidth" + 41), SUM("ResolutionWidth" + 42), SUM("ResolutionWidth" + 43), SUM("ResolutionWidth" + 44), SUM("ResolutionWidth" + 45), SUM("ResolutionWidth" + 46), SUM("ResolutionWidth" + 47), SUM("ResolutionWidth" + 48), SUM("ResolutionWidth" + 49), SUM("ResolutionWidth" + 50), SUM("ResolutionWidth" + 51), SUM("ResolutionWidth" + 52), SUM("ResolutionWidth" + 53), SUM("ResolutionWidth" + 54), SUM("ResolutionWidth" + 55), SUM("ResolutionWidth" + 56), SUM("ResolutionWidth" + 57), SUM("ResolutionWidth" + 58), SUM("ResolutionWidth" + 59), SUM("ResolutionWidth" + 60), SUM("ResolutionWidth" + 61), SUM("ResolutionWidth" + 62), SUM("ResolutionWidth" + 63), SUM("ResolutionWidth" + 64), SUM("ResolutionWidth" + 65), SUM("ResolutionWidth" + 66), SUM("ResolutionWidth" + 67), SUM("ResolutionWidth" + 68), SUM("ResolutionWidth" + 69), SUM("ResolutionWidth" + 70), SUM("ResolutionWidth" + 71), SUM("ResolutionWidth" + 72), SUM("ResolutionWidth" + 73), SUM("ResolutionWidth" + 74), SUM("ResolutionWidth" + 75), SUM("ResolutionWidth" + 76), SUM("ResolutionWidth" + 77), SUM("ResolutionWidth" + 78), SUM("ResolutionWidth" + 79), SUM("ResolutionWidth" + 80), SUM("ResolutionWidth" + 81), SUM("ResolutionWidth" + 82), SUM("ResolutionWidth" + 83), SUM("ResolutionWidth" + 84), SUM("ResolutionWidth" + 85), SUM("ResolutionWidth" + 86), SUM("ResolutionWidth" + 87), SUM("ResolutionWidth" + 88), SUM("ResolutionWidth" + 89) FROM hits;
@@ -801,7 +801,7 @@ EXPLAIN SELECT "SearchEngineID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AV
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.SearchEngineID, hits.ClientIP, count(Int64(1)) AS count(*) AS c, sum(hits.IsRefresh), avg(hits.ResolutionWidth)
+02)--Projection: hits.SearchEngineID, hits.ClientIP, "count(Int64(1))" AS count(*) AS c, "sum(hits.IsRefresh)", "avg(hits.ResolutionWidth)"
 03)----Aggregate: groupBy=[[hits.SearchEngineID, hits.ClientIP]], aggr=[[count(Int64(1)), sum(CAST(hits.IsRefresh AS Int64)), avg(CAST(hits.ResolutionWidth AS Float64))]]
 04)------SubqueryAlias: hits
 05)--------Projection: hits_raw.ClientIP, hits_raw.IsRefresh, hits_raw.ResolutionWidth, hits_raw.SearchEngineID
@@ -828,7 +828,7 @@ EXPLAIN SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("Reso
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.WatchID, hits.ClientIP, count(Int64(1)) AS count(*) AS c, sum(hits.IsRefresh), avg(hits.ResolutionWidth)
+02)--Projection: hits.WatchID, hits.ClientIP, "count(Int64(1))" AS count(*) AS c, "sum(hits.IsRefresh)", "avg(hits.ResolutionWidth)"
 03)----Aggregate: groupBy=[[hits.WatchID, hits.ClientIP]], aggr=[[count(Int64(1)), sum(CAST(hits.IsRefresh AS Int64)), avg(CAST(hits.ResolutionWidth AS Float64))]]
 04)------SubqueryAlias: hits
 05)--------Projection: hits_raw.WatchID, hits_raw.ClientIP, hits_raw.IsRefresh, hits_raw.ResolutionWidth
@@ -855,7 +855,7 @@ EXPLAIN SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("Reso
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.WatchID, hits.ClientIP, count(Int64(1)) AS count(*) AS c, sum(hits.IsRefresh), avg(hits.ResolutionWidth)
+02)--Projection: hits.WatchID, hits.ClientIP, "count(Int64(1))" AS count(*) AS c, "sum(hits.IsRefresh)", "avg(hits.ResolutionWidth)"
 03)----Aggregate: groupBy=[[hits.WatchID, hits.ClientIP]], aggr=[[count(Int64(1)), sum(CAST(hits.IsRefresh AS Int64)), avg(CAST(hits.ResolutionWidth AS Float64))]]
 04)------SubqueryAlias: hits
 05)--------TableScan: hits_raw projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth]
@@ -888,7 +888,7 @@ EXPLAIN SELECT "URL", COUNT(*) AS c FROM hits GROUP BY "URL" ORDER BY c DESC LIM
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.URL, count(Int64(1)) AS count(*) AS c
+02)--Projection: hits.URL, "count(Int64(1))" AS count(*) AS c
 03)----Aggregate: groupBy=[[hits.URL]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: hits
 05)--------TableScan: hits_raw projection=[URL]
@@ -917,7 +917,7 @@ EXPLAIN SELECT 1, "URL", COUNT(*) AS c FROM hits GROUP BY 1, "URL" ORDER BY c DE
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: Int64(1), hits.URL, count(Int64(1)) AS c
+02)--Projection: Int64(1), hits.URL, "count(Int64(1))" AS c
 03)----Aggregate: groupBy=[[hits.URL]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: hits
 05)--------TableScan: hits_raw projection=[URL]
@@ -946,16 +946,16 @@ EXPLAIN SELECT "ClientIP", "ClientIP" - 1, "ClientIP" - 2, "ClientIP" - 3, COUNT
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.ClientIP, __common_expr_1 - Int64(1) AS hits.ClientIP - Int64(1), __common_expr_1 - Int64(2) AS hits.ClientIP - Int64(2), __common_expr_1 - Int64(3) AS hits.ClientIP - Int64(3), count(Int64(1)) AS c
-03)----Projection: CAST(hits.ClientIP AS Int64) AS __common_expr_1, hits.ClientIP, count(Int64(1))
+02)--Projection: hits.ClientIP, "hits.ClientIP" - Int64(1), "hits.ClientIP" - Int64(2), "hits.ClientIP" - Int64(3), "count(Int64(1))" AS c
+03)----Projection: CAST(hits.ClientIP AS Int64), hits.ClientIP, "count(Int64(1))"
 04)------Aggregate: groupBy=[[hits.ClientIP]], aggr=[[count(Int64(1))]]
 05)--------SubqueryAlias: hits
 06)----------TableScan: hits_raw projection=[ClientIP]
 physical_plan
 01)SortPreservingMergeExec: [c@4 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[c@4 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[ClientIP@1 as ClientIP, __common_expr_1@0 - 1 as hits.ClientIP - Int64(1), __common_expr_1@0 - 2 as hits.ClientIP - Int64(2), __common_expr_1@0 - 3 as hits.ClientIP - Int64(3), count(Int64(1))@2 as c]
-04)------ProjectionExec: expr=[CAST(ClientIP@0 AS Int64) as __common_expr_1, ClientIP@0 as ClientIP, count(Int64(1))@1 as count(Int64(1))]
+03)----ProjectionExec: expr=[ClientIP@1 as ClientIP, hits.ClientIP@0 - 1 as hits.ClientIP - Int64(1), hits.ClientIP@0 - 2 as hits.ClientIP - Int64(2), hits.ClientIP@0 - 3 as hits.ClientIP - Int64(3), count(Int64(1))@2 as c]
+04)------ProjectionExec: expr=[CAST(ClientIP@0 AS Int64) as hits.ClientIP, ClientIP@0 as ClientIP, count(Int64(1))@1 as count(Int64(1))]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[ClientIP@0 as ClientIP], aggr=[count(Int64(1))]
 06)----------RepartitionExec: partitioning=Hash([ClientIP@0], 4), input_partitions=1
 07)------------AggregateExec: mode=Partial, gby=[ClientIP@0 as ClientIP], aggr=[count(Int64(1))]
@@ -975,7 +975,7 @@ EXPLAIN SELECT "URL", COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND
 ----
 logical_plan
 01)Sort: pageviews DESC NULLS FIRST, fetch=10
-02)--Projection: hits.URL, count(Int64(1)) AS count(*) AS pageviews
+02)--Projection: hits.URL, "count(Int64(1))" AS count(*) AS pageviews
 03)----Aggregate: groupBy=[[hits.URL]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: hits
 05)--------Projection: hits_raw.URL
@@ -1002,7 +1002,7 @@ EXPLAIN SELECT "Title", COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 A
 ----
 logical_plan
 01)Sort: pageviews DESC NULLS FIRST, fetch=10
-02)--Projection: hits.Title, count(Int64(1)) AS count(*) AS pageviews
+02)--Projection: hits.Title, "count(Int64(1))" AS count(*) AS pageviews
 03)----Aggregate: groupBy=[[hits.Title]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: hits
 05)--------Projection: hits_raw.Title
@@ -1030,7 +1030,7 @@ EXPLAIN SELECT "URL", COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND
 logical_plan
 01)Limit: skip=1000, fetch=10
 02)--Sort: pageviews DESC NULLS FIRST, fetch=1010
-03)----Projection: hits.URL, count(Int64(1)) AS count(*) AS pageviews
+03)----Projection: hits.URL, "count(Int64(1))" AS count(*) AS pageviews
 04)------Aggregate: groupBy=[[hits.URL]], aggr=[[count(Int64(1))]]
 05)--------SubqueryAlias: hits
 06)----------Projection: hits_raw.URL
@@ -1059,7 +1059,7 @@ EXPLAIN SELECT "TraficSourceID", "SearchEngineID", "AdvEngineID", CASE WHEN ("Se
 logical_plan
 01)Limit: skip=1000, fetch=10
 02)--Sort: pageviews DESC NULLS FIRST, fetch=1010
-03)----Projection: hits.TraficSourceID, hits.SearchEngineID, hits.AdvEngineID, CASE WHEN hits.SearchEngineID = Int64(0) AND hits.AdvEngineID = Int64(0) THEN hits.Referer ELSE Utf8("") END AS src, hits.URL AS dst, count(Int64(1)) AS count(*) AS pageviews
+03)----Projection: hits.TraficSourceID, hits.SearchEngineID, hits.AdvEngineID, "CASE WHEN hits.SearchEngineID = Int64(0) AND hits.AdvEngineID = Int64(0) THEN hits.Referer ELSE Utf8("""") END" AS src, hits.URL AS dst, "count(Int64(1))" AS count(*) AS pageviews
 04)------Aggregate: groupBy=[[hits.TraficSourceID, hits.SearchEngineID, hits.AdvEngineID, CASE WHEN hits.SearchEngineID = Int16(0) AND hits.AdvEngineID = Int16(0) THEN hits.Referer ELSE Utf8View("") END AS CASE WHEN hits.SearchEngineID = Int64(0) AND hits.AdvEngineID = Int64(0) THEN hits.Referer ELSE Utf8("") END, hits.URL]], aggr=[[count(Int64(1))]]
 05)--------SubqueryAlias: hits
 06)----------Projection: hits_raw.URL, hits_raw.Referer, hits_raw.TraficSourceID, hits_raw.SearchEngineID, hits_raw.AdvEngineID
@@ -1088,7 +1088,7 @@ EXPLAIN SELECT "URLHash", "EventDate", COUNT(*) AS PageViews FROM hits WHERE "Co
 logical_plan
 01)Limit: skip=100, fetch=10
 02)--Sort: pageviews DESC NULLS FIRST, fetch=110
-03)----Projection: hits.URLHash, hits.EventDate, count(Int64(1)) AS count(*) AS pageviews
+03)----Projection: hits.URLHash, hits.EventDate, "count(Int64(1))" AS count(*) AS pageviews
 04)------Aggregate: groupBy=[[hits.URLHash, hits.EventDate]], aggr=[[count(Int64(1))]]
 05)--------SubqueryAlias: hits
 06)----------Projection: hits_raw.URLHash, CAST(CAST(hits_raw.EventDate AS Int32) AS Date32) AS EventDate
@@ -1118,7 +1118,7 @@ EXPLAIN SELECT "WindowClientWidth", "WindowClientHeight", COUNT(*) AS PageViews 
 logical_plan
 01)Limit: skip=10000, fetch=10
 02)--Sort: pageviews DESC NULLS FIRST, fetch=10010
-03)----Projection: hits.WindowClientWidth, hits.WindowClientHeight, count(Int64(1)) AS count(*) AS pageviews
+03)----Projection: hits.WindowClientWidth, hits.WindowClientHeight, "count(Int64(1))" AS count(*) AS pageviews
 04)------Aggregate: groupBy=[[hits.WindowClientWidth, hits.WindowClientHeight]], aggr=[[count(Int64(1))]]
 05)--------SubqueryAlias: hits
 06)----------Projection: hits_raw.WindowClientWidth, hits_raw.WindowClientHeight
@@ -1147,7 +1147,7 @@ EXPLAIN SELECT DATE_TRUNC('minute', to_timestamp_seconds("EventTime")) AS M, COU
 logical_plan
 01)Limit: skip=1000, fetch=10
 02)--Sort: date_trunc(Utf8("minute"), m) ASC NULLS LAST, fetch=1010
-03)----Projection: date_trunc(Utf8("minute"),to_timestamp_seconds(hits.EventTime)) AS m, count(Int64(1)) AS count(*) AS pageviews
+03)----Projection: "date_trunc(Utf8(""minute""),to_timestamp_seconds(hits.EventTime))" AS m, "count(Int64(1))" AS count(*) AS pageviews
 04)------Aggregate: groupBy=[[date_trunc(Utf8("minute"), to_timestamp_seconds(hits.EventTime))]], aggr=[[count(Int64(1))]]
 05)--------SubqueryAlias: hits
 06)----------Projection: hits_raw.EventTime
@@ -1207,7 +1207,7 @@ query TT
 EXPLAIN SELECT "BrowserCountry",  COUNT(DISTINCT "SocialNetwork"), COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserLanguage"), COUNT(DISTINCT "SocialAction") FROM hits GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 ----
 logical_plan
-01)Sort: count(DISTINCT hits.SocialNetwork) DESC NULLS FIRST, fetch=10
+01)Sort: "count(DISTINCT hits.SocialNetwork)" DESC NULLS FIRST, fetch=10
 02)--Aggregate: groupBy=[[hits.BrowserCountry]], aggr=[[count(DISTINCT hits.SocialNetwork), count(DISTINCT hits.HitColor), count(DISTINCT hits.BrowserLanguage), count(DISTINCT hits.SocialAction)]]
 03)----SubqueryAlias: hits
 04)------TableScan: hits_raw projection=[HitColor, BrowserLanguage, BrowserCountry, SocialNetwork, SocialAction]

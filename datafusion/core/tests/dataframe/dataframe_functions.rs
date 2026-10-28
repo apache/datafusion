@@ -1321,12 +1321,12 @@ async fn test_count_wildcard() -> Result<()> {
 
     let formatted_plan = plan.display_indent_schema().to_string();
     assert_snapshot!(formatted_plan,
-        @r"
-    Sort: count(*) ASC NULLS LAST [count(*):Int64]
-      Projection: count(*) [count(*):Int64]
+        @r#"
+    Sort: "count(*)" ASC NULLS LAST [count(*):Int64]
+      Projection: "count(*)" [count(*):Int64]
         Aggregate: groupBy=[[test.b]], aggr=[[count(Int64(1)) AS count(*)]] [b:UInt32, count(*):Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-    ");
+    "#);
 
     Ok(())
 }

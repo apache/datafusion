@@ -58,7 +58,7 @@ query TT
 EXPLAIN SELECT env, count(*) FROM dim_csv GROUP BY env;
 ----
 logical_plan
-01)Projection: dim_csv.env, count(Int64(1)) AS count(*)
+01)Projection: dim_csv.env, "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[dim_csv.env]], aggr=[[count(Int64(1))]]
 03)----TableScan: dim_csv projection=[env]
 physical_plan
@@ -75,7 +75,7 @@ query TT
 EXPLAIN SELECT env, count(*) FROM dim_parquet GROUP BY env;
 ----
 logical_plan
-01)Projection: dim_parquet.env, count(Int64(1)) AS count(*)
+01)Projection: dim_parquet.env, "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[dim_parquet.env]], aggr=[[count(Int64(1))]]
 03)----TableScan: dim_parquet projection=[env]
 physical_plan
@@ -108,7 +108,7 @@ query TT
 EXPLAIN SELECT env, count(*) FROM dim_parquet GROUP BY env;
 ----
 logical_plan
-01)Projection: dim_parquet.env, count(Int64(1)) AS count(*)
+01)Projection: dim_parquet.env, "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[dim_parquet.env]], aggr=[[count(Int64(1))]]
 03)----TableScan: dim_parquet projection=[env]
 physical_plan

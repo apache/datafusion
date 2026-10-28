@@ -142,7 +142,7 @@ ORDER BY f_dkey, time_bin;
 ----
 logical_plan
 01)Sort: fact_table_ordered.f_dkey ASC NULLS LAST, time_bin ASC NULLS LAST
-02)--Projection: fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp) AS time_bin, count(Int64(1)) AS count(*), avg(fact_table_ordered.value)
+02)--Projection: fact_table_ordered.f_dkey, "date_bin(IntervalMonthDayNano(""IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }""),fact_table_ordered.timestamp)" AS time_bin, "count(Int64(1))" AS count(*), "avg(fact_table_ordered.value)"
 03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), fact_table_ordered.timestamp)]], aggr=[[count(Int64(1)), avg(fact_table_ordered.value)]]
 04)------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
@@ -184,7 +184,7 @@ ORDER BY f_dkey, time_bin;
 ----
 logical_plan
 01)Sort: fact_table_ordered.f_dkey ASC NULLS LAST, time_bin ASC NULLS LAST
-02)--Projection: fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp) AS time_bin, count(Int64(1)) AS count(*), avg(fact_table_ordered.value)
+02)--Projection: fact_table_ordered.f_dkey, "date_bin(IntervalMonthDayNano(""IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }""),fact_table_ordered.timestamp)" AS time_bin, "count(Int64(1))" AS count(*), "avg(fact_table_ordered.value)"
 03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), fact_table_ordered.timestamp)]], aggr=[[count(Int64(1)), avg(fact_table_ordered.value)]]
 04)------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
@@ -230,7 +230,7 @@ EXPLAIN SELECT f_dkey, timestamp, value,
 FROM fact_table_ordered;
 ----
 logical_plan
-01)Projection: fact_table_ordered.f_dkey, fact_table_ordered.timestamp, fact_table_ordered.value, row_number() PARTITION BY [fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+01)Projection: fact_table_ordered.f_dkey, fact_table_ordered.timestamp, fact_table_ordered.value, "row_number() PARTITION BY [fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano(""IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }""),fact_table_ordered.timestamp)] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
 02)--WindowAggr: windowExpr=[[row_number() PARTITION BY [fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), fact_table_ordered.timestamp)] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 03)----TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
@@ -273,7 +273,7 @@ EXPLAIN SELECT f_dkey, timestamp, value,
 FROM fact_table_ordered;
 ----
 logical_plan
-01)Projection: fact_table_ordered.f_dkey, fact_table_ordered.timestamp, fact_table_ordered.value, row_number() PARTITION BY [fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+01)Projection: fact_table_ordered.f_dkey, fact_table_ordered.timestamp, fact_table_ordered.value, "row_number() PARTITION BY [fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano(""IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }""),fact_table_ordered.timestamp)] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
 02)--WindowAggr: windowExpr=[[row_number() PARTITION BY [fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), fact_table_ordered.timestamp)] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 03)----TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
@@ -338,10 +338,10 @@ ORDER BY env, time_bin;
 ----
 logical_plan
 01)Sort: a.env ASC NULLS LAST, a.time_bin ASC NULLS LAST
-02)--Projection: a.env, a.time_bin, avg(a.max_bin_value) AS avg_max_value
+02)--Projection: a.env, a.time_bin, "avg(a.max_bin_value)" AS avg_max_value
 03)----Aggregate: groupBy=[[a.env, a.time_bin]], aggr=[[avg(a.max_bin_value)]]
 04)------SubqueryAlias: a
-05)--------Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp) AS time_bin, j.env, max(j.value) AS max_bin_value
+05)--------Projection: "date_bin(IntervalMonthDayNano(""IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }""),j.timestamp)" AS time_bin, j.env, "max(j.value)" AS max_bin_value
 06)----------Aggregate: groupBy=[[j.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), j.timestamp), j.env]], aggr=[[max(j.value)]]
 07)------------SubqueryAlias: j
 08)--------------Projection: f.f_dkey, d.env, f.timestamp, f.value
@@ -435,10 +435,10 @@ ORDER BY env, time_bin;
 ----
 logical_plan
 01)Sort: a.env ASC NULLS LAST, a.time_bin ASC NULLS LAST
-02)--Projection: a.env, a.time_bin, avg(a.max_bin_value) AS avg_max_value
+02)--Projection: a.env, a.time_bin, "avg(a.max_bin_value)" AS avg_max_value
 03)----Aggregate: groupBy=[[a.env, a.time_bin]], aggr=[[avg(a.max_bin_value)]]
 04)------SubqueryAlias: a
-05)--------Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp) AS time_bin, j.env, max(j.value) AS max_bin_value
+05)--------Projection: "date_bin(IntervalMonthDayNano(""IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }""),j.timestamp)" AS time_bin, j.env, "max(j.value)" AS max_bin_value
 06)----------Aggregate: groupBy=[[j.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), j.timestamp), j.env]], aggr=[[max(j.value)]]
 07)------------SubqueryAlias: j
 08)--------------Projection: f.f_dkey, d.env, f.timestamp, f.value

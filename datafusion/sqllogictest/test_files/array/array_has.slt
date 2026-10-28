@@ -491,7 +491,7 @@ explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM ge
 select count(*) from test WHERE needle IN ('7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c');
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
@@ -518,7 +518,7 @@ explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM ge
 select count(*) from test WHERE needle = ANY(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c']);
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
@@ -545,7 +545,7 @@ explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM ge
 select count(*) from test WHERE array_has(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], needle);
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
@@ -572,7 +572,7 @@ explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM ge
 select count(*) from test WHERE array_has(arrow_cast(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], 'LargeList(Utf8View)'), needle);
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
@@ -599,7 +599,7 @@ explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM ge
 select count(*) from test WHERE array_has(arrow_cast(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], 'FixedSizeList(4, Utf8View)'), needle);
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
@@ -627,7 +627,7 @@ explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM ge
 select count(*) from test WHERE array_has([needle], needle);
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t

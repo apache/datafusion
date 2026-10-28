@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::decorrelate::{
-    PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, build_join_filter,
+    PlanKey, PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, build_join_filter,
 };
 use crate::extract_equijoin_predicate::split_eq_and_noneq_join_predicate;
 use crate::optimizer::ApplyOrder;
@@ -515,9 +515,6 @@ fn mark_join(
 ) -> Result<Option<MarkJoin>> {
     let alias = alias_generator.next("__correlated_sq");
 
-    let exists_col = Expr::Column(Column::new(Some(alias.clone()), "mark"));
-    let exists_expr = if negated { !exists_col } else { exists_col };
-
     Ok(build_join(
         left,
         subquery,
@@ -526,10 +523,21 @@ fn mark_join(
         &alias,
         needs_null_aware_mark,
     )?
-    .map(|join| MarkJoin {
-        plan: join.plan,
-        mark: exists_expr,
-        three_valued_exact: join.mark_is_three_valued_exact,
+    .map(|join| {
+        // the mark column of the join, with its id
+        let schema = join.plan.schema();
+        let mark = Column::new(Some(alias.clone()), "mark");
+        let mark = schema
+            .maybe_index_of_column(&mark)
+            .map(|idx| schema.column(idx))
+            .unwrap_or(mark);
+        let exists_col = Expr::Column(mark);
+        let exists_expr = if negated { !exists_col } else { exists_col };
+        MarkJoin {
+            plan: join.plan,
+            mark: exists_expr,
+            three_valued_exact: join.mark_is_three_valued_exact,
+        }
     }))
 }
 
@@ -810,7 +818,7 @@ fn build_join(
 
     let mut count_bug_compensation = pull_up
         .collected_count_expr_map
-        .get(&new_plan)
+        .get(&PlanKey::new(&new_plan))
         .filter(|m| !m.is_empty())
         .cloned();
     // A HAVING-failure miss looks identical to an absent group once compensated, so bail if the join filter reads the aggregate's own output.
@@ -853,7 +861,7 @@ fn build_join(
         let count_bug_is_harmless = match rewrite(true) {
             Ok((plan, pull_up)) => pull_up
                 .collected_count_expr_map
-                .get(&plan)
+                .get(&PlanKey::new(&plan))
                 .filter(|m| !m.is_empty())
                 .is_none_or(|empty_input_values| {
                     null_reads_as_false
@@ -1083,7 +1091,7 @@ fn build_join(
 
         let right_proj_exprs: Vec<Expr> = right_col_indices
             .into_iter()
-            .map(|index| Expr::Column(Column::from(right_schema.qualified_field(index))))
+            .map(|index| Expr::Column(right_schema.column(index)))
             .collect();
 
         let right_projected = if !right_proj_exprs.is_empty() {
@@ -1961,14 +1969,14 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @r#"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.orders.o_custkey + Int32(1) AND customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
+          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1."orders.o_custkey + Int32(1)" AND customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             TableScan: customer [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [orders.o_custkey + Int32(1):Int64, o_custkey:Int64]
               Projection: orders.o_custkey + Int32(1), orders.o_custkey [orders.o_custkey + Int32(1):Int64, o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        "
+        "#
         )
     }
 
@@ -2526,14 +2534,14 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @r#"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
+          LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1."sq.c * UInt32(2)" [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32]
               Projection: sq.c * UInt32(2) [sq.c * UInt32(2):UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
-        "
+        "#
         )
     }
 
@@ -2558,15 +2566,15 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @r#"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) AND test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
+          LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1."sq.c * UInt32(2)" AND test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32, a:UInt32]
               Projection: sq.c * UInt32(2), sq.a [sq.c * UInt32(2):UInt32, a:UInt32]
                 Filter: sq.a + UInt32(1) = sq.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
-        "
+        "#
         )
     }
 
@@ -2592,15 +2600,15 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @r#"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) AND test.a + test.b = __correlated_sq_1.a + __correlated_sq_1.b [a:UInt32, b:UInt32, c:UInt32]
+          LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1."sq.c * UInt32(2)" AND test.a + test.b = __correlated_sq_1.a + __correlated_sq_1.b [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32, a:UInt32, b:UInt32]
               Projection: sq.c * UInt32(2), sq.a, sq.b [sq.c * UInt32(2):UInt32, a:UInt32, b:UInt32]
                 Filter: sq.a + UInt32(1) = sq.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
-        "
+        "#
         )
     }
 
@@ -2632,11 +2640,11 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @r#"
         Projection: test.b [b:UInt32]
           Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]
-            LeftSemi Join:  Filter: test.c * UInt32(2) = __correlated_sq_2.sq2.c * UInt32(2) AND test.a > __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]
-              LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq1.c * UInt32(2) AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
+            LeftSemi Join:  Filter: test.c * UInt32(2) = __correlated_sq_2."sq2.c * UInt32(2)" AND test.a > __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]
+              LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1."sq1.c * UInt32(2)" AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
                 TableScan: test [a:UInt32, b:UInt32, c:UInt32]
                 SubqueryAlias: __correlated_sq_1 [sq1.c * UInt32(2):UInt32, a:UInt32]
                   Projection: sq1.c * UInt32(2), sq1.a [sq1.c * UInt32(2):UInt32, a:UInt32]
@@ -2644,7 +2652,7 @@ mod tests {
               SubqueryAlias: __correlated_sq_2 [sq2.c * UInt32(2):UInt32, a:UInt32]
                 Projection: sq2.c * UInt32(2), sq2.a [sq2.c * UInt32(2):UInt32, a:UInt32]
                   TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]
-        "
+        "#
         )
     }
 

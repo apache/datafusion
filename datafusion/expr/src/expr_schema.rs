@@ -23,7 +23,7 @@ use arrow::datatypes::{DataType, Field};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::{
-    Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
+    DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
@@ -888,7 +888,7 @@ pub fn cast_subquery_columns(
                 .iter()
                 .enumerate()
                 .map(|(i, cast_to_type)| {
-                    Expr::Column(Column::from(plan.schema().qualified_field(i)))
+                    Expr::Column(plan.schema().column(i))
                         .cast_to(cast_to_type, subquery.subquery.schema())
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -916,6 +916,7 @@ mod tests {
         LogicalPlanBuilder, and, col, in_subquery, lit, not, or,
         out_ref_col_with_metadata, scalar_subquery, when,
     };
+    use datafusion_common::Column;
 
     use arrow::datatypes::Schema;
     use datafusion_common::{DFSchema, assert_or_internal_err};

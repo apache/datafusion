@@ -76,7 +76,7 @@ query TT
 EXPLAIN SELECT DISTINCT ON (c1) c3, c2 FROM aggregate_test_100 ORDER BY c1, c3;
 ----
 logical_plan
-01)Projection: first_value(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST] AS c3, first_value(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST] AS c2
+01)Projection: "first_value(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]" AS c3, "first_value(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]" AS c2
 02)--Sort: aggregate_test_100.c1 ASC NULLS LAST
 03)----Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[first_value(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST], first_value(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]]]
 04)------TableScan: aggregate_test_100 projection=[c1, c2, c3]
@@ -154,7 +154,7 @@ query TT
 explain select distinct on (a) b from t order by a desc, c;
 ----
 logical_plan
-01)Projection: first_value(t.b) ORDER BY [t.a DESC NULLS FIRST, t.c ASC NULLS LAST] AS b
+01)Projection: "first_value(t.b) ORDER BY [t.a DESC NULLS FIRST, t.c ASC NULLS LAST]" AS b
 02)--Sort: t.a DESC NULLS FIRST
 03)----Aggregate: groupBy=[[t.a]], aggr=[[first_value(t.b) ORDER BY [t.a DESC NULLS FIRST, t.c ASC NULLS LAST]]]
 04)------TableScan: t projection=[a, b, c]
@@ -382,9 +382,9 @@ explain SELECT DISTINCT ON (c1) c1, max(c4) AS agg2
 FROM aggregate_test_100 GROUP BY c1 ORDER BY c1, agg2;
 ----
 logical_plan
-01)Projection: first_value(aggregate_test_100.c1) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST] AS c1, first_value(agg2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST] AS agg2
+01)Projection: "first_value(aggregate_test_100.c1) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST]" AS c1, "first_value(agg2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST]" AS agg2
 02)--Sort: aggregate_test_100.c1 ASC NULLS LAST
-03)----Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[first_value(aggregate_test_100.c1) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST], first_value(max(aggregate_test_100.c4) AS agg2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST]]]
+03)----Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[first_value(aggregate_test_100.c1) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, "max(aggregate_test_100.c4)" ASC NULLS LAST] AS first_value(aggregate_test_100.c1) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST], first_value("max(aggregate_test_100.c4)" AS agg2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, "max(aggregate_test_100.c4)" ASC NULLS LAST] AS first_value(agg2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST]]]
 04)------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[max(aggregate_test_100.c4)]]
 05)--------TableScan: aggregate_test_100 projection=[c1, c4]
 
