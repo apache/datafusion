@@ -411,6 +411,19 @@ A full list of benchmarks can be found [here](https://github.com/apache/datafusi
 
 _[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
 
+### Microbenchmark health checks (local-only)
+
+Runs each microbenchmark case once to catch runtime panics, without measuring performance:
+
+```shell
+cargo xtask ci step test microbenchmarks
+```
+
+The suite took about 10 minutes in CI, so execution is local-only, including on
+release branches; no hosted workflow or required check is provided. Runtime failures
+may go unnoticed until a local run. When changing benchmark fixtures, setup, or APIs,
+run the affected benchmarks and include the commands and results in your PR.
+
 ### Parquet SQL Benchmarks
 
 The parquet SQL benchmarks can be run with

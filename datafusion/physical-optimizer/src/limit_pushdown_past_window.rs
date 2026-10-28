@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::ScalarValue;
@@ -177,7 +164,10 @@ fn grow_limit(window: &BoundedWindowAggExec, ctx: &mut TraverseState) -> bool {
     }
 
     // finish grow
-    ctx.max_lookahead(ctx.lookahead + max_rel);
+    // Frame bounds come straight from the query and can be as large as
+    // `u64::MAX`, so saturate instead of overflowing. A saturated lookahead
+    // makes the `checked_add` in `apply_limit` fail, which skips the pushdown.
+    ctx.max_lookahead(ctx.lookahead.saturating_add(max_rel));
     true
 }
 
@@ -194,16 +184,26 @@ fn apply_limit(
         ctx.lookahead = 0;
         return Some(Transformed::no(Arc::clone(node)));
     };
+    // A fetch that overflows can't drop any rows, so skip the pushdown rather
+    // than turning the sort into a TopK that holds every row and can't spill.
+    let Some(fetch) = fetch.checked_add(ctx.lookahead) else {
+        ctx.lookahead = 0;
+        return Some(Transformed::no(Arc::clone(node)));
+    };
     let fetch = match node.fetch() {
-        None => fetch + ctx.lookahead,
-        Some(existing) => cmp::min(existing, fetch + ctx.lookahead),
+        None => fetch,
+        Some(existing) => cmp::min(existing, fetch),
     };
     Some(Transformed::complete(node.with_fetch(Some(fetch)).unwrap()))
 }
 
 fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
     if let Some(limit) = node.downcast_ref::<GlobalLimitExec>() {
-        ctx.reset_limit(limit.fetch().map(|fetch| fetch + limit.skip()));
+        ctx.reset_limit(
+            limit
+                .fetch()
+                .map(|fetch| fetch.saturating_add(limit.skip())),
+        );
         return true;
     }
     // In distributed execution, GlobalLimitExec becomes LocalLimitExec
