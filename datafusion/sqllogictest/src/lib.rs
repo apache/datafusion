@@ -38,8 +38,7 @@ mod util;
 pub use config_matrix::{TestConfiguration, run_each_configuration, test_configurations};
 pub use filters::*;
 pub use memory_drift::{
-    CountingAllocator, enable_memory_drift_logging, flush_thread_allocations,
-    memory_drift_tracker,
+    CountingAllocator, enable_memory_drift_logging, peak_memory_drift,
 };
 pub use test_context::TestContext;
 pub use test_file::TestFile;

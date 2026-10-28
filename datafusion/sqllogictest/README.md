@@ -109,20 +109,13 @@ allocated, to find operators whose memory is not tracked by the pool (see
 default and prints the largest drift seen at the end of the run. It only logs
 and never fails a test.
 
-Test files run concurrently by default, so the comparison is process-wide:
-allocated bytes across the whole process against reservations summed across all
-files. In this mode, the file in the output can be wrong. To attribute drift to
-one file, run one file at a time:
-
-```shell
-cargo test --test sqllogictests -- --test-threads 1
-```
-
-In both modes, the consumer in the output is the reservation change that took
-the sample, not necessarily the code that allocated the untracked memory. Most
-drift at this scale is memory that `MemoryPool` does not track by design (for
-example, in-flight batches and Parquet read buffers), so a large drift is a lead
-to investigate, not necessarily a bug.
+Each test file is charged its own allocations, including those of the tasks it
+spawns through DataFusion, so files running concurrently are measured apart.
+The consumer in the output is the reservation change that took the sample, not
+necessarily the code that allocated the untracked memory. Most drift at this
+scale is memory that `MemoryPool` does not track by design (for example,
+in-flight batches and Parquet read buffers), so a large drift is a lead to
+investigate, not necessarily a bug.
 
 ```shell
 # Log each 64 MB rise in drift, with the file and consumer that took the sample
@@ -132,7 +125,7 @@ RUST_LOG=datafusion_execution::memory_pool=info cargo test --test sqllogictests
 ```shell
 # Log each 4 MB rise instead (also settable via SLT_MEMORY_DRIFT_LOG_THRESHOLD)
 RUST_LOG=datafusion_execution::memory_pool=info cargo test --test sqllogictests -- \
-  --test-threads 1 --memory-drift-log-threshold 4194304
+  --memory-drift-log-threshold 4194304
 ```
 
 ```shell

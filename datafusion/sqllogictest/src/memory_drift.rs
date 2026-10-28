@@ -5,76 +5,63 @@
 //! Logs drift between `MemoryPool` reservations and actual allocations while
 //! running sqllogictests. See <https://github.com/apache/datafusion/issues/25650>.
 //!
-//! Test files run concurrently in one process, so allocations cannot be split
-//! per file. Instead every file's pool reports to one process-wide
-//! [`MemoryDriftTracker`], which compares the sum of all reservations with the
-//! bytes counted by [`CountingAllocator`].
+//! Each test file runs in a [`MemoryTrackedFuture`] charged to its own
+//! [`MemoryAccount`], from the per-thread count kept by [`CountingAllocator`].
+//! [`MemoryAccountTracer`] charges the tasks a file spawns to the same account,
+//! so files running concurrently are measured apart. Each file's pool reports
+//! to its own [`MemoryDriftTracker`], comparing its reservations with its
+//! account.
 //!
 //! Files that `SET datafusion.runtime.memory_limit` replace their pool; the
 //! runner wraps the replacement too (see [`rewrap_replaced_pool`]).
 //!
 //! This only logs. It never fails a test.
+//!
+//! [`MemoryTrackedFuture`]: datafusion::common::runtime::MemoryTrackedFuture
+//! [`MemoryAccount`]: datafusion::common::runtime::MemoryAccount
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicIsize, Ordering},
-    },
+    sync::{Arc, Mutex, OnceLock},
 };
 
+use datafusion::common::runtime::{
+    MemoryAccountTracer, current_memory_account, set_join_set_tracer,
+    set_thread_allocated_bytes,
+};
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::memory_pool::{
-    MemoryDriftTracker, MemoryPool, PeakRecordingPool,
+    DriftSample, MemoryDriftTracker, MemoryPool, PeakRecordingPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 
-static ALLOCATED: AtomicIsize = AtomicIsize::new(0);
-static TRACKER: OnceLock<Arc<MemoryDriftTracker>> = OnceLock::new();
+/// Set once drift logging is enabled.
+static LOG_THRESHOLD: OnceLock<usize> = OnceLock::new();
+/// Every test file's tracker, to report the peak at the end of the run.
+static TRACKERS: Mutex<Vec<Arc<MemoryDriftTracker>>> = Mutex::new(Vec::new());
 
-/// A [`GlobalAlloc`] that counts the bytes currently allocated through it,
-/// delegating the allocation itself to [`System`].
+/// A [`GlobalAlloc`] that counts the bytes each thread allocates minus the
+/// bytes it frees, delegating the allocation itself to [`System`].
 ///
 /// Counts requested sizes, so allocator overhead and memory retained by the
-/// allocator are not included. Counting starts with the process, so memory
-/// freed later was always counted when it was allocated.
+/// allocator are not included.
 pub struct CountingAllocator;
-
-/// Per-thread count is flushed to [`ALLOCATED`] once it moves this far, so
-/// threads do not contend on one atomic for every allocation. The global count
-/// is therefore off by up to `FLUSH_BYTES` per live thread. Tokio threads
-/// flush the rest when they stop (see [`flush_thread_allocations`]); the
-/// unflushed count of any other thread that exits is lost.
-const FLUSH_BYTES: isize = 256 * 1024;
 
 thread_local! {
     // `const` with no destructor, so accessing it never allocates.
-    static UNFLUSHED: Cell<isize> = const { Cell::new(0) };
+    static THREAD_ALLOCATED: Cell<u64> = const { Cell::new(0) };
 }
 
 fn count(delta: isize) {
     // `try_with` because this can run while the thread is being torn down.
-    let _ = UNFLUSHED.try_with(|unflushed| {
-        let pending = unflushed.get() + delta;
-        if pending.abs() >= FLUSH_BYTES {
-            ALLOCATED.fetch_add(pending, Ordering::Relaxed);
-            unflushed.set(0);
-        } else {
-            unflushed.set(pending);
-        }
-    });
+    let _ = THREAD_ALLOCATED
+        .try_with(|allocated| allocated.set(allocated.get().wrapping_add(delta as u64)));
 }
 
-/// Flush this thread's unflushed count into the global count.
-///
-/// Registered as the Tokio runtime's `on_thread_stop` hook, which runs just
-/// before a worker or blocking thread exits, outside the allocator.
-pub fn flush_thread_allocations() {
-    let _ = UNFLUSHED.try_with(|unflushed| {
-        ALLOCATED.fetch_add(unflushed.replace(0), Ordering::Relaxed);
-    });
+fn thread_allocated_bytes() -> u64 {
+    THREAD_ALLOCATED.try_with(Cell::get).unwrap_or(0)
 }
 
 // SAFETY: every call is forwarded unchanged to `System`, which upholds the
@@ -110,45 +97,51 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 }
 
-/// Bytes currently allocated through [`CountingAllocator`], clamped at zero
-/// because counts lost with exiting threads can bias it either way.
-fn allocated_bytes() -> usize {
-    ALLOCATED.load(Ordering::Relaxed).max(0) as usize
-}
-
-/// Wrap the memory pool of every test file created from now on, logging each
-/// rise in drift of `log_threshold` bytes. Only meaningful if
+/// Charge each test file run from now on to its own account, logging each
+/// rise in a file's drift of `log_threshold` bytes. Only meaningful if
 /// [`CountingAllocator`] is the global allocator.
 pub fn enable_memory_drift_logging(log_threshold: usize) {
-    TRACKER.get_or_init(|| {
-        Arc::new(
-            MemoryDriftTracker::new(Arc::new(allocated_bytes))
-                .with_log_threshold(log_threshold),
-        )
-    });
-}
-
-/// The process-wide tracker, if [`enable_memory_drift_logging`] was called.
-pub fn memory_drift_tracker() -> Option<&'static Arc<MemoryDriftTracker>> {
-    TRACKER.get()
-}
-
-/// Wrap `pool` so its reservations are reported to the process-wide tracker,
-/// or return it unchanged if drift logging is not enabled.
-pub fn wrap_pool(pool: Arc<dyn MemoryPool>, label: &str) -> Arc<dyn MemoryPool> {
-    match memory_drift_tracker() {
-        Some(tracker) => Arc::new(
-            PeakRecordingPool::new(pool).with_drift_tracker(Arc::clone(tracker), label),
-        ),
-        None => pool,
+    if LOG_THRESHOLD.set(log_threshold).is_err() {
+        return;
     }
+    set_thread_allocated_bytes(thread_allocated_bytes)
+        .expect("only sqllogictests sets the thread allocated bytes counter");
+    set_join_set_tracer(&MemoryAccountTracer)
+        .expect("only sqllogictests sets the JoinSet tracer");
+}
+
+/// The largest drift any test file reached, if drift logging is enabled.
+pub fn peak_memory_drift() -> Option<DriftSample> {
+    TRACKERS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|tracker| tracker.peak_drift())
+        .max_by_key(|sample| sample.drift)
+}
+
+/// Wrap `pool` so its reservations are compared with the account of the test
+/// file creating it. Returns it unchanged if drift logging is not enabled or
+/// no file is being charged.
+pub fn wrap_pool(pool: Arc<dyn MemoryPool>, label: &str) -> Arc<dyn MemoryPool> {
+    let (Some(&log_threshold), Some(account)) =
+        (LOG_THRESHOLD.get(), current_memory_account())
+    else {
+        return pool;
+    };
+    let tracker = Arc::new(
+        MemoryDriftTracker::new(Arc::new(move || account.bytes().max(0) as usize))
+            .with_log_threshold(log_threshold),
+    );
+    TRACKERS.lock().unwrap().push(Arc::clone(&tracker));
+    Arc::new(PeakRecordingPool::new(pool).with_drift_tracker(tracker, label))
 }
 
 /// Wrap the memory pool of `ctx` again if a statement replaced it, e.g.
 /// `SET datafusion.runtime.memory_limit`, so its reservations keep being
 /// counted. Does nothing if drift logging is not enabled.
 pub(crate) fn rewrap_replaced_pool(ctx: &SessionContext, label: &str) {
-    if memory_drift_tracker().is_none() {
+    if LOG_THRESHOLD.get().is_none() {
         return;
     }
     let state = ctx.state_ref();
