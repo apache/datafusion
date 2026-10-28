@@ -9166,6 +9166,29 @@ select 0 from having_test having max(v1) = 4
 query error
 select * from having_test group by v1 having max(v1) = 3
 
+# HAVING that references the alias of a volatile expression currently
+# dereferences the alias into a fresh copy of the expression. The filter then
+# evaluates random() independently from the projection, so returned rows can
+# violate the predicate on the returned value, and the filter is pushed below
+# the aggregate. This demonstrates the incorrect plan; see
+# https://github.com/apache/datafusion/issues/7976
+query TT
+EXPLAIN select v1, random() as r from having_test group by v1 having r > 0.5
+----
+logical_plan
+01)Projection: having_test.v1, random() AS r
+02)--Aggregate: groupBy=[[having_test.v1]], aggr=[[]]
+03)----Filter: random() > Float64(0.5)
+04)------TableScan: having_test projection=[v1]
+physical_plan
+01)ProjectionExec: expr=[v1@0 as v1, random() as r]
+02)--AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1], aggr=[]
+03)----RepartitionExec: partitioning=Hash([v1@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[v1@0 as v1], aggr=[]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------FilterExec: random() > 0.5
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 drop table having_test
 
