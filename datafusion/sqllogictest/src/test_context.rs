@@ -33,6 +33,7 @@ use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
 };
+use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::{
@@ -60,6 +61,7 @@ use log::info;
 use sqlparser::ast;
 use tempfile::TempDir;
 
+mod custom_sort_pushdown;
 mod range_partitioning;
 
 /// Context for running tests
@@ -100,6 +102,7 @@ impl TestContext {
     /// If `None` is returned (e.g. because some needed feature is not
     /// enabled), the file should be skipped
     pub async fn try_new_for_test_file(relative_path: &Path) -> Option<Self> {
+        let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
             .with_target_partitions(4);
@@ -163,12 +166,30 @@ impl TestContext {
             state_builder = state_builder.with_statistics_registry(registry);
         }
 
+        if file_name == "sort_pushdown.slt" {
+            let mut rules = PhysicalOptimizer::new().rules;
+            let ensure_requirements = rules
+                .iter()
+                .position(|rule| rule.name() == "EnsureRequirements")
+                .expect("default optimizer includes EnsureRequirements");
+            rules.insert(
+                ensure_requirements,
+                Arc::new(custom_sort_pushdown::CustomLimitRule),
+            );
+            state_builder = state_builder.with_physical_optimizer_rules(rules);
+        }
+
         let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
 
-        let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
+            "sort_pushdown.slt" => {
+                custom_sort_pushdown::register_custom_sort_pushdown(
+                    test_ctx.session_ctx(),
+                )
+                .expect("register custom projection table");
+            }
             "parquet_missing_bounds.slt" => {
                 register_parquet_missing_bounds(&mut test_ctx).await;
             }

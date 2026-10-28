@@ -1059,3 +1059,91 @@ ORDER BY n
 # Cleanup
 statement ok
 DROP TABLE in_list_case_items;
+
+
+##########
+# IN lists containing NULL literals, under filter semantics
+#
+# A NULL member can only turn FALSE into NULL, and a filter keeps only the rows
+# for which its predicate is TRUE, so NULL rejects a row just like FALSE:
+#   x IN (a, NULL)     keeps exactly the rows that x IN (a) keeps
+#   x IN (NULL)        keeps nothing
+#   x NOT IN (a, NULL) keeps nothing: it is FALSE on a match and NULL otherwise
+#
+# This holds only inside a filter. In a general expression context
+# SELECT 3 IN (1, NULL) must still be NULL, which is checked at the end.
+##########
+
+statement ok
+CREATE TABLE in_list_nulls (label VARCHAR, n INT) AS VALUES
+  ('one', 1),
+  ('eleven', 11),
+  ('other', 42);
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# The NULL member is dropped from the list. The list is kept over
+# THRESHOLD_INLINE_INLIST members so that it stays an IN list instead of being
+# rewritten into a chain of ORs.
+query TT
+explain select label from in_list_nulls where n in (1, 11, 42, 7, NULL);
+----
+logical_plan
+01)Projection: in_list_nulls.label
+02)--Filter: in_list_nulls.n IN ([Int32(1), Int32(11), Int32(42), Int32(7)])
+03)----TableScan: in_list_nulls projection=[label, n]
+
+# A list of nothing but NULLs rejects every row.
+query TT
+explain select label from in_list_nulls where n in (NULL);
+----
+logical_plan EmptyRelation: rows=0
+
+# NOT IN with a NULL member is never TRUE, so it rejects every row.
+query TT
+explain select label from in_list_nulls where n not in (1, 11, NULL);
+----
+logical_plan EmptyRelation: rows=0
+
+# Lists without a NULL member are left alone.
+query TT
+explain select label from in_list_nulls where n in (1, 11, 42, 7);
+----
+logical_plan
+01)Projection: in_list_nulls.label
+02)--Filter: in_list_nulls.n IN ([Int32(1), Int32(11), Int32(42), Int32(7)])
+03)----TableScan: in_list_nulls projection=[label, n]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+# The rewritten filters return the same rows as the originals.
+query T rowsort
+select label from in_list_nulls where n in (1, 11, 42, 7, NULL);
+----
+eleven
+one
+other
+
+query T
+select label from in_list_nulls where n in (NULL);
+----
+
+query T
+select label from in_list_nulls where n not in (1, 11, 42, 7, NULL);
+----
+
+# Outside a filter the NULL must still make the result NULL, not FALSE.
+query B
+select 3 in (1, NULL);
+----
+NULL
+
+query B
+select 1 in (1, NULL);
+----
+true
+
+statement ok
+DROP TABLE in_list_nulls;

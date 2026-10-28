@@ -6,6 +6,7 @@
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::expr::InList;
 use datafusion_expr::{EmptyRelation, Expr, Filter, LogicalPlan, Operator};
 use std::sync::Arc;
 
@@ -86,6 +87,10 @@ struct SimplifiedFilterPredicate {
 /// throughout an `AND` / `OR` tree because both operators are monotonic with
 /// respect to whether their result can be `TRUE`. It is not safe through `NOT`
 /// or arbitrary expressions, so those are deliberately treated as leaves.
+///
+/// The same equivalence lets `IN` lists drop their `NULL` members, and makes
+/// `NOT IN` lists that contain one reject every row. See
+/// [`simplify_filter_in_list`].
 fn simplify_filter_predicate(expr: Expr) -> SimplifiedFilterPredicate {
     match expr {
         Expr::Literal(ScalarValue::Boolean(Some(true)), _) => {
@@ -100,8 +105,55 @@ fn simplify_filter_predicate(expr: Expr) -> SimplifiedFilterPredicate {
         Expr::BinaryExpr(binary) if binary.op == Operator::Or => {
             simplify_filter_or(*binary.left, *binary.right)
         }
+        Expr::InList(in_list) => simplify_filter_in_list(in_list),
         expr => simplified(FilterPredicate::Expression(expr), false),
     }
+}
+
+fn is_null_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::Literal(scalar, _) if scalar.is_null())
+}
+
+/// Simplifies an `IN` list under filter semantics by dropping `NULL` members.
+///
+/// `x NOT IN (a, NULL)` is `FALSE` when `x` matches `a` and `NULL` otherwise, so
+/// it is never `TRUE` and rejects every row.
+///
+/// This is only sound under filter semantics; the same rewrite in a general
+/// expression context would change `SELECT 3 IN (1, NULL)` from `NULL` to `FALSE`.
+fn simplify_filter_in_list(in_list: InList) -> SimplifiedFilterPredicate {
+    let InList {
+        expr,
+        mut list,
+        negated,
+    } = in_list;
+
+    // `retain` drops the `NULL`s in place. Most lists have none, and that case
+    // then costs one pass and no allocation.
+    let len_before = list.len();
+    list.retain(|e| !is_null_literal(e));
+
+    if list.len() == len_before {
+        // No `NULL` members, so there is nothing to simplify.
+        return simplified(
+            FilterPredicate::Expression(Expr::InList(InList::new(expr, list, negated))),
+            false,
+        );
+    }
+
+    if negated || list.is_empty() {
+        // `NOT IN` with a `NULL` member, and `IN` over nothing but `NULL`s, are
+        // both `NULL` for every row that they do not reject outright.
+        return simplified(
+            FilterPredicate::RejectsAll(Expr::Literal(ScalarValue::Boolean(None), None)),
+            true,
+        );
+    }
+
+    simplified(
+        FilterPredicate::Expression(Expr::InList(InList::new(expr, list, negated))),
+        true,
+    )
 }
 
 fn simplify_filter_and(left: Expr, right: Expr) -> SimplifiedFilterPredicate {
