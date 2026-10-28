@@ -1396,6 +1396,8 @@ mod tests {
         ))
     }
 
+    /// Builds `date_bin(stride, timestamp)` with a nanosecond-only literal stride
+    /// and the default epoch origin. This constructs the expression without evaluating it.
     fn date_bin_of(
         timestamp: Arc<dyn PhysicalExpr>,
         stride_nanos: i64,
