@@ -584,6 +584,21 @@ fn adjust_window_sort_removal(
         return plan_err!("Expected WindowAggExec or BoundedWindowAggExec");
     };
 
+    let new_window = if let Some(candidate) = new_window {
+        let requirements = candidate.required_input_ordering();
+        let valid = if let Some(Some(required)) = requirements.first() {
+            child_plan
+                .equivalence_properties()
+                .ordering_satisfy_requirement(required.clone().into_single())?
+        } else {
+            true
+        };
+
+        if valid { Some(candidate) } else { None }
+    } else {
+        None
+    };
+
     window_tree.plan = if let Some(new_window) = new_window {
         // We were able to change the window to accommodate the input, use it:
         new_window
