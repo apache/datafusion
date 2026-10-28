@@ -28,17 +28,20 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 ///
 /// There are two kinds of ids:
 ///
-/// * An *allocated* id ([`ColumnId::next`]) identifies a column that a source
-///   defines: a table scan field, a `VALUES` column, or an alias. Two scans of
-///   the same table define different columns, so each gets new ids.
-/// * A *derived* id ([`ColumnId::derived`]) identifies a column that is
-///   computed from other columns, such as the output of `a + 1` or a union
-///   output. It is a hash of what computes the column, so a node rebuilt from
-///   the same expressions and inputs gets the same ids. This is value
-///   numbering, as in a compiler.
+/// * An *allocated* id ([`ColumnId::next`]) identifies a column that is
+///   defined in one place: a table scan field, a `VALUES` column, an alias
+///   (which also names every computed output of a projection, aggregate or
+///   window), or a union output. Two scans of the same table define different
+///   columns, so each gets new ids.
+/// * A *derived* id ([`ColumnId::derived`]) identifies a column that a node
+///   computes from one input column, with no expression to hold an id: the
+///   mark column of a join, a grouping set column, an unnested column. It is a
+///   hash of the node kind and the input column's id, so a node rebuilt from
+///   the same input gets the same id. This is value numbering, as in a
+///   compiler.
 ///
 /// Ids are unique within a process. They are not stable across processes and
-/// are never shown in plan display output.
+/// are not shown in `EXPLAIN` output.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct ColumnId(NonZeroU64);
 
