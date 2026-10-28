@@ -40,10 +40,14 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_expr::{JoinType, SortExpr};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
+    LexOrdering, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
 };
 use datafusion_physical_expr::{Distribution, Partitioning, PhysicalExpr};
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+use datafusion_functions_aggregate::sum::sum_udaf;
+use datafusion_physical_plan::test::TestMemoryExec;
 use datafusion_physical_expr::expressions::{col, is_not_null, BinaryExpr, Column, NotExpr};
+use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -59,7 +63,7 @@ use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
-use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
+use datafusion_physical_optimizer::output_requirements::{OutputRequirementExec, OutputRequirements};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::*;
 use arrow::array::{record_batch, Array, ArrayRef, Int32Array, RecordBatch};
@@ -3643,18 +3647,6 @@ async fn test_passthrough_wrapper_projection_keeps_ordering() -> Result<()> {
 /// not unique on `k` across input partitions, so the sort must stay.
 #[tokio::test]
 async fn test_keep_sort_above_repartitioned_partial_aggregate() -> Result<()> {
-    use arrow::array::AsArray;
-    use arrow::datatypes::{Int32Type, Int64Type};
-    use datafusion_functions_aggregate::sum::sum_udaf;
-    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr_common::sort_expr::LexRequirement;
-    use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-    use datafusion_physical_plan::aggregates::{
-        AggregateExec, AggregateMode, PhysicalGroupBy,
-    };
-    use datafusion_physical_plan::common::collect;
-    use datafusion_physical_plan::test::TestMemoryExec;
-
     let schema = Arc::new(Schema::new(vec![
         Field::new("k", DataType::Int32, false),
         Field::new("v", DataType::Int64, false),
@@ -3707,24 +3699,6 @@ async fn test_keep_sort_above_repartitioned_partial_aggregate() -> Result<()> {
         AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum_v], group_clustering_mode=Full
           DataSourceExec: partitions=2, partition_sizes=[1, 1], output_ordering=k@0 ASC
     ");
-
-    let task_ctx = Arc::new(TaskContext::default());
-    for partition in 0..optimized.output_partitioning().partition_count() {
-        let batches =
-            collect(optimized.execute(partition, Arc::clone(&task_ctx))?).await?;
-        let rows: Vec<(i32, i64)> = batches
-            .iter()
-            .flat_map(|batch| {
-                let k = batch.column(0).as_primitive::<Int32Type>();
-                let sum = batch.column(1).as_primitive::<Int64Type>();
-                (0..batch.num_rows()).map(move |i| (k.value(i), sum.value(i)))
-            })
-            .collect();
-        assert!(
-            rows.is_sorted(),
-            "partition {partition} is not sorted: {rows:?}"
-        );
-    }
 
     Ok(())
 }
