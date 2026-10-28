@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Readable labels for the output columns of a SQL query, enabled by
 //! `datafusion.sql_parser.column_labels`.
@@ -563,4 +550,33 @@ fn is_default_frame(
             _ => false,
         };
     frame.to_string() == WindowFrame::new(Some(is_ordering_strict)).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_expr::{EmptyRelation, lit};
+    use datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf;
+
+    /// An aggregate built through the Expr API doesn't have to put the
+    /// `WITHIN GROUP` ordering expression first in its args like the SQL
+    /// planner does, so the args can be empty.
+    #[test]
+    fn within_group_aggregate_without_args() -> Result<()> {
+        let expr = Expr::AggregateFunction(AggregateFunction::new_udf(
+            percentile_cont_udaf(),
+            vec![],
+            false,
+            None,
+            vec![lit(1_i64).sort(true, false)],
+            None,
+        ));
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+        let label = resolve_aggregate_expr(&expr, &input, &mut TraceCache::new())?;
+        assert!(label.is_some());
+        Ok(())
+    }
 }

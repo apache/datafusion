@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests for `datafusion.sql_parser.column_labels`, which attaches a readable
 //! label to each output column of a SQL query as field metadata.
@@ -449,5 +436,54 @@ async fn column_labels_explain_plan_unchanged() -> Result<()> {
         .await?;
     let without_labels = ctx.sql(sql).await?.to_string().await?;
     assert_eq!(with_labels, without_labels);
+    Ok(())
+}
+
+/// Labels come from `Expr::human_display`, which doesn't group operators,
+/// quote strings or hide literal type wrappers in function calls. These
+/// cases pin the current output, which the spec describes as ambiguous.
+#[tokio::test]
+async fn column_labels_known_limitations() -> Result<()> {
+    let ctx = labels_ctx().await?;
+    let queries = [
+        "SELECT (a + b) * c FROM t",
+        "SELECT a + (b * c) FROM t",
+        "SELECT 'foo', 'a' || 'b'",
+        "SELECT a IN (1, 2) FROM t",
+        "SELECT NOT (a > 1 AND b > 2) FROM t",
+        "SELECT round(CAST(c AS DOUBLE), 2) FROM t",
+    ];
+    assert_snapshot!(labels(&ctx, &queries).await?, @r#"
+    SELECT (a + b) * c FROM t
+      t.a + t.b * t.c => a + b * c
+    SELECT a + (b * c) FROM t
+      t.a + t.b * t.c => a + b * c
+    SELECT 'foo', 'a' || 'b'
+      Utf8("foo") => foo
+      Utf8("a") || Utf8("b") => a || b
+    SELECT a IN (1, 2) FROM t
+      t.a IN Int64(1), Int64(2) => a IN 1, 2
+    SELECT NOT (a > 1 AND b > 2) FROM t
+      NOT t.a > Int64(1) AND t.b > Int64(2) => NOT a > 1 AND b > 2
+    SELECT round(CAST(c AS DOUBLE), 2) FROM t
+      round(t.c,Int64(2)) => round(CAST(c AS Float64), Int64(2))
+    "#);
+    Ok(())
+}
+
+/// A `DataFrame` from a labeled query keeps its labels when it becomes a
+/// view, because the view takes the schema of the plan.
+#[tokio::test]
+async fn column_labels_dataframe_view_keeps_labels() -> Result<()> {
+    let ctx = labels_ctx().await?;
+    let df = ctx.sql("SELECT a + 1 FROM t").await?;
+    ctx.register_table("labeled_view", df.into_view())?;
+    let schema = ctx.table("labeled_view").await?.schema().as_arrow().clone();
+    let field = schema.field(0);
+    assert_eq!(field.name(), "t.a + Int64(1)");
+    assert_eq!(
+        field.metadata().get(COLUMN_LABEL_KEY).map(String::as_str),
+        Some("a + 1")
+    );
     Ok(())
 }
