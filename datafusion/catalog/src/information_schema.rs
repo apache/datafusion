@@ -31,9 +31,6 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-// Re-exported (rather than just `use`d) because these were already part of
-// this module's public API before it started sharing its schema/builder
-// definitions with `datafusion_common::information_schema`.
 use datafusion_common::types::{LogicalType, NativeType};
 use datafusion_common::{
     DataFusionError, ResolvedTableReference, plan_datafusion_err, plan_err,
