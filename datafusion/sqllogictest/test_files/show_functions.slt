@@ -1,0 +1,47 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# SHOW FUNCTIONS fetches it source data directly so it does not require information_schema.routines/.parameters to
+# be present.
+statement ok
+set datafusion.catalog.information_schema = false;
+
+# A LIKE filter that doesn't match any function returns the empty set
+query TT??TTT
+SHOW FUNCTIONS LIKE 'this_function_does_not_exist'
+----
+
+# Unsupported (non-LIKE) filter kinds are rejected
+statement error DataFusion error: Error during planning: Unsupported SHOW FUNCTIONS filter
+SHOW FUNCTIONS WHERE function_name = 'abs'
+
+# A function with multiple overloads should report all signatures
+query TT??TTT rowsort
+SHOW FUNCTIONS LIKE 'string_agg'
+----
+string_agg String [expression, delimiter] [String, Null] AGGREGATE Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression. string_agg([DISTINCT] expression, delimiter [ORDER BY expression])
+string_agg String [expression, delimiter] [String, String] AGGREGATE Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression. string_agg([DISTINCT] expression, delimiter [ORDER BY expression])
+
+# Functions without parameters should be reported
+query TT??TTT rowsort
+SHOW FUNCTIONS LIKE 'pi'
+----
+pi NULL [] [] SCALAR Returns an approximate value of π. pi()
+
+# Config reset
+statement ok
+reset datafusion.catalog.information_schema;
