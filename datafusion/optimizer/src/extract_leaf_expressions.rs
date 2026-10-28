@@ -2528,7 +2528,7 @@ mod tests {
         ## After Extraction
         Projection: test.a, test.b, d
           Filter: __datafusion_extracted_1 = Int32(1)
-            Projection: test.a, test.b, test.c + Int32(1) AS d, leaf_udf(a, Utf8("x")) AS __datafusion_extracted_1
+            Projection: test.a, test.b, test.c + Int32(1) AS d, leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_1
               TableScan: test projection=[a, b, c]
 
         ## After Pushdown
@@ -2554,9 +2554,11 @@ mod tests {
         let merged = build_extraction_projection_impl(
             &[],
             &columns_needed,
+            &IndexSet::new(),
             &Arc::new(projection),
             &target_schema,
-        )?;
+        )?
+        .expect("the merge does not duplicate any definition");
 
         assert_eq!(
             merged.expr,
