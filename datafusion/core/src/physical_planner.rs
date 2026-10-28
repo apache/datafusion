@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
@@ -72,8 +59,8 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeCategories;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    DFSchema, DFSchemaRef, ScalarValue, exec_err, internal_datafusion_err, internal_err,
-    not_impl_err, plan_err,
+    DFSchema, DFSchemaRef, ScalarValue, Statistics, exec_err, internal_datafusion_err,
+    internal_err, not_impl_err, plan_err,
 };
 use datafusion_common::{
     TableReference, assert_eq_or_internal_err, assert_or_internal_err,
@@ -112,7 +99,7 @@ use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
-use datafusion_physical_plan::statistics::StatisticsContext;
+use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 
@@ -239,8 +226,6 @@ impl DefaultPhysicalPlanner {
         let plan = self
             .create_initial_plan(logical_plan, session_state)
             .await?;
-        let plan = bind_materialized_cte_scans(plan)?;
-
         self.optimize_physical_plan(plan, session_state, |_, _| {})
     }
 }
@@ -318,56 +303,126 @@ fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>>
         .map(|t| Some(t.data))
 }
 
-/// Point every [`MaterializedCteScanExec`] at the buffer of the
-/// [`MaterializedCteExec`] with the same id.
+/// Points every [`MaterializedCteScanExec`] at the buffer of the
+/// [`MaterializedCteExec`] with the same id, and gives it the statistics of
+/// the CTE body.
 ///
 /// [`renumber_materialized_ctes`] makes the ids unique before the physical
 /// plan is created.
 ///
 /// A scan that is already bound was planned and bound by a separate planning
-/// run, such as the `scan` of a [`ViewTable`], and is left as is. Binding it
-/// again would count its partitions twice in the buffer.
+/// run, such as the `scan` of a [`ViewTable`], and is not bound again. Binding
+/// it again would count its partitions twice in the buffer.
 ///
 /// Scans are planned before the node that owns their CTE, and a scan inside a
 /// scalar subquery is planned in a separate subtree, so the binding is done
-/// once on the whole initial plan.
+/// on the whole initial plan.
 ///
 /// [`ViewTable`]: crate::datasource::ViewTable
+struct MaterializedCteBinder {
+    ctes: HashMap<u64, Arc<dyn ExecutionPlan>>,
+    /// The statistics of the CTE bodies. `None` while they are computed.
+    statistics: HashMap<u64, Option<Arc<Statistics>>>,
+    context: StatisticsContext,
+}
+
+impl MaterializedCteBinder {
+    fn new(plan: &Arc<dyn ExecutionPlan>, session_state: &dyn Session) -> Result<Self> {
+        let mut ctes = HashMap::new();
+        plan.apply(|node| {
+            if let Some(cte) = node.downcast_ref::<MaterializedCteExec>()
+                && ctes.insert(cte.buffer().id(), Arc::clone(node)).is_some()
+            {
+                return internal_err!(
+                    "Two MaterializedCteExec nodes have the id {}",
+                    cte.buffer().id()
+                );
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        let context = match session_state.statistics_registry() {
+            Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
+            None => StatisticsContext::new(),
+        };
+        Ok(Self {
+            ctes,
+            statistics: HashMap::new(),
+            context,
+        })
+    }
+
+    fn cte(&self, id: u64) -> Option<&MaterializedCteExec> {
+        self.ctes
+            .get(&id)
+            .and_then(|cte| cte.downcast_ref::<MaterializedCteExec>())
+    }
+
+    /// Give every scan in `plan` whose CTE is in `self.ctes` the statistics
+    /// of the CTE body. If `bind` is true, also bind the scans that are not
+    /// bound.
+    fn bind(
+        &mut self,
+        plan: Arc<dyn ExecutionPlan>,
+        bind: bool,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        plan.transform_up(|node| {
+            let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>() else {
+                return Ok(Transformed::no(node));
+            };
+            let Some(cte) = self.cte(scan.id()) else {
+                if scan.is_bound() {
+                    return Ok(Transformed::no(node));
+                }
+                return internal_err!("MaterializedCteScanExec {} has no CTE", scan.id());
+            };
+            let bound =
+                (bind && !scan.is_bound()).then(|| scan.bind(Arc::clone(cte.buffer())));
+            let scan = bound.as_ref().unwrap_or(scan);
+            let scan = match self.body_statistics(scan.id())? {
+                Some(statistics) => scan.with_body_statistics(statistics),
+                None => match bound {
+                    Some(bound) => bound,
+                    None => return Ok(Transformed::no(node)),
+                },
+            };
+            Ok(Transformed::yes(Arc::new(scan) as Arc<dyn ExecutionPlan>))
+        })
+        .map(|t| t.data)
+    }
+
+    /// The statistics of the body of the CTE `id`, or `None` while they are
+    /// computed.
+    ///
+    /// The body can read other CTEs. Its scans get their statistics first,
+    /// in a copy of the body that is used only here.
+    fn body_statistics(&mut self, id: u64) -> Result<Option<Arc<Statistics>>> {
+        if let Some(statistics) = self.statistics.get(&id) {
+            return Ok(statistics.clone());
+        }
+        let Some(cte) = self.cte(id) else {
+            return Ok(None);
+        };
+        let body = Arc::clone(cte.body());
+        self.statistics.insert(id, None);
+        let body = self.bind(body, false)?;
+        let statistics = self
+            .context
+            .compute(body.as_ref(), &StatisticsArgs::new())?;
+        self.statistics.insert(id, Some(Arc::clone(&statistics)));
+        Ok(Some(statistics))
+    }
+}
+
+/// See [`MaterializedCteBinder`].
 fn bind_materialized_cte_scans(
     plan: Arc<dyn ExecutionPlan>,
+    session_state: &dyn Session,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let mut buffers = HashMap::new();
-    plan.apply(|node| {
-        if let Some(cte) = node.downcast_ref::<MaterializedCteExec>()
-            && buffers
-                .insert(cte.buffer().id(), Arc::clone(cte.buffer()))
-                .is_some()
-        {
-            return internal_err!(
-                "Two MaterializedCteExec nodes have the id {}",
-                cte.buffer().id()
-            );
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    if buffers.is_empty() {
+    let mut binder = MaterializedCteBinder::new(&plan, session_state)?;
+    if binder.ctes.is_empty() {
         return Ok(plan);
     }
-    plan.transform_up(|node| {
-        let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>() else {
-            return Ok(Transformed::no(node));
-        };
-        if scan.is_bound() {
-            return Ok(Transformed::no(node));
-        }
-        let Some(buffer) = buffers.get(&scan.id()) else {
-            return internal_err!("MaterializedCteScanExec {} has no CTE", scan.id());
-        };
-        Ok(Transformed::yes(
-            Arc::new(scan.bind(Arc::clone(buffer))) as Arc<dyn ExecutionPlan>
-        ))
-    })
-    .map(|t| t.data)
+    binder.bind(plan, true)
 }
 
 #[derive(Debug)]
@@ -3301,7 +3356,15 @@ impl DefaultPhysicalPlanner {
 
     /// Optimize a physical plan by applying each physical optimizer,
     /// calling observer(plan, optimizer after each one)
-    #[expect(clippy::needless_pass_by_value)]
+    ///
+    /// Before the optimizers run, each [`MaterializedCteScanExec`] is bound
+    /// to the buffer of its [`MaterializedCteExec`] and gets the statistics
+    /// of the CTE body, as it is before the optimizers run. A rewrite of the
+    /// body does not change its rows, so these statistics stay valid, but
+    /// they can be less precise than the statistics of the optimized body.
+    ///
+    /// TODO: snapshot the statistics after the body is optimized, see
+    /// <https://github.com/apache/datafusion/issues/26424>.
     pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -3311,6 +3374,7 @@ impl DefaultPhysicalPlanner {
     where
         F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
     {
+        let plan = bind_materialized_cte_scans(plan, session_state)?;
         let optimizers = session_state.physical_optimizers();
         debug!(
             "Input physical plan:\n{}\n",
