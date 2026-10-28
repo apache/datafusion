@@ -268,6 +268,50 @@ mod tests {
     }
 
     #[test]
+    fn clear_orderings_clears_groupings() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let ordering = [PhysicalSortExpr::new_default(Arc::clone(&a))];
+        let mut properties =
+            EquivalenceProperties::new_with_orderings(schema, [ordering.clone()]);
+        properties.add_grouping([Arc::clone(&b)]);
+        assert!(properties.grouping_satisfy([Arc::clone(&a)])?);
+        assert!(properties.grouping_satisfy([Arc::clone(&b)])?);
+
+        properties.clear_orderings();
+
+        assert!(properties.oeq_class().is_empty());
+        assert!(properties.geq_class().is_empty());
+        assert!(properties.normalized_geq_class().is_empty());
+        assert!(!properties.ordering_satisfy(ordering)?);
+        assert!(!properties.grouping_satisfy([a])?);
+        assert!(!properties.grouping_satisfy([b])?);
+        Ok(())
+    }
+
+    #[test]
+    fn clear_groupings_preserves_orderings() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let ordering = [PhysicalSortExpr::new_default(Arc::clone(&a))];
+        let mut properties =
+            EquivalenceProperties::new_with_orderings(schema, [ordering.clone()]);
+        properties.add_grouping([Arc::clone(&b)]);
+        assert!(properties.grouping_satisfy([Arc::clone(&b)])?);
+
+        properties.clear_groupings();
+
+        assert!(properties.geq_class().is_empty());
+        assert!(properties.normalized_geq_class().is_empty());
+        assert!(properties.ordering_satisfy(ordering)?);
+        assert!(properties.grouping_satisfy([a])?);
+        assert!(!properties.grouping_satisfy([b])?);
+        Ok(())
+    }
+
+    #[test]
     fn reorder_clears_explicit_grouping() -> Result<()> {
         let schema = create_test_schema()?;
         let a = col("a", &schema)?;
