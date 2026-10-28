@@ -722,6 +722,18 @@ synced fork builds much faster.</p></li>
 is, while the merge queue tests it merged with <code class="docutils literal notranslate"><span class="pre">main</span></code>.</p></li>
 </ol>
 </section>
+<section id="obsolete-merge-queue-runs">
+<h4>Obsolete Merge Queue Runs<a class="headerlink" href="#obsolete-merge-queue-runs" title="Link to this heading">#</a></h4>
+<p>The <strong>Merge queue cleanup</strong> workflow finds unfinished merge queue CI runs whose
+queue branch was removed or now points to a different commit. It scans when a
+new merge group is created and every 15 minutes.</p>
+<p>Cleanup keeps runs for active groups, commits already in their target branch,
+and rerun attempts. Contributors can rerun an obsolete job to investigate a
+failure. A failed check alone does not cause cancellation.</p>
+<p>The workflow only reports candidates until a maintainer sets the repository
+Actions variable <code class="docutils literal notranslate"><span class="pre">MERGE_QUEUE_CLEANUP_ENABLED</span></code> to <code class="docutils literal notranslate"><span class="pre">true</span></code>. Manual runs default
+to <code class="docutils literal notranslate"><span class="pre">dry_run</span></code>. To stop cancellation, remove the variable or set it to <code class="docutils literal notranslate"><span class="pre">false</span></code>.</p>
+</section>
 </section>
 </section>
 </section>
@@ -799,6 +811,7 @@ is, while the merge queue tests it merged with <code class="docutils literal not
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#github-runners">GitHub Runners</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#pull-requests-from-forks">Pull Requests from Forks</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#obsolete-merge-queue-runs">Obsolete Merge Queue Runs</a></li>
 </ul>
 </li>
 </ul>
