@@ -388,8 +388,13 @@ impl MaterializedCteBinder {
                 }
                 return internal_err!("MaterializedCteScanExec {} has no CTE", scan.id());
             };
-            let bound =
-                (bind && !scan.is_bound()).then(|| scan.bind(Arc::clone(cte.buffer())));
+            let bound = if bind && !scan.is_bound() {
+                // The scan reads the batches of the body by position.
+                scan.check_body_schema(&cte.body().schema())?;
+                Some(scan.bind(Arc::clone(cte.buffer())))
+            } else {
+                None
+            };
             let scan = bound.as_ref().unwrap_or(scan);
             let scan = match self.body_statistics(scan.id())? {
                 Some(statistics) => scan.with_body_statistics(statistics),
@@ -891,12 +896,15 @@ impl DefaultPhysicalPlanner {
 
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
                 // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
-                Arc::new(MaterializedCteScanExec::new(
-                    scan.id.as_u64(),
-                    &scan.name,
-                    Arc::clone(scan.schema.inner()),
-                    session_state.config().target_partitions(),
-                ))
+                Arc::new(
+                    MaterializedCteScanExec::new(
+                        scan.id.as_u64(),
+                        &scan.name,
+                        Arc::clone(scan.schema.inner()),
+                        session_state.config().target_partitions(),
+                    )
+                    .with_projection(scan.projection.clone()),
+                )
             }
 
             // 1 Child
