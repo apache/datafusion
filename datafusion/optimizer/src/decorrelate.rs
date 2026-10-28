@@ -933,11 +933,13 @@ impl PullUpCorrelatedExpr {
 /// exactly when their input has rows, and an `Aggregate` without a grouping
 /// always outputs its one row, so no `Aggregate` can be emptied by the rows a
 /// `Limit` held back.
+/// A materialized CTE outputs exactly its continuation's rows, and only the
+/// continuation is rewritten, so its emptiness follows that input.
 ///
 /// A `Filter` is what this leaves out: it reads values, so the rows the `Limit`
-/// kept decide whether anything survives it. A `Join`, a `Union` and an
-/// `Unnest` can empty a non-empty input too. Every other variant is treated the
-/// same way, so that a new one does not silently become droppable.
+/// kept decide whether anything survives it. A `Join` and an `Unnest` can empty
+/// a non-empty input too. Every other variant is treated the same way, so that
+/// a new one does not silently become droppable.
 fn emptiness_follows_input(plan: &LogicalPlan) -> bool {
     matches!(
         plan,
@@ -948,6 +950,7 @@ fn emptiness_follows_input(plan: &LogicalPlan) -> bool {
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Distinct(Distinct::All(_))
             | LogicalPlan::Aggregate(_)
+            | LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(_))
     )
 }
 
