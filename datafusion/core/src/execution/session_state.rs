@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SessionState`]: information required to run queries in a session
 
@@ -36,6 +23,8 @@ use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::DataType;
 use arrow_schema::FieldRef;
 use datafusion_catalog::MemoryCatalogProviderList;
+#[cfg(feature = "sql")]
+use datafusion_catalog::information_schema::INFORMATION_SCHEMA_TABLES;
 use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, InformationSchemaProvider,
 };
@@ -48,7 +37,7 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
-    exec_err, plan_datafusion_err,
+    exec_err, plan_datafusion_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -78,10 +67,12 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
-use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
+use datafusion_session::{
+    CatalogProvider, PhysicalOptimizerContext, PhysicalOptimizerRule, Session,
+};
 #[cfg(feature = "sql")]
 use datafusion_sql::{
-    parser::{DFParserBuilder, Statement},
+    parser::{DFParserBuilder, ExplainStatement, Statement},
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
 
@@ -93,7 +84,9 @@ use log::{debug, info};
 use object_store::ObjectStore;
 #[cfg(feature = "sql")]
 use sqlparser::{
-    ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias},
+    ast::{
+        Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, Statement as SQLStatement,
+    },
     dialect::dialect_from_str,
 };
 use url::Url;
@@ -417,28 +410,73 @@ impl SessionState {
         table_ref: impl Into<TableReference>,
     ) -> datafusion_common::Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
-        if self.config().information_schema()
-            && *resolved_ref.schema == *INFORMATION_SCHEMA
+        let catalog_name = resolved_ref.catalog.as_ref();
+
+        // Special case handling for `information_schema`.
+        if *resolved_ref.schema == *INFORMATION_SCHEMA
+            && self.inner.config.information_schema()
         {
-            return Ok(Arc::new(
-                InformationSchemaProvider::new(Arc::clone(&self.inner.catalog_list))
-                    .with_table_functions(self.inner.table_functions.clone()),
-            ));
+            match self.inner.config.system_catalog() {
+                Some(system_catalog) => {
+                    if system_catalog == catalog_name {
+                        // Global catalog configured, catalog name references it
+                        //   => information schema provider for full catalog list
+                        return Ok(Arc::new(
+                            InformationSchemaProvider::new(Arc::clone(
+                                &self.inner.catalog_list,
+                            ))
+                            .with_table_functions(self.inner.table_functions.clone())
+                            .with_system_catalog(String::from(system_catalog)),
+                        ));
+                    } else {
+                        // Global catalog configured, catalog name is other catalog
+                        //   => information schema provider for named catalog
+                        let catalog = self.resolve_catalog(catalog_name)?;
+                        return Ok(Arc::new(
+                            InformationSchemaProvider::new_from_catalog(
+                                catalog_name.to_string(),
+                                catalog,
+                            )
+                            .with_table_functions(self.inner.table_functions.clone()),
+                        ));
+                    }
+                }
+                None => {
+                    // Global catalog not configured
+                    //   => information schema provider for full catalog list
+                    // Resolve the catalog (even though it's not needed for the InformationSchemaProvider)
+                    // so references to non-existent catalogs report an error.
+                    self.resolve_catalog(catalog_name)?;
+                    return Ok(Arc::new(
+                        InformationSchemaProvider::new(Arc::clone(
+                            &self.inner.catalog_list,
+                        ))
+                        .with_table_functions(self.inner.table_functions.clone()),
+                    ));
+                }
+            }
         }
 
-        self.inner
+        let catalog = self.resolve_catalog(catalog_name)?;
+        let Some(schema) = catalog.schema(&resolved_ref.schema) else {
+            return plan_err!("failed to resolve schema: {}", resolved_ref.schema);
+        };
+
+        Ok(schema)
+    }
+
+    fn resolve_catalog(
+        &self,
+        catalog_name: &str,
+    ) -> Result<Arc<dyn CatalogProvider>, DataFusionError> {
+        let catalog = self
+            .inner
             .catalog_list
-            .catalog(&resolved_ref.catalog)
+            .catalog(catalog_name)
             .ok_or_else(|| {
-                plan_datafusion_err!(
-                    "failed to resolve catalog: {}",
-                    resolved_ref.catalog
-                )
-            })?
-            .schema(&resolved_ref.schema)
-            .ok_or_else(|| {
-                plan_datafusion_err!("failed to resolve schema: {}", resolved_ref.schema)
-            })
+                plan_datafusion_err!("failed to resolve catalog: {catalog_name}")
+            })?;
+        Ok(catalog)
     }
 
     /// Add `analyzer_rule` to the end of the list of
@@ -622,7 +660,23 @@ impl SessionState {
         &self,
         statement: Statement,
     ) -> datafusion_common::Result<LogicalPlan> {
-        let references = self.resolve_table_references(&statement)?;
+        let mut references = self.resolve_table_references(&statement)?;
+
+        if Self::requires_information_schema(&statement) {
+            let info_tables = INFORMATION_SCHEMA_TABLES.iter();
+            let info_table_refs: Vec<_> = if let Some(system_catalog) =
+                self.config().system_catalog()
+            {
+                info_tables
+                    .map(|n| TableReference::full(system_catalog, INFORMATION_SCHEMA, *n))
+                    .collect()
+            } else {
+                info_tables
+                    .map(|n| TableReference::partial(INFORMATION_SCHEMA, *n))
+                    .collect()
+            };
+            references.extend(info_table_refs);
+        }
 
         let mut provider = SessionContextProvider {
             state: self,
@@ -643,6 +697,24 @@ impl SessionState {
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.statement_to_plan(statement)
+    }
+
+    #[cfg(feature = "sql")]
+    fn requires_information_schema(statement: &Statement) -> bool {
+        match &statement {
+            Statement::Explain(ExplainStatement { statement, .. }) => {
+                Self::requires_information_schema(statement)
+            }
+            Statement::Statement(s) => matches!(
+                s.as_ref(),
+                SQLStatement::ShowCreate { .. }
+                    | SQLStatement::ShowTables { .. }
+                    | SQLStatement::ShowColumns { .. }
+                    | SQLStatement::ShowVariable { .. }
+                    | SQLStatement::ShowFunctions { .. }
+            ),
+            _ => false,
+        }
     }
 
     #[cfg(feature = "sql")]
