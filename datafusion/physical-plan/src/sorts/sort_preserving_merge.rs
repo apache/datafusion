@@ -163,7 +163,6 @@ impl SortPreservingMergeExec {
         // Other input orderings hold only within each partition:
         if input_partitions > 1 {
             eq_properties.clear_orderings();
-            eq_properties.clear_groupings();
         }
         eq_properties.clear_per_partition_constants();
         eq_properties.add_ordering(ordering);

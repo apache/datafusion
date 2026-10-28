@@ -349,15 +349,18 @@ impl EquivalenceProperties {
         Ok(self)
     }
 
-    /// Clears (empties) the ordering equivalence class within this object.
-    /// Call this method when existing orderings are invalidated.
+    /// Clears ordering and explicit grouping information.
+    ///
+    /// Call this method when existing orderings are invalidated. Grouping
+    /// assertions are also cleared because the operation may split groups.
     pub fn clear_orderings(&mut self) {
         self.oeq_class.clear();
         self.oeq_cache.clear();
+        // Row reordering can also split groups, invalidating their contiguity.
+        self.clear_groupings();
     }
 
-    /// Clears grouping information invalidated by an operation that changes
-    /// row sequence or combines input partitions.
+    /// Clears explicit grouping information without changing orderings.
     pub fn clear_groupings(&mut self) {
         self.geq_class.clear();
         self.geq_cache.clear();

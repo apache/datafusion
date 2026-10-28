@@ -83,9 +83,6 @@ impl CoalescePartitionsExec {
         // Coalescing partitions loses existing orderings:
         let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_orderings();
-        if input_partitions > 1 {
-            eq_properties.clear_groupings();
-        }
         eq_properties.clear_per_partition_constants();
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
@@ -470,9 +467,11 @@ mod tests {
 
     use futures::FutureExt;
 
-    #[test]
-    fn grouping_is_cleared_only_when_partitions_are_merged() -> Result<()> {
-        let input = test::mem_exec(2);
+    #[rstest::rstest]
+    #[case::single_partition(1)]
+    #[case::multiple_partitions(2)]
+    fn coalesce_clears_explicit_grouping(#[case] partitions: usize) -> Result<()> {
+        let input = test::mem_exec(partitions);
         let grouping = col("i", &input.schema())?;
         let input = Arc::new(
             input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
@@ -487,16 +486,6 @@ mod tests {
         let properties = merge.properties().equivalence_properties();
         assert!(properties.geq_class().is_empty());
         assert!(!properties.grouping_satisfy([grouping])?);
-
-        let input = test::mem_exec(1);
-        let grouping = col("i", &input.schema())?;
-        let input = Arc::new(
-            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
-        );
-        let merge = CoalescePartitionsExec::new(input);
-        let properties = merge.properties().equivalence_properties();
-        assert_eq!(properties.geq_class().len(), 1);
-        assert!(properties.grouping_satisfy([grouping])?);
         Ok(())
     }
 
