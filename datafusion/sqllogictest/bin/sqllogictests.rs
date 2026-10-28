@@ -210,10 +210,7 @@ async fn run_tests() -> Result<()> {
                 currently_running_sql_tracker.clone();
             let file_start = Instant::now();
             let account = Arc::new(MemoryAccount::default());
-            let debug_account = Arc::clone(&account);
-            let debug_path = test_file.relative_path.clone();
             SpawnedTask::spawn(MemoryTrackedFuture::new(account, async move {
-                let _debug = DebugAccount(debug_account, debug_path);
                 let result = match (
                     options.postgres_runner,
                     options.complete,
@@ -1292,12 +1289,4 @@ fn scratch_file_check(test_files: &[TestFile]) -> Result<Vec<String>> {
     }
 
     Ok(errors)
-}
-
-// TEMPORARY DEBUG
-struct DebugAccount(Arc<MemoryAccount>, PathBuf);
-impl Drop for DebugAccount {
-    fn drop(&mut self) {
-        eprintln!("DEBUG account at file end: {} {}", self.1.display(), self.0.bytes());
-    }
 }

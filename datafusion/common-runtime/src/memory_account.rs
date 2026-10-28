@@ -72,6 +72,12 @@ impl MemoryAccount {
         });
         settled + unsettled
     }
+
+    /// Add `bytes` allocated where no account was charged, e.g. on a thread
+    /// another library started, and handed to this account's owner.
+    pub fn charge(&self, bytes: i64) {
+        self.bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
 }
 
 struct Charging {
@@ -266,6 +272,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // Spawn without `SpawnedTask`, which would apply the global tracer.
+    #[expect(clippy::disallowed_methods)]
     async fn tracer_charges_spawned_work_to_the_spawner() {
         let account = account();
         MemoryTrackedFuture::new(Arc::clone(&account), async {
@@ -286,6 +294,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // Spawn without `SpawnedTask`, which would apply the global tracer.
+    #[expect(clippy::disallowed_methods)]
     async fn tracer_leaves_untracked_work_alone() {
         let _ = account();
         assert!(current_memory_account().is_none());

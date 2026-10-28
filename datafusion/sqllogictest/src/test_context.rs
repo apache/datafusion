@@ -114,6 +114,7 @@ impl TestContext {
             .with_memory_pool(pool)
             .build_arc()
             .expect("default runtime builds");
+        crate::memory_drift::wrap_local_object_store(&runtime);
 
         let mut state_builder = SessionStateBuilder::new()
             .with_config(config)
