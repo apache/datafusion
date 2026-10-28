@@ -18,6 +18,7 @@ use datafusion_execution::memory_pool::{
     GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+use datafusion_expr::AggregateUDF;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -64,6 +65,17 @@ pub(super) fn sum_over_sorted_input(
     keys: &[&str],
     batches: Vec<Vec<Vec<i64>>>,
 ) -> Result<AggregateExec> {
+    aggregate_over_sorted_input(mode, keys, batches, sum_udaf())
+}
+
+/// Like [`sum_over_sorted_input`], but aggregates `v` with `udaf`. For `Final`
+/// mode, the state of `udaf` must be a single `Int64` column.
+pub(super) fn aggregate_over_sorted_input(
+    mode: AggregateMode,
+    keys: &[&str],
+    batches: Vec<Vec<Vec<i64>>>,
+    udaf: Arc<AggregateUDF>,
+) -> Result<AggregateExec> {
     let fields = keys
         .iter()
         .chain(&["v"])
@@ -76,9 +88,9 @@ pub(super) fn sum_over_sorted_input(
             .collect::<Result<_>>()?,
     );
     let aggregate_exprs = vec![Arc::new(
-        AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+        AggregateExprBuilder::new(Arc::clone(&udaf), vec![col("v", &schema)?])
             .schema(Arc::clone(&schema))
-            .alias("sum")
+            .alias(udaf.name())
             .build()?,
     )];
 

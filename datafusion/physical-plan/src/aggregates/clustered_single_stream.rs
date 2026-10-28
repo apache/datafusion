@@ -762,9 +762,10 @@ mod tests {
     use super::*;
     use crate::aggregates::PhysicalGroupBy;
     use crate::aggregates::clustered_test_util::{
-        assert_completed_groups_emitted_under_limit, assert_output_unchanged_under_limit,
-        assert_resources_exhausted_under_limit, distinct_key_batches, full_batches,
-        held_memory, single_key_batches, sum_over_sorted_input,
+        aggregate_over_sorted_input, assert_completed_groups_emitted_under_limit,
+        assert_output_unchanged_under_limit, assert_resources_exhausted_under_limit,
+        distinct_key_batches, full_batches, held_memory, single_key_batches,
+        sum_over_sorted_input,
     };
     use crate::collect;
     use crate::test::TestMemoryExec;
@@ -776,6 +777,7 @@ mod tests {
         GreedyMemoryPool, MemoryPool, PeakRecordingPool,
     };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_functions_aggregate::approx_distinct::approx_distinct_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -872,6 +874,22 @@ mod tests {
             sum_over_sorted_input(AggregateMode::Single, &["k"], distinct_key_batches())?;
         assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
         assert_output_unchanged_under_limit(&plan, 100 * 1024).await
+    }
+
+    /// Like [`completed_groups_release_batch_capacity`], but `APPROX_DISTINCT`
+    /// also keeps the hashes of the last batch (64 KB for 8192 rows), which the
+    /// table must release too. The limit fits the active group, but not those
+    /// hashes.
+    #[tokio::test]
+    async fn completed_groups_release_accumulator_scratch() -> Result<()> {
+        let plan = aggregate_over_sorted_input(
+            AggregateMode::Single,
+            &["k"],
+            distinct_key_batches(),
+            approx_distinct_udaf(),
+        )?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_output_unchanged_under_limit(&plan, 64 * 1024).await
     }
 
     /// A single key never completes a group before the input ends. The limit
