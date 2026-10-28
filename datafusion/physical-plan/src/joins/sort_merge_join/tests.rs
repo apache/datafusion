@@ -5268,32 +5268,114 @@ async fn join_float_key_batch_boundaries(
     #[values(false, true)] descending: bool,
     #[values(1, 2)] input_batch_size: usize,
 ) -> Result<()> {
-    let input = |unmatched_key| -> Result<Arc<dyn ExecutionPlan>> {
-        let mut keys = vec![
+    let keys = |unmatched_key| {
+        arrow::compute::cast(
+            &arrow::array::Float64Array::from(vec![
+                None,
+                Some(f64::NEG_INFINITY),
+                Some(-0.0),
+                Some(0.0),
+                Some(unmatched_key),
+                Some(f64::INFINITY),
+                Some(f64::NAN),
+                Some(f64::NAN),
+                Some(f64::NAN),
+            ]),
+            &key_type,
+        )
+    };
+    assert_key_batch_boundaries(
+        keys(1.0)?,
+        keys(2.0)?,
+        join_type,
+        null_equality,
+        descending,
+        input_batch_size,
+    )
+    .await
+}
+
+// Key types `compare_join_arrays` did not support (#26003) must also compare
+// across batches.
+#[rstest::rstest]
+#[tokio::test]
+async fn join_key_type_batch_boundaries(
+    #[values(
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into())),
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        DataType::Decimal256(40, 2),
+        DataType::Time32(arrow::datatypes::TimeUnit::Second),
+        DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond)
+    )]
+    key_type: DataType,
+    #[values(LeftMark, RightMark, LeftSemi, RightSemi, LeftAnti, RightAnti)]
+    join_type: JoinType,
+    #[values(NullEquality::NullEqualsNothing, NullEquality::NullEqualsNull)]
+    null_equality: NullEquality,
+    #[values(false, true)] descending: bool,
+    #[values(1, 2)] input_batch_size: usize,
+) -> Result<()> {
+    // Single-digit keys so Utf8 dictionary values sort like the integers.
+    let keys = |unmatched_key| -> Result<arrow::array::ArrayRef> {
+        let keys = arrow::array::Int64Array::from(vec![
             None,
-            Some(f64::NEG_INFINITY),
-            Some(-0.0),
-            Some(0.0),
+            Some(1),
+            Some(2),
+            Some(3),
             Some(unmatched_key),
-            Some(f64::INFINITY),
-            Some(f64::NAN),
-            Some(f64::NAN),
-            Some(f64::NAN),
-        ];
+            Some(6),
+            Some(7),
+            Some(7),
+            Some(7),
+        ]);
+        // Int64 cannot be cast to Time32 directly.
+        let keys = match key_type {
+            DataType::Time32(_) => arrow::compute::cast(&keys, &DataType::Int32)?,
+            _ => Arc::new(keys),
+        };
+        Ok(arrow::compute::cast(&keys, &key_type)?)
+    };
+    assert_key_batch_boundaries(
+        keys(4)?,
+        keys(5)?,
+        join_type,
+        null_equality,
+        descending,
+        input_batch_size,
+    )
+    .await
+}
+
+/// Joins two inputs of nine ascending keys split into `input_batch_size`-row
+/// batches. Row 0 must be null, row 4 must differ between the sides, and all
+/// remaining rows must match.
+async fn assert_key_batch_boundaries(
+    left_keys: arrow::array::ArrayRef,
+    right_keys: arrow::array::ArrayRef,
+    join_type: JoinType,
+    null_equality: NullEquality,
+    descending: bool,
+    input_batch_size: usize,
+) -> Result<()> {
+    let key_type = left_keys.data_type().clone();
+    let input = |mut keys: arrow::array::ArrayRef| -> Result<Arc<dyn ExecutionPlan>> {
         let mut ids: Vec<i32> = (0..keys.len() as i32).collect();
         if descending {
-            keys.reverse();
             ids.reverse();
+            keys = arrow::compute::take(
+                &keys,
+                &arrow::array::UInt32Array::from_iter_values(
+                    (0..keys.len() as u32).rev(),
+                ),
+                None,
+            )?;
         }
         let batch = RecordBatch::try_from_iter(vec![
             (
                 "id",
                 Arc::new(Int32Array::from(ids)) as arrow::array::ArrayRef,
             ),
-            (
-                "key",
-                arrow::compute::cast(&arrow::array::Float64Array::from(keys), &key_type)?,
-            ),
+            ("key", keys),
         ])?;
         Ok(build_table_from_batches(
             (0..batch.num_rows())
@@ -5309,8 +5391,8 @@ async fn join_float_key_batch_boundaries(
         Arc::new(Column::new("key", 1)),
     )];
     let (_, output) = join_collect_with_options(
-        input(1.0)?,
-        input(2.0)?,
+        input(left_keys)?,
+        input(right_keys)?,
         on,
         join_type,
         vec![SortOptions {
