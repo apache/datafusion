@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::ops::Add;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
@@ -17,8 +16,8 @@ use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
-    Result, ScalarValue, exec_err, internal_datafusion_err, internal_err,
-    utils::take_function_args,
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_datafusion_err,
+    internal_err, utils::take_function_args,
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -298,7 +297,10 @@ pub(crate) fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue>
 /// ```
 ///
 /// See `test_adjust_to_local_time()` for example
-pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
+pub fn adjust_to_local_time<T: ArrowTimestampType>(
+    ts: i64,
+    tz: impl TimeZone + Copy,
+) -> Result<i64> {
     fn convert_timestamp<F>(ts: i64, converter: F) -> Result<DateTime<Utc>>
     where
         F: Fn(i64) -> MappedLocalTime<DateTime<Utc>>,
@@ -328,12 +330,18 @@ pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i6
         .fix()
         .local_minus_utc() as i64;
 
-    let adjusted_date_time = date_time.add(
-        // This should not fail under normal circumstances as the
-        // maximum possible offset is 26 hours (93,600 seconds)
-        TimeDelta::try_seconds(offset_seconds)
-            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
-    );
+    let adjusted_date_time = date_time
+        .checked_add_signed(
+            // This should not fail under normal circumstances as the
+            // maximum possible offset is 26 hours (93,600 seconds)
+            TimeDelta::try_seconds(offset_seconds)
+                .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
+        )
+        .ok_or_else(|| {
+            exec_datafusion_err!(
+                "Timezone adjustment of timestamp {ts} by {offset_seconds} seconds exceeds Chrono's calendar range"
+            )
+        })?;
 
     // convert the naive datetime back to i64
     match T::UNIT {

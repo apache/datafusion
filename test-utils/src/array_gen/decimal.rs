@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::{ArrayRef, PrimitiveArray, PrimitiveBuilder, UInt32Array};
+use arrow::array::{
+    ArrayRef, ArrowNativeTypeOp, PrimitiveArray, PrimitiveBuilder, UInt32Array,
+};
 use arrow::datatypes::DecimalType;
 use rand::Rng;
 use rand::rngs::StdRng;
@@ -31,13 +33,19 @@ impl DecimalArrayGenerator {
     where
         D: DecimalType + RandomNativeData,
     {
+        // Valid decimals have at most `precision` digits, so draw values in
+        // (-10^precision, 10^precision)
+        let modulus = D::MAX_FOR_EACH_PRECISION[self.precision as usize]
+            .add_wrapping(D::Native::ONE);
+
         // table of decimals from which to draw
         let distinct_decimals: PrimitiveArray<D> = {
             let mut decimal_builder =
                 PrimitiveBuilder::<D>::with_capacity(self.num_distinct_decimals);
             for _ in 0..self.num_distinct_decimals {
-                decimal_builder
-                    .append_option(Some(D::generate_random_native_data(&mut self.rng)));
+                let value =
+                    D::generate_random_native_data(&mut self.rng).mod_wrapping(modulus);
+                decimal_builder.append_option(Some(value));
             }
 
             decimal_builder

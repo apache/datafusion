@@ -661,3 +661,56 @@ SELECT min(dict_of_ree), max(dict_of_ree), arrow_typeof(max(dict_of_ree)) FROM d
 
 statement ok
 DROP TABLE dict_encoded_values;
+
+##########
+## Sorting tests: ORDER BY on dictionary columns with NULLS FIRST / NULLS LAST
+##########
+
+statement ok
+CREATE TABLE dict_nulls_order AS
+SELECT arrow_cast(v, 'Dictionary(Int32, Utf8)') AS d
+FROM (VALUES ('b'), (NULL), ('a'), ('c'), (NULL)) AS x(v);
+
+query T
+SELECT arrow_typeof(d) FROM dict_nulls_order LIMIT 1;
+----
+Dictionary(Int32, Utf8)
+
+query T
+SELECT d FROM dict_nulls_order ORDER BY d ASC NULLS FIRST;
+----
+NULL
+NULL
+a
+b
+c
+
+query T
+SELECT d FROM dict_nulls_order ORDER BY d ASC NULLS LAST;
+----
+a
+b
+c
+NULL
+NULL
+
+query T
+SELECT d FROM dict_nulls_order ORDER BY d DESC NULLS FIRST;
+----
+NULL
+NULL
+c
+b
+a
+
+query T
+SELECT d FROM dict_nulls_order ORDER BY d DESC NULLS LAST;
+----
+c
+b
+a
+NULL
+NULL
+
+statement ok
+DROP TABLE dict_nulls_order;

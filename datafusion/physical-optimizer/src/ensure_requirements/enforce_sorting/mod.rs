@@ -89,8 +89,9 @@ fn update_sort_ctx_children_data(
         child_node.data = if is_sort(child_plan) {
             // child is sort
             true
-        } else if is_limit(child_plan) {
-            // There is no sort linkage for this path, it starts at a limit.
+        } else if is_limit(child_plan) || child_plan.fetch().is_some() {
+            // Removing a sort below a row limit can change which rows survive,
+            // including limits embedded in operators such as FilterExec.
             false
         } else {
             // If a descendent is a sort, and the child maintains the sort.
@@ -414,16 +415,14 @@ pub fn ensure_sorting(
         .zip(requirements.children)
         .enumerate()
     {
-        let physical_ordering = child.plan.output_ordering();
-
         if let Some(required) = required_ordering {
             let eq_properties = child.plan.equivalence_properties();
             let req = required.into_single();
             if !eq_properties.ordering_satisfy_requirement(req.clone())? {
-                // Make sure we preserve the ordering requirements:
-                if physical_ordering.is_some() {
-                    child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
-                }
+                // The new sort supersedes linked sorts even when a projection
+                // hides their keys. Explicit and embedded limits stop sort
+                // linkage, preserving sorts that determine which rows survive.
+                child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 child = add_sort_above(
                     child,
                     req,
@@ -433,9 +432,11 @@ pub fn ensure_sorting(
                 );
                 child = update_sort_ctx_children_data(child, true)?;
             }
-        } else if physical_ordering.is_none() || !plan.maintains_input_order()[idx] {
-            // We have a `SortExec` whose effect may be neutralized by another
-            // order-imposing operator, remove this sort:
+        } else if !plan.maintains_input_order()[idx] {
+            // Remove linked sorts only when this operator does not preserve
+            // their row order. A projection can hide the sort key, making
+            // output_ordering() None, while a later LIMIT or OFFSET still
+            // depends on that order to select rows.
             child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
         }
         updated_children.push(child);

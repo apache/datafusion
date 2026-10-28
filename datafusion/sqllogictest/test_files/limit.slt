@@ -1244,3 +1244,58 @@ physical_plan
 
 statement ok
 DROP TABLE t22489;
+
+# Regression test for https://github.com/apache/datafusion/issues/23534
+# The sort below OFFSET selects rows even when a projection hides its sort key.
+statement ok
+CREATE TABLE t23534 (grp VARCHAR NOT NULL, sort_key BIGINT NOT NULL)
+AS VALUES ('physical_second', 2), ('sorted_first', 1);
+
+query TI
+SELECT grp, sort_key FROM t23534 ORDER BY sort_key ASC NULLS LAST OFFSET 1;
+----
+physical_second 2
+
+query TI
+SELECT grp, COUNT(*) AS n
+FROM (
+  SELECT grp, sort_key FROM t23534
+  ORDER BY sort_key ASC NULLS LAST OFFSET 1
+) q
+GROUP BY grp
+ORDER BY grp;
+----
+physical_second 1
+
+# One pass leaves a projection between the limit and sort. Correctness must
+# not depend on a later logical rewrite moving that projection.
+statement ok
+SET datafusion.optimizer.max_passes = 1;
+
+query TI
+SELECT grp, COUNT(*) AS n
+FROM (
+  SELECT grp, sort_key FROM t23534
+  ORDER BY sort_key ASC NULLS LAST OFFSET 1
+) q
+GROUP BY grp
+ORDER BY grp;
+----
+physical_second 1
+
+query TI
+SELECT grp, COUNT(*) AS n
+FROM (
+  SELECT grp, sort_key FROM t23534
+  ORDER BY sort_key ASC NULLS LAST LIMIT 1 OFFSET 1
+) q
+GROUP BY grp
+ORDER BY grp;
+----
+physical_second 1
+
+statement ok
+SET datafusion.optimizer.max_passes = 3;
+
+statement ok
+DROP TABLE t23534;
