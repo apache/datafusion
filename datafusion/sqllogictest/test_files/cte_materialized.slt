@@ -450,6 +450,26 @@ Plan with Metrics
 11)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
 12)--------------MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
 
+# The two scalar subqueries read the CTE, and the body is computed one time
+# for both of them.
+query TT
+EXPLAIN ANALYZE WITH g AS MATERIALIZED (SELECT value AS x FROM generate_series(1, 200000))
+SELECT (SELECT count(*) FROM g), (SELECT sum(x) FROM g)
+----
+Plan with Metrics
+01)ScalarSubqueryExec: subqueries=2, metrics=[]
+02)--MaterializedCteExec: name=g, metrics=[spill_count=2, <slt:ignore>buffered_rows=200.0 K]
+03)----ProjectionExec: expr=[value@0 as x], metrics=[<slt:ignore>]
+04)------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=200000, batch_size=8192], metrics=[<slt:ignore>]
+05)----ProjectionExec: expr=[scalar_subquery(200000) as count(*), scalar_subquery(20000100000) as sum(g.x)], metrics=[<slt:ignore>]
+06)------PlaceholderRowExec, metrics=[]
+07)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+08)----AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+09)------ProjectionExec: expr=[], metrics=[<slt:ignore>]
+10)--------MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
+11)--AggregateExec: mode=Single, gby=[], aggr=[sum(g.x)], metrics=[<slt:ignore>]
+12)----MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
+
 # Spill: the first batch has long strings and stays in memory. The next
 # batches are smaller and go to disk. The two references then need memory to
 # decode the spill files, and the first batch must move to disk. It is
