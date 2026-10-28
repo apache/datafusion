@@ -881,6 +881,8 @@ fn rewrite_projection_given_requirements(
 
     let required_indices =
         RequiredIndices::new().with_exprs(input.schema(), exprs_used.iter());
+    let old_input_schema = Arc::clone(input.schema());
+    let read_indices = required_indices.indices().to_vec();
 
     // rewrite the children projection, and if they are changed rewrite the
     // projection down
@@ -888,6 +890,19 @@ fn rewrite_projection_given_requirements(
         .transform_data(|input| {
             if is_projection_unnecessary(&input, &exprs_used)? {
                 Ok(Transformed::yes(input))
+            } else if exprs_used.iter().any(contains_subquery)
+                || !read_fields_unchanged(
+                    &old_input_schema,
+                    input.schema(),
+                    &read_indices,
+                )
+            {
+                // A subquery is optimized on its own, and rewriting the input
+                // can change the fields this projection reads, so the stored
+                // schema may be stale. Recompute it rather than reuse it.
+                Projection::try_new(exprs_used, Arc::new(input))
+                    .map(LogicalPlan::Projection)
+                    .map(Transformed::yes)
             } else {
                 Projection::try_new_with_schema(
                     exprs_used,
@@ -898,6 +913,38 @@ fn rewrite_projection_given_requirements(
                 .map(Transformed::yes)
             }
         })
+}
+
+/// Returns true if the input fields at `read_indices` of `old` are unchanged in
+/// `new`, the input after it was rewritten for those indices.
+///
+/// The rewritten input either keeps every field of `old` or only the fields at
+/// `read_indices`, in order. Any other shape is treated as changed.
+fn read_fields_unchanged(old: &DFSchema, new: &DFSchema, read_indices: &[usize]) -> bool {
+    if new.fields().len() == old.fields().len() {
+        read_indices.iter().all(|&i| old.field(i) == new.field(i))
+    } else if new.fields().len() == read_indices.len() {
+        read_indices
+            .iter()
+            .enumerate()
+            .all(|(j, &i)| old.field(i) == new.field(j))
+    } else {
+        false
+    }
+}
+
+/// Returns true if `expr` contains a subquery expression.
+fn contains_subquery(expr: &Expr) -> bool {
+    expr.exists(|e| {
+        Ok(matches!(
+            e,
+            Expr::Exists(_)
+                | Expr::InSubquery(_)
+                | Expr::SetComparison(_)
+                | Expr::ScalarSubquery(_)
+        ))
+    })
+    .unwrap_or(true)
 }
 
 /// Builds the output schema of a projection that keeps only the fields at
@@ -2691,6 +2738,92 @@ mod tests {
                 TableScan: s3 projection=[a]
         "
         )
+    }
+
+    /// Returns `schema` with the field called `name` marked nullable.
+    fn with_nullable_field(schema: &DFSchema, name: &str) -> Result<DFSchemaRef> {
+        let fields = schema
+            .iter()
+            .map(|(qualifier, field)| {
+                let field = if field.name() == name {
+                    Arc::new(field.as_ref().clone().with_nullable(true))
+                } else {
+                    Arc::clone(field)
+                };
+                (qualifier.cloned(), field)
+            })
+            .collect();
+        Ok(Arc::new(DFSchema::new_with_metadata(
+            fields,
+            HashMap::new(),
+        )?))
+    }
+
+    /// Asserts that `plan` is a projection whose schema is the one its
+    /// expressions derive.
+    fn assert_projection_schema_derived(plan: &LogicalPlan) -> Result<()> {
+        use datafusion_expr::logical_plan::projection_schema;
+
+        let LogicalPlan::Projection(projection) = plan else {
+            panic!("expected a projection, got {plan}");
+        };
+        let derived = projection_schema(&projection.input, &projection.expr)?;
+        assert_eq!(projection.schema.as_ref(), derived.as_ref());
+        Ok(())
+    }
+
+    /// When rewriting the input changes a field the projection reads, the
+    /// projection's schema is derived again instead of reused.
+    #[test]
+    fn projection_schema_follows_rewritten_input() -> Result<()> {
+        use datafusion_expr::Aggregate;
+
+        let table_scan = Arc::new(test_table_scan()?);
+        let group_expr = vec![lit(1u32).alias("g")];
+        let aggr_expr = vec![count(col("b")).alias("cnt")];
+        let aggregate = Aggregate::try_new(
+            Arc::clone(&table_scan),
+            group_expr.clone(),
+            aggr_expr.clone(),
+        )?;
+        // A non-null group column stored as nullable, as a rule that keeps a
+        // node's schema while folding its expressions can leave it.
+        let stale = with_nullable_field(&aggregate.schema, "g")?;
+        let aggregate =
+            Aggregate::try_new_with_schema(table_scan, group_expr, aggr_expr, stale)?;
+        let plan = LogicalPlanBuilder::from(LogicalPlan::Aggregate(aggregate))
+            .project(vec![col("g").alias("x")])?
+            .build()?;
+        assert!(plan.schema().field(0).is_nullable());
+
+        // Pruning `cnt` rebuilds the aggregate, which derives `g` as non-null.
+        let optimized = optimize(plan)?;
+        assert!(!optimized.schema().field(0).is_nullable());
+        assert_projection_schema_derived(&optimized)
+    }
+
+    /// A projection over a subquery derives its schema again instead of
+    /// reusing one that may be stale.
+    #[test]
+    fn projection_schema_follows_subquery() -> Result<()> {
+        let subquery = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a")])?
+            .limit(0, Some(1))?
+            .build()?;
+        let input = Arc::new(test_table_scan()?);
+        let exprs = vec![
+            col("b"),
+            datafusion_expr::scalar_subquery(Arc::new(subquery)).alias("s"),
+        ];
+        let derived = Projection::try_new(exprs.clone(), Arc::clone(&input))?;
+        // Mark `b` nullable so a reused schema would differ from the derived one.
+        let stale = with_nullable_field(&derived.schema, "b")?;
+        let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
+            exprs, input, stale,
+        )?);
+
+        let optimized = optimize(plan)?;
+        assert_projection_schema_derived(&optimized)
     }
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
