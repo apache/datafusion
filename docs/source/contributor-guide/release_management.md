@@ -39,6 +39,8 @@ In general:
 - Patch releases are cut from the corresponding `branch-NN`
 - Only targeted, low-risk fixes should be added to a release branch
 
+The crate version on `main` always has a `-dev` suffix, such as `56.0.0-dev`
+
 Changes reach a release branch in one of two ways:
 
 - (Most common) Fix the issue on `main` and then backport the merged change to the release branch
@@ -53,6 +55,7 @@ or open a backport PR and link it there.
 To prepare for a new release series, maintainers:
 
 - Create a new branch from `main`, such as `branch-50`, in the Apache repository
+- Bump the version on `main` to the next development version, such as `51.0.0-dev`
 - Continue merging new features to `main`
 - Prepare the release branch for release by updating versions, changelog content,
   and any additional release-specific fixes via the
