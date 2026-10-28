@@ -527,4 +527,58 @@ mod tests {
 
         Ok(())
     }
+
+    /// The plan of a view that is not inlined is optimized two times: by the
+    /// planning run of the view, and as a part of the outer plan. The scans
+    /// of its CTE get the partitioning of the CTE body in both runs.
+    #[tokio::test]
+    async fn query_not_inlined_view_with_partitioned_materialized_cte() -> Result<()> {
+        let session_ctx = SessionContext::new_with_config(
+            SessionConfig::new()
+                .with_target_partitions(4)
+                .set_str("datafusion.sql_parser.dialect", "PostgreSQL"),
+        );
+        session_ctx
+            .sql("CREATE TABLE t AS VALUES (1, 10), (1, 20), (2, 30)")
+            .await?
+            .collect()
+            .await?;
+        let plan = session_ctx
+            .sql(
+                "WITH r AS MATERIALIZED \
+                   (SELECT column1 AS g, sum(column2) AS s FROM t GROUP BY column1) \
+                 SELECT g, max(s) AS s FROM r GROUP BY g",
+            )
+            .await?
+            .into_optimized_plan()?;
+        let view = crate::datasource::ViewTable::new(plan, None);
+        session_ctx.register_table("w", std::sync::Arc::new(NotInlinedView(view)))?;
+
+        let df = session_ctx
+            .sql("SELECT x.g, x.s + y.s AS s FROM w x JOIN w y ON x.g = y.g ORDER BY g")
+            .await?;
+        let physical_plan = df.clone().create_physical_plan().await?;
+        let displayed = crate::physical_plan::displayable(physical_plan.as_ref())
+            .indent(true)
+            .to_string();
+        assert_eq!(
+            displayed
+                .matches("MaterializedCteScanExec: name=r, partitioning=Hash([g@0], 4)")
+                .count(),
+            2,
+            "{displayed}"
+        );
+
+        let results = df.collect().await?;
+        insta::assert_snapshot!(batches_to_string(&results),@r"
+        +---+----+
+        | g | s  |
+        +---+----+
+        | 1 | 60 |
+        | 2 | 60 |
+        +---+----+
+        ");
+
+        Ok(())
+    }
 }
