@@ -27,8 +27,8 @@ use crate::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, TableType};
 use crate::physical_expr::EquivalenceProperties;
 use crate::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PhysicalExpr,
-    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, displayable,
+    ExecutionPlanProperties, Partitioning, PhysicalExpr, PlanProperties,
+    ReplaceChildrenOptions, SendableRecordBatchStream, displayable,
     stream::RecordBatchStreamAdapter,
 };
 
@@ -55,7 +55,11 @@ impl DataFrame {
     /// Lazy implementation behind [`array_col`]: wraps the current plan in an
     /// [`AddColumnProvider`] that zips `array` onto the rows at execution time.
     /// See [`array_col`] for the contract.
-    pub(super) fn with_array_column(self, name: &str, array: ArrayRef) -> Result<DataFrame> {
+    pub(super) fn with_array_column(
+        self,
+        name: &str,
+        array: ArrayRef,
+    ) -> Result<DataFrame> {
         let (state, plan) = self.into_parts();
         // Consecutive `array_col` calls extend the existing provider instead of
         // nesting one sub-plan per column.
