@@ -474,7 +474,12 @@ fn can_rewrite_count_args(args: &[Expr], info: &SimplifyContext) -> bool {
     let mut has_non_nullable_column = false;
     for arg in args {
         match arg {
-            Expr::Column(_) if matches!(info.nullable(arg), Ok(false)) => {
+            Expr::Column(_)
+                if matches!(info.nullable(arg), Ok(false))
+                    && info
+                        .get_data_type(arg)
+                        .is_ok_and(|data_type| !may_have_logical_nulls(&data_type)) =>
+            {
                 has_non_nullable_column = true;
             }
             Expr::Literal(value, _) if !value.is_null() => {}
@@ -482,6 +487,17 @@ fn can_rewrite_count_args(args: &[Expr], info: &SimplifyContext) -> bool {
         }
     }
     has_non_nullable_column
+}
+
+/// Arrays of these types can hold logical nulls even when their field is non-nullable
+fn may_have_logical_nulls(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Null
+            | DataType::Dictionary(_, _)
+            | DataType::RunEndEncoded(_, _)
+            | DataType::Union(_, _)
+    )
 }
 
 #[cold]
@@ -977,7 +993,7 @@ mod tests {
     use super::*;
     use arrow::{
         array::{DictionaryArray, Int32Array, Int64Array, NullArray, StringArray},
-        datatypes::{DataType, Field, Int32Type, Schema},
+        datatypes::{DataType, Field, Int32Type, Schema, UnionFields, UnionMode},
     };
     use datafusion_common::DFSchema;
     use datafusion_expr::function::AccumulatorArgs;
@@ -1028,6 +1044,32 @@ mod tests {
         let schema = DFSchema::try_from(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, true),
+            Field::new("null_col", DataType::Null, false),
+            Field::new(
+                "dict_col",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
+                "ree_col",
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Utf8, true)),
+                ),
+                false,
+            ),
+            Field::new(
+                "union_col",
+                DataType::Union(
+                    UnionFields::from_fields(vec![Field::new(
+                        "i",
+                        DataType::Int32,
+                        true,
+                    )]),
+                    UnionMode::Sparse,
+                ),
+                false,
+            ),
         ]))?;
         let info = SimplifyContext::builder()
             .with_schema(Arc::new(schema))
@@ -1057,6 +1099,11 @@ mod tests {
             vec![col("b")],
             vec![col("a"), col("b")],
             vec![col("a") + lit(1)],
+            vec![col("null_col")],
+            vec![col("dict_col")],
+            vec![col("ree_col")],
+            vec![col("union_col")],
+            vec![col("a"), col("dict_col")],
         ] {
             assert_eq!(simplified_args(args.clone(), false)?, args);
         }
