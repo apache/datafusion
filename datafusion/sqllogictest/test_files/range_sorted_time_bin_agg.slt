@@ -136,8 +136,8 @@ k2 2024-01-01T01:30:00 30
 k2 2024-01-01T01:45:00 5
 
 ##########
-# Crossing date_bin bins must retain the hash shuffle, even though the
-# function's parameters are admitted for range-key locality analysis.
+# The 90-minute bin [00:00, 01:30) crosses the scan's 01:00 partition split.
+# Keep the hash shuffle even though the date_bin parameters are admitted.
 ##########
 
 query TT

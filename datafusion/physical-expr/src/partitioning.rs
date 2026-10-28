@@ -1429,6 +1429,8 @@ mod tests {
         )])?;
         let hour = 3_600_000_000_000;
         let function = date_bin_of(fixture.col(0), hour);
+        // Ascending compares split - 1 ns with split. Descending compares split
+        // with split + 1 ns, so aligned descending splits end a bin rather than start it.
         let cases = [
             ("ascending aligned", false, vec![-hour, 0, hour], true),
             ("ascending crossing", false, vec![-hour, 1, hour], false),
@@ -1472,32 +1474,34 @@ mod tests {
             DataType::Timestamp(TimeUnit::Nanosecond, None),
         )])?;
         let hour = 3_600_000_000_000;
-        let minimum_safe_input = i64::MIN + hour - i64::MIN.rem_euclid(hour);
-        let function = date_bin_of(fixture.col(0), hour);
-        assert_eq!(
-            evaluate_with_range_value(
-                &function,
-                &fixture.col(0),
-                &ScalarValue::TimestampNanosecond(Some(minimum_safe_input), None),
-            ),
-            Some(ScalarValue::TimestampNanosecond(
-                Some(minimum_safe_input),
-                None
-            )),
-        );
+        // The hour containing i64::MIN starts outside the timestamp range.
+        let nanos_to_next_hour = hour - i64::MIN.rem_euclid(hour);
+        let first_representable_hour = i64::MIN + nanos_to_next_hour;
+        let at_split =
+            ScalarValue::TimestampNanosecond(Some(first_representable_hour), None);
+        let before_split =
+            ScalarValue::TimestampNanosecond(Some(first_representable_hour - 1), None);
+        let timestamp = fixture.col(0);
+        let function = date_bin_of(Arc::clone(&timestamp), hour);
+
+        let bin_at_split = evaluate_with_range_value(&function, &timestamp, &at_split);
+        assert_eq!(bin_at_split, Some(at_split));
+
+        let bin_before_split =
+            evaluate_with_range_value(&function, &timestamp, &before_split);
         assert!(
-            evaluate_with_range_value(
-                &function,
-                &fixture.col(0),
-                &ScalarValue::TimestampNanosecond(Some(minimum_safe_input - 1), None),
-            )
-            .is_none()
+            bin_before_split.is_none(),
+            "binning 1 ns before the split must fail"
         );
+
         let range = fixture.range_partitioning(
             [0],
-            vec![timestamp_split(Some(minimum_safe_input), None)],
+            vec![timestamp_split(Some(first_representable_hour), None)],
         );
-        assert!(!range.keeps_keys_local(&[function], &fixture.eq_properties, false));
+        assert!(
+            !range.keeps_keys_local(&[function], &fixture.eq_properties, false),
+            "a boundary evaluation error must reject the optimization",
+        );
         Ok(())
     }
 
