@@ -65,8 +65,9 @@ use crate::{
     common::can_project,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
-        build_join_schema, check_join_is_valid, estimate_join_statistics,
-        need_produce_result_in_final, symmetric_join_output_partitioning,
+        build_join_schema, check_join_is_valid, co_partitioned_key_requirements,
+        estimate_join_statistics, need_produce_result_in_final,
+        symmetric_join_output_partitioning,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
@@ -1532,17 +1533,7 @@ impl ExecutionPlan for HashJoinExec {
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         match self.mode {
-            PartitionMode::Partitioned => {
-                let (left_expr, right_expr) = self
-                    .on
-                    .iter()
-                    .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
-                    .unzip();
-                InputDistributionRequirements::co_partitioned(vec![
-                    Distribution::KeyPartitioned(left_expr),
-                    Distribution::KeyPartitioned(right_expr),
-                ])
-            }
+            PartitionMode::Partitioned => co_partitioned_key_requirements(&self.on),
             PartitionMode::CollectLeft => InputDistributionRequirements::new(vec![
                 Distribution::SinglePartition,
                 Distribution::UnspecifiedDistribution,

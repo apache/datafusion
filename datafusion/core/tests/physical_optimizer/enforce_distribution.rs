@@ -2780,8 +2780,8 @@ fn range_left_anti_hash_join_rehashes_incompatible_null_options() -> Result<()> 
     Ok(())
 }
 
-/// Builds a Full `HashJoinExec` over two scans laid out by `partitioning`. The right side
-/// columns are aliased to `a1` and `b1`.
+/// Builds a Full `HashJoinExec` on `a = a1` over two scans laid out by `partitioning`.
+/// The right side keeps only `a` and `b`, renamed to `a1` and `b1`.
 fn co_partitioned_full_join(
     partitioning: Partitioning,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -2815,8 +2815,8 @@ fn coalesced_key(
     )
 }
 
-/// Inner joins `join` on `key` with a scan laid out by `partitioning`, then runs the
-/// distribution rule over the result.
+/// Inner joins `join` on `key = c` with a scan laid out by `partitioning`, then runs the
+/// distribution and sorting rules over the result.
 fn plan_join_on_key(
     join: Arc<dyn ExecutionPlan>,
     key: Arc<dyn PhysicalExpr>,

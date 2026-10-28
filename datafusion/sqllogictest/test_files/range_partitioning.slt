@@ -2113,7 +2113,7 @@ ORDER BY k;
 
 ##########
 # TEST 53: Full Join Output Partitioning Does Not Cover a Single Side Key
-# Right only rows carry NULL in l.range_key in every partition, so a repartition stays.
+# Right-only rows put NULL in l.range_key in two partitions, so a repartition stays.
 ##########
 
 query TT
@@ -2150,7 +2150,7 @@ NULL 2
 
 ##########
 # TEST 54: Full Join Output Partitioning Matches Coalesce in Either Key Order
-# Both coalesce orders are equal on every Full join row, so no repartition either.
+# Both coalesce orders are equal on every Full join row, so no repartition.
 ##########
 
 query TT
