@@ -949,6 +949,68 @@ fn test_type_union_resolution_map() {
     );
 }
 
+/// Tests that `type_union_resolution` correctly preserves field nullability when
+/// resolving structs with identical field names in different orders.
+/// See <https://github.com/apache/datafusion/issues/26296>.
+#[test]
+fn test_type_union_resolution_struct_reordered_nullability() {
+    let s_lhs = DataType::Struct(Fields::from(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+
+    let s_rhs = DataType::Struct(Fields::from(vec![
+        Field::new("b", DataType::Int32, true),
+        Field::new("a", DataType::Int32, false),
+    ]));
+
+    // With &[s_lhs, s_rhs], the fold resolves with s_rhs as the primary type:
+    // field "b" is nullable (true || false), field "a" is non-nullable (false || false)
+    let expected_s_rhs_order = DataType::Struct(Fields::from(vec![
+        Field::new("b", DataType::Int32, true),
+        Field::new("a", DataType::Int32, false),
+    ]));
+
+    assert_eq!(
+        type_union_resolution(&[s_lhs.clone(), s_rhs.clone()]),
+        Some(expected_s_rhs_order)
+    );
+
+    // With &[s_rhs, s_lhs], the fold resolves with s_lhs as the primary type:
+    // field "a" is non-nullable (false || false), field "b" is nullable (false || true)
+    let expected_s_lhs_order = DataType::Struct(Fields::from(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, true),
+    ]));
+
+    assert_eq!(
+        type_union_resolution(&[s_rhs.clone(), s_lhs.clone()]),
+        Some(expected_s_lhs_order)
+    );
+
+    // Structs with type widening across reordered fields
+    let s1 = DataType::Struct(Fields::from(vec![
+        Field::new("x", DataType::Int32, false),
+        Field::new("y", DataType::Utf8, false),
+    ]));
+
+    let s2 = DataType::Struct(Fields::from(vec![
+        Field::new("y", DataType::Utf8, true),
+        Field::new("x", DataType::Int64, false),
+    ]));
+
+    // &[s1, s2] fold resolves with s2 as primary order: "y", then "x"
+    let expected_widened = DataType::Struct(Fields::from(vec![
+        Field::new("y", DataType::Utf8, true),
+        Field::new("x", DataType::Int64, false),
+    ]));
+
+    assert_eq!(
+        type_union_resolution(&[s1, s2]),
+        Some(expected_widened)
+    );
+}
+
 /// Tests that comparison operators coerce to numeric when comparing
 /// numeric and string types.
 #[test]

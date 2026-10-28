@@ -824,37 +824,15 @@ fn type_union_resolution_coercion(
                 return None;
             }
 
-            // Search the field in the right hand side with the SAME field name
-            fn search_corresponding_coerced_type(
-                lhs_field: &FieldRef,
-                rhs: &Fields,
-            ) -> Option<DataType> {
-                for rhs_field in rhs.iter() {
-                    if lhs_field.name() == rhs_field.name() {
-                        let t = type_union_resolution_coercion(
-                            lhs_field.data_type(),
-                            rhs_field.data_type(),
-                        )?;
-                        return Some(t);
-                    }
-                }
-
-                None
+            let mut fields = Vec::with_capacity(lhs.len());
+            for lhs_field in lhs.iter() {
+                let rhs_field = rhs.iter().find(|f| f.name() == lhs_field.name())?;
+                let coerced_type = type_union_resolution_coercion(
+                    lhs_field.data_type(),
+                    rhs_field.data_type(),
+                )?;
+                fields.push(coerce_fields(coerced_type, lhs_field, rhs_field));
             }
-
-            let coerced_types = lhs
-                .iter()
-                .map(|lhs_field| search_corresponding_coerced_type(lhs_field, rhs))
-                .collect::<Option<Vec<_>>>()?;
-
-            // preserve the field name and nullability
-            let orig_fields = std::iter::zip(lhs.iter(), rhs.iter());
-
-            let fields: Vec<FieldRef> = coerced_types
-                .into_iter()
-                .zip(orig_fields)
-                .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
-                .collect();
             Some(DataType::Struct(fields.into()))
         }
         _ => binary_numeric_coercion(lhs_type, rhs_type)
