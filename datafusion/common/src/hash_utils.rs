@@ -1458,7 +1458,7 @@ mod tests {
 
     #[cfg(not(feature = "force_hash_collisions"))]
     #[test]
-    fn caching_array_hasher_reuses_dictionary_allocation() -> Result<()> {
+    fn caching_array_hasher() -> Result<()> {
         let random_state = RandomState::with_seed(0);
         let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
         let dictionary = DictionaryArray::<Int8Type>::new(
@@ -1510,17 +1510,11 @@ mod tests {
         assert!(Arc::ptr_eq(&cached_values, &new_values));
         assert_eq!(value_hashes.as_ptr(), allocation);
         assert_eq!(value_hashes[1], 0);
-        Ok(())
-    }
 
-    #[test]
-    fn caching_array_hasher_hashes_non_dictionary() -> Result<()> {
-        let random_state = RandomState::with_seed(0);
         let array = Int32Array::from(vec![1, 2, 3]);
         let mut expected = vec![0; array.len()];
         create_hashes([&array as &dyn Array], &random_state, &mut expected)?;
 
-        let mut cache = CachingArrayHasher::new(random_state);
         let mut actual = vec![0; array.len()];
         cache.create_hashes(&array, &mut actual, false)?;
 
