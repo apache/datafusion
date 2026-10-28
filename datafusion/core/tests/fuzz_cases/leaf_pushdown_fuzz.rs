@@ -39,6 +39,7 @@
 //! `LEAF_PUSHDOWN_FUZZ_CASES` also raises the case count of a normal run.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow::array::{
     Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch, StringArray,
@@ -48,6 +49,8 @@ use arrow::datatypes::{DataType, Field, Fields, Int32Type, Schema};
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion_common::Result;
+use datafusion_common::instant::Instant;
+use datafusion_common_runtime::SpawnedTask;
 use parquet::arrow::ArrowWriter;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -638,47 +641,170 @@ async fn check_case(
     }
 }
 
-/// Runs `cases` seeded cases against the two contexts. `left` and `right` name
-/// the two settings in the failure report. Every case runs, so the report holds
-/// the share of the seeds that fail, not only the first one.
-async fn run(
-    ctx_left: &SessionContext,
-    ctx_right: &SessionContext,
-    left: &str,
-    right: &str,
-    cases: usize,
-    seed0: u64,
-) {
-    let mut skipped = 0;
-    let mut failed = 0;
-    let mut first: Option<String> = None;
-    for seed in seed0..seed0 + cases as u64 {
-        let case = gen_case(&mut SmallRng::seed_from_u64(seed));
-        let Some(detail) =
-            check_case(ctx_left, ctx_right, left, right, &case, &mut skipped).await
-        else {
-            continue;
-        };
-        failed += 1;
-        first.get_or_insert_with(|| {
-            format!(
-                "  seed: {seed}\n  sql: {}\n  {detail}\n  reproduce with \
-                 LEAF_PUSHDOWN_FUZZ_SEED={seed} LEAF_PUSHDOWN_FUZZ_CASES=1",
-                case.sql
-            )
-        });
+/// Limit concurrent worker tasks to prevent thread thrashing
+/// since individual queries already execute with `target_partitions = 2`.
+const MAX_CONCURRENT_WORKERS: usize = 16;
+const DEFAULT_FALLBACK_WORKERS: usize = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Seed(u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Cases(usize);
+
+/// Couples an engine's execution context with its diagnostic label.
+/// Guarantees at compile time that an engine context cannot be mispaired with the wrong label.
+#[derive(Clone, Copy)]
+struct TestEngine<'a> {
+    ctx: &'a SessionContext,
+    label: &'a str,
+}
+
+impl<'a> TestEngine<'a> {
+    fn new(ctx: &'a SessionContext, label: &'a str) -> Self {
+        Self { ctx, label }
     }
-    let ratio = skipped as f64 / cases as f64;
+}
+
+/// Aggregate execution metrics collected per worker task.
+#[derive(Default)]
+struct WorkerResult {
+    skipped: usize,
+    failed: usize,
+    /// Holds `(seed, error_report)` for the lowest numerical seed that failed
+    /// in this worker. Preserving the earliest seed guarantees 100% deterministic
+    /// reproduction (`LEAF_PUSHDOWN_FUZZ_SEED=<seed> LEAF_PUSHDOWN_FUZZ_CASES=1`)
+    /// even though workers finish out of order.
+    first_failure: Option<(u64, String)>,
+}
+
+/// Runs `cases` seeded cases against the two contexts.
+///
+/// # Concurrency & Dynamic Work-Stealing Architecture
+/// - Scales worker tasks to host vCPUs via `available_parallelism`, capped at
+///   [`MAX_CONCURRENT_WORKERS`] to prevent thread thrashing.
+/// - Seeds are dynamically claimed from a central [`AtomicU64`] counter with `fetch_add`,
+///   preventing straggler stalls when complex plans take longer to execute.
+/// - `SessionContext` is safely cloned across tasks since tables are pre-registered
+///   and differential queries only acquire read locks on `SessionState`.
+/// - Each worker tallies its local `skipped`, `failed`, and earliest `first_failure`.
+///   The coordinator reduces across all workers by minimal seed number so failure
+///   reporting matches sequential execution order.
+async fn run(left: TestEngine<'_>, right: TestEngine<'_>, cases: Cases, seed0: Seed) {
+    let Cases(num_cases) = cases;
+    let Seed(start_seed) = seed0;
+
+    if num_cases == 0 {
+        return;
+    }
+
+    let start_instant = Instant::now();
+
+    let num_workers = match std::thread::available_parallelism() {
+        Ok(n) => n.get().clamp(1, MAX_CONCURRENT_WORKERS).min(num_cases),
+        Err(e) => {
+            eprintln!(
+                "\n[WARNING] leaf pushdown fuzz: failed to detect CPU cores ({e}).\n\
+                 Falling back to {DEFAULT_FALLBACK_WORKERS} worker.\n"
+            );
+            DEFAULT_FALLBACK_WORKERS.min(num_cases)
+        }
+    };
+
+    let next_seed = Arc::new(AtomicU64::new(start_seed));
+    let max_seed = start_seed + num_cases as u64;
+
+    let mut handles = Vec::with_capacity(num_workers);
+    for _ in 0..num_workers {
+        let ctx_left = left.ctx.clone();
+        let ctx_right = right.ctx.clone();
+        let left_label = left.label.to_string();
+        let right_label = right.label.to_string();
+        let next_seed = Arc::clone(&next_seed);
+
+        handles.push(SpawnedTask::spawn(async move {
+            let mut res = WorkerResult::default();
+
+            loop {
+                if next_seed.load(Ordering::Relaxed) >= max_seed {
+                    break;
+                }
+                let seed = next_seed.fetch_add(1, Ordering::Relaxed);
+                if seed >= max_seed {
+                    break;
+                }
+
+                let case = gen_case(&mut SmallRng::seed_from_u64(seed));
+                let Some(detail) = check_case(
+                    &ctx_left,
+                    &ctx_right,
+                    &left_label,
+                    &right_label,
+                    &case,
+                    &mut res.skipped,
+                )
+                .await
+                else {
+                    continue;
+                };
+
+                res.failed += 1;
+                if res.first_failure.is_none() {
+                    res.first_failure = Some((
+                        seed,
+                        format!(
+                            "  seed: {seed}\n  sql: {}\n  {detail}\n  reproduce with \
+                             LEAF_PUSHDOWN_FUZZ_SEED={seed} LEAF_PUSHDOWN_FUZZ_CASES=1",
+                            case.sql
+                        ),
+                    ));
+                }
+            }
+
+            res
+        }));
+    }
+
+    let mut total = WorkerResult::default();
+
+    for handle in handles {
+        let worker_res = handle.await.expect("fuzz worker task panicked");
+        total.skipped += worker_res.skipped;
+        total.failed += worker_res.failed;
+
+        if let Some((seed, report)) = worker_res.first_failure {
+            match &total.first_failure {
+                Some((best_seed, _)) if seed < *best_seed => {
+                    total.first_failure = Some((seed, report));
+                }
+                None => {
+                    total.first_failure = Some((seed, report));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let succeeded = num_cases - total.skipped - total.failed;
+    let first = total.first_failure.map(|(_, report)| report);
+    let ratio = total.skipped as f64 / num_cases as f64;
+    let (left_label, right_label) = (left.label, right.label);
+    let elapsed = start_instant.elapsed();
+
     println!(
-        "leaf pushdown fuzz: {left} vs {right}, seeds {seed0}..{}, ok {}, \
-         skipped {skipped} ({:.1}%), failed {failed}",
-        seed0 + cases as u64,
-        cases - skipped - failed,
-        ratio * 100.0
+        "leaf pushdown fuzz: {left_label} vs {right_label}, seeds {start_seed}..{}, ok {succeeded}, \
+         skipped {} ({:.1}%), failed {} in {:.2?}",
+        start_seed + num_cases as u64,
+        total.skipped,
+        ratio * 100.0,
+        total.failed,
+        elapsed
     );
+
     assert!(
         first.is_none(),
-        "leaf pushdown fuzz: {failed} of {cases} seeds failed, first one:\n{}",
+        "leaf pushdown fuzz: {} of {num_cases} seeds failed, first one:\n{}",
+        total.failed,
         first.unwrap_or_default()
     );
     assert!(
@@ -695,14 +821,20 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-fn seed() -> u64 {
-    env_usize("LEAF_PUSHDOWN_FUZZ_SEED", 0) as u64
+fn seed() -> Seed {
+    Seed(env_usize("LEAF_PUSHDOWN_FUZZ_SEED", 0) as u64)
 }
 
 async fn run_memory(cases: usize) {
     let on = memory_ctx(true);
     let off = memory_ctx(false);
-    run(&on, &off, "pushdown on", "pushdown off", cases, seed()).await;
+    run(
+        TestEngine::new(&on, "pushdown on"),
+        TestEngine::new(&off, "pushdown off"),
+        Cases(cases),
+        seed(),
+    )
+    .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -753,11 +885,9 @@ async fn run_parquet(cases: usize) {
     let on = parquet_ctx(&dir, true).await;
     let off = parquet_ctx(&dir, false).await;
     run(
-        &on,
-        &off,
-        "parquet pushdown on",
-        "parquet pushdown off",
-        cases,
+        TestEngine::new(&on, "parquet pushdown on"),
+        TestEngine::new(&off, "parquet pushdown off"),
+        Cases(cases),
         seed(),
     )
     .await;
@@ -820,11 +950,9 @@ async fn leaf_pushdown_parquet_schema_evolution() {
     }
     check_evolved_filters(&contexts[0], &contexts[1], &wide).await;
     run(
-        &contexts[0],
-        &contexts[1],
-        "parquet pushdown on",
-        "parquet pushdown off",
-        DEFAULT_CASES / 5,
+        TestEngine::new(&contexts[0], "parquet pushdown on"),
+        TestEngine::new(&contexts[1], "parquet pushdown off"),
+        Cases(DEFAULT_CASES / 5),
         seed(),
     )
     .await;
