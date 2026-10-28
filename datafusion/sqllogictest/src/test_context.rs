@@ -60,6 +60,7 @@ use log::info;
 use sqlparser::ast;
 use tempfile::TempDir;
 
+mod exact_sort_pushdown;
 mod range_partitioning;
 
 /// Context for running tests
@@ -169,6 +170,10 @@ impl TestContext {
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
+            "sort_pushdown.slt" => {
+                exact_sort_pushdown::register_exact_sort_source(test_ctx.session_ctx())
+                    .expect("register exact sort source");
+            }
             "parquet_missing_bounds.slt" => {
                 register_parquet_missing_bounds(&mut test_ctx).await;
             }
