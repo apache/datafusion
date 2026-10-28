@@ -128,6 +128,10 @@ use tokio::sync::Mutex;
 // Re-export from this module for backwards compatibility.
 pub use datafusion_session::{ExtensionPlanner, PhysicalPlanner};
 
+/// Called with the plan after each physical optimizer rule.
+type OptimizerObserver<'a> =
+    dyn FnMut(&Arc<dyn ExecutionPlan>, &dyn PhysicalOptimizerRule) + 'a;
+
 struct SessionOptimizerContext<'a> {
     session: &'a dyn Session,
     statistics_context: StatisticsContext,
@@ -341,18 +345,7 @@ struct MaterializedCteBinder {
 
 impl MaterializedCteBinder {
     fn new(plan: &Arc<dyn ExecutionPlan>, session_state: &dyn Session) -> Result<Self> {
-        let mut ctes = HashMap::new();
-        plan.apply(|node| {
-            if let Some(cte) = node.downcast_ref::<MaterializedCteExec>()
-                && ctes.insert(cte.buffer().id(), Arc::clone(node)).is_some()
-            {
-                return internal_err!(
-                    "Two MaterializedCteExec nodes have the id {}",
-                    cte.buffer().id()
-                );
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
+        let ctes = materialized_ctes(plan)?;
         let context = match session_state.statistics_registry() {
             Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
             None => StatisticsContext::new(),
@@ -367,7 +360,7 @@ impl MaterializedCteBinder {
     fn cte(&self, id: u64) -> Option<&MaterializedCteExec> {
         self.ctes
             .get(&id)
-            .and_then(|cte| cte.downcast_ref::<MaterializedCteExec>())
+            .and_then(|cte| as_materialized_cte(cte).ok())
     }
 
     /// Give every scan in `plan` whose CTE is in `self.ctes` the statistics
@@ -436,6 +429,32 @@ fn bind_materialized_cte_scans(
         return Ok(plan);
     }
     binder.bind(plan, true)
+}
+
+/// The [`MaterializedCteExec`] nodes of `plan`, by id.
+fn materialized_ctes(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Result<HashMap<u64, Arc<dyn ExecutionPlan>>> {
+    let mut ctes = HashMap::new();
+    plan.apply(|node| {
+        if let Some(cte) = node.downcast_ref::<MaterializedCteExec>()
+            && ctes.insert(cte.buffer().id(), Arc::clone(node)).is_some()
+        {
+            return internal_err!(
+                "Two MaterializedCteExec nodes have the id {}",
+                cte.buffer().id()
+            );
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(ctes)
+}
+
+fn as_materialized_cte(plan: &Arc<dyn ExecutionPlan>) -> Result<&MaterializedCteExec> {
+    match plan.downcast_ref::<MaterializedCteExec>() {
+        Some(cte) => Ok(cte),
+        None => internal_err!("Expected a MaterializedCteExec"),
+    }
 }
 
 #[derive(Debug)]
@@ -3388,6 +3407,20 @@ impl DefaultPhysicalPlanner {
         F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
     {
         let plan = bind_materialized_cte_scans(plan, session_state)?;
+        self.run_physical_optimizers(plan, session_state, &mut |plan, optimizer| {
+            observer(plan.as_ref(), optimizer)
+        })
+    }
+
+    /// Apply each physical optimizer to `plan`, and call `observer` with the
+    /// plan after each one.
+    #[expect(clippy::needless_pass_by_value)]
+    fn run_physical_optimizers(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        session_state: &dyn Session,
+        observer: &mut OptimizerObserver,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let optimizers = session_state.physical_optimizers();
         debug!(
             "Input physical plan:\n{}\n",
@@ -3421,7 +3454,7 @@ impl DefaultPhysicalPlanner {
                 optimizer.name(),
                 displayable(new_plan.as_ref()).indent(false)
             );
-            observer(new_plan.as_ref(), optimizer.as_ref())
+            observer(&new_plan, optimizer.as_ref())
         }
 
         // This runs once after all optimizer runs are complete,
