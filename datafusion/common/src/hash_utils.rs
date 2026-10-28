@@ -34,57 +34,86 @@ pub type QualityRandomState = foldhash::quality::FixedState;
 
 type DictionaryHashEntry = (Weak<dyn Array>, Vec<u64>);
 
-/// Hashes one array at a time, reusing dictionary value hashes when possible.
+/// Hashes arrays, reusing dictionary value hashes by column when possible.
 #[derive(Debug)]
 pub struct CachingArrayHasher {
     /// Stored with the cache so value hashes cannot cross hash seeds.
     random_state: RandomState,
-    /// Weak identity avoids retaining values; the hash allocation is reusable.
-    dictionary: Option<DictionaryHashEntry>,
+    /// One entry per column. Weak identity avoids retaining dictionary values.
+    dictionaries: Vec<Option<DictionaryHashEntry>>,
 }
 
 impl CachingArrayHasher {
-    /// Creates an empty cache for `random_state`.
-    pub fn new(random_state: RandomState) -> Self {
+    /// Creates one cache slot per column in `schema`.
+    ///
+    /// For each dictionary column, the cache tracks the values array with a
+    /// weak pointer, so it does not keep the values alive, and owns a reusable
+    /// value-hash buffer. [`Self::create_hashes`] reuses those hashes while the
+    /// values `Arc` is unchanged, recomputes them when it changes, and scatters
+    /// them through the dictionary keys into the row hashes. Non-dictionary
+    /// columns use the regular array hashing path.
+    pub fn new(schema: &Schema, random_state: RandomState) -> Self {
         Self {
             random_state,
-            dictionary: None,
+            dictionaries: schema.fields().iter().map(|_| None).collect(),
         }
     }
 
-    /// Hashes `array`, reusing dictionary value hashes while its values array
-    /// is unchanged.
-    ///
-    /// `hashes_buffer` must have the same length as `array`. If `rehash` is
-    /// `false`, this initializes each row hash; if `true`, it combines the
-    /// array hash with the existing row hash.
-    pub fn create_hashes<'a>(
+    /// Hashes `arrays`, reusing dictionary value hashes while each column's
+    /// values array is unchanged.
+    pub fn create_hashes<'a, I, T>(
         &mut self,
-        array: &dyn Array,
+        arrays: I,
         hashes_buffer: &'a mut [u64],
+    ) -> Result<&'a mut [u64]>
+    where
+        I: IntoIterator<Item = T>,
+        I::IntoIter: ExactSizeIterator,
+        T: AsDynArray,
+    {
+        let arrays = arrays.into_iter();
+        if arrays.len() != self.dictionaries.len() {
+            return _internal_err!(
+                "CachingArrayHasher expected {} arrays, got {}",
+                self.dictionaries.len(),
+                arrays.len()
+            );
+        }
+        for (index, array) in arrays.enumerate() {
+            self.hash_array(index, array.as_dyn_array(), hashes_buffer, index != 0)?;
+        }
+        Ok(hashes_buffer)
+    }
+
+    fn hash_array(
+        &mut self,
+        index: usize,
+        array: &dyn Array,
+        hashes_buffer: &mut [u64],
         rehash: bool,
-    ) -> Result<&'a mut [u64]> {
+    ) -> Result<()> {
         #[cfg(feature = "force_hash_collisions")]
         {
+            let _ = index;
             hash_single_array(array, &self.random_state, hashes_buffer, rehash)?;
         }
 
         #[cfg(not(feature = "force_hash_collisions"))]
         {
+            let dictionary = &mut self.dictionaries[index];
             if !matches!(array.data_type(), DataType::Dictionary(_, _)) {
-                self.dictionary = None;
+                *dictionary = None;
                 hash_single_array(array, &self.random_state, hashes_buffer, rehash)?;
-                return Ok(hashes_buffer);
+                return Ok(());
             }
 
             downcast_dictionary_array! {
                 array => {
                     let values = array.values();
-                    if !self.dictionary.as_ref().is_some_and(|(cached, _)| {
+                    if !dictionary.as_ref().is_some_and(|(cached, _)| {
                         std::ptr::addr_eq(cached.as_ptr(), Arc::as_ptr(values))
                     }) {
-                        let mut hashes = self
-                            .dictionary
+                        let mut hashes = dictionary
                             .take()
                             .map(|(_, hashes)| hashes)
                             .unwrap_or_default();
@@ -97,11 +126,11 @@ impl CachingArrayHasher {
                             &mut hashes,
                             false,
                         )?;
-                        self.dictionary = Some((Arc::downgrade(values), hashes));
+                        *dictionary = Some((Arc::downgrade(values), hashes));
                     }
                     dispatch_dictionary_scatter(
                         array,
-                        &self.dictionary.as_ref().unwrap().1,
+                        &dictionary.as_ref().unwrap().1,
                         hashes_buffer,
                         rehash,
                     );
@@ -110,20 +139,24 @@ impl CachingArrayHasher {
             };
         }
 
-        Ok(hashes_buffer)
+        Ok(())
     }
 
-    /// Returns the current dictionary values and hashes, if any.
-    pub fn dictionary_hashes(&self) -> Option<(ArrayRef, &[u64])> {
-        let (values, hashes) = self.dictionary.as_ref()?;
+    /// Returns the current dictionary values and hashes for `index`, if any.
+    pub fn dictionary_hashes(&self, index: usize) -> Option<(ArrayRef, &[u64])> {
+        let (values, hashes) = self.dictionaries.get(index)?.as_ref()?;
         Some((values.upgrade()?, hashes))
     }
 
     /// Returns the allocated size of the cache.
     pub fn size(&self) -> usize {
-        self.dictionary
-            .as_ref()
-            .map_or(0, |entry| entry.1.capacity() * size_of::<u64>())
+        self.dictionaries.capacity() * size_of::<Option<DictionaryHashEntry>>()
+            + self
+                .dictionaries
+                .iter()
+                .flatten()
+                .map(|entry| entry.1.capacity() * size_of::<u64>())
+                .sum::<usize>()
     }
 }
 
@@ -1457,69 +1490,190 @@ mod tests {
     }
 
     #[cfg(not(feature = "force_hash_collisions"))]
+    fn string_dictionary(keys: Vec<i8>, values: &ArrayRef) -> ArrayRef {
+        Arc::new(DictionaryArray::<Int8Type>::new(
+            Int8Array::from(keys),
+            Arc::clone(values),
+        ))
+    }
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn caching_hasher(
+        columns: &[ArrayRef],
+        random_state: &RandomState,
+    ) -> CachingArrayHasher {
+        let fields = columns
+            .iter()
+            .enumerate()
+            .map(|(index, column)| {
+                Field::new(format!("column_{index}"), column.data_type().clone(), true)
+            })
+            .collect::<Vec<_>>();
+        CachingArrayHasher::new(&Schema::new(fields), random_state.clone())
+    }
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn assert_hashes_match(
+        hasher: &mut CachingArrayHasher,
+        columns: &[ArrayRef],
+        random_state: &RandomState,
+    ) -> Result<()> {
+        let mut expected = vec![0; columns[0].len()];
+        create_hashes(columns, random_state, &mut expected)?;
+
+        let mut actual = vec![0; columns[0].len()];
+        hasher.create_hashes(columns, &mut actual)?;
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn assert_cached_values(
+        hasher: &CachingArrayHasher,
+        column_index: usize,
+        expected_values: &ArrayRef,
+    ) -> *const u64 {
+        let (cached_values, value_hashes) =
+            hasher.dictionary_hashes(column_index).unwrap();
+        assert!(Arc::ptr_eq(&cached_values, expected_values));
+        value_hashes.as_ptr()
+    }
+
+    #[cfg(not(feature = "force_hash_collisions"))]
     #[test]
-    fn caching_array_hasher() -> Result<()> {
+    fn caching_array_hasher_hashes_regular_and_dictionary_columns() -> Result<()> {
         let random_state = RandomState::with_seed(0);
-        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
-        let dictionary = DictionaryArray::<Int8Type>::new(
-            Int8Array::from(vec![0, 1, 0]),
-            Arc::clone(&values),
+        let dictionary_values: ArrayRef =
+            Arc::new(StringArray::from(vec!["active", "inactive"]));
+        let first_batch = vec![
+            Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
+            string_dictionary(vec![0, 1, 0], &dictionary_values),
+        ];
+        let mut hasher = caching_hasher(&first_batch, &random_state);
+        assert_hashes_match(&mut hasher, &first_batch, &random_state)?;
+
+        assert!(hasher.dictionary_hashes(0).is_none());
+        let value_hash_allocation = assert_cached_values(&hasher, 1, &dictionary_values);
+
+        // A later batch has new plain values and dictionary keys, but shares
+        // the dictionary values array and therefore its cached hashes.
+        let second_batch = vec![
+            Arc::new(Int32Array::from(vec![40, 50])) as ArrayRef,
+            string_dictionary(vec![1, 0], &dictionary_values),
+        ];
+        assert_hashes_match(&mut hasher, &second_batch, &random_state)?;
+        assert_eq!(
+            assert_cached_values(&hasher, 1, &dictionary_values),
+            value_hash_allocation
         );
-        let mut expected = vec![0; dictionary.len()];
-        create_hashes([&dictionary as &dyn Array], &random_state, &mut expected)?;
+        Ok(())
+    }
 
-        let mut cache = CachingArrayHasher::new(random_state.clone());
-        let mut actual = vec![0; dictionary.len()];
-        cache.create_hashes(&dictionary, &mut actual, false)?;
-        assert_eq!(actual, expected);
+    #[cfg(not(feature = "force_hash_collisions"))]
+    #[test]
+    fn caching_array_hasher_updates_dictionary_columns_independently() -> Result<()> {
+        let random_state = RandomState::with_seed(0);
+        let country_values: ArrayRef = Arc::new(StringArray::from(vec!["us", "uk"]));
+        let status_values: ArrayRef =
+            Arc::new(StringArray::from(vec!["active", "inactive"]));
+        let first_batch = vec![
+            string_dictionary(vec![0, 1, 0], &country_values),
+            string_dictionary(vec![1, 0, 1], &status_values),
+        ];
+        let mut hasher = caching_hasher(&first_batch, &random_state);
+        assert_hashes_match(&mut hasher, &first_batch, &random_state)?;
+        let country_hash_allocation = assert_cached_values(&hasher, 0, &country_values);
+        let status_hash_allocation = assert_cached_values(&hasher, 1, &status_values);
 
-        let (cached_values, value_hashes) = cache.dictionary_hashes().unwrap();
-        assert!(Arc::ptr_eq(&cached_values, &values));
-        let allocation = value_hashes.as_ptr();
-
-        let prefix = Int32Array::from(vec![10, 20]);
-        let dictionary = DictionaryArray::<Int8Type>::new(
-            Int8Array::from(vec![1, 0]),
-            Arc::clone(&values),
+        // Aggregation batches can rebuild one dictionary while another group
+        // column continues to share its values array.
+        let new_country_values: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("ca"), None]));
+        let second_batch = vec![
+            string_dictionary(vec![1, 0], &new_country_values),
+            string_dictionary(vec![0, 1], &status_values),
+        ];
+        assert_hashes_match(&mut hasher, &second_batch, &random_state)?;
+        assert_eq!(
+            assert_cached_values(&hasher, 0, &new_country_values),
+            country_hash_allocation
         );
-        let mut expected = vec![0; dictionary.len()];
-        create_hashes(
-            [&prefix as &dyn Array, &dictionary],
-            &random_state,
-            &mut expected,
-        )?;
-        let mut actual = vec![0; dictionary.len()];
-        create_hashes([&prefix as &dyn Array], &random_state, &mut actual)?;
-        cache.create_hashes(&dictionary, &mut actual, true)?;
-        assert_eq!(actual, expected);
-
-        let new_values: ArrayRef = Arc::new(StringArray::from(vec![Some("c"), None]));
-        let dictionary = DictionaryArray::<Int8Type>::new(
-            Int8Array::from(vec![1, 0]),
-            Arc::clone(&new_values),
+        assert_eq!(
+            assert_cached_values(&hasher, 1, &status_values),
+            status_hash_allocation
         );
-        actual.clear();
-        actual.resize(dictionary.len(), 0);
-        expected.clear();
-        expected.resize(dictionary.len(), 0);
-        create_hashes([&dictionary as &dyn Array], &random_state, &mut expected)?;
-        cache.create_hashes(&dictionary, &mut actual, false)?;
+        assert_eq!(hasher.dictionary_hashes(0).unwrap().1[1], 0);
 
-        let (cached_values, value_hashes) = cache.dictionary_hashes().unwrap();
-        assert_eq!(actual, expected);
-        assert!(Arc::ptr_eq(&cached_values, &new_values));
-        assert_eq!(value_hashes.as_ptr(), allocation);
-        assert_eq!(value_hashes[1], 0);
+        // Reverse the transition: the first dictionary stays shared while the
+        // second receives a new values array.
+        let new_status_values: ArrayRef =
+            Arc::new(StringArray::from(vec!["pending", "complete"]));
+        let third_batch = vec![
+            string_dictionary(vec![0, 1], &new_country_values),
+            string_dictionary(vec![1, 0], &new_status_values),
+        ];
+        assert_hashes_match(&mut hasher, &third_batch, &random_state)?;
+        assert_eq!(
+            assert_cached_values(&hasher, 0, &new_country_values),
+            country_hash_allocation
+        );
+        assert_eq!(
+            assert_cached_values(&hasher, 1, &new_status_values),
+            status_hash_allocation
+        );
+        Ok(())
+    }
 
-        let array = Int32Array::from(vec![1, 2, 3]);
-        let mut expected = vec![0; array.len()];
-        create_hashes([&array as &dyn Array], &random_state, &mut expected)?;
+    #[cfg(not(feature = "force_hash_collisions"))]
+    #[test]
+    fn caching_array_hasher_tracks_repeated_changes_with_regular_column() -> Result<()> {
+        let random_state = RandomState::with_seed(0);
+        let region_values_v1: ArrayRef =
+            Arc::new(StringArray::from(vec!["east", "west"]));
+        let category_values_v1: ArrayRef =
+            Arc::new(StringArray::from(vec!["hardware", "software"]));
+        let first_batch = vec![
+            string_dictionary(vec![0, 1, 0], &region_values_v1),
+            string_dictionary(vec![1, 0, 1], &category_values_v1),
+            Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
+        ];
+        let mut hasher = caching_hasher(&first_batch, &random_state);
+        assert_hashes_match(&mut hasher, &first_batch, &random_state)?;
 
-        let mut actual = vec![0; array.len()];
-        cache.create_hashes(&array, &mut actual, false)?;
+        // This mirrors repeated aggregation input: dictionary group columns
+        // can change independently while regular group columns change normally.
+        let region_values_v2: ArrayRef =
+            Arc::new(StringArray::from(vec!["north", "south"]));
+        let second_batch = vec![
+            string_dictionary(vec![1, 0, 1], &region_values_v2),
+            string_dictionary(vec![0, 1, 0], &category_values_v1),
+            Arc::new(Int32Array::from(vec![40, 50, 60])) as ArrayRef,
+        ];
+        assert_hashes_match(&mut hasher, &second_batch, &random_state)?;
 
-        assert_eq!(actual, expected);
-        assert!(cache.dictionary_hashes().is_none());
+        let category_values_v2: ArrayRef =
+            Arc::new(StringArray::from(vec!["services", "support"]));
+        let third_batch = vec![
+            string_dictionary(vec![0, 1], &region_values_v2),
+            string_dictionary(vec![1, 0], &category_values_v2),
+            Arc::new(Int32Array::from(vec![70, 80])) as ArrayRef,
+        ];
+        assert_hashes_match(&mut hasher, &third_batch, &random_state)?;
+
+        // Replacing both dictionaries together must also update both cache
+        // slots without affecting the regular column.
+        let region_values_v3: ArrayRef =
+            Arc::new(StringArray::from(vec!["central", "coastal", "remote"]));
+        let category_values_v3: ArrayRef = Arc::new(StringArray::from(vec!["other"]));
+        let fourth_batch = vec![
+            string_dictionary(vec![2, 0, 1], &region_values_v3),
+            string_dictionary(vec![0, 0, 0], &category_values_v3),
+            Arc::new(Int32Array::from(vec![90, 100, 110])) as ArrayRef,
+        ];
+        assert_hashes_match(&mut hasher, &fourth_batch, &random_state)?;
+        assert_cached_values(&hasher, 0, &region_values_v3);
+        assert_cached_values(&hasher, 1, &category_values_v3);
+        assert!(hasher.dictionary_hashes(2).is_none());
         Ok(())
     }
 
