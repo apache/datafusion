@@ -22,7 +22,6 @@ mod union; // Submodule containing calculate_union
 pub use joins::*;
 pub use union::*;
 
-use std::collections::BTreeMap;
 use std::fmt::{self, Display};
 use std::mem;
 use std::sync::Arc;
@@ -52,8 +51,11 @@ use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::sort_expr::options_compatible;
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
-use indexmap::IndexSet;
+use hashbrown::DefaultHashBuilder;
+use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
+
+type ColumnRanges = IndexMap<usize, Interval, DefaultHashBuilder>;
 
 /// `EquivalenceProperties` stores information about the output of a plan node
 /// that can be used to optimize the plan. Currently, it keeps track of:
@@ -137,7 +139,7 @@ use itertools::Itertools;
 ///     "order: [[a@0 ASC, c@2 DESC]], eq: [{members: [b@1], constant: (heterogeneous)}]"
 /// );
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EquivalenceProperties {
     /// Distinct equivalence classes (i.e. expressions with the same value).
     eq_group: EquivalenceGroup,
@@ -152,25 +154,7 @@ pub struct EquivalenceProperties {
     /// Schema associated with this object.
     schema: SchemaRef,
     /// Trusted bounds for non-null integer values, independent of estimate precision.
-    column_ranges: Option<Arc<HashMap<usize, Interval>>>,
-}
-
-impl fmt::Debug for EquivalenceProperties {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Keep range diagnostics stable when properties are reconstructed.
-        let column_ranges = self
-            .column_ranges
-            .as_ref()
-            .map(|ranges| ranges.iter().collect::<BTreeMap<_, _>>());
-        f.debug_struct("EquivalenceProperties")
-            .field("eq_group", &self.eq_group)
-            .field("oeq_class", &self.oeq_class)
-            .field("oeq_cache", &self.oeq_cache)
-            .field("constraints", &self.constraints)
-            .field("schema", &self.schema)
-            .field("column_ranges", &column_ranges)
-            .finish()
-    }
+    column_ranges: Option<Arc<ColumnRanges>>,
 }
 
 /// This object serves as a cache for storing equivalent sort expressions
@@ -333,7 +317,7 @@ impl EquivalenceProperties {
             .filter_map(|(index, (statistics, field))| {
                 integer_range(field.data_type(), statistics).map(|range| (index, range))
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<ColumnRanges>();
         self.column_ranges = (!ranges.is_empty()).then(|| Arc::new(ranges));
         self
     }
@@ -1359,9 +1343,9 @@ impl EquivalenceProperties {
         &self,
         mapping: &ProjectionMapping,
         output_schema: &SchemaRef,
-    ) -> Option<Arc<HashMap<usize, Interval>>> {
+    ) -> Option<Arc<ColumnRanges>> {
         self.column_ranges.as_ref()?;
-        let mut ranges = HashMap::new();
+        let mut ranges = ColumnRanges::default();
         let dependencies = Dependencies::default();
         for (source, targets) in mapping.iter() {
             let Ok(properties) = get_expr_properties(
@@ -1724,7 +1708,7 @@ fn get_expr_properties(
     expr: &Arc<dyn PhysicalExpr>,
     dependencies: &Dependencies,
     schema: &SchemaRef,
-    column_ranges: Option<&HashMap<usize, Interval>>,
+    column_ranges: Option<&ColumnRanges>,
 ) -> Result<ExprProperties> {
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
         // If exact match is found, return its ordering. This is a base case
@@ -1790,7 +1774,7 @@ fn get_expr_properties(
 fn column_range(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &SchemaRef,
-    column_ranges: Option<&HashMap<usize, Interval>>,
+    column_ranges: Option<&ColumnRanges>,
 ) -> Result<Interval> {
     let data_type = expr.data_type(schema)?;
     if let Some(column) = expr.downcast_ref::<Column>()

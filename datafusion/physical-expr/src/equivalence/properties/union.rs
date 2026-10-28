@@ -18,12 +18,12 @@
 use std::iter::Peekable;
 use std::sync::Arc;
 
-use super::EquivalenceProperties;
+use super::{ColumnRanges, EquivalenceProperties};
 use crate::equivalence::class::AcrossPartitions;
 use crate::{ConstExpr, PhysicalSortExpr};
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{HashMap, Result, internal_err};
+use datafusion_common::{Result, internal_err};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Computes the union (in the sense of `UnionExec`) `EquivalenceProperties`
@@ -87,7 +87,7 @@ fn calculate_union_binary(
                         .and_then(|right| left.union(right).ok())
                         .map(|range| (*index, range))
                 })
-                .collect::<HashMap<_, _>>()
+                .collect::<ColumnRanges>()
         })
         .filter(|ranges| !ranges.is_empty())
         .map(Arc::new);
