@@ -421,6 +421,7 @@ mod tests {
         }
     }
 
+    /// Builds `date_bin(stride, ts)` and checks whether locality analysis is allowed.
     fn date_bin_supports_locality_with_stride(
         function: Arc<ScalarUDF>,
         stride: Arc<dyn PhysicalExpr>,
