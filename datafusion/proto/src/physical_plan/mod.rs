@@ -1366,6 +1366,10 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::PiecewiseMergeJoin(_) => {
                 PiecewiseMergeJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
+            PhysicalPlanType::MaterializedCte(_)
+            | PhysicalPlanType::MaterializedCteScan(_) => not_impl_err!(
+                "PhysicalPlan serde is not yet implemented for MATERIALIZED CTEs"
+            ),
         }
     }
 

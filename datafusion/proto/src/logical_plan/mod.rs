@@ -1355,6 +1355,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )
                 .map(LogicalPlan::RecursiveQuery)
             }
+            LogicalPlanType::MaterializedCte(_)
+            | LogicalPlanType::MaterializedCteScan(_) => {
+                not_impl_err!(
+                    "LogicalPlan serde is not yet implemented for MATERIALIZED CTEs"
+                )
+            }
             LogicalPlanType::CteWorkTableScan(cte_work_table_scan_node) => {
                 let CteWorkTableScanNode { name, schema } = cte_work_table_scan_node;
                 let schema = convert_required!(*schema)?;
