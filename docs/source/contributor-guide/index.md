@@ -284,3 +284,17 @@ To make this work:
    synced fork builds much faster.
 3. Rebase your branch before you push. The fork run tests your branch as it
    is, while the merge queue tests it merged with `main`.
+
+#### Obsolete Merge Queue Runs
+
+The **Merge queue cleanup** workflow finds unfinished merge queue CI runs whose
+queue branch was removed or now points to a different commit. It scans when a
+new merge group is created and every 15 minutes.
+
+Cleanup keeps runs for active groups, commits already in their target branch,
+and rerun attempts. Contributors can rerun an obsolete job to investigate a
+failure. A failed check alone does not cause cancellation.
+
+The workflow only reports candidates until a maintainer sets the repository
+Actions variable `MERGE_QUEUE_CLEANUP_ENABLED` to `true`. Manual runs default
+to `dry_run`. To stop cancellation, remove the variable or set it to `false`.
