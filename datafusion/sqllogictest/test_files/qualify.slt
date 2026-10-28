@@ -345,28 +345,18 @@ physical_plan
 11)--------------------AggregateExec: mode=Partial, gby=[dept@1 as dept], aggr=[sum(users.salary)]
 12)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
-# QUALIFY that references the alias of a volatile expression currently
-# dereferences the alias into a fresh copy of the expression. The filter then
-# evaluates random() independently from the projection, so returned rows can
-# violate the predicate on the returned value. This demonstrates the incorrect
-# plan; see https://github.com/apache/datafusion/issues/7976
-query TT
-EXPLAIN SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn, random() AS r
-FROM users
-QUALIFY rn >= 1 AND r > 0.5;
+# QUALIFY that references the alias of a volatile expression must filter on
+# the value the query returns: every returned row must satisfy the predicate
+# on the returned value of r; see
+# https://github.com/apache/datafusion/issues/7976
+query B
+select count(*) > 0 from (
+  select row_number() over () as rn, random() as r
+  from generate_series(1, 1000)
+  qualify rn >= 1 and r > 0.5
+) where r <= 0.5;
 ----
-logical_plan
-01)Projection: users.id, row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, random() AS r
-02)--Filter: row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW >= UInt64(1) AND random() > Float64(0.5)
-03)----WindowAggr: windowExpr=[[row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-04)------TableScan: users projection=[id]
-physical_plan
-01)ProjectionExec: expr=[id@0 as id, row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn, random() as r]
-02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
-03)----FilterExec: row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 >= 1 AND random() > 0.5
-04)------BoundedWindowAggExec: wdw=[row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-05)--------SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+false
 
 # Clean up
 statement ok
