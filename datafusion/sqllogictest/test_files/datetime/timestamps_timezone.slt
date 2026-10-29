@@ -1377,9 +1377,9 @@ Timestamp(ns, "+00:00") 2024-07-01T06:00:00Z
 ##########
 ## SECTION 16: DST boundaries
 ##
-## Casting a naive timestamp into a named zone (a column cast or
-## `AT TIME ZONE`) resolves an ambiguous or non-existent local time the way
-## PostgreSQL does, since https://github.com/apache/arrow-rs/pull/11038:
+## Casting a naive timestamp into a named zone resolves an ambiguous or
+## non-existent local time like PostgreSQL.
+##
 ##   ambiguous 2024-11-03 01:30:00 America/Denver -> 2024-11-03 01:30:00-07
 ##       (the second, standard-time occurrence)
 ##   nonexistent 2024-03-10 02:30:00 America/Denver -> 2024-03-10 03:30:00-06
@@ -1387,11 +1387,8 @@ Timestamp(ns, "+00:00") 2024-07-01T06:00:00Z
 ##   ambiguous 2024-10-27 02:30:00 Europe/Brussels -> 2024-10-27 02:30:00+01
 ##   nonexistent 2024-03-31 02:30:00 Europe/Brussels -> 2024-03-31 03:30:00+02
 ##
-## KNOWN WRONG: the *parsing* routes into a named zone -- a string literal cast
-## to a timestamp with a named zone, or `::timestamptz` under a session zone --
-## still fail with "error computing timezone offset" from the Arrow timestamp
-## parser, where PostgreSQL resolves the value.
-##
+## KNOWN WRONG: the *parsing* routes into a named zone with a session zone
+## still fail with "error computing timezone offset". See
 ## See https://github.com/apache/datafusion/issues/25084
 ##########
 
@@ -1417,8 +1414,7 @@ SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') FROM
 ----
 2024-11-03T01:30:00-07:00
 
-# The same wall clock arriving as a string literal instead of a column still
-# fails, as it goes through the timestamp parser rather than the cast kernel
+# String literal parsing fails.
 query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-11\-03T01:30:00':\ error\ computing\ timezone\ offset
 SELECT arrow_cast('2024-11-03T01:30:00', 'Timestamp(Nanosecond, Some("America/Denver"))')
 
@@ -1506,9 +1502,7 @@ statement ok
 RESET datafusion.execution.time_zone
 
 # A tz-aware column crossing the fall-back boundary. Constructing the values
-# from explicit UTC instants covers both occurrences of the repeated hour, so
-# the behaviour of date_trunc / date_bin / date_part / interval arithmetic
-# across it can be pinned down.
+# from explicit UTC instants covers a repeated hour
 statement ok
 CREATE TABLE dst_cross AS
 SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') AS ts
