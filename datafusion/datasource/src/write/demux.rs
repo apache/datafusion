@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Module containing helper methods/traits related to enabling
 //! dividing input stream into multiple output files at execution time
@@ -344,12 +331,12 @@ async fn hive_style_partitions_demuxer(
         // Next compute how the batch should be split up to take each distinct key to its own batch
         let take_map = compute_take_arrays(&rb, &all_partition_values);
 
+        let struct_array: StructArray = rb.clone().into();
         // Divide up the batch into distinct partition key batches and send each batch
         for (part_key, mut builder) in take_map.into_iter() {
             // Take method adapted from https://github.com/lancedb/lance/pull/1337/files
             // TODO: upstream RecordBatch::take to arrow-rs
             let take_indices = builder.finish();
-            let struct_array: StructArray = rb.clone().into();
             let parted_batch = RecordBatch::from(
                 arrow::compute::take(&struct_array, &take_indices, None)?.as_struct(),
             );
@@ -408,7 +395,7 @@ fn compute_partition_keys_by_row<'a>(
     rb: &'a RecordBatch,
     partition_by: &'a [(String, DataType)],
 ) -> Result<Vec<Vec<Cow<'a, str>>>> {
-    let mut all_partition_values = vec![];
+    let mut all_partition_values = Vec::with_capacity(partition_by.len());
 
     const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 
@@ -419,7 +406,7 @@ fn compute_partition_keys_by_row<'a>(
     // batch schema instead.
     let schema = rb.schema();
     for (col, _) in partition_by.iter() {
-        let mut partition_values = vec![];
+        let mut partition_values = Vec::with_capacity(rb.num_rows());
 
         let dtype = schema.field_with_name(col)?.data_type();
         let col_array = rb.column_by_name(col).ok_or(exec_datafusion_err!(
@@ -583,13 +570,18 @@ fn compute_take_arrays(
     rb: &RecordBatch,
     all_partition_values: &[Vec<Cow<str>>],
 ) -> HashMap<Vec<String>, UInt64Builder> {
-    let mut take_map = HashMap::new();
+    let mut take_map: HashMap<Vec<String>, UInt64Builder> = HashMap::new();
+    // Reused for every row, cloned only when a new partition key is seen
+    let mut part_key = vec![String::new(); all_partition_values.len()];
     for i in 0..rb.num_rows() {
-        let mut part_key = vec![];
-        for vals in all_partition_values.iter() {
-            part_key.push(vals[i].clone().into());
+        for (key, vals) in part_key.iter_mut().zip(all_partition_values) {
+            key.clear();
+            key.push_str(&vals[i]);
         }
-        let builder = take_map.entry(part_key).or_insert_with(UInt64Builder::new);
+        let builder = match take_map.get_mut(&part_key) {
+            Some(builder) => builder,
+            None => take_map.entry(part_key.clone()).or_default(),
+        };
         builder.append_value(i as u64);
     }
     take_map
@@ -599,13 +591,12 @@ fn remove_partition_by_columns(
     parted_batch: &RecordBatch,
     partition_by: &[(String, DataType)],
 ) -> Result<RecordBatch> {
-    let partition_names: Vec<_> = partition_by.iter().map(|(s, _)| s).collect();
     let (non_part_cols, non_part_fields): (Vec<_>, Vec<_>) = parted_batch
         .columns()
         .iter()
         .zip(parted_batch.schema().fields())
         .filter_map(|(a, f)| {
-            if !partition_names.contains(&f.name()) {
+            if !partition_by.iter().any(|(s, _)| s == f.name()) {
                 Some((Arc::clone(a), (**f).clone()))
             } else {
                 None

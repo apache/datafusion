@@ -38,7 +38,6 @@ workspace = true
 
 [lib]
 name = "datafusion_ffi"
-crate-type = ["cdylib", "rlib"]
 
 # Note to developers: do *not* add `datafusion` as a dependency in this crate.
 # It increases build times and library binary size for users.

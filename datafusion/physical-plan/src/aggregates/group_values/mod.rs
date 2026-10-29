@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`GroupValues`] trait for storing and interning group keys
 
@@ -29,16 +16,16 @@ mod row;
 pub use row::GroupValuesRows;
 mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
-use multi_group_by::{GroupValuesColumn, GroupValuesOrdered};
+use multi_group_by::{GroupValuesClustered, GroupValuesColumn};
 
-pub(crate) use single_group_by::primitive::HashValue;
+pub(crate) use single_group_by::primitive::{GroupValuesPrimitive, HashValue};
 
 use crate::aggregates::{
     group_values::single_group_by::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
-        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
+        bytes_view::GroupValuesBytesView,
     },
-    order::GroupOrdering,
+    order::GroupClustering,
 };
 
 mod metrics;
@@ -133,13 +120,23 @@ pub trait GroupValues: Send {
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, num_rows: usize);
+
+    /// Keeps the stored groups but releases capacity they do not need, such as
+    /// hash table slots and per-batch scratch buffers, so that [`Self::size`]
+    /// reflects the stored groups. For example, after [`EmitTo::First`] removes
+    /// most groups, the hash table may keep the slots it grew for them.
+    ///
+    /// The default does nothing.
+    ///
+    /// [`EmitTo::First`]: datafusion_expr::EmitTo::First
+    fn shrink_to_fit(&mut self) {}
 }
 
 /// Return a specialized implementation of [`GroupValues`] for the given schema.
 ///
 /// [`GroupValues`] implementations choosing logic:
 ///
-///   - Fully ordered multi-column keys with supported scalar types use adjacent
+///   - Fully clustered multi-column keys with supported scalar types use adjacent
 ///     comparisons and column builders, without a hash table.
 ///
 ///   - If group by single column, and type of this column has
@@ -156,12 +153,12 @@ pub trait GroupValues: Send {
 /// `GroupValuesRows`: crate::aggregates::group_values::GroupValuesRows
 pub fn new_group_values(
     schema: SchemaRef,
-    group_ordering: &GroupOrdering,
+    group_clustering: &GroupClustering,
 ) -> Result<Box<dyn GroupValues>> {
-    if matches!(group_ordering, GroupOrdering::Full(_))
-        && GroupValuesOrdered::supports_schema(&schema)
+    if matches!(group_clustering, GroupClustering::Full(_))
+        && GroupValuesClustered::supports_schema(&schema)
     {
-        return Ok(Box::new(GroupValuesOrdered::try_new(schema)?));
+        return Ok(Box::new(GroupValuesClustered::try_new(schema)?));
     }
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
@@ -200,7 +197,7 @@ pub fn new_group_values(
     }
 
     if multi_group_by::supported_schema(schema.as_ref()) {
-        if matches!(group_ordering, GroupOrdering::None) {
+        if matches!(group_clustering, GroupClustering::None) {
             Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
         } else {
             Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))
@@ -221,7 +218,7 @@ mod tests {
     use datafusion_expr::{EmitTo, GroupSelection};
 
     use super::new_group_values;
-    use crate::aggregates::order::GroupOrdering;
+    use crate::aggregates::order::GroupClustering;
 
     #[test]
     fn preserving_values_keep_group_indices_valid() {
@@ -230,7 +227,7 @@ mod tests {
             DataType::Int32,
             true,
         )]));
-        let mut group_values = new_group_values(schema, &GroupOrdering::None).unwrap();
+        let mut group_values = new_group_values(schema, &GroupClustering::None).unwrap();
         assert!(group_values.supports_values_preserving());
 
         let input = Arc::new(Int32Array::from(vec![
@@ -287,7 +284,7 @@ mod tests {
             Field::new("primitive", DataType::Int32, false),
             Field::new("boolean", DataType::Boolean, false),
         ]));
-        let mut group_values = new_group_values(schema, &GroupOrdering::None).unwrap();
+        let mut group_values = new_group_values(schema, &GroupClustering::None).unwrap();
         let input = vec![
             Arc::new(Int32Array::from(vec![10, 20, 10])) as ArrayRef,
             Arc::new(BooleanArray::from(vec![true, false, true])) as ArrayRef,
@@ -318,7 +315,7 @@ mod tests {
                 true,
             )]));
             let mut group_values =
-                new_group_values(schema, &GroupOrdering::None).unwrap();
+                new_group_values(schema, &GroupClustering::None).unwrap();
             let input: ArrayRef = match data_type {
                 DataType::Utf8 => Arc::new(StringArray::from(vec![
                     Some("a"),

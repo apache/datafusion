@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module provides logic for displaying LogicalPlans in various styles
 
@@ -22,9 +9,10 @@ use std::fmt;
 
 use crate::{
     Aggregate, AsOfJoin, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter,
-    Join, Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition,
-    Sort, Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest,
-    Values, Window, expr_vec_fmt,
+    Join, Limit, LogicalPlan, MaterializedCte, MaterializedCtePlan, MaterializedCteScan,
+    Partitioning, Projection, RecursiveQuery, Repartition, Sort, Subquery, SubqueryAlias,
+    TableProviderFilterPushDown, TableScan, Unnest, Values, Window, WriteOp,
+    expr_vec_fmt,
 };
 
 use crate::dml::CopyTo;
@@ -463,11 +451,27 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 )
             }
             LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
-                pg_fields!(
-                    "Node Type": "Projection",
+                let mut object = pg_fields!(
+                    "Node Type": "Dml",
                     "Operation": op.name(),
                     "Table Name": table_name.table()
-                )
+                );
+                if let WriteOp::MergeInto(merge_op) = op {
+                    object.push("On", serde_json::Value::String(merge_op.on.to_string()));
+                    object.push(
+                        "Clauses",
+                        serde_json::Value::Array(
+                            merge_op
+                                .clauses
+                                .iter()
+                                .map(|clause| {
+                                    serde_json::Value::String(clause.to_string())
+                                })
+                                .collect(),
+                        ),
+                    );
+                }
+                object
             }
             LogicalPlan::Copy(CopyTo {
                 input: _,
@@ -689,6 +693,23 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 pg_fields!(
                     "Node Type": e.node.name(),
                     "Detail": format!("{:?}", e.node)
+                )
+            }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+                name,
+                ..
+            })) => {
+                pg_fields!(
+                    "Node Type": "MaterializedCte",
+                    "Name": name,
+                )
+            }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+                MaterializedCteScan { name, .. },
+            )) => {
+                pg_fields!(
+                    "Node Type": "MaterializedCteScan",
+                    "Name": name,
                 )
             }
             LogicalPlan::DescribeTable(DescribeTable { .. }) => {

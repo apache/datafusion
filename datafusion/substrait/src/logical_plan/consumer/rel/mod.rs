@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod aggregate_rel;
 mod cross_rel;
@@ -96,7 +83,7 @@ fn apply_emit_kind(
                 // converting a single call of the random() function into multiple calls due to
                 // duplicate fields in the output_mapping.
                 LogicalPlan::Projection(proj) if !contains_volatile_expr(&proj) => {
-                    let mut exprs: Vec<Expr> = vec![];
+                    let mut exprs: Vec<Expr> = Vec::with_capacity(output_mapping.len());
                     for field in output_mapping {
                         let expr = proj.expr
                             .get(field as usize)
@@ -114,7 +101,7 @@ fn apply_emit_kind(
                 _ => {
                     let input_schema = plan.schema();
 
-                    let mut exprs: Vec<Expr> = vec![];
+                    let mut exprs: Vec<Expr> = Vec::with_capacity(output_mapping.len());
                     for index in output_mapping.into_iter() {
                         let column = Expr::Column(Column::from(
                             input_schema.qualified_field(index as usize),

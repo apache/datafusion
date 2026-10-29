@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
@@ -42,7 +29,7 @@ pub mod memory;
 pub mod morsel;
 pub mod projection;
 /// Protobuf conversions for [`FileRange`], [`PartitionedFile`] and
-/// [`FileGroup`](crate::file_groups::FileGroup), gated on the `proto` feature.
+/// [`FileGroup`], gated on the `proto` feature.
 #[cfg(feature = "proto")]
 mod proto;
 pub mod schema_adapter;
@@ -88,9 +75,11 @@ pub type FileExtensions = datafusion_common::extensions::Extensions;
 pub type PartitionedFileStream =
     Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
 
-/// Only scan a subset of Row Groups from the Parquet file whose data "midpoint"
-/// lies within the [start, end) byte offsets. This option can be used to scan non-overlapping
-/// sections of a Parquet file in parallel.
+/// A `[start, end)` byte range of a file. Non-overlapping ranges can be scanned
+/// in parallel. For Parquet, [`RowGroupRangeAssignment`] picks the row groups a
+/// range reads.
+///
+/// [`RowGroupRangeAssignment`]: datafusion_common::parquet_config::RowGroupRangeAssignment
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct FileRange {
     /// Range start
@@ -413,8 +402,6 @@ impl From<ObjectMeta> for PartitionedFile {
 
 /// Generates test files with min-max statistics in different overlap patterns.
 ///
-/// Used by tests and benchmarks.
-///
 /// # Overlap Factors
 ///
 /// The `overlap_factor` parameter controls how much the value ranges in generated test files overlap:
@@ -450,6 +437,13 @@ impl From<ObjectMeta> for PartitionedFile {
 /// File 2: [40, 140]
 /// File 3: [60, 160]
 /// File 4: [80, 180]
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGroup> {
     let mut files = Vec::with_capacity(num_files);
     if num_files == 0 {
@@ -500,8 +494,14 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
     vec![FileGroup::new(files)]
 }
 
-// Helper function to verify that files within each group maintain sort order
-/// Used by tests and benchmarks
+/// Verifies that files within each group maintain sort order.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub fn verify_sort_integrity(file_groups: &[FileGroup]) -> bool {
     for group in file_groups {
         // Known-empty files contribute no rows and may not have min/max

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Regressions for immutable preparation, task isolation and buffer ownership.
 
@@ -785,7 +772,9 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
             assert_eq!(counter.count_batch(&membership_batch), 0);
             drop(membership_batch);
 
-            // Disabling IN-list membership changes no retained key buffers.
+            // Disabling IN-list membership shares the same key buffers; a
+            // pruning bitmap, when the sparse two-key range earns one, adds
+            // its own bytes on top.
             let mut config = ConfigOptions::default();
             config.optimizer.hash_join_inlist_pushdown_max_size = 0;
             let map = base
@@ -795,9 +784,12 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
                     Arc::new(config),
                 )
                 .await?;
-            assert!(matches!(map.build.membership, PushdownStrategy::Map(_)));
-            assert_eq!(map.reserved_bytes(), bytes);
-            assert_eq!(pool.reserved(), 2 * bytes);
+            let PushdownStrategy::Map(_, bitmap) = &map.build.membership else {
+                panic!("expected hash-map membership");
+            };
+            let bitmap_bytes = bitmap.as_ref().map_or(0, |bitmap| bitmap.size());
+            assert_eq!(map.reserved_bytes(), bytes + bitmap_bytes);
+            assert_eq!(pool.reserved(), 2 * bytes + bitmap_bytes);
             drop(map);
             let lease = Arc::clone(&prepared);
             drop(prepared);
@@ -888,7 +880,7 @@ async fn prepared_byte_keys_use_hash_membership() -> Result<()> {
         assert!(prepared.build.bounds.is_none());
         assert!(matches!(
             &prepared.build.membership,
-            PushdownStrategy::Map(_)
+            PushdownStrategy::Map(_, _)
         ));
         let task = with_probe_filter(base)?
             .builder()

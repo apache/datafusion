@@ -1,31 +1,18 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, ByteView, OffsetSizeTrait, PrimitiveArray, StringArrayType,
+    Array, ArrayRef, AsArray, OffsetSizeTrait, PrimitiveArray, StringArrayType,
     StringViewArray, make_view, new_null_array,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, Int64Type};
 use arrow_buffer::NullBuffer;
 
-use crate::strings::GenericStringArrayBuilder;
+use crate::strings::{GenericStringArrayBuilder, MAX_INLINE_LEN, substr_view};
 use crate::utils::make_scalar_function;
 use datafusion_common::utils::offset_span_len;
 use datafusion_common::{
@@ -324,7 +311,7 @@ fn substr_index_view(
     // Safety: each appended view is either:
     // (1) a copied null sentinel,
     // (2) the original valid input view, or
-    // (3) built by `append_view` for a contiguous substring of the input row.
+    // (3) built by `substr_view` for a contiguous substring of the input row.
     unsafe {
         Ok(Arc::new(StringViewArray::new_unchecked(
             ScalarBuffer::from(views_buf),
@@ -457,7 +444,7 @@ fn substr_index_scalar_view(
     // (1) a copied null sentinel,
     // (2) the original valid input view,
     // (3) an inline empty string view, or
-    // (4) built by `append_view` for a contiguous substring of the input row.
+    // (4) built by `substr_view` for a contiguous substring of the input row.
     unsafe {
         Ok(Arc::new(StringViewArray::new_unchecked(
             ScalarBuffer::from(views_buf),
@@ -580,20 +567,6 @@ fn substr_index_rslice_finder<'a>(
 }
 
 #[inline]
-fn substr_view(original_view: &u128, substr: &str, start_offset: u32) -> u128 {
-    if substr.len() > 12 {
-        let view = ByteView::from(*original_view);
-        make_view(
-            substr.as_bytes(),
-            view.buffer_index,
-            view.offset + start_offset,
-        )
-    } else {
-        make_view(substr.as_bytes(), 0, 0)
-    }
-}
-
-#[inline]
 fn append_substr_view(
     views_buf: &mut Vec<u128>,
     raw_view: &u128,
@@ -602,7 +575,7 @@ fn append_substr_view(
 ) -> bool {
     if substr.len() == string.len() {
         views_buf.push(*raw_view);
-        return substr.len() > 12;
+        return substr.len() > MAX_INLINE_LEN;
     }
 
     if substr.is_empty() {
@@ -610,11 +583,8 @@ fn append_substr_view(
         return false;
     }
 
-    let start_offset = substr.as_ptr() as usize - string.as_ptr() as usize;
-    let start_offset =
-        u32::try_from(start_offset).expect("string view offsets fit in u32");
-    views_buf.push(substr_view(raw_view, substr, start_offset));
-    substr.len() > 12
+    views_buf.push(substr_view(*raw_view, string, substr));
+    substr.len() > MAX_INLINE_LEN
 }
 
 #[cfg(test)]

@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 ## Math expression Tests
@@ -87,6 +74,16 @@ query RRRRRRRR
 SELECT round(125.2345, -3), round(125.2345, -2), round(125.2345, -1), round(125.2345), round(125.2345, 0), round(125.2345, 1), round(125.2345, 2), round(125.2345, 3)
 ----
 0 100 130 125 125 125.2 125.23 125.235
+
+query RR
+SELECT 1.0 / trunc(column1), 1.0 / trunc(column1, 0) FROM (VALUES (CAST(-0.0 AS DOUBLE)));
+----
+-Infinity -Infinity
+
+query RR
+SELECT 1.0 / trunc(column1), 1.0 / trunc(column1, 0) FROM (VALUES (CAST(-0.0 AS REAL)));
+----
+-Infinity -Infinity
 
 # Round signed and unsigned integer scalar widths
 query IIIIIIII
@@ -175,10 +172,10 @@ NULL
 query error DataFusion error: Error during planning: 'round' does not support zero arguments
 SELECT round();
 
-query error Error during planning: Internal error: Function 'round' failed to match any signature
+query error Error during planning: Function 'round' failed to match any signature
 SELECT round(1, 2, 3);
 
-query error Error during planning: Internal error: Function 'round' failed to match any signature
+query error Error during planning: Function 'round' failed to match any signature
 SELECT round('x');
 
 query error round decimal_places 2147483648 is out of supported i32 range
@@ -777,6 +774,19 @@ SELECT c1%1, c2%1 FROM test_non_nullable_float
 NaN NaN
 
 statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT c2 % 1 AS remainder FROM test_non_nullable_float;
+----
+logical_plan
+01)Projection: test_non_nullable_float.c2 % Float64(1) AS remainder
+02)--TableScan: test_non_nullable_float projection=[c2]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
 drop table test_non_nullable_float
 
 
@@ -864,7 +874,7 @@ statement ok
 CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL);
 
 query I
-INSERT INTO test_non_nullable_decimal VALUES(1)
+INSERT INTO test_non_nullable_decimal VALUES(1.50)
 ----
 1
 
@@ -878,6 +888,29 @@ SELECT c1/0 FROM test_non_nullable_decimal
 
 query error DataFusion error: Arrow error: Divide by zero error
 SELECT c1%0 FROM test_non_nullable_decimal
+
+query RR
+SELECT c1 % 1 AS int_literal, c1 % CAST(1 AS DECIMAL(9,2)) AS decimal_literal FROM test_non_nullable_decimal
+----
+0.50 0.50
+
+query I
+SELECT count(*) FROM test_non_nullable_decimal WHERE c1 % 1 = 0
+----
+0
+
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT c1 % CAST(1 AS DECIMAL(9,2)) AS remainder FROM test_non_nullable_decimal;
+----
+logical_plan
+01)Projection: test_non_nullable_decimal.c1 % Decimal128(1.00,9,2) AS remainder
+02)--TableScan: test_non_nullable_decimal projection=[c1]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
 
 statement ok
 drop table test_non_nullable_decimal

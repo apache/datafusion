@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`EliminateCrossJoin`] converts `CROSS JOIN` to `INNER JOIN` if join predicates are available.
 use crate::{OptimizerConfig, OptimizerRule};
@@ -75,10 +62,6 @@ impl EliminateCrossJoin {
 ///
 /// This fix helps to improve the performance of TPCH Q19. issue#78
 impl OptimizerRule for EliminateCrossJoin {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite(
         &self,
@@ -351,6 +334,7 @@ fn find_inner_join(
                 schema: join_schema,
                 null_equality,
                 null_aware: false,
+                null_aware_value_keys: 1,
             }));
         }
     }
@@ -374,6 +358,7 @@ fn find_inner_join(
         join_constraint: JoinConstraint::On,
         null_equality,
         null_aware: false,
+        null_aware_value_keys: 1,
     }))
 }
 
@@ -1409,6 +1394,7 @@ mod tests {
             schema: join_schema,
             null_equality: NullEquality::NullEqualsNull, // Test preservation
             null_aware: false,
+            null_aware_value_keys: 1,
         });
 
         // Apply filter that can create join conditions

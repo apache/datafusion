@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Metric [`Registry`] and [`Snapshot`] implementations.
 
@@ -79,6 +66,7 @@ impl Registry {
 #[derive(Clone)]
 pub(super) enum Snapshot {
     /// All metrics registered before a fixed boundary; partition reads use the index.
+    /// Retains the source registry, including later registrations, until dropped.
     All(Arc<AllMetrics>),
     /// A selected partition, independent of the source registry.
     Partition {
@@ -94,6 +82,11 @@ pub(super) struct AllMetrics {
     registry: Arc<Mutex<Registry>>,
     // Exclusive position in Registry::metrics, not a per-partition count.
     end: usize,
+    // Lazily copies registry.metrics[..end] for full iteration. The vector keeps
+    // the snapshot's original membership; only the metric values remain shared.
+    // Caching it gives iter(&self) stable references without holding the registry
+    // lock, and avoids copying the handles again on subsequent iterations. Keep
+    // the registry as well so partition selection can still use its shared index.
     flat: OnceLock<Vec<Arc<Metric>>>,
 }
 

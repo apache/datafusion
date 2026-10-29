@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::{Expr, LogicalPlan, SortExpr, Volatility};
 use std::cmp::Ordering;
@@ -24,13 +11,15 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::expr::Sort;
+use crate::expr::{Exists, InSubquery, SetComparison, Sort};
 #[cfg(not(feature = "sql"))]
 use crate::sql::Ident;
 use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
+};
 use datafusion_common::{
-    Constraints, DFSchemaRef, Result, SchemaReference, TableReference,
+    Constraints, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference, plan_err,
 };
 #[cfg(feature = "sql")]
 use sqlparser::ast::Ident;
@@ -615,6 +604,99 @@ impl PartialOrd for CreateExternalCatalog {
     }
 }
 
+impl CreateExternalCatalog {
+    /// Creates a builder for [`CreateExternalCatalog`].
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::CreateExternalCatalog;
+    /// let cmd = CreateExternalCatalog::builder("my_catalog", "memory")
+    ///     .with_if_not_exists(true)
+    ///     .build();
+    /// assert_eq!(cmd.catalog_name, "my_catalog");
+    /// ```
+    #[must_use]
+    pub fn builder(
+        catalog_name: impl Into<String>,
+        catalog_type: impl Into<String>,
+    ) -> CreateExternalCatalogBuilder {
+        CreateExternalCatalogBuilder {
+            catalog_name: catalog_name.into(),
+            catalog_type: catalog_type.into(),
+            location: None,
+            if_not_exists: false,
+            or_replace: false,
+            options: HashMap::new(),
+            schema: Arc::new(DFSchema::empty()),
+        }
+    }
+}
+
+/// Builder for [`CreateExternalCatalog`].
+#[derive(Debug, Clone)]
+pub struct CreateExternalCatalogBuilder {
+    catalog_name: String,
+    catalog_type: String,
+    location: Option<String>,
+    if_not_exists: bool,
+    or_replace: bool,
+    options: HashMap<String, String>,
+    schema: DFSchemaRef,
+}
+
+impl CreateExternalCatalogBuilder {
+    /// Set the physical location of the catalog
+    ///
+    /// Passing `None` will **un**set the location.
+    #[must_use]
+    pub fn with_location(mut self, location: Option<String>) -> Self {
+        self.location = location;
+        self
+    }
+
+    /// Set the if_not_exists flag
+    #[must_use]
+    pub fn with_if_not_exists(mut self, if_not_exists: bool) -> Self {
+        self.if_not_exists = if_not_exists;
+        self
+    }
+
+    /// Set the or_replace flag
+    #[must_use]
+    pub fn with_or_replace(mut self, or_replace: bool) -> Self {
+        self.or_replace = or_replace;
+        self
+    }
+
+    /// Set the catalog options
+    #[must_use]
+    pub fn with_options(mut self, options: HashMap<String, String>) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Set the schema
+    #[must_use]
+    pub fn with_schema(mut self, schema: DFSchemaRef) -> Self {
+        self.schema = schema;
+        self
+    }
+
+    /// Build the [`CreateExternalCatalog`]
+    #[must_use]
+    pub fn build(self) -> CreateExternalCatalog {
+        CreateExternalCatalog {
+            catalog_name: self.catalog_name,
+            catalog_type: self.catalog_type,
+            location: self.location,
+            if_not_exists: self.if_not_exists,
+            or_replace: self.or_replace,
+            options: self.options,
+            schema: self.schema,
+        }
+    }
+}
+
 /// Creates a schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateCatalogSchema {
@@ -737,6 +819,69 @@ impl PartialOrd for DropCatalog {
     }
 }
 
+impl DropCatalog {
+    /// Creates a builder for [`DropCatalog`].
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::DropCatalog;
+    /// let cmd = DropCatalog::builder("my_catalog").with_if_exists(true).build();
+    /// assert_eq!(cmd.name, "my_catalog");
+    /// ```
+    #[must_use]
+    pub fn builder(name: impl Into<String>) -> DropCatalogBuilder {
+        DropCatalogBuilder {
+            name: name.into(),
+            if_exists: false,
+            cascade: false,
+            schema: Arc::new(DFSchema::empty()),
+        }
+    }
+}
+
+/// Builder for [`DropCatalog`].
+#[derive(Debug, Clone)]
+pub struct DropCatalogBuilder {
+    name: String,
+    if_exists: bool,
+    cascade: bool,
+    schema: DFSchemaRef,
+}
+
+impl DropCatalogBuilder {
+    /// Set the if_exists flag
+    #[must_use]
+    pub fn with_if_exists(mut self, if_exists: bool) -> Self {
+        self.if_exists = if_exists;
+        self
+    }
+
+    /// Set whether the drop should cascade
+    #[must_use]
+    pub fn with_cascade(mut self, cascade: bool) -> Self {
+        self.cascade = cascade;
+        self
+    }
+
+    /// Set the schema
+    #[must_use]
+    pub fn with_schema(mut self, schema: DFSchemaRef) -> Self {
+        self.schema = schema;
+        self
+    }
+
+    /// Build the [`DropCatalog`]
+    #[must_use]
+    pub fn build(self) -> DropCatalog {
+        DropCatalog {
+            name: self.name,
+            if_exists: self.if_exists,
+            cascade: self.cascade,
+            schema: self.schema,
+        }
+    }
+}
+
 /// Arguments passed to the `CREATE FUNCTION` statement
 ///
 /// These statements are turned into executable functions using [`FunctionFactory`]
@@ -759,6 +904,95 @@ pub struct CreateFunction {
     pub params: CreateFunctionBody,
     /// Dummy schema
     pub schema: DFSchemaRef,
+}
+
+impl CreateFunction {
+    /// Creates a function definition, validating placeholders in its body and
+    /// argument defaults, including expressions inside subqueries.
+    ///
+    /// Placeholders must be positional (`$1`, `$2`, ...) and reference a
+    /// declared argument. SQL argument names must be resolved before calling
+    /// this constructor.
+    pub fn try_new(
+        or_replace: bool,
+        temporary: bool,
+        name: String,
+        args: Option<Vec<OperateFunctionArg>>,
+        return_type: Option<DataType>,
+        params: CreateFunctionBody,
+    ) -> Result<Self> {
+        let arg_count = args.as_ref().map_or(0, |declared| declared.len());
+        for default_expr in args
+            .iter()
+            .flatten()
+            .filter_map(|arg| arg.default_expr.as_ref())
+        {
+            validate_function_body_placeholders(default_expr, arg_count)?;
+        }
+        if let Some(body) = &params.function_body {
+            validate_function_body_placeholders(body, arg_count)?;
+        }
+        Ok(Self {
+            or_replace,
+            temporary,
+            name,
+            args,
+            return_type,
+            params,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        })
+    }
+}
+
+/// Rejects placeholders in a `CREATE FUNCTION` body or argument default
+/// expression that do not reference a declared argument (e.g. `$3` for a
+/// two-argument function) at definition time, instead of deferring the error
+/// to function invocation.
+fn validate_function_body_placeholders(expr: &Expr, arg_count: usize) -> Result<()> {
+    expr.apply(|expr| {
+        if let Expr::Placeholder(placeholder) = expr {
+            match placeholder
+                .id
+                .strip_prefix('$')
+                .and_then(|id| id.parse::<usize>().ok())
+            {
+                // In range, e.g. `$2` with two declared arguments
+                Some(idx) if (1..=arg_count).contains(&idx) => {}
+                // Out of range, e.g. `$3` with two declared arguments
+                Some(_) => {
+                    return plan_err!(
+                        "Invalid placeholder, out of range: {}",
+                        placeholder.id
+                    );
+                }
+                // Named or malformed placeholder
+                None => {
+                    return plan_err!("Unknown placeholder: {}", placeholder.id);
+                }
+            }
+        }
+        // `Expr::apply` does not descend into subqueries, so walk their
+        // plans explicitly to validate placeholders inside them
+        if let Some(subquery) = match expr {
+            Expr::ScalarSubquery(subquery) => Some(&subquery.subquery),
+            Expr::Exists(Exists { subquery, .. }) => Some(&subquery.subquery),
+            Expr::InSubquery(InSubquery { subquery, .. }) => Some(&subquery.subquery),
+            Expr::SetComparison(SetComparison { subquery, .. }) => {
+                Some(&subquery.subquery)
+            }
+            _ => None,
+        } {
+            // Nested subqueries are handled by this expression visitor
+            subquery.apply(|plan| {
+                plan.apply_expressions(|e| {
+                    validate_function_body_placeholders(e, arg_count)?;
+                    Ok(TreeNodeRecursion::Continue)
+                })
+            })?;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(())
 }
 
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
@@ -931,9 +1165,69 @@ impl PartialOrd for CreateIndex {
 
 #[cfg(test)]
 mod test {
-    use crate::{CreateCatalog, DdlStatement, DropView};
+    use super::{CreateFunction, CreateFunctionBody, OperateFunctionArg};
+    use crate::expr_fn::placeholder;
+    use crate::{
+        CreateCatalog, CreateExternalCatalog, DdlStatement, DropCatalog, DropView, Expr,
+        LogicalPlanBuilder, Subquery,
+    };
+    use arrow::datatypes::DataType;
     use datafusion_common::{DFSchema, DFSchemaRef, TableReference};
-    use std::cmp::Ordering;
+    use std::{cmp::Ordering, collections::HashMap, sync::Arc};
+
+    #[test]
+    fn create_function_try_new_validates_placeholders() {
+        let create = |body, default_expr| {
+            CreateFunction::try_new(
+                false,
+                false,
+                "f".to_string(),
+                Some(vec![OperateFunctionArg {
+                    name: None,
+                    data_type: DataType::Int64,
+                    default_expr,
+                }]),
+                Some(DataType::Int64),
+                CreateFunctionBody {
+                    language: None,
+                    behavior: None,
+                    function_body: body,
+                },
+            )
+        };
+
+        assert!(create(Some(placeholder("$1")), Some(placeholder("$1"))).is_ok());
+        assert!(create(None, None).is_ok());
+        for (body, default_expr) in [
+            (Some(placeholder("$2")), None),
+            (None, Some(placeholder("$2"))),
+        ] {
+            let err = create(body, default_expr).unwrap_err();
+            assert_eq!(
+                err.strip_backtrace(),
+                "Error during planning: Invalid placeholder, out of range: $2"
+            );
+        }
+
+        let mut nested_body = placeholder("$2");
+        for _ in 0..16 {
+            let plan = LogicalPlanBuilder::empty(true)
+                .project(vec![nested_body.alias("v")])
+                .unwrap()
+                .build()
+                .unwrap();
+            nested_body = Expr::ScalarSubquery(Subquery {
+                subquery: Arc::new(plan),
+                outer_ref_columns: vec![],
+                spans: Default::default(),
+            });
+        }
+        let err = create(Some(nested_body), None).unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: Invalid placeholder, out of range: $2"
+        );
+    }
 
     #[test]
     fn test_partial_ord() {
@@ -957,5 +1251,70 @@ mod test {
         });
 
         assert_eq!(drop_view.partial_cmp(&catalog), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn test_create_external_catalog_builder_defaults() {
+        let expected = CreateExternalCatalog {
+            catalog_name: "my_catalog".to_string(),
+            catalog_type: "memory".to_string(),
+            location: None,
+            if_not_exists: false,
+            or_replace: false,
+            options: HashMap::new(),
+            schema: Arc::new(DFSchema::empty()),
+        };
+        let cmd = CreateExternalCatalog::builder("my_catalog", "memory").build();
+        assert_eq!(cmd, expected);
+    }
+
+    #[test]
+    fn test_create_external_catalog_builder_setters() {
+        let cmd = CreateExternalCatalog::builder("my_catalog", "memory")
+            .with_location(Some("/tmp/catalog".to_string()))
+            .with_if_not_exists(true)
+            .with_or_replace(true)
+            .with_options(HashMap::from([("key".to_string(), "value".to_string())]))
+            .with_schema(Arc::new(DFSchema::empty()))
+            .build();
+        assert_eq!(cmd.location, Some("/tmp/catalog".to_string()));
+        assert!(cmd.if_not_exists);
+        assert!(cmd.or_replace);
+        assert_eq!(cmd.options.get("key").map(String::as_str), Some("value"));
+        assert_eq!(cmd.schema, Arc::new(DFSchema::empty()));
+    }
+
+    #[test]
+    fn test_create_external_catalog_builder_unsets_location() {
+        let cmd = CreateExternalCatalog::builder("my_catalog", "memory")
+            .with_location(Some("/tmp/catalog".to_string()))
+            .with_location(None)
+            .build();
+        assert_eq!(cmd.location, None);
+    }
+
+    #[test]
+    fn test_drop_catalog_builder_defaults() {
+        let expected = DropCatalog {
+            name: "my_catalog".to_string(),
+            if_exists: false,
+            cascade: false,
+            schema: Arc::new(DFSchema::empty()),
+        };
+        let cmd = DropCatalog::builder("my_catalog").build();
+        assert_eq!(cmd, expected);
+    }
+
+    #[test]
+    fn test_drop_catalog_builder_setters() {
+        let cmd = DropCatalog::builder("my_catalog")
+            .with_if_exists(true)
+            .with_cascade(true)
+            .with_schema(Arc::new(DFSchema::empty()))
+            .build();
+        assert_eq!(cmd.name, "my_catalog");
+        assert!(cmd.if_exists);
+        assert!(cmd.cascade);
+        assert_eq!(cmd.schema, Arc::new(DFSchema::empty()));
     }
 }

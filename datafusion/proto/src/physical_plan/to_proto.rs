@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -284,7 +271,15 @@ pub fn serialize_physical_expr_with_converter(
         proto_converter,
     };
     let ctx = datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx::new(&encoder);
-    if let Some(node) = expr.try_to_proto(&ctx)? {
+    if let Some(mut node) = expr.try_to_proto(&ctx)? {
+        // Stamp the expression's identity here, at the common boundary, so
+        // a hook that builds its node with a helper such as
+        // `extension_expr_node` (which cannot see the id) keeps the same
+        // dedup behaviour as the downcast path below. A hook that set its
+        // own `expr_id` keeps it.
+        if node.expr_id.is_none() {
+            node.expr_id = expr_id;
+        }
         return Ok(node);
     }
 
@@ -332,7 +327,15 @@ pub fn serialize_physical_expr_with_converter(
                 Ok(protobuf::PhysicalExprNode {
                     expr_id,
                     expr_type: Some(protobuf::physical_expr_node::ExprType::Extension(
-                        protobuf::PhysicalExtensionExprNode { expr: buf, inputs },
+                        protobuf::PhysicalExtensionExprNode {
+                            expr: buf,
+                            inputs,
+                            // The codec *is* the discriminator on this path,
+                            // so no name is written. Expressions that want
+                            // registry decoding write their own node from
+                            // `try_to_proto`.
+                            expr_name: None,
+                        },
                     )),
                 })
             }

@@ -37,6 +37,8 @@
 
 This is a list of DataFusion related blog posts, articles, and other resources. Please open a PR to add any new resources you create or find
 
+- **2026-10-01** [Blog: How we extended Apache DataFusion to execute one query across many machines](https://www.datadoghq.com/blog/engineering/distributed-datafusion/)
+
 - **2026-07-29** [Blog: Bringing DuckLake to DataFusion](https://ducklake.select/2026/07/29/bringing-ducklake-to-datafusion/)
 
 - **2026-07-20** [Blog: Optimizing for Almost Sorted Data: Sort Pushdown in Apache DataFusion](https://datafusion.apache.org/blog/2026/07/20/sort-pushdown/)
@@ -217,6 +219,9 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 The [DataFusion Community Showcase](https://github.com/apache/datafusion/issues/22963) is a
 regular virtual event where community members share what they are building with DataFusion.
 
+- **2026-10-01** [Vol. 6: Hotdata (Shefeek Jinaah) & Veeva Systems (Bruce Ritchie)](https://www.youtube.com/watch?v=0QGbk6gnAX4)
+- **2026-09-17** [Vol. 5: Zarr DataFusion (Jayendra Parmar) & Rerun.io (Timothy Saucer)](https://www.youtube.com/watch?v=vD113GhJwaM)
+- **2026-08-20** [Vol. 4: RDF Fusion & Cloudflare R2 SQL](https://www.youtube.com/watch?v=oKEtmUzdPoM)
 - **2026-08-06** [Vol. 3: ASAPQuery (Milind Srivastava) & Streamling (Yaroslav Tkachenko)](https://www.youtube.com/watch?v=0-BIHyzODH8)
 - **2026-07-23** [Vol. 2: DataFusion Comet (Jordan Epstein) & DataFusion Ballista (Phillip LeBlanc)](https://www.youtube.com/watch?v=G8In--2RUwI)
 - **2026-07-09** [Vol. 1: SedonaDB (Dewey Dunnington) & Xarray-SQL (Alex Merose)](https://www.youtube.com/watch?v=5o-4hL8vGPw)

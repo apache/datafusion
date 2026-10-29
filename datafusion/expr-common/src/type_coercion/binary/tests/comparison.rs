@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::*;
 
@@ -1123,4 +1110,125 @@ fn test_decimal256_comparison_coercion_precision_overflow() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[test]
+fn test_comparison_coercion_with_session_timezone() {
+    fn ree(value_type: DataType) -> DataType {
+        DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", value_type, false)),
+        )
+    }
+
+    fn list(value_type: DataType) -> DataType {
+        DataType::List(Arc::new(Field::new_list_field(value_type, true)))
+    }
+
+    fn structure(value_type: DataType) -> DataType {
+        DataType::Struct(Fields::from(vec![Field::new("ts", value_type, true)]))
+    }
+
+    fn map(value_type: DataType) -> DataType {
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", value_type, true),
+                ])),
+                false,
+            )),
+            false,
+        )
+    }
+
+    let aware = DataType::Timestamp(Millisecond, Some("America/New_York".into()));
+    let naive = DataType::Timestamp(Nanosecond, None);
+    let session = DataType::Timestamp(Nanosecond, Some("+08:00".into()));
+
+    // A mixed pair is read in the session timezone, at the finer unit, in
+    // either operand order.
+    assert_eq!(
+        comparison_coercion_with_session_timezone(&aware, &naive, Some("+08:00")),
+        Some(session.clone())
+    );
+    assert_eq!(
+        comparison_coercion_with_session_timezone(&naive, &aware, Some("+08:00")),
+        Some(session)
+    );
+
+    // Timestamp comparison coercion recurses through encoded and nested types.
+    let session = DataType::Timestamp(Nanosecond, Some("+08:00".into()));
+    let recursive_cases = [
+        (
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(aware.clone())),
+            naive.clone(),
+            session.clone(),
+        ),
+        (ree(aware.clone()), naive.clone(), session.clone()),
+        (
+            list(aware.clone()),
+            list(naive.clone()),
+            list(session.clone()),
+        ),
+        (
+            structure(aware.clone()),
+            structure(naive.clone()),
+            structure(session.clone()),
+        ),
+        (map(aware.clone()), map(naive.clone()), map(session.clone())),
+    ];
+    for (lhs, rhs, expected) in recursive_cases {
+        assert_eq!(
+            comparison_coercion_with_session_timezone(&lhs, &rhs, Some("+08:00")),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            comparison_coercion_with_session_timezone(&rhs, &lhs, Some("+08:00")),
+            Some(expected)
+        );
+        assert_eq!(
+            comparison_coercion_with_session_timezone(&lhs, &rhs, None),
+            comparison_coercion(&lhs, &rhs)
+        );
+        assert_eq!(
+            comparison_coercion_with_session_timezone(&rhs, &lhs, None),
+            comparison_coercion(&rhs, &lhs)
+        );
+    }
+
+    // Pairs that are both aware or both naive are left to the ordinary rules.
+    for (lhs, rhs) in [(&aware, &aware), (&naive, &naive)] {
+        assert_eq!(
+            comparison_coercion_with_session_timezone(lhs, rhs, Some("+08:00")),
+            comparison_coercion(lhs, rhs)
+        );
+    }
+
+    // Without a session timezone this matches `comparison_coercion` for
+    // everything except the `Null` cases below.
+    for (lhs, rhs) in [
+        (&aware, &naive),
+        (&naive, &aware),
+        (&DataType::Int32, &DataType::Int64),
+        (&DataType::Utf8, &DataType::Int32),
+    ] {
+        assert_eq!(
+            comparison_coercion_with_session_timezone(lhs, rhs, None),
+            comparison_coercion(lhs, rhs)
+        );
+    }
+
+    // Unlike `comparison_coercion`, `Null` against a dictionary keeps the
+    // dictionary encoding, because `=` does.
+    let dict = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+    assert_eq!(
+        comparison_coercion_with_session_timezone(&DataType::Null, &dict, None),
+        Some(dict.clone())
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Null, &dict),
+        Some(DataType::Utf8)
+    );
 }

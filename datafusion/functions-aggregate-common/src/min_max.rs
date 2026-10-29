@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Basic min/max functionality shared across DataFusion aggregate functions
 
@@ -31,6 +18,7 @@ use arrow::array::{
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use datafusion_common::float_semantics::{FloatSemantics, compare_floats};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, downcast_value, internal_err,
 };
@@ -64,17 +52,16 @@ fn min_max_option<T: Clone + Ord>(
     }
 }
 
-fn min_max_float_option<T: Copy>(
+fn min_max_float_option<T: FloatSemantics>(
     lhs: Option<&T>,
     rhs: Option<&T>,
     ordering: Ordering,
-    cmp: impl Fn(&T, &T) -> Ordering,
 ) -> Option<T> {
     match (lhs, rhs) {
         (None, None) => None,
         (Some(a), None) => Some(*a),
         (None, Some(b)) => Some(*b),
-        (Some(a), Some(b)) if cmp(a, b) == ordering => Some(*b),
+        (Some(a), Some(b)) if compare_floats(*a, *b) == ordering => Some(*b),
         (Some(a), Some(_)) => Some(*a),
     }
 }
@@ -247,15 +234,13 @@ fn min_max_scalar_same_variant(
             ScalarValue::Boolean(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))
         }
         (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => ScalarValue::Float64(
-            min_max_float_option(lhs.as_ref(), rhs.as_ref(), ordering, f64::total_cmp),
+            min_max_float_option(lhs.as_ref(), rhs.as_ref(), ordering),
         ),
         (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => ScalarValue::Float32(
-            min_max_float_option(lhs.as_ref(), rhs.as_ref(), ordering, f32::total_cmp),
+            min_max_float_option(lhs.as_ref(), rhs.as_ref(), ordering),
         ),
         (ScalarValue::Float16(lhs), ScalarValue::Float16(rhs)) => ScalarValue::Float16(
-            min_max_float_option(lhs.as_ref(), rhs.as_ref(), ordering, |a, b| {
-                a.total_cmp(b)
-            }),
+            min_max_float_option(lhs.as_ref(), rhs.as_ref(), ordering),
         ),
         (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
             ScalarValue::UInt64(min_max_option(lhs.as_ref(), rhs.as_ref(), ordering))

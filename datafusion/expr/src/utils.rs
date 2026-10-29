@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Expression utilities
 
@@ -70,8 +57,8 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
 /// Returns an iterator of index vectors, where each vector contains the indices
 /// of elements to include in that subset.
 fn powerset_indices(len: usize) -> impl Iterator<Item = Vec<usize>> {
-    (0..(1 << len)).map(move |mask| {
-        let mut indices = vec![];
+    (0..(1 << len)).map(move |mask: u64| {
+        let mut indices = Vec::with_capacity(mask.count_ones() as usize);
         let mut bitset = mask;
         while bitset > 0 {
             let rightmost: u64 = bitset & !(bitset - 1);
@@ -373,7 +360,7 @@ fn get_excluded_columns(
         return plan_err!("EXCLUDE or EXCEPT contains duplicate column names");
     }
 
-    let mut result = vec![];
+    let mut result = Vec::with_capacity(unique_idents.len());
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
         let (qualifier, field) = schema.qualified_field_with_name(qualifier, col_name)?;
@@ -525,8 +512,9 @@ pub fn generate_sort_key(
         })
         .collect::<Vec<_>>();
 
-    let mut final_sort_keys = vec![];
-    let mut is_partition_flag = vec![];
+    let num_keys = partition_by.len() + order_by.len();
+    let mut final_sort_keys = Vec::with_capacity(num_keys);
+    let mut is_partition_flag = Vec::with_capacity(num_keys);
     for e in partition_by {
         // By default, create sort key with ASC is true and NULLS LAST to be consistent with
         // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
@@ -861,15 +849,11 @@ fn find_exprs_in_exprs<'a, F>(
 where
     F: Fn(&Expr) -> bool,
 {
-    exprs
-        .into_iter()
-        .flat_map(|expr| find_exprs_in_expr(expr, test_fn))
-        .fold(vec![], |mut acc, expr| {
-            if !acc.contains(&expr) {
-                acc.push(expr)
-            }
-            acc
-        })
+    let mut found = IndexSet::new();
+    for expr in exprs {
+        collect_exprs_in_expr(expr, test_fn, &mut found);
+    }
+    found.into_iter().collect()
 }
 
 /// Search an `Expr`, and all of its nested `Expr`'s, for any that pass the
@@ -879,11 +863,17 @@ fn find_exprs_in_expr<F>(expr: &Expr, test_fn: &F) -> Vec<Expr>
 where
     F: Fn(&Expr) -> bool,
 {
-    let mut exprs = vec![];
+    find_exprs_in_exprs(std::iter::once(expr), test_fn)
+}
+
+fn collect_exprs_in_expr<F>(expr: &Expr, test_fn: &F, found: &mut IndexSet<Expr>)
+where
+    F: Fn(&Expr) -> bool,
+{
     expr.apply(|expr| {
         if test_fn(expr) {
-            if !(exprs.contains(expr)) {
-                exprs.push(expr.clone())
+            if !found.contains(expr) {
+                found.insert(expr.clone());
             }
             // Stop recursing down this expr once we find a match
             return Ok(TreeNodeRecursion::Jump);
@@ -893,7 +883,6 @@ where
     })
     // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");
-    exprs
 }
 
 /// Recursively inspect an [`Expr`] and all its children.
@@ -916,6 +905,28 @@ where
     .expect("no way to return error during recursion");
 
     err
+}
+
+/// Returns the element field at the given list unnesting depth.
+pub(crate) fn get_unnested_list_field(
+    data_type: &DataType,
+    depth: usize,
+) -> Result<&Field> {
+    match data_type {
+        DataType::List(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => {
+            if depth == 1 {
+                return Ok(field.as_ref());
+            }
+            return get_unnested_list_field(field.data_type(), depth - 1);
+        }
+        _ => {}
+    }
+
+    internal_err!("trying to unnest on invalid data type {data_type}")
 }
 
 /// Create schema fields from an expression list, for use in result set schema construction
@@ -963,20 +974,38 @@ pub fn exprlist_to_fields<'a>(
 /// .project(vec![col("c1"), col("SUM(c2)")?
 /// ```
 pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
-    let output_exprs = match input.columnized_output_exprs() {
-        Ok(exprs) if !exprs.is_empty() => exprs,
-        _ => return Ok(e),
-    };
-    let exprs_map: HashMap<&Expr, Column> = output_exprs.into_iter().collect();
-    e.transform_down(|node: Expr| match exprs_map.get(&node) {
-        Some(column) => Ok(Transformed::new(
-            Expr::Column(column.clone()),
-            true,
-            TreeNodeRecursion::Jump,
-        )),
-        None => Ok(Transformed::no(node)),
-    })
-    .data()
+    Columnizer::new(input).columnize(e)
+}
+
+/// Applies [`columnize_expr`] to many expressions over the same input plan,
+/// building the lookup of the input's output expressions only once.
+pub(crate) struct Columnizer<'a> {
+    output_exprs: HashMap<&'a Expr, Column>,
+}
+
+impl<'a> Columnizer<'a> {
+    pub(crate) fn new(input: &'a LogicalPlan) -> Self {
+        let output_exprs = input
+            .columnized_output_exprs()
+            .map(|exprs| exprs.into_iter().collect())
+            .unwrap_or_default();
+        Self { output_exprs }
+    }
+
+    pub(crate) fn columnize(&self, e: Expr) -> Result<Expr> {
+        if self.output_exprs.is_empty() {
+            return Ok(e);
+        }
+        e.transform_down(|node: Expr| match self.output_exprs.get(&node) {
+            Some(column) => Ok(Transformed::new(
+                Expr::Column(column.clone()),
+                true,
+                TreeNodeRecursion::Jump,
+            )),
+            None => Ok(Transformed::no(node)),
+        })
+        .data()
+    }
 }
 
 /// Collect all deeply nested `Expr::Column`'s. They are returned in order of
@@ -1000,6 +1029,26 @@ pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     // As the closure always returns Ok, this "can't" error
     .expect("Unexpected error");
     exprs
+}
+
+/// Returns the index of the `schema` field that `expr` passes through
+/// unchanged, or `None` if `expr` computes a new value.
+///
+/// Only a column reference (possibly aliased) passes a field through. Use this
+/// instead of comparing [`Expr::schema_name`] with field names: different
+/// expressions can have the same name, e.g. `CAST(t.a AS INT)` is named `t.a`.
+///
+/// A column is resolved like any other column reference, so an ambiguous
+/// unqualified name (e.g. `id` over `a.id` and `b.id`) passes nothing through.
+pub fn passthrough_field_index(expr: &Expr, schema: &DFSchema) -> Option<usize> {
+    match expr {
+        Expr::Column(col) => {
+            let (_, field) = schema.qualified_field_from_column(col).ok()?;
+            schema.fields().iter().position(|f| std::ptr::eq(f, field))
+        }
+        Expr::Alias(alias) => passthrough_field_index(&alias.expr, schema),
+        _ => None,
+    }
 }
 
 /// Convert any `Expr` to an `Expr::Column`.
@@ -1444,6 +1493,10 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> Result<LogicalPlan
 /// # Return value
 ///
 /// Tuple of (expressions containing joins, remaining non-join expressions)
+#[deprecated(
+    since = "56.0.0",
+    note = "This decorrelation helper is intended for internal optimizer use and has no public replacement"
+)]
 pub fn find_join_exprs(exprs: Vec<&Expr>) -> Result<(Vec<Expr>, Vec<Expr>)> {
     let mut joins = vec![];
     let mut others = vec![];
@@ -1525,16 +1578,46 @@ pub fn collect_subquery_cols(
     subquery_schema: &DFSchema,
 ) -> Result<BTreeSet<Column>> {
     exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
-        let mut using_cols: Vec<Column> = vec![];
         for col in expr.column_refs().into_iter() {
             if subquery_schema.has_column(col) {
-                using_cols.push(col.clone());
+                cols.insert(col.clone());
             }
         }
 
-        cols.extend(using_cols);
         Result::<_>::Ok(cols)
     })
+}
+
+/// Determine the subquery-side expressions a join filter compares,
+/// stopping at the first subquery-referencing sub-expression rather than
+/// descending to the bare columns inside of it.
+///
+/// `t1.a = t2.b` yields `t2.b`, matching [`collect_subquery_cols`]. But
+/// `t1.a = CAST(t2.b AS INT)` yields `CAST(t2.b AS INT)` whole, not `t2.b`.
+/// The two differ whenever the correlated predicate wraps the subquery's
+/// column in an expression, in which case we need to evaluate the full
+/// expression before grouping, so that two column values which compare
+/// equal after the wrapping expression end up in the same group.
+pub fn collect_subquery_join_exprs(
+    exprs: &[Expr],
+    subquery_schema: &DFSchema,
+) -> Result<Vec<Expr>> {
+    let mut result: Vec<Expr> = vec![];
+    for expr in exprs {
+        expr.apply(|e| {
+            if e.column_refs()
+                .into_iter()
+                .all(|col| subquery_schema.has_column(col))
+                && !e.column_refs().is_empty()
+                && !result.contains(e)
+            {
+                result.push(e.clone());
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -1546,8 +1629,45 @@ mod tests {
         expr_vec_fmt, grouping_set, lit, rollup,
         test::function_stub::{max_udaf, min_udaf, sum_udaf},
     };
-    use arrow::datatypes::{UnionFields, UnionMode};
+    use arrow::datatypes::{Metadata, UnionFields, UnionMode};
     use datafusion_expr_common::signature::Volatility;
+
+    #[test]
+    fn passthrough_field_index_resolves_like_a_column_reference() -> Result<()> {
+        let field = |name| Arc::new(Field::new(name, DataType::Int32, false));
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                (Some("a".into()), field("id")),
+                (Some("b".into()), field("id")),
+                (Some("b".into()), field("v")),
+            ],
+            Metadata::default(),
+        )?;
+        let index = |e: Expr| passthrough_field_index(&e, &schema);
+
+        assert_eq!(index(col("b.id")), Some(1));
+        assert_eq!(index(col("v").alias("w")), Some(2));
+        // ambiguous: `a.id` or `b.id`
+        assert_eq!(index(col("id")), None);
+        // computed, even though it is named `b.id`
+        assert_eq!(index(crate::cast(col("b.id"), DataType::Int64)), None);
+        Ok(())
+    }
+
+    #[test]
+    fn find_aggregate_exprs_dedups_in_order_of_appearance() {
+        use crate::test::function_stub::{count, sum};
+
+        let exprs = [
+            sum(col("a")) + count(col("b")),
+            count(col("b")) * sum(col("c")),
+            sum(col("a")) + sum(col("a")),
+        ];
+        assert_eq!(
+            find_aggregate_exprs(&exprs),
+            vec![sum(col("a")), count(col("b")), sum(col("c"))]
+        );
+    }
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::{Arc, OnceLock};
 
@@ -327,15 +314,13 @@ impl ScalarUDFImpl for GetFieldFunc {
             match current_field.data_type() {
                 DataType::Map(map_field, _) => {
                     match map_field.data_type() {
-                        DataType::Struct(fields) if fields.len() == 2 => {
+                        DataType::Struct(fields)
+                            if let [_, value_field] = &fields[..] =>
+                        {
                             // Arrow's MapArray is essentially a ListArray of structs with two columns. They are
                             // often named "key", and "value", but we don't require any specific naming here;
                             // instead, we assume that the second column is the "value" column both here and in
                             // execution.
-                            let value_field = fields
-                                .get(1)
-                                .expect("fields should have exactly two members");
-
                             current_field = Arc::new(
                                 value_field.as_ref().clone().with_nullable(true),
                             );
@@ -351,11 +336,8 @@ impl ScalarUDFImpl for GetFieldFunc {
                 // the underlying struct, then wrap the result back in the
                 // same Dictionary type so the promised type matches execution.
                 DataType::Dictionary(key_type, value_type)
-                    if matches!(value_type.as_ref(), DataType::Struct(_)) =>
+                    if let DataType::Struct(fields) = value_type.as_ref() =>
                 {
-                    let DataType::Struct(fields) = value_type.as_ref() else {
-                        unreachable!()
-                    };
                     let field_name = sv
                         .as_ref()
                         .and_then(|sv| {

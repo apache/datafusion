@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! # Examples demonstrating DataFusion's plan serialization via the `datafusion-proto` crate
 //!
@@ -21,7 +8,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example proto -- [all|composed_extension_codec|expression_deduplication]
+//! cargo run --example proto -- [all|composed_extension_codec|expression_deduplication|extension_plan_registry]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -32,9 +19,13 @@
 //!
 //! - `expression_deduplication`
 //!   (file: expression_deduplication.rs, desc: Example of expression caching/deduplication using the codec decorator pattern)
+//!
+//! - `extension_plan_registry`
+//!   (file: extension_plan_registry.rs, desc: Decode two crates' extension plans by name, with no composed codec)
 
 mod composed_extension_codec;
 mod expression_deduplication;
+mod extension_plan_registry;
 
 use datafusion::error::{DataFusionError, Result};
 use strum::{IntoEnumIterator, VariantNames};
@@ -46,6 +37,7 @@ enum ExampleKind {
     All,
     ComposedExtensionCodec,
     ExpressionDeduplication,
+    ExtensionPlanRegistry,
 }
 
 impl ExampleKind {
@@ -68,6 +60,9 @@ impl ExampleKind {
             }
             ExampleKind::ExpressionDeduplication => {
                 expression_deduplication::expression_deduplication()?
+            }
+            ExampleKind::ExtensionPlanRegistry => {
+                extension_plan_registry::extension_plan_registry()?
             }
         }
         Ok(())
