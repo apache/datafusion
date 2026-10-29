@@ -20,16 +20,23 @@
 //! The benchmarks are parameterized by the number of equivalence classes, since
 //! that -- not the schema width, which sits behind an `Arc` -- is what these
 //! checks carry around.
+//!
+//! `project/wide_struct_fields` measures [`EquivalenceProperties::project`] for a
+//! projection that reads many fields of one wide struct column, as flattening a
+//! parsed JSON document does.
 
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-use datafusion_physical_expr::expressions::Column;
+use datafusion_common::config::ConfigOptions;
+use datafusion_functions::core::get_field;
+use datafusion_physical_expr::expressions::{Column, lit};
+use datafusion_physical_expr::projection::ProjectionMapping;
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    PhysicalSortRequirement, ScalarFunctionExpr,
 };
 
 fn schema(n_cols: usize) -> SchemaRef {
@@ -152,5 +159,56 @@ fn bench_ordering_satisfaction(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_ordering_satisfaction);
+fn bench_project_wide_struct_fields(c: &mut Criterion) {
+    const FIELDS: usize = 300;
+    const READ: usize = 230;
+    let wide: Fields = (0..FIELDS)
+        .map(|i| Field::new(format!("f{i}"), DataType::Utf8, true))
+        .collect();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("s", DataType::Struct(wide), true),
+    ]));
+    let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+    let col_s = Arc::new(Column::new("s", 1)) as Arc<dyn PhysicalExpr>;
+    let config = Arc::new(ConfigOptions::default());
+    let mut exprs = (0..READ)
+        .map(|i| {
+            let field = ScalarFunctionExpr::try_new(
+                get_field(),
+                vec![Arc::clone(&col_s), lit(format!("f{i}"))],
+                &schema,
+                Arc::clone(&config),
+            )
+            .unwrap();
+            (Arc::new(field) as Arc<dyn PhysicalExpr>, format!("f{i}"))
+        })
+        .collect::<Vec<_>>();
+    exprs.push((Arc::clone(&col_a), "a".to_string()));
+    let mapping = ProjectionMapping::try_new(exprs, &schema).unwrap();
+    let output = Arc::new(Schema::new(
+        mapping
+            .iter()
+            .flat_map(|(source, targets)| {
+                let data_type = source.data_type(&schema).unwrap();
+                targets.iter().map(move |(target, _)| {
+                    Field::new(target.to_string(), data_type.clone(), true)
+                })
+            })
+            .collect::<Vec<_>>(),
+    ));
+    let mut props = EquivalenceProperties::new(Arc::clone(&schema));
+    props.add_orderings([vec![PhysicalSortExpr::new(col_a, SortOptions::default())]]);
+
+    c.bench_function(
+        &format!("equivalence_properties/project/wide_struct_fields/{READ}_of_{FIELDS}"),
+        |b| b.iter(|| props.project(&mapping, Arc::clone(&output))),
+    );
+}
+
+criterion_group!(
+    benches,
+    bench_ordering_satisfaction,
+    bench_project_wide_struct_fields
+);
 criterion_main!(benches);

@@ -382,10 +382,12 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::record_batch::RecordBatch;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Constraint, Constraints, Result};
+    use datafusion_expr::ColumnarValue;
     use datafusion_expr::Operator;
-    use datafusion_expr::sort_properties::SortProperties;
+    use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_functions::string::concat;
     use datafusion_physical_expr_common::sort_expr::{
         LexRequirement, PhysicalSortRequirement,
@@ -1548,6 +1550,258 @@ mod tests {
             "Output should be ordered by get_field(s, 'a') since input is ordered by col_a"
         );
 
+        Ok(())
+    }
+
+    /// A pass-through expression with its own identity that records the data
+    /// type of the range it is given for its child, and declares itself
+    /// ascending when `ordered` is set.
+    #[derive(Debug)]
+    struct RangeProbe {
+        child: Arc<dyn PhysicalExpr>,
+        id: usize,
+        ordered: bool,
+        seen: Arc<std::sync::Mutex<Vec<DataType>>>,
+    }
+
+    impl PartialEq for RangeProbe {
+        fn eq(&self, other: &Self) -> bool {
+            self.id == other.id && self.child.eq(&other.child)
+        }
+    }
+    impl Eq for RangeProbe {}
+    impl std::hash::Hash for RangeProbe {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.id.hash(state);
+            self.child.hash(state);
+        }
+    }
+    impl Display for RangeProbe {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "probe{}({})", self.id, self.child)
+        }
+    }
+
+    impl PhysicalExpr for RangeProbe {
+        fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+            self.child.data_type(input_schema)
+        }
+        fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+            self.child.nullable(input_schema)
+        }
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            self.child.evaluate(batch)
+        }
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.child]
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(RangeProbe {
+                child: Arc::clone(&children[0]),
+                id: self.id,
+                ordered: self.ordered,
+                seen: Arc::clone(&self.seen),
+            }))
+        }
+        fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(children[0].range.data_type());
+            let properties = ExprProperties::new_unknown();
+            Ok(if self.ordered {
+                properties.with_order(SortProperties::Ordered(SortOptions::default()))
+            } else {
+                properties
+            })
+        }
+        fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{self}")
+        }
+    }
+
+    type Seen = Arc<std::sync::Mutex<Vec<DataType>>>;
+
+    fn probe(
+        child: Arc<dyn PhysicalExpr>,
+        id: usize,
+        ordered: bool,
+    ) -> (Arc<dyn PhysicalExpr>, Seen) {
+        let seen = Seen::default();
+        let expr = Arc::new(RangeProbe {
+            child,
+            id,
+            ordered,
+            seen: Arc::clone(&seen),
+        });
+        (expr, seen)
+    }
+
+    fn assert_only_saw(seen: &Seen, expected: &DataType) {
+        let seen = seen.lock().unwrap();
+        assert!(!seen.is_empty());
+        assert!(seen.iter().all(|t| t == expected), "{seen:?}");
+    }
+
+    fn sorted_orderings(properties: &EquivalenceProperties) -> Vec<String> {
+        let mut orderings = properties
+            .oeq_class()
+            .iter()
+            .map(|o| {
+                o.iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .collect::<Vec<_>>();
+        orderings.sort();
+        orderings
+    }
+
+    #[test]
+    fn project_gives_each_source_the_range_of_its_own_column() -> Result<()> {
+        let wide = DataType::Struct(
+            (0..300)
+                .map(|i| Field::new(format!("f{i}"), DataType::Utf8, true))
+                .collect(),
+        );
+        let narrow =
+            DataType::Struct(vec![Field::new("g", DataType::Int64, true)].into());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("w", wide.clone(), true),
+            Field::new("n", narrow.clone(), true),
+        ]));
+        let col_a = col("a", &schema)?;
+        let mut input = EquivalenceProperties::new(Arc::clone(&schema));
+        input.add_orderings([vec![PhysicalSortExpr::new(
+            Arc::clone(&col_a),
+            SortOptions::default(),
+        )]]);
+
+        // Many sources over the wide column, two over the narrow one, and `a`.
+        let mut proj_exprs = (0..100)
+            .map(|i| Ok((probe(col("w", &schema)?, i, false).0, format!("w{i}"))))
+            .collect::<Result<Vec<_>>>()?;
+        let (wide_ordered, wide_seen) = probe(col("w", &schema)?, 100, true);
+        let (narrow_unordered, narrow_seen) = probe(col("n", &schema)?, 101, false);
+        let (narrow_ordered, _) = probe(col("n", &schema)?, 102, true);
+        proj_exprs.push((wide_ordered, "wo".to_string()));
+        proj_exprs.push((narrow_unordered, "nu".to_string()));
+        proj_exprs.push((narrow_ordered, "no".to_string()));
+        proj_exprs.push((col_a, "aa".to_string()));
+        let mapping = ProjectionMapping::try_new(proj_exprs, &schema)?;
+        let projected = input.project(&mapping, output_schema(&mapping, &schema)?);
+
+        assert_eq!(
+            sorted_orderings(&projected),
+            vec!["aa@103 ASC", "no@102 ASC", "wo@100 ASC"]
+        );
+        assert_only_saw(&wide_seen, &wide);
+        assert_only_saw(&narrow_seen, &narrow);
+        Ok(())
+    }
+
+    #[test]
+    fn project_does_not_reuse_a_column_range_across_schemas() -> Result<()> {
+        let wide = DataType::Struct(vec![Field::new("f", DataType::Utf8, true)].into());
+        for data_type in [wide, DataType::Int64] {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("s", data_type.clone(), true)]));
+            let (source, seen) = probe(col("s", &schema)?, 0, true);
+            let mapping =
+                ProjectionMapping::try_new(vec![(source, "o".to_string())], &schema)?;
+            let projected = EquivalenceProperties::new(Arc::clone(&schema))
+                .project(&mapping, output_schema(&mapping, &schema)?);
+            assert_eq!(sorted_orderings(&projected), vec!["o@0 ASC"]);
+            assert_only_saw(&seen, &data_type);
+        }
+        Ok(())
+    }
+
+    /// An expression whose type cannot be determined; counts the attempts.
+    #[derive(Debug, Default)]
+    struct Untyped {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl PartialEq for Untyped {
+        fn eq(&self, _other: &Self) -> bool {
+            true
+        }
+    }
+    impl Eq for Untyped {}
+    impl std::hash::Hash for Untyped {
+        fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+    }
+    impl Display for Untyped {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "untyped")
+        }
+    }
+
+    impl PhysicalExpr for Untyped {
+        fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            datafusion_common::plan_err!("no type")
+        }
+        fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+            Ok(true)
+        }
+        fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
+            datafusion_common::plan_err!("no value")
+        }
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
+        }
+        fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{self}")
+        }
+    }
+
+    #[test]
+    fn project_keeps_dropping_a_derivation_whose_range_type_fails() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let col_a = col("a", &schema)?;
+        let typeless = Arc::new(Untyped::default());
+        let untyped = Arc::clone(&typeless) as Arc<dyn PhysicalExpr>;
+        let mut input = EquivalenceProperties::new(Arc::clone(&schema));
+        input.add_orderings([
+            vec![PhysicalSortExpr::new(
+                Arc::clone(&untyped),
+                SortOptions::default(),
+            )],
+            vec![PhysicalSortExpr::new(
+                Arc::clone(&col_a),
+                SortOptions::default(),
+            )],
+        ]);
+        let mapping = ProjectionMapping::try_new(
+            vec![(untyped, "u".to_string()), (col_a, "aa".to_string())],
+            &schema,
+        )?;
+        let out_schema = Arc::new(Schema::new(vec![
+            Field::new("u", DataType::Null, true),
+            Field::new("aa", DataType::Int64, true),
+        ]));
+
+        let before = typeless.calls.load(std::sync::atomic::Ordering::Relaxed);
+        let projected = input.project(&mapping, out_schema);
+        // The failing type is asked for while deriving orderings. That
+        // derivation is dropped; the sort key is still carried by the direct
+        // mapping of the existing orderings.
+        assert!(typeless.calls.load(std::sync::atomic::Ordering::Relaxed) > before);
+        assert_eq!(sorted_orderings(&projected), vec!["aa@1 ASC", "u@0 ASC"]);
         Ok(())
     }
 }
