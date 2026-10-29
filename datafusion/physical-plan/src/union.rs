@@ -1006,26 +1006,22 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
             // Select the first nullable field, or the first field if none are
             // nullable, before merging metadata. Otherwise, each non-nullable
             // candidate would repeat the full metadata merge.
-            let (input_idx, input) = inputs
+            let input = inputs
                 .iter()
-                .enumerate()
-                .find_or_first(|(_, input)| input.schema().field(i).is_nullable())
+                .find_or_first(|input| input.schema().field(i).is_nullable())
                 // Empty inputs are rejected above.
                 .unwrap();
             let field = input.schema().field(i).clone();
-            let mut metadata = field.metadata().clone();
 
-            // Preserve precedence: the selected field's metadata comes first,
-            // followed by the other inputs in their original order.
-            let other_metadatas = inputs
+            // Preserve precedence: last input overrides earlier ones
+            let new_meadata = inputs
                 .iter()
-                .enumerate()
-                .filter(|(other_idx, _)| *other_idx != input_idx)
-                .flat_map(|(_, other_input)| {
-                    other_input.schema().field(i).metadata().clone().into_iter()
-                });
-            metadata.extend(other_metadatas);
-            field.with_metadata(metadata).with_name(base_field.name())
+                .flat_map(|input| input.schema().field(i).metadata().clone().into_iter())
+                .collect::<Metadata>();
+
+            field
+                .with_metadata(new_meadata)
+                .with_name(base_field.name())
         })
         .collect::<Vec<_>>();
 
