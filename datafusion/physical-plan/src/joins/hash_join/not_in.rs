@@ -33,7 +33,7 @@
 //! - [`NotInBuild::final_chunk`] on each chunk of build rows emitted after
 //!   the probe side is exhausted.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 
@@ -59,7 +59,7 @@ use crate::joins::join_hash_map::{JoinHashMapType, ProbeOffset};
 use crate::joins::probe_completion::ProbeSideSummary;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, JoinFilter, apply_join_filter_to_indices,
-    equal_rows_arr_with_normalized_left, matchable_join_keys, update_hash,
+    equal_rows_arr_with_normalized_left, matchable_join_keys,
 };
 
 /// Which `NOT IN` a null-aware join computes, derived from
@@ -181,9 +181,9 @@ pub(super) enum NotInBuild {
         /// One bit per build row, set once its mark is UNKNOWN; shared by
         /// every probe partition, and never cleared.
         unknown: SharedBitmapBuilder,
-        /// Hash table over the scope keys (`on[value_keys..]`) of all build
-        /// rows, probed with NULL-valued probe rows. `None` without scope keys.
-        scope_map: Option<Box<dyn JoinHashMapType>>,
+        /// Hash table over the scope keys of all build rows, probed with
+        /// NULL-valued probe rows. `None` without scope keys.
+        scope_map: Option<BuildScopeMap>,
         /// The build rows with a NULL value key, `None` when there are none.
         null_value_rows: Option<NullValueBuildRows>,
     },
@@ -200,7 +200,7 @@ pub(super) enum NotInBuild {
     /// The fields are those of [`Self::BuildRowsCorrelated`].
     ProbeRowsCorrelated {
         value_keys: usize,
-        scope_map: Option<Box<dyn JoinHashMapType>>,
+        scope_map: Option<BuildScopeMap>,
         null_value_rows: Option<NullValueBuildRows>,
     },
     /// Uncorrelated [`NotIn::ProbeRows`].
@@ -229,7 +229,6 @@ impl NotInBuild {
         let correlated_row_state = |value_keys, reservation: &mut MemoryReservation| {
             correlated_row_state(
                 on_left,
-                batch,
                 keys,
                 normalized,
                 value_keys,
@@ -478,7 +477,7 @@ impl NotInProbe {
                     mark_null_candidates_for_probe_batch(
                         left_data,
                         UnknownMarks::Build(unknown),
-                        scope_map.as_deref(),
+                        scope_map.as_ref(),
                         null_value_rows.as_ref(),
                         probe_batch,
                         probe_values,
@@ -516,7 +515,7 @@ impl NotInProbe {
                     mark_null_candidates_for_probe_batch(
                         left_data,
                         UnknownMarks::Probe(&unknown),
-                        scope_map.as_deref(),
+                        scope_map.as_ref(),
                         null_value_rows.as_ref(),
                         probe_batch,
                         probe_values,
@@ -601,42 +600,23 @@ fn retain_probe_rows(
 }
 
 /// The scope map and NULL-valued build rows of a correlated `NOT IN`.
-#[expect(clippy::too_many_arguments, clippy::type_complexity)]
 fn correlated_row_state(
     on_left: &[PhysicalExprRef],
-    batch: &RecordBatch,
     keys: &[ArrayRef],
     normalized: &[ArrayRef],
     value_keys: usize,
     random_state: &RandomState,
     reservation: &mut MemoryReservation,
     metrics: &BuildProbeJoinMetrics,
-) -> Result<(Option<Box<dyn JoinHashMapType>>, Option<NullValueBuildRows>)> {
-    let num_rows = batch.num_rows();
+) -> Result<(Option<BuildScopeMap>, Option<NullValueBuildRows>)> {
     // `on_left[..V]` are the value keys and `on_left[V..]` the (possibly
     // empty) correlation scope keys.
     let scope_keys = &on_left[value_keys..];
-    let scope_map = if scope_keys.is_empty() {
-        None
-    } else {
-        // Scope-only NULL marking uses a HashMap (the primary join map may
-        // use ArrayMap for full-key matches, but scope keys have arbitrary
-        // shape).
-        let mut scope_map = new_join_hashmap(num_rows, reservation, metrics)?;
-        let mut hashes_buffer = vec![0; num_rows];
-        update_hash(
-            scope_keys,
-            batch,
-            &mut *scope_map,
-            0,
-            random_state,
-            &mut hashes_buffer,
-            0,
-            true,
-            NullEquality::NullEqualsNothing,
-        )?;
-        Some(scope_map)
-    };
+    let scope_map = (!scope_keys.is_empty()).then(|| BuildScopeMap {
+        map: OnceLock::new(),
+        reservation: Mutex::new(reservation.new_empty()),
+        metrics: metrics.clone(),
+    });
 
     let Some(null_mask) = null_value_key_mask(&keys[..value_keys]) else {
         return Ok((scope_map, None));
@@ -670,6 +650,54 @@ fn correlated_row_state(
             build_indices,
         }),
     ))
+}
+
+/// Hash table over the correlation scope keys (`on[value_keys..]`) of all
+/// build rows, used by correlated `NOT IN` (see [`NotInScope::Correlated`]).
+///
+/// Only the probe rows with a NULL value key look it up, so it is built on
+/// the first such probe row rather than with the build side: a probe side
+/// without NULLs never pays for a second hash table over the build side.
+pub(super) struct BuildScopeMap {
+    map: OnceLock<Box<dyn JoinHashMapType>>,
+    /// Charged for the map once it is built. Its lock also makes the probe
+    /// partitions build the map only once.
+    reservation: Mutex<MemoryReservation>,
+    metrics: BuildProbeJoinMetrics,
+}
+
+impl BuildScopeMap {
+    /// Returns the map, building it on first use from `scope_values`, the
+    /// build side's scope keys (`JoinLeftData::values()[value_keys..]`).
+    fn get_or_try_init(
+        &self,
+        scope_values: &[ArrayRef],
+        random_state: &RandomState,
+    ) -> Result<&dyn JoinHashMapType> {
+        if let Some(map) = self.map.get() {
+            return Ok(map.as_ref());
+        }
+        let mut reservation = self.reservation.lock();
+        if let Some(map) = self.map.get() {
+            return Ok(map.as_ref());
+        }
+        // Scope-only NULL marking uses a HashMap (the primary join map may
+        // use ArrayMap for full-key matches, but scope keys have arbitrary
+        // shape).
+        let num_rows = scope_values[0].len();
+        let mut map = new_join_hashmap(num_rows, &mut reservation, &self.metrics)?;
+        let mut hashes_buffer = vec![0; num_rows];
+        create_hashes(scope_values, random_state, &mut hashes_buffer)?;
+        map.extend_zero(num_rows);
+        // A build row whose scope keys hold a NULL is in no scope.
+        let valid = matchable_join_keys(scope_values, NullEquality::NullEqualsNothing);
+        let hashes = hashes_buffer
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| valid.as_ref().is_none_or(|valid| valid.is_valid(*i)));
+        map.update_from_iter(Box::new(hashes.rev()), 0);
+        Ok(self.map.get_or_init(|| map).as_ref())
+    }
 }
 
 /// The build rows with a NULL `NOT IN` value key (in any element of a
@@ -763,7 +791,7 @@ impl<'a> UnknownMarks<'a> {
 fn mark_null_candidates_for_probe_batch(
     left_data: &JoinLeftData,
     marks: UnknownMarks<'_>,
-    scope_map: Option<&dyn JoinHashMapType>,
+    scope_map: Option<&BuildScopeMap>,
     null_value_build_rows: Option<&NullValueBuildRows>,
     probe_batch: &RecordBatch,
     probe_values: &[ArrayRef],
@@ -893,14 +921,20 @@ fn mark_null_candidates_for_probe_batch(
     // Case 2: NULL-valued probe rows paired with the build rows in their
     // correlation scope.
     if let Some(null_mask) = probe_null_value_mask {
-        let null_probe_rows = null_mask
+        let mut null_probe_rows = null_mask
             .values()
             .set_indices()
             .map(|i| i as u32)
-            .filter(in_scope);
+            .filter(in_scope)
+            .peekable();
 
         match scope_map {
+            // No NULL-valued probe row is in any scope: nothing to look up,
+            // so the scope map need not be built.
+            Some(_) if null_probe_rows.peek().is_none() => {}
             Some(scope_map) => {
+                let scope_map =
+                    scope_map.get_or_try_init(build_scope_values, random_state)?;
                 let mut pairs =
                     UnmarkedPairs::new(marks, batch_size, &mut mark_scope_matches);
                 pairs.scope_matches(
