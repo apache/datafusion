@@ -192,9 +192,9 @@ fn find_key_group_end(cmp: &JoinKeyComparator, from: usize, len: usize) -> usize
 fn null_aware_left_anti_selection(
     unmatched: BooleanArray,
     outer_key: &dyn Array,
-    subqury_state: SubqueryState,
+    subquery_state: SubqueryState,
 ) -> Result<BooleanArray> {
-    match subqury_state {
+    match subquery_state {
         SubqueryState::Empty => Ok(unmatched),
         SubqueryState::NonEmptyNoNull => match outer_key.logical_nulls() {
             // All outer keys are non-NULL, so unmatched rows can be kept.
@@ -319,6 +319,14 @@ pub(crate) struct BitwiseSortMergeJoinStream {
 }
 
 impl BitwiseSortMergeJoinStream {
+    /// Creates a sort-merge join stream for semi, anti, and mark joins.
+    ///
+    /// # Preconditions
+    ///
+    /// If `null_aware` is `Some`, the mode and join configuration must satisfy
+    /// the requirements of [`NullAwareMode::try_new`].
+    /// `SortMergeJoinExec::execute` performs this validation before creating
+    /// the stream.
     #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         schema: SchemaRef,
@@ -362,22 +370,6 @@ impl BitwiseSortMergeJoinStream {
         let baseline_metrics = BaselineMetrics::new(metrics, partition);
         let peak_mem_used =
             MetricBuilder::new(metrics).peak_memory_usage("peak_mem_used", partition);
-
-        if let Some(mode) = null_aware {
-            let validated = NullAwareMode::try_new(
-                join_type,
-                on_outer.len(),
-                filter.is_some(),
-                null_equality,
-                &sort_options,
-            )?;
-
-            if mode != validated {
-                return internal_err!(
-                    "null-aware mode does not match the join configuration"
-                );
-            }
-        }
 
         let mut state = Self {
             join_type,
