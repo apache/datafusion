@@ -176,6 +176,53 @@ async fn schema_merge_can_preserve_metadata() {
     assert_metadata(&actual, &expected_metadata);
 }
 
+/// The extension type is part of the type of a field, so it is kept when the other
+/// field metadata is cleared.
+#[tokio::test]
+async fn schema_merge_keeps_extension_types_by_default() {
+    let tmp_dir = TempDir::new().unwrap();
+    let table_dir = tmp_dir.path().join("parquet_test");
+
+    let mut extension_meta = make_meta("ARROW:extension:name", "example.ext");
+    extension_meta.insert("ARROW:extension:metadata".into(), r#"{"width":5}"#.into());
+    let with_extension_meta = |k: &str, v: &str| {
+        let mut meta = extension_meta.clone();
+        meta.insert(k.into(), v.into());
+        meta
+    };
+
+    let f1 = Field::new("id", DataType::Int32, true);
+    let f2 = Field::new("name", DataType::Utf8, true);
+
+    let schemas = vec![
+        // extension type with other field level metadata
+        Schema::new(vec![
+            f1.clone()
+                .with_metadata(with_extension_meta("blarg", "bar")),
+            f2.clone(),
+        ]),
+        // same extension type with incompatible other field level metadata
+        Schema::new(vec![
+            f1.clone()
+                .with_metadata(with_extension_meta("blarg", "baz")),
+            f2.clone(),
+        ]),
+        // no extension type
+        Schema::new(vec![f1, f2]),
+    ];
+    write_files(table_dir.as_path(), schemas);
+    let table_path = table_dir.to_str().unwrap().to_string();
+
+    let ctx = SessionContext::new();
+    let df = ctx
+        .read_parquet(&table_path, ParquetReadOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(df.schema().field(0).metadata(), &extension_meta);
+    assert!(df.schema().field(1).metadata().is_empty());
+    assert!(df.schema().metadata().is_empty());
+}
+
 /// A column that only some files carry must be inferred as nullable, because
 /// reading the files without it yields nulls, even when every file that has
 /// the column declares it required.
