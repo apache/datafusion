@@ -1228,3 +1228,35 @@ fn test_plan_with_order_breaking_variants_preserves_fetch() -> Result<()> {
     assert_eq!(res.plan.fetch(), Some(10));
     Ok(())
 }
+
+#[test]
+fn test_plan_with_order_preserving_variants_accounts_for_limit_skip() -> Result<()> {
+    use datafusion_physical_plan::limit::GlobalLimitExec;
+
+    let schema = create_test_schema3()?;
+    let parquet_sort_exprs: LexOrdering = [sort_expr("a", &schema)].into();
+    let parquet_exec = parquet_exec_with_sort(schema, vec![parquet_sort_exprs.clone()]);
+    let coalesced = coalesce_partitions_exec(parquet_exec.clone());
+    let limit = Arc::new(GlobalLimitExec::new(coalesced.clone(), 5, None));
+
+    let requirements = OrderPreservationContext::new(
+        limit.clone(),
+        false,
+        vec![OrderPreservationContext::new(
+            coalesced,
+            true,
+            vec![OrderPreservationContext::new(
+                parquet_exec,
+                true,
+                vec![],
+            )],
+        )],
+    );
+
+    // Parent sort has fetch=10. With skip=5 on GlobalLimitExec,
+    // the replacement SortPreservingMergeExec must receive fetch = 10 + 5 = 15.
+    let res = plan_with_order_preserving_variants(requirements, false, true, Some(10))?;
+    let child_spm = res.children[0].plan.as_ref();
+    assert_eq!(child_spm.fetch(), Some(15));
+    Ok(())
+}

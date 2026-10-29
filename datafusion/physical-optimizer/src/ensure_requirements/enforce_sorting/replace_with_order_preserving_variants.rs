@@ -15,12 +15,13 @@ use crate::utils::{
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
-use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use itertools::izip;
 
@@ -77,6 +78,28 @@ pub fn update_order_preservation_ctx_children_data(opc: &mut OrderPreservationCo
     opc.data = false;
 }
 
+fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
+    match (f1, f2) {
+        (Some(f1), Some(f2)) => Some(f1.min(f2)),
+        (Some(_), _) => f1,
+        (_, Some(_)) => f2,
+        _ => None,
+    }
+}
+
+/// Calculate the fetch to push down to the children of `plan`.
+/// If `plan` is a `GlobalLimitExec`, its `skip` must be added to the pushed-down fetch.
+fn input_fetch(
+    plan: &Arc<dyn ExecutionPlan>,
+    parent_fetch: Option<usize>,
+) -> Option<usize> {
+    let fetch = min_fetch(plan.fetch(), parent_fetch)?;
+    let skip = plan
+        .downcast_ref::<GlobalLimitExec>()
+        .map_or(0, |limit| limit.skip());
+    Some(fetch.saturating_add(skip))
+}
+
 /// Calculates the updated plan by replacing operators that lose ordering
 /// inside `sort_input` with their order-preserving variants. This will
 /// generate an alternative plan, which will be accepted or rejected later on
@@ -97,6 +120,7 @@ pub fn plan_with_order_preserving_variants(
         sort_input.data = false;
         return Ok(sort_input);
     }
+    let child_fetch = input_fetch(&sort_input.plan, fetch);
     sort_input.children = sort_input
         .children
         .into_iter()
@@ -107,7 +131,7 @@ pub fn plan_with_order_preserving_variants(
                     node,
                     is_spr_better,
                     is_spm_better,
-                    fetch,
+                    child_fetch,
                 )
             } else {
                 Ok(node)
