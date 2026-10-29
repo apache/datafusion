@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -133,6 +120,39 @@ pub fn format_type_and_metadata(
         }
         _ => data_type.to_string(),
     }
+}
+
+/// Merges the field or schema metadata of the inputs of a `UNION`.
+///
+/// Inputs are merged in order: keys present in only some inputs are kept, and
+/// when inputs disagree on a key's value, the last input wins. Inputs without
+/// metadata (e.g. `NULL` literals) contribute nothing.
+///
+/// # Example
+/// ```
+/// # use arrow::datatypes::Metadata;
+/// # use datafusion_common::metadata::merge_metadata_for_union;
+/// let first = Metadata::new().with("id", "1").with("only_first", "a");
+/// let last = Metadata::new().with("id", "2");
+/// assert_eq!(
+///     merge_metadata_for_union([&first, &last]),
+///     Metadata::new().with("id", "2").with("only_first", "a"),
+/// );
+/// ```
+pub fn merge_metadata_for_union<'a>(
+    metadatas: impl IntoIterator<Item = &'a Metadata>,
+) -> Metadata {
+    metadatas
+        .into_iter()
+        .fold(Metadata::new(), |mut merged, metadata| {
+            if merged.is_empty() {
+                // Shares the underlying map rather than copying it
+                metadata.clone()
+            } else {
+                merged.extend(metadata);
+                merged
+            }
+        })
 }
 
 /// Literal metadata

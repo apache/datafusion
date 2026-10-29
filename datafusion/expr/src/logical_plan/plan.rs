@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Logical plan types
 
@@ -32,7 +19,6 @@ use super::invariants::{
 use crate::builder::{unique_field_aliases, unnest_with_options};
 use crate::expr::{
     Alias, Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams,
-    intersect_metadata_for_union,
 };
 use crate::expr_rewriter::{
     NamePreserver, create_col_from_scalar_expr, normalize_cols, normalize_sorts,
@@ -61,7 +47,9 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
-use datafusion_common::metadata::check_metadata_with_storage_equal;
+use datafusion_common::metadata::{
+    check_metadata_with_storage_equal, merge_metadata_for_union,
+};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -3676,14 +3664,14 @@ impl Union {
 
                     let mut field =
                         Field::new(name, data_type.clone(), final_is_nullable);
-                    field.set_metadata(intersect_metadata_for_union(unmerged_metadata));
+                    field.set_metadata(merge_metadata_for_union(unmerged_metadata));
 
                     (None, Arc::new(field))
                 },
             )
             .collect::<Vec<(Option<TableReference>, _)>>();
 
-        let union_schema_metadata = intersect_metadata_for_union(
+        let union_schema_metadata = merge_metadata_for_union(
             inputs.iter().map(|input| input.schema().metadata()),
         );
 
@@ -3754,14 +3742,13 @@ impl Union {
                 };
 
                 let mut field = Field::new(&name, data_type.clone(), nullable);
-                let field_metadata = intersect_metadata_for_union(
-                    fields.iter().map(|field| field.metadata()),
-                );
+                let field_metadata =
+                    merge_metadata_for_union(fields.iter().map(|field| field.metadata()));
                 field.set_metadata(field_metadata);
                 Ok((None, Arc::new(field)))
             })
             .collect::<Result<_>>()?;
-        let union_schema_metadata = intersect_metadata_for_union(
+        let union_schema_metadata = merge_metadata_for_union(
             inputs.iter().map(|input| input.schema().metadata()),
         );
 
