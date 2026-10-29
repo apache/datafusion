@@ -1224,12 +1224,14 @@ example, to set and reset <code class="docutils literal notranslate"><span class
 </section>
 <section id="tuning-guide">
 <h1>Tuning Guide<a class="headerlink" href="#tuning-guide" title="Link to this heading">#</a></h1>
-<section id="short-queries">
-<h2>Short Queries<a class="headerlink" href="#short-queries" title="Link to this heading">#</a></h2>
+<section id="short-queries-and-point-lookups">
+<h2>Short Queries and Point Lookups<a class="headerlink" href="#short-queries-and-point-lookups" title="Link to this heading">#</a></h2>
 <p>By default DataFusion will attempt to maximize parallelism and use all cores –
 For example, if you have 32 cores, each plan will split the data into 32
-partitions. However, if your data is small, the overhead of splitting the data
-to enable parallelization can dominate the actual computation.</p>
+partitions. However, if your data is small, or the query only reads a few rows
+(for example, a point lookup such as <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">*</span> <span class="pre">FROM</span> <span class="pre">t</span> <span class="pre">WHERE</span> <span class="pre">id</span> <span class="pre">=</span> <span class="pre">42</span></code>), the
+overhead of planning, opening files, and splitting the data to enable
+parallelization can dominate the actual computation.</p>
 <p>You can find out how many cores are being used via the <a class="reference internal" href="sql/explain.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code></span></a> command and look
 at the number of partitions in the plan.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.repartition_file_min_size</span></code> option controls the minimum file size the
@@ -1237,10 +1239,38 @@ at the number of partitions in the plan.</p>
 does not apply to user defined data sources and only works when DataFusion has accurate statistics.</p>
 <p>If you know your data is small, you can set the <code class="docutils literal notranslate"><span class="pre">datafusion.execution.target_partitions</span></code>
 option to a smaller number to reduce the overhead of repartitioning. For very small datasets (e.g. less
-than 1MB), we recommend setting <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> to 1 to avoid repartitioning altogether.</p>
+than 1MB) or point lookups, we recommend setting <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> to 1 to avoid repartitioning altogether.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">target_partitions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;1&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
+<p>For point lookups, the following techniques also help:</p>
+<ul class="simple">
+<li><p>Sort the data by the lookup key so the data that is fetched is physically nearby (clustered).
+This makes techniques such as Parquet min/max metadata pruning more effective.</p></li>
+<li><p>Write Parquet files with smaller row groups and data pages than the default
+so that less data needs to be read and decoded for each lookup.</p></li>
+<li><p>Enable <code class="docutils literal notranslate"><span class="pre">datafusion.execution.parquet.pushdown_filters</span></code> so filters are
+evaluated while decoding Parquet.</p></li>
+<li><p>Set the Parquet metadata cache size via
+<code class="docutils literal notranslate"><span class="pre">datafusion.runtime.metadata_cache_limit</span></code> so it is large enough to hold all the metadata for the
+files you query repeatedly.</p></li>
+<li><p>Reuse physical plans to avoid re-planning each query.</p></li>
+</ul>
+<p>Here is an example of how to write Parquet files with smaller row groups and
+data pages:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">COPY</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="p">)</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;t.parquet&#39;</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="n">MAX_ROW_GROUP_SIZE</span><span class="w"> </span><span class="mi">131072</span><span class="p">,</span>
+<span class="w">  </span><span class="n">DATA_PAGE_ROW_COUNT_LIMIT</span><span class="w"> </span><span class="mi">2048</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>Here is how to enable pushdown filters:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">parquet</span><span class="p">.</span><span class="n">pushdown_filters</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>See the <a class="reference external" href="https://datafusion.apache.org/blog/2026/10/24/point-queries/">Best Practices for Single Row Lookups (Point Queries)</a> blog post for
+more details.</p>
 </section>
 <section id="memory-limited-queries">
 <h2>Memory-limited Queries<a class="headerlink" href="#memory-limited-queries" title="Link to this heading">#</a></h2>
@@ -1381,7 +1411,7 @@ equal in size.</p></li>
 </li>
 <li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#runtime-configuration-settings">Runtime Configuration Settings</a></li>
 <li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#tuning-guide">Tuning Guide</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#short-queries">Short Queries</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#short-queries-and-point-lookups">Short Queries and Point Lookups</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#memory-limited-queries">Memory-limited Queries</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#join-queries">Join Queries</a></li>
 </ul>
