@@ -306,7 +306,11 @@ impl MinMaxStructState {
                 let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
                 let first_data_capacity: usize = first_min_maxes
                     .iter()
-                    .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
+                    .map(|opt| {
+                        opt.as_ref()
+                            .map(|value| value.get_array_memory_size())
+                            .unwrap_or(0)
+                    })
                     .sum();
                 self.total_data_bytes -= first_data_capacity;
                 (first_data_capacity, first_min_maxes)
@@ -361,6 +365,35 @@ mod tests {
             vec![Arc::new(inner_struct) as ArrayRef],
             None,
         )
+    }
+
+    #[test]
+    fn test_emit_to_first_updates_data_bytes() {
+        let array = create_test_struct_array(
+            vec![Some(1), Some(2)],
+            vec![Some("first value"), Some("second value")],
+        );
+        let mut state = MinMaxStructState::new(array.data_type().clone());
+        state.min_max.resize(2, None);
+        let first_value = array.slice(0, 1);
+        let second_value = array.slice(1, 1);
+        state.set_value(0, &first_value);
+        state.set_value(1, &second_value);
+
+        let first_data_bytes = state.min_max[0].as_ref().unwrap().get_array_memory_size();
+        let second_data_bytes =
+            state.min_max[1].as_ref().unwrap().get_array_memory_size();
+        assert_eq!(state.total_data_bytes, first_data_bytes + second_data_bytes);
+
+        let (emitted_data_bytes, emitted_min_maxes) = state.emit_to(EmitTo::First(1));
+
+        assert_eq!(emitted_data_bytes, first_data_bytes);
+        assert_eq!(emitted_min_maxes.len(), 1);
+        assert_eq!(state.total_data_bytes, second_data_bytes);
+        assert_eq!(
+            state.size(),
+            second_data_bytes + size_of::<Option<StructArray>>()
+        );
     }
 
     #[test]
