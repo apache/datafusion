@@ -10,6 +10,10 @@
 ## Note that table_with_metadata is defined using Rust code
 ## in the test harness as there is no way to define schema
 ## with metadata in SQL.
+##
+## arrow_metadata() reads the field of its argument from the physical plan at
+## execution time, so these tests observe the metadata of the executed
+## expression, not only the metadata computed during logical planning.
 
 query ITTPT
 select * from table_with_metadata;
@@ -518,6 +522,234 @@ query ?
 select arrow_metadata((select id from table_with_metadata where id = 1));
 ----
 {metadata_key: the id field}
+
+# Tests for coalesce / nvl / ifnull / nvl2 propagate field metadata
+# https://github.com/apache/datafusion/pull/24865
+
+# The tests below use the id, name and l_name columns. Each column carries
+# its own 'metadata_key' entry, so the output of arrow_metadata() shows which
+# argument the result's metadata came from.
+query ITT
+select id, name, l_name from table_with_metadata;
+----
+1 NULL NULL
+NULL bar l_bar
+3 baz l_baz
+
+query ???
+select arrow_metadata(id), arrow_metadata(name), arrow_metadata(l_name)
+from table_with_metadata limit 1;
+----
+{metadata_key: the id field} {metadata_key: the name field} {metadata_key: the l_name field}
+
+# Metadata is merged from the value-contributing arguments; earlier arguments win.
+query TT
+select coalesce(name, l_name), arrow_metadata(coalesce(name, l_name), 'metadata_key')
+from table_with_metadata;
+----
+NULL NULL
+bar NULL
+baz NULL
+
+# Expected
+#NULL the name field
+#bar the name field
+#baz the name field
+
+# An untyped NULL literal argument does not block metadata.
+query TT
+select coalesce(NULL, name), arrow_metadata(coalesce(NULL, name), 'metadata_key')
+from table_with_metadata;
+----
+NULL the name field
+bar the name field
+baz the name field
+
+# Expected
+#NULL the name field
+#bar the name field
+#baz the name field
+
+# An argument without metadata does not block metadata from later arguments.
+query TT
+select coalesce(upper(name), l_name), arrow_metadata(coalesce(upper(name), l_name), 'metadata_key')
+from table_with_metadata;
+----
+NULL NULL
+BAR NULL
+BAZ NULL
+
+# Expected
+#NULL the l_name field
+#BAR the l_name field
+#BAZ the l_name field
+
+# Common extension types are propagated.
+query T
+select arrow_metadata(
+  coalesce(
+    with_metadata(name, 'ARROW:extension:name', 'ext.type'),
+    with_metadata(l_name, 'ARROW:extension:name', 'ext.type')
+  ),
+  'ARROW:extension:name')
+from table_with_metadata limit 1;
+----
+NULL
+
+# Conflicting extension types should be a planning error:
+# Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a.type' and 'b.type'
+query T
+select coalesce(
+  with_metadata(name, 'ARROW:extension:name', 'a.type'),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+----
+NULL
+bar
+baz
+
+# nvl
+query TT
+select nvl(name, l_name), arrow_metadata(nvl(name, l_name), 'metadata_key')
+from table_with_metadata;
+----
+NULL NULL
+bar NULL
+baz NULL
+
+# Expected
+#NULL the name field
+#bar the name field
+#baz the name field
+
+query T
+select arrow_metadata(ifnull(name, l_name), 'metadata_key') from table_with_metadata limit 1;
+----
+NULL
+
+# nvl2: the result comes from the second or third argument.
+query TT
+select nvl2(id, name, l_name), arrow_metadata(nvl2(id, name, l_name), 'metadata_key')
+from table_with_metadata;
+----
+NULL NULL
+l_bar NULL
+baz NULL
+
+# Expected
+#NULL the name field
+#l_bar the name field
+#baz the name field
+
+# The first argument of nvl2 is only tested for NULL; its metadata does not leak.
+query T
+select arrow_metadata(
+  nvl2(with_metadata(id, 'ARROW:extension:name', 'test.type'), name, l_name),
+  'ARROW:extension:name')
+from table_with_metadata limit 1;
+----
+NULL
+
+# CASE: metadata is merged from the THEN and ELSE branches; earlier branches win.
+# coalesce, nvl, ifnull and nvl2 are all rewritten to CASE during
+# simplification, so CASE must propagate metadata for them to do so.
+query TT
+select
+  case when name is not null then name else l_name end,
+  arrow_metadata(case when name is not null then name else l_name end, 'metadata_key')
+from table_with_metadata;
+----
+NULL NULL
+bar NULL
+baz NULL
+
+# Expected
+#NULL the name field
+#bar the name field
+#baz the name field
+
+# CASE without ELSE
+query TT
+select
+  case when name is not null then name end,
+  arrow_metadata(case when name is not null then name end, 'metadata_key')
+from table_with_metadata;
+----
+NULL NULL
+bar NULL
+baz NULL
+
+# Expected
+#NULL the name field
+#bar the name field
+#baz the name field
+
+# Simple CASE form
+query TT
+select
+  case id when 1 then name else l_name end,
+  arrow_metadata(case id when 1 then name else l_name end, 'metadata_key')
+from table_with_metadata;
+----
+NULL NULL
+l_bar NULL
+l_baz NULL
+
+# Expected
+#NULL the name field
+#l_bar the name field
+#l_baz the name field
+
+# A branch without metadata does not block metadata from later branches.
+query TT
+select
+  case when id is null then upper(name) else l_name end,
+  arrow_metadata(case when id is null then upper(name) else l_name end, 'metadata_key')
+from table_with_metadata;
+----
+NULL NULL
+BAR NULL
+l_baz NULL
+
+# Expected
+#NULL the l_name field
+#BAR the l_name field
+#l_baz the l_name field
+
+# Agreeing extension types are propagated.
+query T
+select arrow_metadata(
+  case when name is not null
+    then with_metadata(name, 'ARROW:extension:name', 'ext.type')
+    else with_metadata(l_name, 'ARROW:extension:name', 'ext.type')
+  end,
+  'ARROW:extension:name')
+from table_with_metadata limit 1;
+----
+NULL
+
+# Conflicting extension types should be a planning error, as for coalesce:
+# Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a.type' and 'b.type'
+query T
+select
+  case when name is not null
+    then with_metadata(name, 'ARROW:extension:name', 'a.type')
+    else with_metadata(l_name, 'ARROW:extension:name', 'b.type')
+  end
+from table_with_metadata;
+----
+NULL
+bar
+baz
+
+# The CASE operand and WHEN conditions are only tested; their metadata does not leak.
+query T
+select arrow_metadata(
+  case with_metadata(id, 'ARROW:extension:name', 'test.type') when 1 then name else l_name end,
+  'ARROW:extension:name')
+from table_with_metadata limit 1;
+----
+NULL
 
 statement ok
 drop table table_with_metadata;
