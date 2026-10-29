@@ -1532,6 +1532,16 @@ fn push_down_into_table_scan(
     let LogicalPlan::TableScan(mut scan) = Arc::unwrap_or_clone(filter.input) else {
         return internal_err!("the input of the filter is not a table scan");
     };
+    // The fetch of a scan applies after its filters, so a filter above a scan
+    // with a fetch cannot move into it without changing the result.
+    if scan.fetch.is_some() {
+        filter.input = Arc::new(LogicalPlan::TableScan(scan));
+        return Ok(Transformed::new(
+            LogicalPlan::Filter(filter),
+            changed,
+            TreeNodeRecursion::Continue,
+        ));
+    }
     let filter_predicates = split_conjunction(&filter.predicate);
     // Filters containing scalar subqueries cannot be pushed to
     // providers because the subquery result is not available
@@ -1587,9 +1597,11 @@ fn push_down_into_table_scan(
         .cloned()
         .collect();
 
+    // Nothing changes when no predicate leaves the filter and the scan already
+    // records every accepted predicate.
     if supported_filters
         .iter()
-        .all(|res| res == &TableProviderFilterPushDown::Inexact)
+        .all(|res| res != &TableProviderFilterPushDown::Exact)
         && scan.filters == new_scan_filters
     {
         filter.input = Arc::new(LogicalPlan::TableScan(scan));
@@ -1642,23 +1654,24 @@ fn push_down_through_extraction_projection_into_scan(
     let pass_through: HashSet<&Column> = projection
         .expr
         .iter()
-        .filter_map(|expr| match expr {
-            Expr::Column(column) => Some(column),
-            _ => None,
-        })
+        .filter_map(Expr::try_as_col)
         .collect();
-    let (scan_predicates, mut keep_predicates): (Vec<Expr>, Vec<Expr>) =
-        predicates.into_iter().partition(|predicate| {
-            predicate
-                .column_refs()
-                .iter()
-                .all(|column| pass_through.contains(column))
-        });
+    let reads_only_pass_through = |predicate: &Expr| {
+        predicate
+            .column_refs()
+            .iter()
+            .all(|column| pass_through.contains(column))
+    };
 
-    let Some(scan_predicate) = conjunction(scan_predicates.clone()) else {
+    let Some(scan_predicate) = conjunction(
+        predicates
+            .iter()
+            .filter(|predicate| reads_only_pass_through(predicate))
+            .cloned(),
+    ) else {
         return Ok((
             Transformed::no(LogicalPlan::Projection(projection)),
-            keep_predicates,
+            predicates,
         ));
     };
     let pushed = push_down_into_table_scan(
@@ -1666,22 +1679,29 @@ fn push_down_through_extraction_projection_into_scan(
         false,
     )?;
     if !pushed.transformed {
-        keep_predicates.extend(scan_predicates);
         return Ok((
             Transformed::no(LogicalPlan::Projection(projection)),
-            keep_predicates,
+            predicates,
         ));
     }
 
     // The predicates the scan does not apply exactly come back in a filter
     // above it. They stay above the projection.
-    let scan = match pushed.data {
-        LogicalPlan::Filter(residual) => {
-            keep_predicates.extend(split_conjunction_owned(residual.predicate));
-            Arc::unwrap_or_clone(residual.input)
-        }
-        scan => scan,
+    let (scan, residual) = match pushed.data {
+        LogicalPlan::Filter(residual) => (
+            Arc::unwrap_or_clone(residual.input),
+            split_conjunction_owned(residual.predicate),
+        ),
+        scan => (scan, vec![]),
     };
+    // Keep the predicates in their original order, which `reorder_predicates`
+    // chose by cost.
+    let keep_predicates = predicates
+        .into_iter()
+        .filter(|predicate| {
+            !reads_only_pass_through(predicate) || residual.contains(predicate)
+        })
+        .collect();
     projection.input = Arc::new(scan);
     Ok((
         Transformed::yes(LogicalPlan::Projection(projection)),
@@ -4981,11 +5001,12 @@ mod tests {
     {
         // The scan records the pass-through predicate. Both predicates stay in
         // the filter above the projection: one because the source applies it
-        // inexactly, the other because it reads an extracted alias.
+        // inexactly, the other because it reads an extracted alias. They keep
+        // their order.
         assert_optimized_plan_equal!(
             filter_above_extraction_projection_over_inexact_source()?,
             @r"
-        Filter: __datafusion_extracted_1 = Int64(1) AND b > Int64(5)
+        Filter: b > Int64(5) AND __datafusion_extracted_1 = Int64(1)
           Projection: leaf_udf(a) AS __datafusion_extracted_1, b
             TableScan: test, partial_filters=[b > Int64(5)]
         "
@@ -5029,6 +5050,37 @@ mod tests {
         Filter: b > Int64(5)
           Projection: leaf_udf(a) AS __datafusion_extracted_1, b
             TableScan: test
+        "
+        )
+    }
+
+    /// The fetch of a scan applies after its filters, so a predicate above a
+    /// pure extraction projection must not reach a scan with a fetch.
+    #[test]
+    fn predicate_above_pure_extraction_projection_skips_scan_with_fetch() -> Result<()> {
+        let LogicalPlan::TableScan(scan) = test_table_scan()? else {
+            unreachable!()
+        };
+        let scan_with_fetch = LogicalPlan::TableScan(TableScan {
+            fetch: Some(10),
+            ..scan
+        });
+        let proj = LogicalPlanBuilder::from(scan_with_fetch)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                col("b"),
+            ])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("b").gt(lit(5i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.b > Int64(5)
+          Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b
+            TableScan: test, fetch=10
         "
         )
     }
