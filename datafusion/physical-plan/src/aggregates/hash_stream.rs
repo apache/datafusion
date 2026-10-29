@@ -849,7 +849,7 @@ mod tests {
     use crate::test::TestMemoryExec;
     use crate::test::exec::BarrierExec;
 
-    use arrow::array::{AsArray, Int32Array, Int64Array, StringViewArray};
+    use arrow::array::{ArrayRef, AsArray, Int32Array, Int64Array, StringViewArray};
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
@@ -857,6 +857,7 @@ mod tests {
         GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
     };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_functions_aggregate::approx_distinct::approx_distinct_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::{min_max::min_udaf, sum::sum_udaf};
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -1646,6 +1647,65 @@ mod tests {
         }
         drop(streams);
         assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    /// Every row is a distinct group, so under memory pressure the stream
+    /// emits every state. After the emit, `APPROX_DISTINCT` must release the
+    /// hashes of the last batch (64 KB for 8192 rows), or reserving the empty
+    /// table fails the limit.
+    #[tokio::test]
+    async fn emitted_states_release_accumulator_scratch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let batches = [0..8192, 8192..16384, 16384..24576]
+            .into_iter()
+            .map(|range| {
+                let values: ArrayRef = Arc::new(Int64Array::from_iter_values(range));
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::clone(&values), values],
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".into())]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(
+                    approx_distinct_udaf(),
+                    vec![col("v", &schema)?],
+                )
+                .schema(Arc::clone(&schema))
+                .alias("approx_distinct")
+                .build()?,
+            )],
+            vec![None],
+            input,
+            schema,
+        )?;
+        assert_eq!(
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::None
+        );
+        let context =
+            Arc::new(
+                TaskContext::default()
+                    .with_session_config(SessionConfig::new().set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        true,
+                    ))
+                    .with_runtime(
+                        RuntimeEnvBuilder::new()
+                            .with_memory_pool(Arc::new(GreedyMemoryPool::new(64 * 1024)))
+                            .build_arc()?,
+                    ),
+            );
+        let output = collect(aggregate.execute(0, context)?).await?;
+        assert_eq!(output.iter().map(|b| b.num_rows()).sum::<usize>(), 24576);
         Ok(())
     }
 }

@@ -339,12 +339,16 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
         debug_assert!(batch.num_rows() > 0);
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
-        // key/index buffers too so the memory reservation can be released
-        // before the batch is passed downstream or sorted for spilling.
+        // key/index buffers and accumulator scratch too so the memory
+        // reservation can be released before the batch is passed downstream or
+        // sorted for spilling.
         self.buffer.group_values.clear_shrink(0);
         self.buffer.group_indices.clear();
         self.buffer.group_indices.shrink_to_fit();
         self.buffer.group_clustering.reset();
+        for acc in &mut self.buffer.accumulators {
+            acc.shrink_to_fit();
+        }
 
         Ok(Some(batch))
     }

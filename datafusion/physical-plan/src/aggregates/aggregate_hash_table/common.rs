@@ -385,11 +385,14 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         debug_assert!(batch.num_rows() > 0);
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
-        // key/index buffers too so the memory reservation can be released
-        // before the batch is sorted for spilling.
+        // key/index buffers and accumulator scratch too so the memory
+        // reservation can be released before the batch is sorted for spilling.
         state.group_values.clear_shrink(0);
         state.batch_group_indices.clear();
         state.batch_group_indices.shrink_to_fit();
+        for acc in &mut state.accumulators {
+            acc.shrink_to_fit();
+        }
 
         Ok(Some(batch))
     }

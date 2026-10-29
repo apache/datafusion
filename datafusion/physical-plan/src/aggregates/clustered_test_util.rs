@@ -170,6 +170,16 @@ async fn collect_with_held_memory(
     Ok((output, held))
 }
 
+/// Runs `plan` under `limit`.
+pub(super) async fn collect_under_limit(
+    plan: &AggregateExec,
+    limit: usize,
+) -> Result<Vec<RecordBatch>> {
+    let (output, _) =
+        collect_with_held_memory(plan, Arc::new(GreedyMemoryPool::new(limit))).await?;
+    Ok(output)
+}
+
 /// Returns the memory `plan` holds when handing off output without a limit.
 pub(super) async fn held_memory(plan: &AggregateExec) -> Result<usize> {
     let (_, held) =

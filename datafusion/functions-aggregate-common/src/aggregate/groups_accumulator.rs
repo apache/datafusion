@@ -496,9 +496,14 @@ impl GroupsAccumulatorAdapter {
     /// that has emitted every group holds no memory
     fn free_scratch_if_empty(&mut self) {
         if self.states.is_empty() {
-            let scratch = std::mem::take(&mut self.scratch);
-            self.free_allocation(scratch.allocated_size());
+            self.free_scratch();
         }
+    }
+
+    /// Release the scratch buffers. The next batch allocates them again.
+    fn free_scratch(&mut self) {
+        let scratch = std::mem::take(&mut self.scratch);
+        self.free_allocation(scratch.allocated_size());
     }
 
     /// Release the allocation held by a state that is being emitted.
@@ -654,11 +659,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     }
 
     fn shrink_to_fit(&mut self) {
-        let vec_size_pre = self.states.allocated_size();
-        self.states.shrink_to_fit();
-        self.adjust_allocation(vec_size_pre, self.states.allocated_size());
-        let scratch = std::mem::take(&mut self.scratch);
-        self.free_allocation(scratch.allocated_size());
+        self.free_scratch();
     }
 
     fn convert_to_state(

@@ -631,7 +631,6 @@ impl GroupsAccumulator for HllGroupsAccumulator {
     }
 
     fn shrink_to_fit(&mut self) {
-        self.groups.shrink_to_fit();
         self.hashes = Vec::new();
     }
 }
