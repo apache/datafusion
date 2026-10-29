@@ -585,6 +585,10 @@ impl Dialect for MySqlDialect {
         ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
     }
 
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
+    }
+
     fn timestamp_cast_dtype(
         &self,
         _time_unit: &TimeUnit,
