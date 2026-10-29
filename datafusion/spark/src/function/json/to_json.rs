@@ -36,7 +36,11 @@ use datafusion_functions::core::expr_fn::named_struct;
 ///
 /// Semantics (matching Spark's defaults):
 /// - A NULL struct row produces NULL
-/// - NULL fields are omitted from the object (`ignoreNullFields = true`)
+/// - NULL struct fields are omitted from the object (`ignoreNullFields = true`);
+///   NULL map entries are kept as `"key":null`
+/// - Map keys are written as strings whatever their type (`{"1":"v"}`)
+/// - Binary values are Base64 strings
+/// - Non-finite floats are the strings `"NaN"`, `"Infinity"` and `"-Infinity"`
 /// - Nested structs, lists and maps are serialized recursively
 ///
 /// The serialization is done batch by batch with the arrow-json row encoder:
@@ -46,7 +50,6 @@ use datafusion_functions::core::expr_fn::named_struct;
 ///
 /// Not yet supported (Spark accepts these): map/array top-level inputs and the
 /// options map argument (`ignoreNullFields`, timestampFormat, ...).
-
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToJson {
     signature: Signature,
@@ -589,7 +592,10 @@ mod tests {
         assert_eq!(out.len(), 3);
         assert_eq!(out.null_count(), 1);
         assert_eq!(out.value(0), r#"{"inner":{"x":2},"tags":["a","b"]}"#);
-        assert!(out.is_null(1), "NULL parent row must stay NULL after slicing");
+        assert!(
+            out.is_null(1),
+            "NULL parent row must stay NULL after slicing"
+        );
         assert_eq!(out.value(2), r#"{"inner":{"x":4},"tags":["d","e","f"]}"#);
     }
 
@@ -653,6 +659,7 @@ mod tests {
         // ...while the column reference keeps its qualifier
         assert_eq!(args[1], Expr::Column(Column::from_qualified_name("t.foo")));
     }
+
     #[test]
     fn test_map_null_values_kept_but_null_struct_fields_omitted() {
         // m: Map<Utf8, Int32> with rows {"k":null}, {"a":1,"b":null}, NULL
@@ -688,6 +695,7 @@ mod tests {
         // a NULL map is a NULL struct field, so it is omitted as well
         assert_eq!(out.value(2), r#"{"s":3}"#);
     }
+
     #[test]
     fn test_binary_is_base64_encoded() {
         // b: Binary ["abc", "", NULL] -> "YWJj", "", omitted
@@ -746,6 +754,7 @@ mod tests {
             r#"{"lb":"YWJj","bv":"YWJj","fsb":"YWI=","l":["YWJj"],"n":{"b":"YWJj"}}"#
         );
     }
+
     #[test]
     fn test_non_finite_floats_are_spark_strings() {
         // d: Float64 [NaN, +inf, -inf, 1.5, NULL]; f: Float32 the same
@@ -810,6 +819,7 @@ mod tests {
         // NULL is still a NULL struct field -> omitted
         assert_eq!(out.value(4), r#"{"l":["NaN",1.5],"n":{}}"#);
     }
+
     #[test]
     fn test_map_keys_are_stringified() {
         // i: Map<Int32, Utf8> {1:"a", 2:"b"}; f: Map<Float64, Utf8> {1.5:"c"}
@@ -1120,6 +1130,7 @@ mod dataframe_tests {
 
         Ok(())
     }
+
     /// Evaluates `SELECT to_json(<expr>)` for each `(expr, expected)` pair and
     /// checks the JSON string.
     ///
@@ -1198,6 +1209,7 @@ mod dataframe_tests {
         ])
         .await
     }
+
     #[tokio::test]
     async fn to_json_non_finite_floats_sql() -> Result<()> {
         assert_sql_json(&[
@@ -1235,6 +1247,7 @@ mod dataframe_tests {
         ])
         .await
     }
+
     #[tokio::test]
     async fn to_json_stringifies_map_keys_sql() -> Result<()> {
         assert_sql_json(&[
