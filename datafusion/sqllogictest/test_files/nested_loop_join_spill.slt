@@ -294,9 +294,6 @@ RIGHT ANTI JOIN existence_spill_right r ON l.threshold > r.k
 ----
 1064 NULL payload-64
 
-# The right side is replayed once per left chunk. Spilled batches are read back
-# without validity buffers for null-free columns (arrow-rs 60.1.0), so they take
-# less memory and fit in three chunks instead of four.
 query TT
 EXPLAIN ANALYZE SELECT count(*)
 FROM existence_spill_left l
