@@ -71,6 +71,19 @@ impl Default for Analyzer {
 
 impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
+    ///
+    /// # Built-in Analyzer Rules
+    ///
+    /// The rules run in the order listed below, after any
+    /// [`FunctionRewrite`]s added with [`Self::add_function_rewrite`]. The
+    /// rule names match the names shown by `EXPLAIN VERBOSE`.
+    ///
+    /// Rule order matters. The default list may change between releases.
+    ///
+    /// | order | rule                        | summary                                                                                 |
+    /// | ----- | --------------------------- | --------------------------------------------------------------------------------------- |
+    /// | 1     | [`ResolveGroupingFunction`] | Rewrites `GROUPING(...)` calls into expressions over DataFusion's internal grouping id. |
+    /// | 2     | [`TypeCoercion`]            | Adds implicit casts so operators and functions receive valid input types.               |
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
             Arc::new(ResolveGroupingFunction::new()),
