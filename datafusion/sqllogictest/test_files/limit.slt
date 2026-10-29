@@ -761,6 +761,11 @@ SELECT * from data LIMIT 3;
 2 b
 3 c
 
+# Sorting an unbounded source without a streaming-friendly limit is pipeline-breaking.
+# Error text should name the operator like EXPLAIN (not Debug), see #26645.
+statement error Cannot execute pipeline breaking queries, operator: SortExec
+SELECT * FROM data ORDER BY column1 LIMIT 1;
+
 # query
 query TT
 explain SELECT * FROM data LIMIT 3;
