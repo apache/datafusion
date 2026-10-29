@@ -66,6 +66,7 @@ fn spark_atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [y, x] = take_function_args("atan2", args)?;
     let y = y.as_primitive::<Float64Type>();
     let x = x.as_primitive::<Float64Type>();
-    let result: Float64Array = binary(y, x, |y, x| y.atan2(x))?;
+    // Spark adds 0.0 to both arguments so that -0.0 is treated as +0.0.
+    let result: Float64Array = binary(y, x, |y, x| (y + 0.0).atan2(x + 0.0))?;
     Ok(Arc::new(result))
 }
