@@ -20,6 +20,7 @@ use crate::{DataFusionError, Result};
 #[cfg(feature = "parquet_encryption")]
 use hex;
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
@@ -887,6 +888,10 @@ impl From<SpillCompression> for Option<CompressionType> {
     }
 }
 
+/// The directory name Hive compliant writers use in place of a null partition value, and the
+/// default for [`ExecutionOptions::listing_table_hive_default_partition_name`].
+pub const HIVE_DEFAULT_PARTITION_NAME: &str = "__HIVE_DEFAULT_PARTITION__";
+
 config_namespace! {
     /// Options related to query execution
     ///
@@ -1095,6 +1100,14 @@ config_namespace! {
         /// partitions from Hive compliant directories. Defaults to true (partition columns are
         /// inferred and will be represented in the table schema).
         pub listing_table_factory_infer_partitions: bool, default = true
+
+        /// The directory name Hive compliant writers use in place of a null partition
+        /// value, e.g. `/table/date=__HIVE_DEFAULT_PARTITION__/data.parquet`. Partition
+        /// values equal to this name are read as NULL, as Hive, Spark and Impala do, and
+        /// partitioned writes reject them. Corresponds to Hive's
+        /// `hive.exec.default.partition.name`. Set this to the empty string to read and
+        /// write such values as the literal directory name instead.
+        pub listing_table_hive_default_partition_name: String, default = HIVE_DEFAULT_PARTITION_NAME.to_string()
 
         /// Should DataFusion support recursive CTEs
         pub enable_recursive_ctes: bool, default = true
@@ -2459,11 +2472,23 @@ impl ConfigOptions {
                 &mut docs,
                 "| {} | {} | {} |",
                 entry.key,
-                entry.value.as_deref().unwrap_or("NULL"),
+                display_default(entry.value.as_deref()),
                 entry.description
             );
         }
         docs
+    }
+}
+
+/// Renders a default value for the generated documentation table.
+///
+/// Values containing `_` or `*` are shown as code, since markdown would otherwise read them
+/// as formatting: a default of `__HIVE_DEFAULT_PARTITION__` renders as bold text.
+fn display_default(value: Option<&str>) -> Cow<'_, str> {
+    match value {
+        None => Cow::Borrowed("NULL"),
+        Some(value) if value.contains(['_', '*']) => Cow::Owned(format!("`{value}`")),
+        Some(value) => Cow::Borrowed(value),
     }
 }
 
