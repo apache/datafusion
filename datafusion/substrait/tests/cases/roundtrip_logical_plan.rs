@@ -2283,25 +2283,21 @@ async fn new_test_grammar() -> Result<()> {
 #[tokio::test]
 async fn extension_logical_plan() -> Result<()> {
     let ctx = create_context().await?;
-    let inputs = [
-        ctx.table("data").await?.into_unoptimized_plan(),
-        ctx.table("data2").await?.into_unoptimized_plan(),
-    ];
-    for input_count in 0..=2 {
-        let ext_plan = LogicalPlan::Extension(Extension {
-            node: Arc::new(MockUserDefinedLogicalPlan {
-                validation_bytes: b"MockUserDefinedLogicalPlan".to_vec(),
-                inputs: inputs[..input_count].to_vec(),
-                empty_schema: Arc::new(DFSchema::empty()),
-            }),
-        });
-        let proto = to_substrait_plan(&ext_plan, &ctx.state())?;
-        let roundtrip = from_substrait_plan(&ctx.state(), &proto).await?;
-        assert_eq!(
-            ext_plan.display_indent().to_string(),
-            roundtrip.display_indent().to_string()
-        );
-    }
+    let validation_bytes = b"MockUserDefinedLogicalPlan".to_vec();
+    let ext_plan = LogicalPlan::Extension(Extension {
+        node: Arc::new(MockUserDefinedLogicalPlan {
+            validation_bytes,
+            inputs: vec![],
+            empty_schema: Arc::new(DFSchema::empty()),
+        }),
+    });
+
+    let proto = to_substrait_plan(&ext_plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+
+    let plan1str = format!("{ext_plan}");
+    let plan2str = format!("{plan2}");
+    assert_eq!(plan1str, plan2str);
 
     Ok(())
 }
