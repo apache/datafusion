@@ -779,6 +779,7 @@ fn next_lambda_parameter_name(
 mod tests {
     use super::*;
     use datafusion::arrow::datatypes::{Field, Schema};
+    use datafusion::logical_expr::logical_plan::builder::table_scan;
 
     use futures::poll;
     use proto::expression::{ReferenceSegment, field_reference, reference_segment};
@@ -925,13 +926,9 @@ mod tests {
             if table.names[0] == "fail" {
                 return substrait_err!("input failed");
             }
-            let provider =
-                datafusion::catalog::empty::EmptyTable::new(Arc::new(Schema::new(vec![
-                    Field::new("x", DataType::Int64, false),
-                ])));
-            datafusion::logical_expr::LogicalPlanBuilder::scan(
-                table.names[0].clone(),
-                datafusion::datasource::provider_as_source(Arc::new(provider)),
+            table_scan(
+                Some(table.names[0].as_str()),
+                &Schema::new(vec![Field::new("x", DataType::Int64, false)]),
                 None,
             )?
             .build()
