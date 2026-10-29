@@ -19,7 +19,6 @@ use super::invariants::{
 use crate::builder::{unique_field_aliases, unnest_with_options};
 use crate::expr::{
     Alias, Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams,
-    intersect_metadata_for_union,
 };
 use crate::expr_rewriter::{
     NamePreserver, create_col_from_scalar_expr, normalize_cols, normalize_sorts,
@@ -48,7 +47,9 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
-use datafusion_common::metadata::check_metadata_with_storage_equal;
+use datafusion_common::metadata::{
+    check_metadata_with_storage_equal, merge_metadata_for_union,
+};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -3663,14 +3664,14 @@ impl Union {
 
                     let mut field =
                         Field::new(name, data_type.clone(), final_is_nullable);
-                    field.set_metadata(intersect_metadata_for_union(unmerged_metadata));
+                    field.set_metadata(merge_metadata_for_union(unmerged_metadata));
 
                     (None, Arc::new(field))
                 },
             )
             .collect::<Vec<(Option<TableReference>, _)>>();
 
-        let union_schema_metadata = intersect_metadata_for_union(
+        let union_schema_metadata = merge_metadata_for_union(
             inputs.iter().map(|input| input.schema().metadata()),
         );
 
@@ -3741,14 +3742,13 @@ impl Union {
                 };
 
                 let mut field = Field::new(&name, data_type.clone(), nullable);
-                let field_metadata = intersect_metadata_for_union(
-                    fields.iter().map(|field| field.metadata()),
-                );
+                let field_metadata =
+                    merge_metadata_for_union(fields.iter().map(|field| field.metadata()));
                 field.set_metadata(field_metadata);
                 Ok((None, Arc::new(field)))
             })
             .collect::<Result<_>>()?;
-        let union_schema_metadata = intersect_metadata_for_union(
+        let union_schema_metadata = merge_metadata_for_union(
             inputs.iter().map(|input| input.schema().metadata()),
         );
 

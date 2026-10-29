@@ -33,9 +33,10 @@ use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::ObservedStream;
 use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 
-use arrow::datatypes::{Metadata, Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata::merge_metadata_for_union;
 use datafusion_common::stats::NdvFallback;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
@@ -997,43 +998,34 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
         }
     }
 
+    let schemas: Vec<SchemaRef> = inputs.iter().map(|input| input.schema()).collect();
     let fields = (0..first_field_count)
         .map(|i| {
             // We take the name from the left side of the union to match how names are coerced during logical planning,
             // which also uses the left side names.
             let base_field = first_schema.field(i).clone();
 
-            // Select the first nullable field, or the first field if none are
-            // nullable, before merging metadata. Otherwise, each non-nullable
-            // candidate would repeat the full metadata merge.
-            let input = inputs
+            // Take the first nullable field, or the first field if none are
+            // nullable.
+            let field = schemas
                 .iter()
-                .find_or_first(|input| input.schema().field(i).is_nullable())
+                .find_or_first(|schema| schema.field(i).is_nullable())
                 // Empty inputs are rejected above.
-                .unwrap();
-            let field = input.schema().field(i).clone();
+                .unwrap()
+                .field(i)
+                .clone();
 
-            // Preserve precedence: last input overrides earlier ones
-            let new_meadata = inputs
-                .iter()
-                .flat_map(|input| input.schema().field(i).metadata().clone().into_iter())
-                .collect::<Metadata>();
-
-            field
-                .with_metadata(new_meadata)
-                .with_name(base_field.name())
+            let metadata = merge_metadata_for_union(
+                schemas.iter().map(|schema| schema.field(i).metadata()),
+            );
+            field.with_metadata(metadata).with_name(base_field.name())
         })
         .collect::<Vec<_>>();
 
-    let all_metadata_merged: Metadata = inputs
-        .iter()
-        .flat_map(|i| i.schema().metadata().clone().into_iter())
-        .collect();
+    let metadata =
+        merge_metadata_for_union(schemas.iter().map(|schema| schema.metadata()));
 
-    Ok(Arc::new(Schema::new_with_metadata(
-        fields,
-        all_metadata_merged,
-    )))
+    Ok(Arc::new(Schema::new_with_metadata(fields, metadata)))
 }
 
 /// CombinedRecordBatchStream can be used to combine a Vec of SendableRecordBatchStreams into one
@@ -1113,7 +1105,7 @@ mod tests {
     use crate::test::{self, TestMemoryExec};
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Metadata};
     use datafusion_common::SplitPoint;
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue};
@@ -1723,14 +1715,14 @@ mod tests {
     async fn test_union_schema_metadata_and_nullability() -> Result<()> {
         use arrow::array::Int32Array;
 
-        // Field metadata from the selected field is merged first, followed by
-        // the other inputs in order. Schema metadata always follows input order.
-        for (nullability, expected_field_value) in [
-            ([false, false, false], "input2"),
-            ([true, false, false], "input2"),
-            ([false, true, false], "input2"),
-            ([false, false, true], "input1"),
-            ([true, true, true], "input2"),
+        // Field and schema metadata are merged in input order, so the last
+        // input wins regardless of which field supplies the nullability.
+        for nullability in [
+            [false, false, false],
+            [true, false, false],
+            [false, true, false],
+            [false, false, true],
+            [true, true, true],
         ] {
             let inputs = nullability
                 .iter()
@@ -1756,19 +1748,17 @@ mod tests {
                 .collect::<Result<Vec<_>>>()?;
 
             let expected_metadata = Metadata::from([
-                ("shared".to_owned(), expected_field_value.to_owned()),
+                ("shared".to_owned(), "input2".to_owned()),
                 ("only0".to_owned(), "kept".to_owned()),
                 ("only1".to_owned(), "kept".to_owned()),
                 ("only2".to_owned(), "kept".to_owned()),
             ]);
-            let mut expected_schema_metadata = expected_metadata.clone();
-            expected_schema_metadata.insert("shared".to_owned(), "input2".to_owned());
             let expected_schema = Arc::new(Schema::new_with_metadata(
                 vec![
                     Field::new("value0", DataType::Int32, nullability.contains(&true))
-                        .with_metadata(expected_metadata),
+                        .with_metadata(expected_metadata.clone()),
                 ],
-                expected_schema_metadata,
+                expected_metadata,
             ));
 
             let union = UnionExec::try_new(inputs)?;

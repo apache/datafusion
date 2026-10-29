@@ -60,7 +60,6 @@ mod set_comparison;
 mod sql_api;
 mod tpcds_planning;
 mod union_comparison;
-mod union_metadata;
 mod union_nullable;
 mod unparser;
 
