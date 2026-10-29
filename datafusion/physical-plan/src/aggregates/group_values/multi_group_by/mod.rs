@@ -1223,7 +1223,6 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
 
     fn shrink_to_fit(&mut self) {
         self.map.shrink_to_fit(|(hash, _)| *hash);
-        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         // Scratch for one `intern` call.
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to_fit();
