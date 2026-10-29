@@ -2,11 +2,15 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use arrow::array::{Array, ArrayAccessor, ArrayRef, AsArray, MapArray, StringBuilder};
+use arrow::array::{
+    Array, ArrayAccessor, ArrayRef, AsArray, MapArray, PrimitiveArray, StringBuilder,
+};
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, FieldRef};
+use arrow::datatypes::{
+    ArrowPrimitiveType, DataType, FieldRef, Float32Type, Float64Type,
+};
 use arrow::error::ArrowError;
 use arrow::json::writer::{
     Encoder, EncoderFactory, EncoderOptions, NullableEncoder, make_encoder,
@@ -109,8 +113,8 @@ impl ScalarUDFImpl for ToJson {
 fn struct_to_json(field: &FieldRef, array: &ArrayRef) -> Result<ArrayRef> {
     // Spark default: ignoreNullFields = true -> NULL struct fields are omitted.
     // The factory covers the places where Spark's output differs from arrow's
-    // defaults (NULL map entries are kept, binary is Base64; see
-    // `SparkJsonEncoderFactory`).
+    // defaults (NULL map entries are kept, binary is Base64, non-finite floats
+    // are strings; see `SparkJsonEncoderFactory`).
     let options = EncoderOptions::default()
         .with_explicit_nulls(false)
         .with_encoder_factory(Arc::new(SparkJsonEncoderFactory));
@@ -162,8 +166,87 @@ impl EncoderFactory for SparkJsonEncoderFactory {
             DataType::FixedSizeBinary(_) => {
                 Ok(Some(base64_encoder(array.as_fixed_size_binary())))
             }
+            // Spark writes non-finite floats as the strings "NaN", "Infinity"
+            // and "-Infinity"; arrow-json writes JSON null, which loses the value
+            DataType::Float32 => Ok(Some(spark_float_encoder(
+                field,
+                array.as_primitive::<Float32Type>(),
+            )?)),
+            DataType::Float64 => Ok(Some(spark_float_encoder(
+                field,
+                array.as_primitive::<Float64Type>(),
+            )?)),
             // everything else uses arrow's default encoder
             _ => Ok(None),
+        }
+    }
+}
+
+/// arrow-json's default options, used to build the inner encoders that the
+/// Spark overrides delegate to (going through `SparkJsonEncoderFactory` again
+/// for the same array would recurse).
+static ARROW_DEFAULT_OPTIONS: LazyLock<EncoderOptions> =
+    LazyLock::new(EncoderOptions::default);
+
+/// Floating point types whose non-finite values Spark serializes as strings.
+trait SparkFloat: Copy {
+    /// The JSON text Spark emits for a non-finite value, or `None` if finite.
+    fn non_finite_json(self) -> Option<&'static [u8]>;
+}
+
+macro_rules! spark_float {
+    ($($t:ty),*) => {$(
+        impl SparkFloat for $t {
+            fn non_finite_json(self) -> Option<&'static [u8]> {
+                if self.is_nan() {
+                    Some(b"\"NaN\"")
+                } else if self.is_infinite() {
+                    Some(if self.is_sign_positive() {
+                        b"\"Infinity\""
+                    } else {
+                        b"\"-Infinity\""
+                    })
+                } else {
+                    None
+                }
+            }
+        }
+    )*};
+}
+spark_float!(f32, f64);
+
+/// Builds a float encoder that writes finite values exactly like arrow-json
+/// and non-finite values the way Spark does.
+fn spark_float_encoder<'a, T>(
+    field: &'a FieldRef,
+    array: &'a PrimitiveArray<T>,
+) -> Result<NullableEncoder<'a>, ArrowError>
+where
+    T: ArrowPrimitiveType,
+    T::Native: SparkFloat,
+{
+    let finite = make_encoder(field, array, &ARROW_DEFAULT_OPTIONS)?;
+    let encoder = SparkFloatEncoder {
+        values: array.values(),
+        finite,
+    };
+    Ok(NullableEncoder::new(
+        Box::new(encoder),
+        array.nulls().cloned(),
+    ))
+}
+
+struct SparkFloatEncoder<'a, N: SparkFloat> {
+    values: &'a [N],
+    /// arrow's default float encoder, used for finite values
+    finite: NullableEncoder<'a>,
+}
+
+impl<N: SparkFloat> Encoder for SparkFloatEncoder<'_, N> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        match self.values[idx].non_finite_json() {
+            Some(text) => out.extend_from_slice(text),
+            None => self.finite.encode(idx, out),
         }
     }
 }
@@ -317,8 +400,8 @@ mod tests {
 
     use arrow::array::{
         BinaryArray, BinaryBuilder, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
-        Int32Array, Int32Builder, Int64Array, LargeBinaryArray, ListBuilder, MapBuilder,
-        StringArray, StructArray,
+        Float32Array, Float64Array, Float64Builder, Int32Array, Int32Builder, Int64Array,
+        LargeBinaryArray, ListBuilder, MapBuilder, StringArray, StructArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{Field, Fields};
@@ -598,6 +681,70 @@ mod tests {
             out.value(2),
             r#"{"lb":"YWJj","bv":"YWJj","fsb":"YWI=","l":["YWJj"],"n":{"b":"YWJj"}}"#
         );
+    }
+    #[test]
+    fn test_non_finite_floats_are_spark_strings() {
+        // d: Float64 [NaN, +inf, -inf, 1.5, NULL]; f: Float32 the same
+        let d = Arc::new(Float64Array::from(vec![
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+            Some(1.5),
+            None,
+        ])) as ArrayRef;
+        let f = Arc::new(Float32Array::from(vec![
+            Some(f32::NAN),
+            Some(f32::INFINITY),
+            Some(f32::NEG_INFINITY),
+            Some(1.5),
+            None,
+        ])) as ArrayRef;
+
+        // l: List<Float64> [[NaN, 1.5]] per row; n: Struct<d: Float64>
+        let mut l = ListBuilder::new(Float64Builder::new());
+        for _ in 0..5 {
+            l.values().append_value(f64::NAN);
+            l.values().append_value(1.5);
+            l.append(true);
+        }
+        let l = Arc::new(l.finish()) as ArrayRef;
+        let n = Arc::new(StructArray::new(
+            Fields::from(vec![Field::new("d", DataType::Float64, true)]),
+            vec![Arc::clone(&d)],
+            None,
+        )) as ArrayRef;
+
+        let fields = Fields::from(vec![
+            Field::new("d", DataType::Float64, true),
+            Field::new("f", DataType::Float32, true),
+            Field::new("l", l.data_type().clone(), true),
+            Field::new("n", n.data_type().clone(), true),
+        ]);
+        let input = StructArray::new(fields, vec![d, f, l, n], None);
+        let field = field_of(&input);
+
+        let out = run(ColumnarValue::Array(Arc::new(input)), field).unwrap();
+        let out = as_string_array(&out).unwrap();
+
+        assert_eq!(
+            out.value(0),
+            r#"{"d":"NaN","f":"NaN","l":["NaN",1.5],"n":{"d":"NaN"}}"#
+        );
+        assert_eq!(
+            out.value(1),
+            r#"{"d":"Infinity","f":"Infinity","l":["NaN",1.5],"n":{"d":"Infinity"}}"#
+        );
+        assert_eq!(
+            out.value(2),
+            r#"{"d":"-Infinity","f":"-Infinity","l":["NaN",1.5],"n":{"d":"-Infinity"}}"#
+        );
+        // finite values keep arrow's formatting
+        assert_eq!(
+            out.value(3),
+            r#"{"d":1.5,"f":1.5,"l":["NaN",1.5],"n":{"d":1.5}}"#
+        );
+        // NULL is still a NULL struct field -> omitted
+        assert_eq!(out.value(4), r#"{"l":["NaN",1.5],"n":{}}"#);
     }
 }
 
@@ -926,6 +1073,43 @@ mod dataframe_tests {
             (
                 "named_struct('m', map(make_array('k'), make_array(arrow_cast('abc', 'Binary'))))",
                 r#"{"m":{"k":"YWJj"}}"#,
+            ),
+        ])
+        .await
+    }
+    #[tokio::test]
+    async fn to_json_non_finite_floats_sql() -> Result<()> {
+        assert_sql_json(&[
+            (
+                "named_struct('x', CAST('NaN' AS DOUBLE))",
+                r#"{"x":"NaN"}"#,
+            ),
+            (
+                "named_struct('x', CAST('Infinity' AS DOUBLE))",
+                r#"{"x":"Infinity"}"#,
+            ),
+            (
+                "named_struct('x', CAST('-Infinity' AS DOUBLE))",
+                r#"{"x":"-Infinity"}"#,
+            ),
+            (
+                "named_struct('x', arrow_cast('NaN', 'Float32'))",
+                r#"{"x":"NaN"}"#,
+            ),
+            // finite values are unchanged
+            ("named_struct('x', 1.5)", r#"{"x":1.5}"#),
+            // nested in a list, a struct and a map value
+            (
+                "named_struct('l', make_array(CAST('NaN' AS DOUBLE), 1.5))",
+                r#"{"l":["NaN",1.5]}"#,
+            ),
+            (
+                "named_struct('n', named_struct('x', CAST('Infinity' AS DOUBLE)))",
+                r#"{"n":{"x":"Infinity"}}"#,
+            ),
+            (
+                "named_struct('m', map(make_array('k'), make_array(CAST('NaN' AS DOUBLE))))",
+                r#"{"m":{"k":"NaN"}}"#,
             ),
         ])
         .await
