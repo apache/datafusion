@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`Correlation`]: correlation sample aggregations.
 
@@ -38,7 +25,7 @@ use log::debug;
 
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -108,7 +95,10 @@ impl AggregateUDFImpl for Correlation {
         Ok(DataType::Float64)
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!("CORR(DISTINCT) aggregations are not available");
+        }
         Ok(Box::new(CorrelationAccumulator::try_new()?))
     }
 
@@ -139,8 +129,8 @@ impl AggregateUDFImpl for Correlation {
         self.doc()
     }
 
-    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
-        true
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        !args.is_distinct
     }
 
     fn create_groups_accumulator(
@@ -152,9 +142,9 @@ impl AggregateUDFImpl for Correlation {
     }
 
     fn distinct_handling(&self) -> DistinctHandling {
-        // Duplicate-sensitive, but the accumulator does not read
-        // `is_distinct` and today silently returns the non-distinct answer.
-        // The tag records the intent; enforcement is a follow-up change.
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`. It only
+        // works when the planner removes it first (`SingleDistinctToGroupBy`
+        // for a single distinct field, e.g. `corr(DISTINCT x, x)`).
         DistinctHandling::Unsupported
     }
 }

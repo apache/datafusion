@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Routers for range partitioning.
 
@@ -24,6 +11,7 @@ use arrow::array::*;
 use arrow::compute::SortOptions;
 use arrow::datatypes::*;
 use arrow::row::{Row, RowConverter, Rows, SortField};
+use datafusion_common::float_semantics::compare_floats;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_err, not_impl_err, plan_err,
     validate_range_split_points,
@@ -471,14 +459,14 @@ macro_rules! impl_float_values_router {
                     if !descending {
                         for (idx, &val) in values.iter().enumerate() {
                             let p = split_points.partition_point(|&sp| {
-                                sp.total_cmp(&val) != Ordering::Greater
+                                compare_floats(sp, val) != Ordering::Greater
                             });
                             emit(idx, p);
                         }
                     } else {
                         for (idx, &val) in values.iter().enumerate() {
                             let p = split_points.partition_point(|&sp| {
-                                sp.total_cmp(&val) != Ordering::Less
+                                compare_floats(sp, val) != Ordering::Less
                             });
                             emit(idx, p);
                         }
@@ -492,11 +480,11 @@ macro_rules! impl_float_values_router {
                             let val = array.value(idx);
                             let p = if !descending {
                                 split_points.partition_point(|&sp| {
-                                    sp.total_cmp(&val) != Ordering::Greater
+                                    compare_floats(sp, val) != Ordering::Greater
                                 })
                             } else {
                                 split_points.partition_point(|&sp| {
-                                    sp.total_cmp(&val) != Ordering::Less
+                                    compare_floats(sp, val) != Ordering::Less
                                 })
                             };
                             emit(idx, p);

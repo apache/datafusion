@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines `Avg` & `Mean` aggregate & accumulators
 
@@ -653,10 +640,14 @@ impl Accumulator for AvgAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![
-            ScalarValue::from(self.count),
-            ScalarValue::Float64(self.sum),
-        ])
+        // With no non-NULL values both fields are NULL, matching
+        // `AvgGroupsAccumulator::state`
+        let (count, sum) = if self.count == 0 {
+            (None, None)
+        } else {
+            (Some(self.count), self.sum)
+        };
+        Ok(vec![ScalarValue::UInt64(count), ScalarValue::Float64(sum)])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -833,9 +824,16 @@ where
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // With no non-NULL values both fields are NULL, matching
+        // `AvgGroupsAccumulator::state`
+        let (count, sum) = if self.count == 0 {
+            (None, None)
+        } else {
+            (Some(self.count), self.sum)
+        };
         Ok(vec![
-            ScalarValue::from(self.count),
-            ScalarValue::new_primitive::<S>(self.sum, &self.sum_data_type)?,
+            ScalarValue::UInt64(count),
+            ScalarValue::new_primitive::<S>(sum, &self.sum_data_type)?,
         ])
     }
 
@@ -916,14 +914,21 @@ impl Accumulator for DurationAvgAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // With no non-NULL values both fields are NULL, matching
+        // `AvgGroupsAccumulator::state`
+        let (count, sum) = if self.count == 0 {
+            (None, None)
+        } else {
+            (Some(self.count), self.sum)
+        };
         let duration_value = match self.time_unit {
-            TimeUnit::Second => ScalarValue::DurationSecond(self.sum),
-            TimeUnit::Millisecond => ScalarValue::DurationMillisecond(self.sum),
-            TimeUnit::Microsecond => ScalarValue::DurationMicrosecond(self.sum),
-            TimeUnit::Nanosecond => ScalarValue::DurationNanosecond(self.sum),
+            TimeUnit::Second => ScalarValue::DurationSecond(sum),
+            TimeUnit::Millisecond => ScalarValue::DurationMillisecond(sum),
+            TimeUnit::Microsecond => ScalarValue::DurationMicrosecond(sum),
+            TimeUnit::Nanosecond => ScalarValue::DurationNanosecond(sum),
         };
 
-        Ok(vec![ScalarValue::from(self.count), duration_value])
+        Ok(vec![ScalarValue::UInt64(count), duration_value])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {

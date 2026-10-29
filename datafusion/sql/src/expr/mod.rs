@@ -1,21 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_expr::planner::{
@@ -760,24 +748,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             SQLExpr::AtTimeZone {
                 timestamp,
                 time_zone,
-            } => Ok(Expr::Cast(Cast::new(
-                Box::new(self.sql_expr_to_logical_expr_internal(
-                    *timestamp,
-                    schema,
-                    planner_context,
-                )?),
-                match *time_zone {
-                    SQLExpr::Value(ValueWithSpan {
-                        value: Value::SingleQuotedString(s),
-                        span: _,
-                    }) => DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
-                    _ => {
-                        return not_impl_err!(
-                            "Unsupported ast node in sqltorel: {time_zone:?}"
-                        );
-                    }
-                },
-            ))),
+            } => self.sql_at_time_zone_to_expr(
+                *timestamp,
+                *time_zone,
+                schema,
+                planner_context,
+            ),
             SQLExpr::Dictionary(fields) => {
                 self.try_plan_dictionary_literal(fields, schema, planner_context)
             }
@@ -965,6 +941,52 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 not_impl_err!("Only identifiers and literals are supported in tuples")
             }
         }
+    }
+
+    /// Plan `<timestamp> AT TIME ZONE '<tz>'`.
+    ///
+    /// The result type depends on whether the input has a timezone *after
+    /// type coercion*, and type coercion runs after this planner. So this
+    /// method only builds `timezone('<tz>', <timestamp>)` through
+    /// [`ExprPlanner::plan_at_time_zone`], and that function decides once the
+    /// type is known. See `TimezoneFunc` in `datafusion-functions` for the
+    /// semantics.
+    ///
+    /// [`ExprPlanner::plan_at_time_zone`]: datafusion_expr::planner::ExprPlanner::plan_at_time_zone
+    fn sql_at_time_zone_to_expr(
+        &self,
+        timestamp: SQLExpr,
+        time_zone: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let tz: Arc<str> = match time_zone {
+            SQLExpr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(s),
+                span: _,
+            }) => s.into(),
+            _ => {
+                return not_impl_err!("Unsupported ast node in sqltorel: {time_zone:?}");
+            }
+        };
+
+        let expr =
+            self.sql_expr_to_logical_expr_internal(timestamp, schema, planner_context)?;
+
+        let mut args = vec![lit(tz.as_ref()), expr];
+        for planner in self.context_provider.get_expr_planners() {
+            match planner.plan_at_time_zone(args)? {
+                PlannerResult::Planned(expr) => return Ok(expr),
+                PlannerResult::Original(original) => {
+                    args = original;
+                }
+            }
+        }
+
+        not_impl_err!(
+            "AT TIME ZONE needs an ExprPlanner that implements `plan_at_time_zone`, \
+             such as the `DatetimeFunctionPlanner` of `datafusion-functions`"
+        )
     }
 
     fn sql_position_to_expr(

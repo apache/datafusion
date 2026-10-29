@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module provides a builder for creating LogicalPlans
 
@@ -41,7 +28,7 @@ use crate::utils::{
     Columnizer, can_hash, check_all_columns_from_schema, compare_sort_expr,
     expand_qualified_wildcard, expand_wildcard, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
-    split_conjunction_owned,
+    passthrough_field_index, split_conjunction_owned,
 };
 use crate::{
     BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
@@ -61,7 +48,9 @@ use datafusion_common::{
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
     plan_err,
 };
-use datafusion_expr_common::type_coercion::binary::type_union_resolution;
+use datafusion_expr_common::type_coercion::binary::{
+    type_union_coercion, type_union_resolution,
+};
 
 use indexmap::IndexSet;
 
@@ -85,6 +74,95 @@ impl LogicalPlanBuilderOptions {
     pub fn with_add_implicit_group_by_exprs(mut self, add: bool) -> Self {
         self.add_implicit_group_by_exprs = add;
         self
+    }
+}
+
+fn recursive_type_can_be_coerced(from: &DataType, into: &DataType) -> bool {
+    if from == into || *from == DataType::Null {
+        return true;
+    }
+    // Preserve the integer coercion supported by recursive queries since #9794.
+    if from.is_integer() && into.is_integer() {
+        return true;
+    }
+    if matches!(
+        (from, into),
+        (DataType::Date32, DataType::Date64)
+            | (DataType::Utf8, DataType::LargeUtf8 | DataType::Utf8View)
+            | (DataType::LargeUtf8, DataType::Utf8View)
+            | (
+                DataType::Binary,
+                DataType::LargeBinary | DataType::BinaryView
+            )
+            | (DataType::LargeBinary, DataType::BinaryView)
+            | (
+                DataType::FixedSizeBinary(_),
+                DataType::Binary | DataType::BinaryView
+            )
+    ) {
+        return true;
+    }
+    // Compound types and changes of type category need an explicit seed type.
+    // UNION's common-type rules can hide lossy casts within nested fields.
+    if !from.is_numeric() || !into.is_numeric() {
+        return false;
+    }
+    // The decimal range/scale checks below are more precise than UNION coercion,
+    // which reserves 20 digits for Int64 even though its values fit in 19.
+    if !into.is_decimal() && type_union_coercion(into, from).as_ref() != Some(into) {
+        return false;
+    }
+
+    match (from, into) {
+        (
+            DataType::Int16
+            | DataType::UInt16
+            | DataType::Int32
+            | DataType::UInt32
+            | DataType::Int64
+            | DataType::UInt64,
+            DataType::Float16,
+        )
+        | (
+            DataType::Int32 | DataType::UInt32 | DataType::Int64 | DataType::UInt64,
+            DataType::Float32,
+        )
+        | (DataType::Int64 | DataType::UInt64, DataType::Float64) => false,
+        (from, into) if from.is_decimal() && into.is_floating() => false,
+        (from, into) if into.is_decimal() => {
+            if from.is_floating() {
+                return false;
+            }
+            let Some((into_precision, into_scale)) = decimal_precision_scale(into) else {
+                return false;
+            };
+            let from_precision_scale = match from {
+                DataType::Int8 | DataType::UInt8 => Some((3, 0)),
+                DataType::Int16 | DataType::UInt16 => Some((5, 0)),
+                DataType::Int32 | DataType::UInt32 => Some((10, 0)),
+                DataType::Int64 => Some((19, 0)),
+                DataType::UInt64 => Some((20, 0)),
+                _ => decimal_precision_scale(from),
+            };
+            let Some((from_precision, from_scale)) = from_precision_scale else {
+                return false;
+            };
+            into_scale >= from_scale
+                && into_precision - into_scale >= from_precision - from_scale
+        }
+        _ => true,
+    }
+}
+
+fn decimal_precision_scale(data_type: &DataType) -> Option<(i16, i16)> {
+    match data_type {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
+            Some((*precision as i16, *scale as i16))
+        }
+        _ => None,
     }
 }
 
@@ -190,6 +268,23 @@ impl LogicalPlanBuilder {
                 static_fields_len,
                 recursive_fields_len
             );
+        }
+        for (index, (static_field, recursive_field)) in self
+            .plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(recursive_term.schema().fields())
+            .enumerate()
+        {
+            let static_type = static_field.data_type();
+            let recursive_type = recursive_field.data_type();
+            if !recursive_type_can_be_coerced(recursive_type, static_type) {
+                return plan_err!(
+                    "Recursive CTE '{name}' column {} has type {static_type} in the non-recursive term but {recursive_type} in the recursive term; cast the non-recursive term to the intended type",
+                    index + 1
+                );
+            }
         }
         // Ensure that the recursive term has the same field types as the static term
         let coerced_recursive_term =
@@ -1988,22 +2083,20 @@ pub fn add_group_by_exprs_from_dependencies(
         return Ok(group_expr);
     }
 
-    // Names of the fields produced by the GROUP BY exprs for example, `GROUP BY
-    // c1 + 1` produces an output field named `"c1 + 1"`
-    let mut group_by_field_names = group_expr
+    // The input field that each GROUP BY expression passes through, or `None`
+    // for a computed expression such as `c1 + 1`
+    let mut group_by_input_indices = group_expr
         .iter()
-        .map(|e| e.schema_name().to_string())
+        .map(|e| passthrough_field_index(e, schema))
         .collect::<Vec<_>>();
 
     if let Some(target_indices) =
-        get_target_functional_dependencies(schema, &group_by_field_names)
+        get_target_functional_dependencies(schema, &group_by_input_indices)
     {
         for idx in target_indices {
-            let expr = Expr::Column(Column::from(schema.qualified_field(idx)));
-            let expr_name = expr.schema_name().to_string();
-            if !group_by_field_names.contains(&expr_name) {
-                group_by_field_names.push(expr_name);
-                group_expr.push(expr);
+            if !group_by_input_indices.contains(&Some(idx)) {
+                group_by_input_indices.push(Some(idx));
+                group_expr.push(Expr::Column(Column::from(schema.qualified_field(idx))));
             }
         }
     }
@@ -2094,58 +2187,31 @@ fn project_with_validation(
     let mut normalizer = ColumnNormalizer::new(&plan);
     let columnizer = Columnizer::new(&plan);
     for (e, validate) in expr {
-        let e = e.into();
-        match e {
+        let mut push_validated = |e: Expr| -> Result<()> {
+            if validate {
+                projected_expr.push(columnizer.columnize(normalizer.normalize(e)?)?)
+            } else {
+                projected_expr.push(e)
+            }
+            Ok(())
+        };
+        match e.into() {
             SelectExpr::Wildcard(opt) => {
                 has_wildcard = true;
                 let expanded = expand_wildcard(plan.schema(), &plan, Some(&opt))?;
-
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                let expanded = if let Some(replace) = opt.replace {
-                    replace_columns(expanded, &replace)?
-                } else {
-                    expanded
-                };
-
-                for e in expanded {
-                    if validate {
-                        projected_expr
-                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
-                    } else {
-                        projected_expr.push(e)
-                    }
-                }
+                apply_replace(expanded, opt.replace.as_ref())?
+                    .into_iter()
+                    .try_for_each(push_validated)?;
             }
             SelectExpr::QualifiedWildcard(table_ref, opt) => {
                 has_wildcard = true;
                 let expanded =
                     expand_qualified_wildcard(&table_ref, plan.schema(), Some(&opt))?;
-
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                let expanded = if let Some(replace) = opt.replace {
-                    replace_columns(expanded, &replace)?
-                } else {
-                    expanded
-                };
-
-                for e in expanded {
-                    if validate {
-                        projected_expr
-                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
-                    } else {
-                        projected_expr.push(e)
-                    }
-                }
+                apply_replace(expanded, opt.replace.as_ref())?
+                    .into_iter()
+                    .try_for_each(push_validated)?;
             }
-            SelectExpr::Expression(e) => {
-                if validate {
-                    projected_expr.push(columnizer.columnize(normalizer.normalize(e)?)?)
-                } else {
-                    projected_expr.push(e)
-                }
-            }
+            SelectExpr::Expression(e) => push_validated(e)?,
         }
     }
 
@@ -2171,6 +2237,18 @@ fn project_with_validation(
     // `columnizer` borrows `plan`, which moves into the projection below.
     drop(columnizer);
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+}
+
+/// Applies a wildcard's REPLACE statement, if it has one, to the columns the
+/// wildcard expanded to.
+fn apply_replace(
+    expanded: Vec<Expr>,
+    replace: Option<&PlannedReplaceSelectItem>,
+) -> Result<Vec<Expr>> {
+    match replace {
+        Some(replace) => replace_columns(expanded, replace),
+        None => Ok(expanded),
+    }
 }
 
 /// If there is a REPLACE statement in the projected expression in the form of
@@ -3135,6 +3213,63 @@ mod tests {
         assert_snapshot!(plan, @r"
         Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]
           TableScan: employee_csv projection=[id, state, salary]
+        ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_aggregate_nullable_unique_adds_no_implicit_group_by_exprs()
+    -> Result<()> {
+        // A nullable UNIQUE column permits multiple NULL rows that may differ
+        // in the other columns, so it does not determine them across the
+        // single NULL group and they must not be added to the GROUP BY.
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("state", DataType::Utf8, true),
+            Field::new("salary", DataType::Int32, true),
+        ]);
+        let constraints = Constraints::new_unverified(vec![Constraint::Unique(vec![0])]);
+        let table_source = table_source_with_constraints(&schema, constraints);
+
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
+        let plan = LogicalPlanBuilder::scan("employee_csv", table_source, None)?
+            .with_options(options)
+            .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+            .build()?;
+
+        assert_snapshot!(plan, @r"
+        Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]
+          TableScan: employee_csv
+        ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_aggregate_not_null_unique_implicit_group_by_exprs() -> Result<()> {
+        // A UNIQUE column declared NOT NULL has no NULL rows, so it determines
+        // the other columns like a PRIMARY KEY and they are added to the
+        // GROUP BY.
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("state", DataType::Utf8, true),
+            Field::new("salary", DataType::Int32, true),
+        ]);
+        let constraints = Constraints::new_unverified(vec![Constraint::Unique(vec![0])]);
+        let table_source = table_source_with_constraints(&schema, constraints);
+
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
+        let plan = LogicalPlanBuilder::scan("employee_csv", table_source, None)?
+            .with_options(options)
+            .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+            .build()?;
+
+        assert_snapshot!(plan, @r"
+        Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]
+          TableScan: employee_csv
         ");
 
         Ok(())

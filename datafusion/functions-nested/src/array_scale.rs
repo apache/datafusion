@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarUDFImpl`] definitions for array_scale function.
 
@@ -205,15 +192,8 @@ fn general_array_scale<O: OffsetSizeTrait>(
     // Preserve the inner field from the input array (including any user
     // metadata). After `coerce_types` the inner type is Float64, but the
     // input may still carry field-level annotations worth keeping.
-    let field = match list_array.data_type() {
-        List(f) | LargeList(f) => Arc::clone(f),
-        other => {
-            return internal_err!("array_scale unexpected list type: {other}");
-        }
-    };
-
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        field,
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::new(new_offsets.into()),
         values_array,
         row_nulls,
