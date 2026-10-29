@@ -426,6 +426,9 @@ impl SessionState {
                                 &self.inner.catalog_list,
                             ))
                             .with_table_functions(self.inner.table_functions.clone())
+                            .with_extension_type_registry(Arc::clone(
+                                &self.inner.extension_types,
+                            ))
                             .with_system_catalog(String::from(system_catalog)),
                         ));
                     } else {
@@ -437,7 +440,10 @@ impl SessionState {
                                 catalog_name.to_string(),
                                 catalog,
                             )
-                            .with_table_functions(self.inner.table_functions.clone()),
+                            .with_table_functions(self.inner.table_functions.clone())
+                            .with_extension_type_registry(
+                                Arc::clone(&self.inner.extension_types),
+                            ),
                         ));
                     }
                 }
@@ -451,7 +457,10 @@ impl SessionState {
                         InformationSchemaProvider::new(Arc::clone(
                             &self.inner.catalog_list,
                         ))
-                        .with_table_functions(self.inner.table_functions.clone()),
+                        .with_table_functions(self.inner.table_functions.clone())
+                        .with_extension_type_registry(
+                            Arc::clone(&self.inner.extension_types),
+                        ),
                     ));
                 }
             }

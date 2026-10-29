@@ -29,6 +29,7 @@ use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion::logical_expr::planner::TypePlanner;
+use datafusion::logical_expr::registry::MemoryExtensionTypeRegistry;
 use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
@@ -133,6 +134,12 @@ impl TestContext {
         ) {
             state_builder =
                 state_builder.with_type_planner(Arc::new(SqlLogicTestTypePlanner));
+        }
+
+        if file_name == "extension_type_names.slt" {
+            state_builder = state_builder.with_extension_type_registry(Arc::new(
+                MemoryExtensionTypeRegistry::new_with_canonical_extension_types(),
+            ));
         }
 
         if matches!(
@@ -244,6 +251,10 @@ impl TestContext {
                 info!("Registering metadata table tables");
                 register_metadata_tables(test_ctx.session_ctx());
                 register_conflicting_metadata_tables(test_ctx.session_ctx())
+            }
+            "extension_type_names.slt" => {
+                info!("Registering table with extension types");
+                register_extension_type_table(test_ctx.session_ctx());
             }
             "union_function.slt" => {
                 info!("Registering table with union column");
@@ -630,6 +641,41 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
 }
 
 /// Registers a table_with_metadata that contains both field level and Table level metadata
+/// Registers an empty table `ext` with columns of registered extension types with and
+/// without a display name, of an unregistered extension type and of a plain type
+pub fn register_extension_type_table(ctx: &SessionContext) {
+    let extension = |name, data_type, metadata: Metadata| {
+        Field::new(name, data_type, true).with_metadata(metadata)
+    };
+    let schema = Schema::new(vec![
+        extension(
+            "u",
+            DataType::FixedSizeBinary(16),
+            Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
+        ),
+        extension(
+            "j",
+            DataType::Utf8,
+            Metadata::new()
+                .with("ARROW:extension:name", "arrow.json")
+                .with("ARROW:extension:metadata", ""),
+        ),
+        extension(
+            "b",
+            DataType::Int8,
+            Metadata::new().with("ARROW:extension:name", "arrow.bool8"),
+        ),
+        extension(
+            "x",
+            DataType::Int32,
+            Metadata::new().with("ARROW:extension:name", "example.unregistered"),
+        ),
+        Field::new("i", DataType::Int32, false),
+    ]);
+    ctx.register_batch("ext", RecordBatch::new_empty(Arc::new(schema)))
+        .unwrap();
+}
+
 pub fn register_metadata_tables(ctx: &SessionContext) {
     let id = Field::new("id", DataType::Int32, true).with_metadata(HashMap::from([(
         String::from("metadata_key"),

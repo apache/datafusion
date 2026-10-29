@@ -22,7 +22,9 @@ use datafusion_common::error::Result;
 use datafusion_common::types::{LogicalType, NativeType};
 use datafusion_execution::TaskContext;
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_expr::extension_types::field_type_display_name;
 use datafusion_expr::function::WindowUDFFieldArgs;
+use datafusion_expr::registry::ExtensionTypeRegistryRef;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
     AggregateUDF, ReturnFieldArgs, ScalarUDF, Signature, TypeSignature, WindowUDF,
@@ -112,6 +114,7 @@ impl InformationSchemaProvider {
                 system_catalog_name: None,
                 catalog_list,
                 table_functions: HashMap::new(),
+                extension_types: None,
             },
         }
     }
@@ -123,6 +126,7 @@ impl InformationSchemaProvider {
                 system_catalog_name: None,
                 catalog_list,
                 table_functions: HashMap::new(),
+                extension_types: None,
             },
         }
     }
@@ -141,6 +145,18 @@ impl InformationSchemaProvider {
         self.config.system_catalog_name = Some(catalog_name);
         self
     }
+
+    /// Attach the session's extension type registry so that
+    /// `information_schema.columns` shows the
+    /// [`display_name`](datafusion_common::types::DFExtensionType::display_name)
+    /// of registered extension types.
+    pub fn with_extension_type_registry(
+        mut self,
+        extension_types: ExtensionTypeRegistryRef,
+    ) -> Self {
+        self.config.extension_types = Some(extension_types);
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -148,6 +164,7 @@ struct InformationSchemaConfig {
     system_catalog_name: Option<String>,
     catalog_list: Arc<dyn CatalogProviderList>,
     table_functions: HashMap<String, Arc<TableFunction>>,
+    extension_types: Option<ExtensionTypeRegistryRef>,
 }
 
 impl InformationSchemaConfig {
@@ -281,7 +298,7 @@ impl InformationSchemaConfig {
                 if schema_name != INFORMATION_SCHEMA {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
-                        Self::add_columns(
+                        self.add_columns(
                             builder,
                             &catalog_name,
                             &schema_name,
@@ -297,6 +314,7 @@ impl InformationSchemaConfig {
     }
 
     async fn add_columns(
+        &self,
         builder: &mut InformationSchemaColumnsBuilder,
         catalog_name: &str,
         schema_name: &str,
@@ -306,12 +324,19 @@ impl InformationSchemaConfig {
             if let Some(table) = schema.table(&table_name).await? {
                 for (field_position, field) in table.schema().fields().iter().enumerate()
                 {
+                    let data_type = match &self.extension_types {
+                        Some(registry) => {
+                            field_type_display_name(registry.as_ref(), field)
+                        }
+                        None => field.data_type().to_string(),
+                    };
                     builder.add_column(
                         catalog_name,
                         schema_name,
                         &table_name,
                         field_position,
                         field,
+                        &data_type,
                     )
                 }
             }
@@ -993,6 +1018,7 @@ impl InformationSchemaColumnsBuilder {
         table_name: &str,
         field_position: usize,
         field: &Field,
+        data_type: &str,
     ) {
         use DataType::*;
 
@@ -1012,8 +1038,9 @@ impl InformationSchemaColumnsBuilder {
         let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
         self.is_nullables.append_value(nullable_str);
 
-        // "System supplied type" --> Use debug format of the datatype
-        self.data_types.append_value(field.data_type().to_string());
+        // "System supplied type" --> Use the display name of the extension type or the
+        // debug format of the datatype
+        self.data_types.append_value(data_type);
 
         // "If data_type identifies a character or bit string type, the
         // declared maximum length; null for all other data types or
@@ -1670,6 +1697,7 @@ mod tests {
             system_catalog_name: None,
             catalog_list: Arc::new(Fixture),
             table_functions: HashMap::new(),
+            extension_types: None,
         };
         let mut builder = InformationSchemaTablesBuilder {
             catalog_names: StringBuilder::new(),

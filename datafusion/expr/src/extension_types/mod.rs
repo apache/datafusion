@@ -5,5 +5,7 @@
 //! This module contains code that enables DataFusion's extension type capabilities.
 
 mod array_formatter_factory;
+mod display_name;
 
 pub use array_formatter_factory::*;
+pub use display_name::*;

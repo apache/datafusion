@@ -43,6 +43,10 @@ impl DFExtensionType for DFUuid {
         self.0.serialize_metadata()
     }
 
+    fn display_name(&self) -> Option<String> {
+        Some("UUID".to_owned())
+    }
+
     fn create_array_formatter<'fmt>(
         &self,
         array: &'fmt dyn Array,

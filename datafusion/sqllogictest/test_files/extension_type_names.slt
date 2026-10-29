@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Schema introspection shows the display name of registered extension types.
+#
+# The test context registers the canonical extension types and the table `ext`:
+# - `u`: `arrow.uuid`, displayed as UUID
+# - `j`: `arrow.json`, displayed as JSON
+# - `b`: `arrow.bool8`, registered without a display name
+# - `x`: `example.unregistered`, not registered
+# - `i`: a plain column
+
+statement ok
+set datafusion.catalog.information_schema = true;
+
+query TTT
+DESCRIBE ext;
+----
+u UUID YES
+j JSON YES
+b Int8 YES
+x Int32 YES
+i Int32 NO
+
+query TT
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'ext'
+ORDER BY ordinal_position;
+----
+u UUID
+j JSON
+b Int8
+x Int32
+i Int32
+
+query TTTTTT
+SHOW COLUMNS FROM ext;
+----
+datafusion public ext u UUID YES
+datafusion public ext j JSON YES
+datafusion public ext b Int8 YES
+datafusion public ext x Int32 YES
+datafusion public ext i Int32 NO
+
+# Columns computed from an extension type column keep its display name only if they keep
+# the extension type
+statement ok
+CREATE VIEW v AS SELECT u, arrow_cast(u, 'FixedSizeBinary(16)') AS raw FROM ext;
+
+query TTT
+DESCRIBE v;
+----
+u UUID YES
+raw FixedSizeBinary(16) YES
+
+statement ok
+DROP VIEW v;
+
+statement ok
+RESET datafusion.catalog.information_schema;
