@@ -92,13 +92,11 @@ use datafusion_expr::{Expr, LogicalPlan};
 /// Report a volatile call that the optimizer run made the plan evaluate at
 /// more sites than the input plan does.
 ///
-/// Off, because one shape still fails on `main`:
+/// On. The last shape that failed on `main`, `random() BETWEEN 0.0 AND 1.0`
+/// (<https://github.com/apache/datafusion/issues/25457>), is fixed by
+/// <https://github.com/apache/datafusion/pull/25476>.
 ///
-/// - `random() BETWEEN 0.0 AND 1.0` in `expr.slt`, which is
-///   <https://github.com/apache/datafusion/issues/25457>, a wrong results bug
-///   with a fix of its own
-///
-/// Turn it on once that is fixed. One other shape is worth recording here,
+/// One other shape is worth recording here,
 /// because it is what an end of run check buys: `file_row_index()` re-inlined
 /// by `optimize_projections` in `file_row_index.slt`. A per rule check reports
 /// it, this check does not, because `CommonSubexprEliminate` hoists the call
@@ -106,7 +104,7 @@ use datafusion_expr::{Expr, LogicalPlan};
 /// the site count the input plan has. The classification order that lets a
 /// volatile call be inlined at all is fixed by
 /// <https://github.com/apache/datafusion/pull/25456>.
-const ENFORCE_NO_NEW_VOLATILE_EVALUATIONS: bool = false;
+const ENFORCE_NO_NEW_VOLATILE_EVALUATIONS: bool = true;
 
 /// True while the invariant is checked.
 ///
@@ -491,10 +489,10 @@ mod tests {
         Ok(())
     }
 
-    /// <https://github.com/apache/datafusion/issues/25457>, pinned so that the
-    /// test fails, and must be flipped to `?`, once that is fixed.
+    /// <https://github.com/apache/datafusion/issues/25457>: a `BETWEEN` on a
+    /// kept volatile call is no longer expanded into two calls.
     #[test]
-    fn reports_between_expansion_of_a_kept_volatile_call() -> Result<()> {
+    fn between_on_a_kept_volatile_call_adds_no_site() -> Result<()> {
         let udf = ScalarUDF::new_from_impl(
             PlacementTestUDF::new()
                 .with_placement(ExpressionPlacement::KeepInPlace)
@@ -506,11 +504,7 @@ mod tests {
         let before = EvaluationSites::count(&input);
         let optimized =
             Optimizer::new().optimize(input, &OptimizerContext::new(), |_, _| {})?;
-        let error = before.check(&optimized).unwrap_err().to_string();
-        assert!(
-            error.contains("is evaluated at 2 sites, against 1"),
-            "{error}"
-        );
+        before.check(&optimized)?;
         Ok(())
     }
 }
