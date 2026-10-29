@@ -22,12 +22,14 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+use crate::expressions::binary::is_all_false;
 
-use arrow::array::BooleanArray;
 use arrow::compute::kernels::boolean;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, ScalarValue, cast::as_boolean_array, internal_err};
+use datafusion_common::{
+    Result, ScalarValue, cast::as_boolean_array, internal_datafusion_err, internal_err,
+};
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::apply_cmp;
 
@@ -110,21 +112,18 @@ impl BetweenExpr {
         &self.high
     }
 
-    /// Apply the `NOT` of `NOT BETWEEN` to an array result
-    fn negate_array(&self, result: BooleanArray) -> Result<BooleanArray> {
-        if self.negated {
-            Ok(boolean::not(&result)?)
-        } else {
-            Ok(result)
+    /// Apply the `NOT` of `NOT BETWEEN` to a result
+    fn negate(&self, result: ColumnarValue) -> Result<ColumnarValue> {
+        if !self.negated {
+            return Ok(result);
         }
-    }
-
-    /// Apply the `NOT` of `NOT BETWEEN` to a scalar result
-    fn negate_scalar(&self, result: Option<bool>) -> Option<bool> {
-        if self.negated {
-            result.map(|v| !v)
-        } else {
-            result
+        match result {
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(Arc::new(
+                boolean::not(as_boolean_array(&array)?)?,
+            ))),
+            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Boolean(as_boolean_scalar(&scalar)?.map(|v| !v)),
+            )),
         }
     }
 }
@@ -156,29 +155,35 @@ impl PhysicalExpr for BetweenExpr {
         // both bounds. This is what makes a volatile value correct.
         let value = self.expr.evaluate(batch)?;
         let low = self.low.evaluate(batch)?;
-        let high = self.high.evaluate(batch)?;
-
         let ge_low = apply_cmp(Operator::GtEq, &value, &low)?;
+
+        // Like `expr >= low AND expr <= high`, skip the upper bound when no
+        // row passes the lower bound. This also keeps a fallible upper bound
+        // (`1 / b` with `b = 0`) from raising an error the expansion would not.
+        if is_all_false(&ge_low) {
+            return self.negate(ge_low);
+        }
+
+        let high = self.high.evaluate(batch)?;
         let le_high = apply_cmp(Operator::LtEq, &value, &high)?;
 
-        match (ge_low, le_high) {
+        let result = match (ge_low, le_high) {
             (ColumnarValue::Scalar(ge_low), ColumnarValue::Scalar(le_high)) => {
-                let result =
-                    kleene_and(as_boolean_scalar(&ge_low)?, as_boolean_scalar(&le_high)?);
-                Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
-                    self.negate_scalar(result),
+                ColumnarValue::Scalar(ScalarValue::Boolean(kleene_and(
+                    as_boolean_scalar(&ge_low)?,
+                    as_boolean_scalar(&le_high)?,
                 )))
             }
             (ge_low, le_high) => {
                 let ge_low = ge_low.into_array(batch.num_rows())?;
                 let le_high = le_high.into_array(batch.num_rows())?;
-                let result = boolean::and_kleene(
+                ColumnarValue::Array(Arc::new(boolean::and_kleene(
                     as_boolean_array(&ge_low)?,
                     as_boolean_array(&le_high)?,
-                )?;
-                Ok(ColumnarValue::Array(Arc::new(self.negate_array(result)?)))
+                )?))
             }
-        }
+        };
+        self.negate(result)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -189,12 +194,14 @@ impl PhysicalExpr for BetweenExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(BetweenExpr::new(
-            Arc::clone(&children[0]),
-            self.negated,
-            Arc::clone(&children[1]),
-            Arc::clone(&children[2]),
-        )))
+        let [expr, low, high]: [Arc<dyn PhysicalExpr>; 3] =
+            children.try_into().map_err(|children: Vec<_>| {
+                internal_datafusion_err!(
+                    "BetweenExpr expects 3 children, got {}",
+                    children.len()
+                )
+            })?;
+        Ok(Arc::new(BetweenExpr::new(expr, self.negated, low, high)))
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -293,7 +300,7 @@ pub fn between(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit};
+    use crate::expressions::{binary, col, lit};
 
     use arrow::array::Int32Array;
     use arrow::datatypes::Field;
@@ -328,6 +335,32 @@ mod tests {
             evaluate_between(true)?,
             vec![Some(true), Some(false), Some(false), Some(true), None]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn upper_bound_is_skipped_when_no_row_passes_the_lower_bound() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let a = Int32Array::from(vec![1, 3, 5]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // `1 / 0` fails if it is evaluated
+        let failing_high = binary(lit(1i32), Operator::Divide, lit(0i32), &schema)?;
+        assert!(failing_high.evaluate(&batch).is_err());
+
+        for (negated, expected) in [(false, false), (true, true)] {
+            let expr = between(
+                col("a", &schema)?,
+                negated,
+                lit(100i32),
+                Arc::clone(&failing_high),
+            );
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(
+                as_boolean_array(&result)?.iter().collect::<Vec<_>>(),
+                vec![Some(expected); 3]
+            );
+        }
         Ok(())
     }
 

@@ -1500,7 +1500,7 @@ fn for_each_conjunct(
 }
 
 /// Whether every row is already `false`.
-fn is_all_false(value: &ColumnarValue) -> bool {
+pub(crate) fn is_all_false(value: &ColumnarValue) -> bool {
     match value {
         ColumnarValue::Array(array) => {
             let array = array.as_boolean();

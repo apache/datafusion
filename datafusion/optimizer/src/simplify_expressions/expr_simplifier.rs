@@ -5303,6 +5303,19 @@ mod tests {
     }
 
     #[test]
+    fn simplify_expr_between_keeps_a_volatile_value_together() {
+        // Expanding would evaluate the volatile value two times
+        let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
+        let volatile = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
+        for expr in [
+            volatile.clone().between(lit(1i16), lit(2i16)),
+            volatile.not_between(lit(1i16), lit(2i16)),
+        ] {
+            assert_eq!(simplify(expr.clone()), expr);
+        }
+    }
+
+    #[test]
     fn test_like_and_ilike() {
         let null = lit(ScalarValue::Utf8(None));
 
