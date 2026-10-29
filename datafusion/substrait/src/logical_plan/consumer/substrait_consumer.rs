@@ -31,7 +31,7 @@ use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::catalog::TableProvider;
 use datafusion::common::datatype::FieldExt;
 use datafusion::common::{
-    DFSchema, ScalarValue, TableReference, not_impl_err, substrait_err,
+    DFSchema, ScalarValue, TableReference, internal_err, not_impl_err, substrait_err,
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::LambdaVariable;
@@ -215,7 +215,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         from_substrait_rel(self, rel).await
     }
 
-    /// Consumes independent inputs of a JOIN or UNION, returning plans in input order.
+    /// Consumes independent inputs of a relation, returning plans in input order.
     ///
     /// Implementations must return exactly one plan per input, in the same order.
     /// On error, implementations must drop any unfinished input futures.
@@ -493,6 +493,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         substrait_err!("Missing handler for ExtensionSingleRel")
     }
 
+    /// Custom handlers can use [`Self::consume_rel_inputs`] to consume independent inputs.
     async fn consume_extension_multi(
         &self,
         rel: &ExtensionMultiRel,
@@ -697,10 +698,12 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
             .state
             .serializer_registry()
             .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
-        let mut inputs = Vec::with_capacity(rel.inputs.len());
-        for input in &rel.inputs {
-            let input_plan = self.consume_rel(input).await?;
-            inputs.push(input_plan);
+        let input_rels = rel.inputs.iter().collect::<Vec<_>>();
+        let inputs = self.consume_rel_inputs(&input_rels).await?;
+        if inputs.len() != input_rels.len() {
+            return internal_err!(
+                "ExtensionMultiRel consumer returned the wrong number of inputs"
+            );
         }
         let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
         Ok(LogicalPlan::Extension(Extension { node: plan }))
@@ -846,6 +849,7 @@ mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
     use datafusion::arrow::datatypes::{Field, Schema};
+    use datafusion::logical_expr::logical_plan::builder::table_scan;
 
     fn make_schema(fields: &[(&str, DataType)]) -> Arc<DFSchema> {
         let arrow_fields: Vec<Field> = fields
@@ -958,13 +962,9 @@ mod tests {
             if table.names[0] == "fail" {
                 return substrait_err!("input failed");
             }
-            let provider =
-                datafusion::catalog::empty::EmptyTable::new(Arc::new(Schema::new(vec![
-                    Field::new("x", DataType::Int64, false),
-                ])));
-            datafusion::logical_expr::LogicalPlanBuilder::scan(
-                table.names[0].clone(),
-                datafusion::datasource::provider_as_source(Arc::new(provider)),
+            table_scan(
+                Some(table.names[0].as_str()),
+                &Schema::new(vec![Field::new("x", DataType::Int64, false)]),
                 None,
             )?
             .build()
@@ -1055,55 +1055,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_and_union_use_the_input_hook() {
-        for truncate in [false, true] {
-            let consumer = HookConsumer {
-                inner: input_consumer(),
-                calls: std::sync::Mutex::default(),
-                truncate,
-            };
-            consumer.inner.ready.add_permits(6);
-            let join = JoinRel {
+    async fn multi_input_relations_use_the_input_hook() {
+        use proto::rel::RelType;
+        use proto::set_rel::SetOp;
+
+        let mut relations = vec![
+            RelType::Join(Box::new(JoinRel {
                 left: Some(Box::new(input_read("a"))),
                 right: Some(Box::new(input_read("b"))),
                 r#type: proto::join_rel::JoinType::Inner as i32,
                 ..Default::default()
-            };
-            let result = consumer.consume_join(&join).await;
-            if truncate {
-                assert!(
-                    result
-                        .unwrap_err()
-                        .to_string()
-                        .contains("wrong number of inputs")
-                );
-            } else {
-                let LogicalPlan::Join(join) = result.unwrap() else {
-                    panic!("expected join")
+            })),
+            RelType::Cross(Box::new(CrossRel {
+                left: Some(Box::new(input_read("a"))),
+                right: Some(Box::new(input_read("b"))),
+                ..Default::default()
+            })),
+        ];
+        for op in [
+            SetOp::UnionAll,
+            SetOp::UnionDistinct,
+            SetOp::IntersectionPrimary,
+            SetOp::IntersectionMultiset,
+            SetOp::IntersectionMultisetAll,
+            SetOp::MinusPrimary,
+            SetOp::MinusPrimaryAll,
+        ] {
+            relations.push(RelType::Set(SetRel {
+                inputs: vec![input_read("a"), input_read("b"), input_read("c")],
+                op: op as i32,
+                ..Default::default()
+            }));
+        }
+        for truncate in [false, true] {
+            for rel_type in &relations {
+                let consumer = HookConsumer {
+                    inner: input_consumer(),
+                    calls: std::sync::Mutex::default(),
+                    truncate,
                 };
-                assert!(
-                    join.left
-                        .display_indent()
-                        .to_string()
-                        .contains("TableScan: a")
-                );
-                assert!(
-                    join.right
-                        .display_indent()
-                        .to_string()
-                        .contains("TableScan: b")
-                );
-            }
-            for op in [
-                proto::set_rel::SetOp::UnionAll,
-                proto::set_rel::SetOp::UnionDistinct,
-            ] {
-                let set = SetRel {
-                    inputs: vec![input_read("a"), input_read("b")],
-                    op: op as i32,
-                    ..Default::default()
+                consumer.inner.ready.add_permits(3);
+                let rel = Rel {
+                    rel_type: Some(rel_type.clone()),
                 };
-                let result = consumer.consume_set(&set).await;
+                let result = consumer.consume_rel(&rel).await;
                 if truncate {
                     assert!(
                         result
@@ -1117,9 +1112,16 @@ mod tests {
                         plan.find("TableScan: a").unwrap()
                             < plan.find("TableScan: b").unwrap()
                     );
+                    if let RelType::Set(_) = rel_type {
+                        assert!(
+                            plan.find("TableScan: b").unwrap()
+                                < plan.find("TableScan: c").unwrap()
+                        );
+                    }
                 }
+                let expected_inputs = if let RelType::Set(_) = rel_type { 3 } else { 2 };
+                assert_eq!(*consumer.calls.lock().unwrap(), [expected_inputs]);
             }
-            assert_eq!(*consumer.calls.lock().unwrap(), [2, 2, 2]);
         }
     }
 }
