@@ -550,6 +550,50 @@ mod tests {
     }
 
     #[test]
+    fn test_sliced_nested_struct_and_list() {
+        // 4 rows of {inner: {x: Int64}, tags: List<Utf8>} with uneven list
+        // lengths (non-trivial list offsets) and a NULL parent in row 2:
+        //   0: {x:1}, []        1: {x:2}, [a,b]
+        //   2: NULL             3: {x:4}, [d,e,f]
+        let x = Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as ArrayRef;
+        let inner_fields = Fields::from(vec![Field::new("x", DataType::Int64, true)]);
+        let inner = Arc::new(StructArray::new(inner_fields, vec![x], None)) as ArrayRef;
+
+        let mut tags = ListBuilder::new(StringBuilder::new());
+        tags.append(true); // []
+        for t in ["a", "b"] {
+            tags.values().append_value(t);
+        }
+        tags.append(true);
+        tags.values().append_value("c");
+        tags.append(true);
+        for t in ["d", "e", "f"] {
+            tags.values().append_value(t);
+        }
+        tags.append(true);
+        let tags = Arc::new(tags.finish()) as ArrayRef;
+
+        let fields = Fields::from(vec![
+            Field::new("inner", inner.data_type().clone(), true),
+            Field::new("tags", tags.data_type().clone(), true),
+        ]);
+        let nulls = NullBuffer::from(vec![true, true, false, true]);
+        let full = StructArray::new(fields, vec![inner, tags], Some(nulls));
+        let field = field_of(&full);
+
+        // encode rows 1..4 through a non-zero-offset slice
+        let sliced = full.slice(1, 3);
+        let out = run(ColumnarValue::Array(Arc::new(sliced)), field).unwrap();
+        let out = as_string_array(&out).unwrap();
+
+        assert_eq!(out.len(), 3);
+        assert_eq!(out.null_count(), 1);
+        assert_eq!(out.value(0), r#"{"inner":{"x":2},"tags":["a","b"]}"#);
+        assert!(out.is_null(1), "NULL parent row must stay NULL after slicing");
+        assert_eq!(out.value(2), r#"{"inner":{"x":4},"tags":["d","e","f"]}"#);
+    }
+
+    #[test]
     fn test_string_escaping() {
         let a = Arc::new(StringArray::from(vec![Some("he said \"hi\"\n")])) as ArrayRef;
         let fields = Fields::from(vec![Field::new("a", DataType::Utf8, true)]);

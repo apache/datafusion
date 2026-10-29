@@ -43,6 +43,43 @@ pub mod expr_fn {
     /// or a slice of column names that are packed into a struct first.
     /// The result is a regular expression and can be used anywhere an expression is accepted,
     /// for example in `DataFrame::with_column`.
+    ///
+    /// NULL fields are omitted from the object (Spark's `ignoreNullFields`
+    /// default) and a NULL struct produces NULL.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// use datafusion_spark::expr_fn::to_json;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> datafusion::error::Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx
+    ///     .sql("SELECT * FROM (VALUES (1, 'x'), (2, NULL)) AS t(foo, bar)")
+    ///     .await?
+    ///     // pack columns into a struct and serialize it
+    ///     .with_column("json", to_json(&["foo", "bar"]))?
+    ///     // or serialize an existing struct column
+    ///     .with_column("event", named_struct(vec![lit("foo"), col("foo")]))?
+    ///     .with_column("event_json", to_json(col("event")))?
+    ///     .select(vec![col("foo"), col("bar"), col("json"), col("event_json")])?;
+    ///
+    /// datafusion::assert_batches_sorted_eq!(
+    ///     [
+    ///         "+-----+-----+---------------------+------------+",
+    ///         "| foo | bar | json                | event_json |",
+    ///         "+-----+-----+---------------------+------------+",
+    ///         "| 1   | x   | {\"foo\":1,\"bar\":\"x\"} | {\"foo\":1}  |",
+    ///         "| 2   |     | {\"foo\":2}           | {\"foo\":2}  |",
+    ///         "+-----+-----+---------------------+------------+",
+    ///     ],
+    ///     &df.collect().await?
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn to_json(input: impl IntoJsonStruct) -> Expr {
         super::to_json().call(vec![input.into_struct_expr()])
     }
