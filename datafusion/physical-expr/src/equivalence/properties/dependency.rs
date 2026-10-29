@@ -381,7 +381,7 @@ mod tests {
     use crate::{ConstExpr, EquivalenceProperties, ScalarFunctionExpr};
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Constraint, Constraints, Result};
@@ -1554,8 +1554,8 @@ mod tests {
     }
 
     /// A pass-through expression with its own identity that records the data
-    /// type of the range it is given for its child, and declares itself
-    /// ascending when `ordered` is set.
+    /// type of the range it is given for its child. It keeps its child's
+    /// ordering, or declares itself ascending when `ordered` is set.
     #[derive(Debug)]
     struct RangeProbe {
         child: Arc<dyn PhysicalExpr>,
@@ -1611,12 +1611,12 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(children[0].range.data_type());
-            let properties = ExprProperties::new_unknown();
-            Ok(if self.ordered {
-                properties.with_order(SortProperties::Ordered(SortOptions::default()))
+            let order = if self.ordered {
+                SortProperties::Ordered(SortOptions::default())
             } else {
-                properties
-            })
+                children[0].sort_properties
+            };
+            Ok(ExprProperties::new_unknown().with_order(order))
         }
         fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{self}")
@@ -1625,19 +1625,28 @@ mod tests {
 
     type Seen = Arc<std::sync::Mutex<Vec<DataType>>>;
 
-    fn probe(
-        child: Arc<dyn PhysicalExpr>,
-        id: usize,
-        ordered: bool,
-    ) -> (Arc<dyn PhysicalExpr>, Seen) {
-        let seen = Seen::default();
-        let expr = Arc::new(RangeProbe {
-            child,
-            id,
-            ordered,
-            seen: Arc::clone(&seen),
-        });
-        (expr, seen)
+    /// Projects each `(child, id, ordered)` through a probe named `p{id}`.
+    /// Returns the mapping and, per probe, the range types it will be given.
+    fn probe_mapping(
+        sources: Vec<(Arc<dyn PhysicalExpr>, usize, bool)>,
+        schema: &SchemaRef,
+    ) -> Result<(ProjectionMapping, Vec<Seen>)> {
+        let mut exprs = vec![];
+        let mut seen = vec![];
+        for (child, id, ordered) in sources {
+            let probe_seen = Seen::default();
+            exprs.push((
+                Arc::new(RangeProbe {
+                    child,
+                    id,
+                    ordered,
+                    seen: Arc::clone(&probe_seen),
+                }) as Arc<dyn PhysicalExpr>,
+                format!("p{id}"),
+            ));
+            seen.push(probe_seen);
+        }
+        Ok((ProjectionMapping::try_new(exprs, schema)?, seen))
     }
 
     fn assert_only_saw(seen: &Seen, expected: &DataType) {
@@ -1663,145 +1672,91 @@ mod tests {
 
     #[test]
     fn project_gives_each_source_the_range_of_its_own_column() -> Result<()> {
-        let wide = DataType::Struct(
-            (0..300)
-                .map(|i| Field::new(format!("f{i}"), DataType::Utf8, true))
-                .collect(),
-        );
-        let narrow =
-            DataType::Struct(vec![Field::new("g", DataType::Int64, true)].into());
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true),
-            Field::new("w", wide.clone(), true),
-            Field::new("n", narrow.clone(), true),
+            Field::new("b", DataType::Utf8, true),
         ]));
-        let col_a = col("a", &schema)?;
+        let (a, b) = (col("a", &schema)?, col("b", &schema)?);
         let mut input = EquivalenceProperties::new(Arc::clone(&schema));
         input.add_orderings([vec![PhysicalSortExpr::new(
-            Arc::clone(&col_a),
+            Arc::clone(&a),
             SortOptions::default(),
         )]]);
 
-        // Many sources over the wide column, two over the narrow one, and `a`.
-        let mut proj_exprs = (0..100)
-            .map(|i| Ok((probe(col("w", &schema)?, i, false).0, format!("w{i}"))))
-            .collect::<Result<Vec<_>>>()?;
-        let (wide_ordered, wide_seen) = probe(col("w", &schema)?, 100, true);
-        let (narrow_unordered, narrow_seen) = probe(col("n", &schema)?, 101, false);
-        let (narrow_ordered, _) = probe(col("n", &schema)?, 102, true);
-        proj_exprs.push((wide_ordered, "wo".to_string()));
-        proj_exprs.push((narrow_unordered, "nu".to_string()));
-        proj_exprs.push((narrow_ordered, "no".to_string()));
-        proj_exprs.push((col_a, "aa".to_string()));
-        let mapping = ProjectionMapping::try_new(proj_exprs, &schema)?;
-        let projected = input.project(&mapping, output_schema(&mapping, &schema)?);
-
-        assert_eq!(
-            sorted_orderings(&projected),
-            vec!["aa@103 ASC", "no@102 ASC", "wo@100 ASC"]
-        );
-        assert_only_saw(&wide_seen, &wide);
-        assert_only_saw(&narrow_seen, &narrow);
-        Ok(())
-    }
-
-    #[test]
-    fn project_does_not_reuse_a_column_range_across_schemas() -> Result<()> {
-        let wide = DataType::Struct(vec![Field::new("f", DataType::Utf8, true)].into());
-        for data_type in [wide, DataType::Int64] {
-            let schema =
-                Arc::new(Schema::new(vec![Field::new("s", data_type.clone(), true)]));
-            let (source, seen) = probe(col("s", &schema)?, 0, true);
-            let mapping =
-                ProjectionMapping::try_new(vec![(source, "o".to_string())], &schema)?;
-            let projected = EquivalenceProperties::new(Arc::clone(&schema))
-                .project(&mapping, output_schema(&mapping, &schema)?);
-            assert_eq!(sorted_orderings(&projected), vec!["o@0 ASC"]);
-            assert_only_saw(&seen, &data_type);
-        }
-        Ok(())
-    }
-
-    /// An expression whose type cannot be determined; counts the attempts.
-    #[derive(Debug, Default)]
-    struct Untyped {
-        calls: std::sync::atomic::AtomicUsize,
-    }
-
-    impl PartialEq for Untyped {
-        fn eq(&self, _other: &Self) -> bool {
-            true
-        }
-    }
-    impl Eq for Untyped {}
-    impl std::hash::Hash for Untyped {
-        fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
-    }
-    impl Display for Untyped {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "untyped")
-        }
-    }
-
-    impl PhysicalExpr for Untyped {
-        fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-            self.calls
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            datafusion_common::plan_err!("no type")
-        }
-        fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-            Ok(true)
-        }
-        fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-            datafusion_common::plan_err!("no value")
-        }
-        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-            vec![]
-        }
-        fn with_new_children(
-            self: Arc<Self>,
-            _children: Vec<Arc<dyn PhysicalExpr>>,
-        ) -> Result<Arc<dyn PhysicalExpr>> {
-            Ok(self)
-        }
-        fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{self}")
-        }
-    }
-
-    #[test]
-    fn project_keeps_dropping_a_derivation_whose_range_type_fails() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
-        let col_a = col("a", &schema)?;
-        let typeless = Arc::new(Untyped::default());
-        let untyped = Arc::clone(&typeless) as Arc<dyn PhysicalExpr>;
-        let mut input = EquivalenceProperties::new(Arc::clone(&schema));
-        input.add_orderings([
-            vec![PhysicalSortExpr::new(
-                Arc::clone(&untyped),
-                SortOptions::default(),
-            )],
-            vec![PhysicalSortExpr::new(
-                Arc::clone(&col_a),
-                SortOptions::default(),
-            )],
-        ]);
-        let mapping = ProjectionMapping::try_new(
-            vec![(untyped, "u".to_string()), (col_a, "aa".to_string())],
+        // Several sources over each column, so all but the first of each are
+        // served from the cache: `a` through the sort key, `b` as a plain
+        // column. `p4` declares itself ordered over the unordered `b`.
+        let (mapping, seen) = probe_mapping(
+            vec![
+                (Arc::clone(&a), 0, false),
+                (a, 1, false),
+                (Arc::clone(&b), 2, false),
+                (Arc::clone(&b), 3, false),
+                (b, 4, true),
+            ],
             &schema,
         )?;
-        let out_schema = Arc::new(Schema::new(vec![
-            Field::new("u", DataType::Null, true),
-            Field::new("aa", DataType::Int64, true),
-        ]));
+        let projected = input.project(&mapping, output_schema(&mapping, &schema)?);
 
-        let before = typeless.calls.load(std::sync::atomic::Ordering::Relaxed);
+        for (seen, expected) in seen.iter().zip([
+            DataType::Int64,
+            DataType::Int64,
+            DataType::Utf8,
+            DataType::Utf8,
+            DataType::Utf8,
+        ]) {
+            assert_only_saw(seen, &expected);
+        }
+        assert_eq!(
+            sorted_orderings(&projected),
+            vec!["p0@0 ASC", "p1@1 ASC", "p4@4 ASC"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn project_does_not_reuse_a_column_range_across_calls() -> Result<()> {
+        for data_type in [DataType::Utf8, DataType::Int64] {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("a", data_type.clone(), true)]));
+            let (mapping, seen) =
+                probe_mapping(vec![(col("a", &schema)?, 0, false)], &schema)?;
+            EquivalenceProperties::new(Arc::clone(&schema))
+                .project(&mapping, output_schema(&mapping, &schema)?);
+            assert_only_saw(&seen[0], &data_type);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn project_drops_a_derivation_whose_sort_key_type_fails() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        // `a + b` has no type, so its range cannot be built.
+        let untyped = Arc::new(BinaryExpr::new(
+            col("a", &schema)?,
+            Operator::Plus,
+            col("b", &schema)?,
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(untyped.data_type(&schema).is_err());
+        let mut input = EquivalenceProperties::new(Arc::clone(&schema));
+        input.add_orderings([vec![PhysicalSortExpr::new(
+            Arc::clone(&untyped),
+            SortOptions::default(),
+        )]]);
+
+        // The probe is ordered only through a derivation from `a + b`, which
+        // fails before the probe is asked for its properties. The output type
+        // cannot be computed either, so it is given as `Null`.
+        let (mapping, seen) = probe_mapping(vec![(untyped, 0, false)], &schema)?;
+        let out_schema =
+            Arc::new(Schema::new(vec![Field::new("p0", DataType::Null, true)]));
         let projected = input.project(&mapping, out_schema);
-        // The failing type is asked for while deriving orderings. That
-        // derivation is dropped; the sort key is still carried by the direct
-        // mapping of the existing orderings.
-        assert!(typeless.calls.load(std::sync::atomic::Ordering::Relaxed) > before);
-        assert_eq!(sorted_orderings(&projected), vec!["aa@1 ASC", "u@0 ASC"]);
+
+        assert!(sorted_orderings(&projected).is_empty());
+        assert!(seen[0].lock().unwrap().is_empty());
         Ok(())
     }
 }
