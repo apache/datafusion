@@ -1,0 +1,17 @@
+---
+source: datafusion/core/tests/parquet/bloom_filter_io.rs
+expression: combined_trace
+---
+--- Query: SELECT * FROM t WHERE a = 10 AND b = 100 (1 rows) ---
+Read Parquet footer (offsets 0..678)
+Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
+Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
+Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
+Read data page for column 'a' (rg 0) (offsets 4..51)
+Read data page for column 'b' (rg 0) (offsets 51..98)
+Produce batch (1 rows)
+
+--- Query: SELECT * FROM t WHERE a = 999 AND b = 100 (0 rows) ---
+Read Parquet footer (offsets 0..678)
+Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
+Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
