@@ -188,31 +188,67 @@ SELECT date_part('MINUTES'::string, '2000-01-01 12:30:45'::timestamp);
 ----
 30
 
-# SECOND
-query I
+# SECOND — Spark returns DECIMAL(8, 6) including the fraction
+query R
 SELECT date_part('SECOND'::string, '2000-01-01 12:30:45'::timestamp);
 ----
-45
+45.000000
 
-query I
+query R
 SELECT date_part('S'::string, '2000-01-01 12:30:45'::timestamp);
 ----
-45
+45.000000
 
-query I
+query R
 SELECT date_part('SEC'::string, '2000-01-01 12:30:45'::timestamp);
 ----
-45
+45.000000
 
-query I
+query R
 SELECT date_part('SECONDS'::string, '2000-01-01 12:30:45'::timestamp);
 ----
-45
+45.000000
 
-query I
+query R
 SELECT date_part('SECS'::string, '2000-01-01 12:30:45'::timestamp);
 ----
-45
+45.000000
+
+query R
+SELECT date_part('SECOND'::string, '2000-01-01 12:30:45.123456'::timestamp);
+----
+45.123456
+
+query R
+SELECT date_part('secs'::string, '2000-01-01 12:30:45.123456789'::timestamp);
+----
+45.123456
+
+query T
+SELECT arrow_typeof(date_part('SECOND'::string, '2000-01-01 12:30:45.123456'::timestamp));
+----
+Decimal128(8, 6)
+
+query R
+SELECT date_part('SECOND'::string, '2000-01-01'::date);
+----
+0.000000
+
+query R
+SELECT date_part('SECOND'::string, NULL::timestamp);
+----
+NULL
+
+# EXTRACT(SECOND FROM …) shares the DECIMAL(8, 6) path via the Spark planner
+query R
+SELECT extract(SECOND FROM timestamp '2000-01-01 12:30:45.123456');
+----
+45.123456
+
+query T
+SELECT arrow_typeof(extract(SECOND FROM timestamp '2000-01-01 12:30:45'));
+----
+Decimal128(8, 6)
 
 # NULL input
 query I
@@ -272,9 +308,8 @@ FROM VALUES
 2000
 NULL
 
-# Nullable even for a non-null input, like the integer parts of the date_part
-# this simplifies to
+# SECOND returns DECIMAL(8, 6); nullable even for a non-null input
 query TTT
 DESCRIBE SELECT date_part('SECOND'::string, ts) AS s FROM (VALUES (timestamp '2020-01-01')) AS t(ts)
 ----
-s Int32 YES
+s Decimal128(8, 6) YES
