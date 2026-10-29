@@ -143,7 +143,7 @@ impl EvaluationSites {
     }
 
     /// The body of [`Self::check_no_new_evaluations`], without the switch, so
-    /// that the machinery has a test while the switch is off.
+    /// that the machinery can be tested in any build.
     fn check(&self, plan: &LogicalPlan) -> Result<()> {
         let after = Self::count(plan);
         let mut offenders: Vec<(&String, usize, usize)> = after
@@ -458,7 +458,7 @@ mod tests {
         Ok(())
     }
 
-    /// The machinery against a real optimizer run, with the switch off: a
+    /// The machinery against a real optimizer run: a
     /// filter on a volatile column defined by a projection must not be pushed
     /// below it, so the optimized plan keeps the site count of the input.
     #[test]
@@ -492,6 +492,38 @@ mod tests {
         let optimized =
             Optimizer::new().optimize(input, &OptimizerContext::new(), |_, _| {})?;
         before.check(&optimized)?;
+        Ok(())
+    }
+
+    /// Known false positive of the name based key, pinned so that the test
+    /// fails, and must be flipped, once the key is fixed. `y` is `a` renamed,
+    /// so the input plan has `f(a)` and `f(y)`, two calls with two keys. When
+    /// the projections are merged both become `f(a)`: still two calls, one
+    /// evaluation each, but one key with 2 sites against 1.
+    #[test]
+    fn reports_renamed_column_merge_as_a_new_site() -> Result<()> {
+        for placement in [
+            ExpressionPlacement::MoveTowardsLeafNodes,
+            ExpressionPlacement::KeepInPlace,
+        ] {
+            let udf = ScalarUDF::new_from_impl(
+                PlacementTestUDF::new()
+                    .with_placement(placement)
+                    .with_volatility(Volatility::Volatile),
+            );
+            let input = LogicalPlanBuilder::from(test_table_scan()?)
+                .project(vec![col("a"), col("a").alias("y")])?
+                .project(vec![udf.call(vec![col("a")]), udf.call(vec![col("y")])])?
+                .build()?;
+            let error = Optimizer::new()
+                .optimize(input, &OptimizerContext::new(), |_, _| {})
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("_udf(a)` is evaluated at 2 sites, against 1"),
+                "{placement:?}: {error:?}"
+            );
+        }
         Ok(())
     }
 }
