@@ -7099,6 +7099,33 @@ select c2, count(DISTINCT cast(c1 AS DECIMAL(10, 2))) from d_table GROUP BY c2 O
 A 2
 B 2
 
+# COUNT(DISTINCT) on Decimal32 / Decimal64. Counting two different columns
+# keeps single_distinct_to_groupby from rewriting the query, so the distinct
+# count accumulator is used.
+statement ok
+CREATE TABLE decimal_count_distinct AS SELECT
+  g,
+  arrow_cast(v, 'Decimal32(9, 2)') AS d32,
+  arrow_cast(v, 'Decimal64(18, 2)') AS d64
+FROM (VALUES
+  (1, 1.50), (1, 1.50), (1, 2.25), (1, NULL),
+  (2, 3.00), (2, 3.00), (2, 3.00)
+) AS t(g, v);
+
+query II
+SELECT COUNT(DISTINCT d32), COUNT(DISTINCT d64) FROM decimal_count_distinct;
+----
+3 3
+
+query III rowsort
+SELECT g, COUNT(DISTINCT d32), COUNT(DISTINCT d64) FROM decimal_count_distinct GROUP BY g;
+----
+1 2 2
+2 1 1
+
+statement ok
+DROP TABLE decimal_count_distinct;
+
 # Creating the table
 statement ok
 CREATE TABLE test_table (c1 INT, c2 INT, c3 INT)

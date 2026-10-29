@@ -619,14 +619,17 @@ impl FinalHashAggregateStream {
                 .await?;
             self.close_input();
 
-            match spill_context.filter(|s| s.has_spills()) {
+            match spill_context {
                 // - If spilled before, perform merging spill runs
-                Some(spill_context) => {
+                Some(spill_context) if spill_context.has_spills() => {
                     self.produce_output_from_spills(hash_table, spill_context, emitter)
                         .await?
                 }
                 // Either all the input fit in memory or hit soft group limit with no spilling
-                None => self.produce_output_from_memory(hash_table, emitter).await?,
+                spill_context => {
+                    self.produce_output_from_memory(hash_table, spill_context, emitter)
+                        .await?
+                }
             }
 
             Ok(())
@@ -806,6 +809,7 @@ impl FinalHashAggregateStream {
     async fn produce_output_from_memory(
         &mut self,
         mut hash_table: AggregateHashTable<FinalMarker>,
+        spill_context: Option<Box<AggregateSpill>>,
         mut emitter: TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
@@ -825,7 +829,33 @@ impl FinalHashAggregateStream {
             // The table hands over its groups as they are materialized and
             // reports a size of 0 once it reaches `Done`, so this releases the
             // reservation before the final batch goes downstream.
-            self.reservation.try_resize(hash_table.memory_size())?;
+            match self.reservation.try_resize(hash_table.memory_size()) {
+                Ok(()) => {}
+                // The materialized output is bigger than the table was. Write
+                // it to disk and stream it back instead of failing the query.
+                Err(e @ DataFusionError::ResourcesExhausted(_)) => {
+                    let spill_context = spill_context.ok_or_else(|| e.context(
+                        "Final hash aggregate cannot spill its output because temporary files are not enabled in the DiskManager",
+                    ))?;
+                    let remaining =
+                        std::iter::from_fn(|| hash_table.next_output_batch().transpose());
+                    let mut output = spill_context.spill_output(
+                        Arc::clone(&self.schema),
+                        std::iter::once(Ok(batch)).chain(remaining),
+                    )?;
+                    drop(hash_table);
+                    self.reservation.try_resize(0)?;
+                    timer.done();
+
+                    while let Some(batch) = output.next().await.transpose()? {
+                        emitter
+                            .emit(batch.record_output(&self.baseline_metrics))
+                            .await;
+                    }
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            }
 
             timer.done();
             emitter
