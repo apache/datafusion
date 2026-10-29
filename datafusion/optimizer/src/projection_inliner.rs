@@ -285,10 +285,15 @@ impl<'a> ProjectionInliner<'a> {
         !pinned.is_empty()
             && expr
                 .exists(|e| {
-                    Ok(matches!(e, Expr::Column(col)
-                        if self.index_of(col).is_some_and(|idx| pinned.0.contains(&idx))))
+                    Ok(matches!(e, Expr::Column(col) if self.is_pinned(col, pinned)))
                 })
                 .expect("exists closure is infallible")
+    }
+
+    /// Returns `true` if the definition of `column` is in `pinned`.
+    pub(crate) fn is_pinned(&self, column: &Column, pinned: &PinnedDefinitions) -> bool {
+        self.index_of(column)
+            .is_some_and(|idx| pinned.0.contains(&idx))
     }
 
     /// Returns the definition of `column`, without its top-level alias.

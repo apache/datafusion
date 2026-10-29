@@ -54,6 +54,7 @@ use datafusion_expr::{
     TableProviderFilterPushDown, and, or,
 };
 
+use crate::common_subexpr_eliminate::CSE_PREFIX;
 use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
 use crate::projection_inliner::{DuplicationCost, ProjectionInliner, unalias};
@@ -1575,19 +1576,48 @@ fn rewrite_projection(
         })
         .collect();
     let no_other_consumers: [&Expr; 0] = [];
-    let pinned = inliner.pinned_with_unknown_consumers(
+    let pushable = || {
         predicates
             .iter()
             .zip(&references_leaf_expr)
             .filter(|(_, kept)| !**kept)
-            .map(|(expr, _)| expr),
+            .map(|(expr, _)| expr)
+    };
+    let pinned = inliner.pinned_with_unknown_consumers(
+        pushable(),
         no_other_consumers,
         DuplicationCost::Cheap,
     );
+    // A definition that `CommonSubexprEliminate` created records a decision
+    // that it is worth computing one time. Such a definition that is cheap,
+    // and that the predicates reference more than one time, is kept too:
+    // CSE would hoist it out of the pushed predicates again with a new alias,
+    // so the two rules would never converge. Only the CSE definitions get
+    // this stricter limit: the other definitions of the same projection (for
+    // example after `OptimizeProjections` merged it into a user projection)
+    // keep the usual one.
+    let pinned_cse = if projection.expr.iter().any(is_cse_definition) {
+        inliner.pinned_with_unknown_consumers(
+            pushable(),
+            no_other_consumers,
+            DuplicationCost::Free,
+        )
+    } else {
+        Default::default()
+    };
+    let references_pinned_cse = |expr: &Expr| {
+        !pinned_cse.is_empty()
+            && expr.column_refs().into_iter().any(|col| {
+                col.name.starts_with(CSE_PREFIX) && inliner.is_pinned(col, &pinned_cse)
+            })
+    };
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
     for (expr, references_leaf_expr) in predicates.into_iter().zip(references_leaf_expr) {
-        if references_leaf_expr || inliner.references_pinned(&expr, &pinned) {
+        if references_leaf_expr
+            || inliner.references_pinned(&expr, &pinned)
+            || references_pinned_cse(&expr)
+        {
             keep_predicates.push(expr);
         } else {
             push_predicates.push(expr);
@@ -1608,6 +1638,12 @@ fn rewrite_projection(
     };
 
     Ok((projection, keep_predicates))
+}
+
+/// Returns `true` if `expr` is a definition that `CommonSubexprEliminate`
+/// created.
+fn is_cse_definition(expr: &Expr) -> bool {
+    matches!(expr, Expr::Alias(alias) if alias.name.starts_with(CSE_PREFIX))
 }
 
 /// Creates a new LogicalPlan::Filter node.
@@ -5009,6 +5045,37 @@ mod tests {
             @r"
         Projection: keep_in_place_udf(test.a) AS c1, test.b
           TableScan: test, full_filters=[keep_in_place_udf(test.a) IS NOT NULL]
+        "
+        )
+    }
+
+    /// A cheap definition that `CommonSubexprEliminate` created is not
+    /// duplicated into pushed predicates that reference it more than one
+    /// time, or CSE would hoist it again with a new alias. A cheap user
+    /// definition in the same projection is still pushed.
+    #[test]
+    fn repeated_cheap_cse_reference_not_pushed_through_projection() -> Result<()> {
+        let cse = format!("{CSE_PREFIX}_1");
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![
+                (col("a") + lit(1)).alias(&cse),
+                (col("b") + lit(1)).alias("c1"),
+                col("c"),
+            ])?
+            .filter(
+                col(&cse)
+                    .gt(lit(1))
+                    .and(col(&cse).lt(lit(5)))
+                    .and(col("c1").gt(lit(1)).or(col("c1").lt(lit(0)))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: __common_expr_1 > Int32(1) AND __common_expr_1 < Int32(5)
+          Projection: test.a + Int32(1) AS __common_expr_1, test.b + Int32(1) AS c1, test.c
+            TableScan: test, full_filters=[test.b + Int32(1) > Int32(1) OR test.b + Int32(1) < Int32(0)]
         "
         )
     }
