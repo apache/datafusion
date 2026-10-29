@@ -986,6 +986,7 @@ mod tests {
 
     // A custom consumer exercises the trait default independently of the default
     // consumer's scheduling policy.
+    #[derive(Clone)]
     struct InputConsumer {
         extensions: Arc<Extensions>,
         state: Arc<SessionState>,
@@ -999,15 +1000,7 @@ mod tests {
     #[async_trait]
     impl SubstraitConsumer for InputConsumer {
         fn fork_for_branch(&self) -> Option<Self> {
-            self.forkable.then(|| Self {
-                extensions: Arc::clone(&self.extensions),
-                state: Arc::clone(&self.state),
-                reads: Arc::clone(&self.reads),
-                ready: Arc::clone(&self.ready),
-                gates: Arc::clone(&self.gates),
-                active: Arc::clone(&self.active),
-                forkable: true,
-            })
+            self.forkable.then(|| self.clone())
         }
 
         fn get_extensions(&self) -> &Extensions {
@@ -1084,17 +1077,11 @@ mod tests {
 
     #[tokio::test]
     async fn input_hook_default_is_sequential_and_stops_on_error() {
-        use std::future::{Future, poll_fn};
-        use std::task::Poll;
         let consumer = input_consumer();
         let rels = [input_read("a"), input_read("fail"), input_read("unreached")];
         let inputs = rels.iter().collect::<Vec<_>>();
         let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs));
-        poll_fn(|cx| {
-            assert!(pending.as_mut().poll(cx).is_pending());
-            Poll::Ready(())
-        })
-        .await;
+        assert!(poll!(pending.as_mut()).is_pending());
         assert_eq!(*consumer.reads.lock().unwrap(), ["a"]);
         consumer.ready.add_permits(3);
         assert!(
@@ -1269,7 +1256,7 @@ mod tests {
             for rel_type in &relations {
                 let consumer = HookConsumer {
                     inner: input_consumer(),
-                    calls: std::sync::Mutex::default(),
+                    calls: Mutex::default(),
                     truncate,
                 };
                 consumer.inner.ready.add_permits(3);
