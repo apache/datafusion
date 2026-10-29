@@ -967,7 +967,7 @@ fn build_join(
             )
         })
         .collect::<Result<Vec<_>>>()?;
-    let value_may_be_null = elements_may_be_null.iter().any(|may_be_null| *may_be_null);
+    let value_may_be_null = elements_may_be_null.contains(&true);
 
     // Whether this join needs null-aware (`NOT IN` three-valued) semantics.
     // Decided once: the constant projection below, the mark branch and the anti

@@ -707,6 +707,41 @@ r
 s
 u
 
+# An element that can be NULL in the schema but not in scope: the correlated
+# filter `i.y >= o.b` rejects a NULL `y` or `b`, so `b = y` is a scope key, and
+# the rows with a NULL `b` reach the join with a NULL scope key. Such a row has
+# an empty subquery, so its NOT IN is TRUE.
+statement ok
+CREATE TABLE mc_scope_outer(k INT, a INT, b INT) AS VALUES
+(1, 1, 2), (2, NULL, 2), (3, NULL, NULL), (4, 5, NULL), (5, NULL, 7), (6, 1, 9), (7, 3, 3);
+
+statement ok
+CREATE TABLE mc_scope_inner(x INT, y INT) AS VALUES
+(1, 2), (NULL, 2), (5, NULL), (NULL, NULL), (3, 1), (8, 4);
+
+query IB
+SELECT k, (a, b) NOT IN (SELECT x, y FROM mc_scope_inner i WHERE i.y >= o.b)
+FROM mc_scope_outer o ORDER BY k;
+----
+1 false
+2 NULL
+3 true
+4 true
+5 true
+6 true
+7 true
+
+query I
+SELECT k FROM mc_scope_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_scope_inner i WHERE i.y >= o.b)
+ORDER BY k;
+----
+3
+4
+5
+6
+7
+
 #############
 ## Cleanup
 #############
@@ -788,3 +823,9 @@ DROP TABLE mc_nn_ree_outer;
 
 statement ok
 DROP TABLE mc_nn_ree_inner;
+
+statement ok
+DROP TABLE mc_scope_outer;
+
+statement ok
+DROP TABLE mc_scope_inner;
