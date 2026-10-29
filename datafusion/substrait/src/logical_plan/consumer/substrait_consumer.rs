@@ -778,156 +778,148 @@ fn next_lambda_parameter_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logical_plan::consumer::utils::tests::test_consumer;
     use datafusion::arrow::datatypes::{Field, Schema};
+    use datafusion::common::assert_contains;
+    use datafusion::logical_expr::ExprSchemable;
     use datafusion::logical_expr::logical_plan::builder::table_scan;
-
     use futures::poll;
-    use proto::expression::{ReferenceSegment, field_reference, reference_segment};
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Semaphore;
 
-    struct ActiveInput<'a>(&'a AtomicUsize);
-
-    impl Drop for ActiveInput<'_> {
-        fn drop(&mut self) {
-            self.0.fetch_sub(1, Ordering::SeqCst);
-        }
-    }
-
-    fn make_schema(fields: &[(&str, DataType)]) -> Arc<DFSchema> {
-        let arrow_fields: Vec<Field> = fields
-            .iter()
-            .map(|(name, dt)| Field::new(*name, dt.clone(), true))
-            .collect();
+    fn schema(name: &str, data_type: DataType) -> Arc<DFSchema> {
         Arc::new(
-            DFSchema::try_from(Schema::new(arrow_fields))
-                .expect("failed to create schema"),
+            DFSchema::try_from(Schema::new(vec![Field::new(name, data_type, true)]))
+                .unwrap(),
         )
     }
 
     #[test]
-    fn test_get_outer_schema_empty_stack() {
-        let context = SubstraitConsumerContext::default();
+    fn outer_scopes_inherit_without_changing_the_parent() {
+        let root = SubstraitConsumerContext::default();
+        let a = schema("a", DataType::Int64);
+        let b = schema("b", DataType::Utf8);
+        let parent = root.with_outer_schema(Arc::clone(&a));
+        let child = parent.with_outer_schema(Arc::clone(&b));
 
-        // No schemas pushed — any steps_out should return None
-        assert!(context.get_outer_schema(0).is_none());
-        assert!(context.get_outer_schema(1).is_none());
-        assert!(context.get_outer_schema(2).is_none());
+        assert!(root.get_outer_schema(1).is_none());
+        assert_eq!(parent.get_outer_schema(1), Some(Arc::clone(&a)));
+        assert!(parent.get_outer_schema(2).is_none());
+        assert_eq!(child.get_outer_schema(1), Some(b));
+        assert_eq!(child.get_outer_schema(2), Some(a));
+        assert!(child.get_outer_schema(0).is_none());
+        assert!(child.get_outer_schema(3).is_none());
     }
 
     #[test]
-    fn test_get_outer_schema_single_level() {
-        let context = SubstraitConsumerContext::default();
+    fn lambda_scopes_inherit_without_changing_parents_or_siblings() {
+        let consumer = test_consumer();
+        let root = SubstraitConsumerContext::default();
+        let schema = DFSchema::empty();
+        let integer = [Type {
+            kind: Some(r#type::Kind::I64(r#type::I64::default())),
+        }];
+        let string = [Type {
+            kind: Some(r#type::Kind::String(r#type::String::default())),
+        }];
+        let (a, a_names) = root
+            .with_lambda_parameters(&consumer, &integer, &schema)
+            .unwrap();
+        let (b, b_names) = root
+            .with_lambda_parameters(&consumer, &string, &schema)
+            .unwrap();
+        let (nested, nested_names) = a
+            .with_lambda_parameters(&consumer, &string, &schema)
+            .unwrap();
 
-        let schema_a = make_schema(&[("a", DataType::Int64)]);
-        let parent = context.clone();
-        let context = context.with_outer_schema(Arc::clone(&schema_a));
-
-        // steps_out=1 returns the one pushed schema
-        let result = context.get_outer_schema(1).unwrap();
-        assert_eq!(result.fields().len(), 1);
-        assert_eq!(result.fields()[0].name(), "a");
-
-        // steps_out=0 and steps_out=2 are out of range
-        assert!(context.get_outer_schema(0).is_none());
-        assert!(context.get_outer_schema(2).is_none());
-
-        let context = parent;
-        assert!(context.get_outer_schema(1).is_none());
+        assert_eq!(a_names, vec!["p0"]);
+        assert_eq!(b_names, vec!["p0"]);
+        assert_eq!(nested_names, vec!["p1"]);
+        assert_eq!(
+            a.lambda_variable(0, 0).unwrap().get_type(&schema).unwrap(),
+            DataType::Int64
+        );
+        assert_eq!(
+            b.lambda_variable(0, 0).unwrap().get_type(&schema).unwrap(),
+            DataType::Utf8
+        );
+        assert_eq!(
+            nested
+                .lambda_variable(0, 0)
+                .unwrap()
+                .get_type(&schema)
+                .unwrap(),
+            DataType::Utf8
+        );
+        assert_eq!(
+            nested.lambda_variable(1, 0).unwrap(),
+            a.lambda_variable(0, 0).unwrap()
+        );
+        assert!(root.lambda_variable(0, 0).is_err());
+        assert!(a.lambda_variable(1, 0).is_err());
+        assert!(b.lambda_variable(1, 0).is_err());
+        assert!(nested.lambda_variable(0, 1).is_err());
     }
 
-    #[test]
-    fn test_get_outer_schema_nested() {
-        let context = SubstraitConsumerContext::default();
-
-        let schema_a = make_schema(&[("a", DataType::Int64)]);
-        let schema_b = make_schema(&[("b", DataType::Utf8)]);
-
-        let context = context.with_outer_schema(Arc::clone(&schema_a));
-        let parent = context.clone();
-        let context = context.with_outer_schema(Arc::clone(&schema_b));
-
-        // steps_out=1 returns the most recent (schema_b)
-        let result = context.get_outer_schema(1).unwrap();
-        assert_eq!(result.fields()[0].name(), "b");
-
-        // steps_out=2 returns the grandparent (schema_a)
-        let result = context.get_outer_schema(2).unwrap();
-        assert_eq!(result.fields()[0].name(), "a");
-
-        // steps_out=3 exceeds depth
-        assert!(context.get_outer_schema(3).is_none());
-
-        // The parent is unchanged — steps_out=1 still returns schema_a
-        let context = parent;
-        let result = context.get_outer_schema(1).unwrap();
-        assert_eq!(result.fields()[0].name(), "a");
-        assert!(context.get_outer_schema(2).is_none());
+    // Only input completion is controlled; JOIN/UNION conversion and batch
+    // scheduling use the standard consumer implementations.
+    struct GatedConsumer {
+        consumer: DefaultSubstraitConsumer<'static>,
+        a_ready: Semaphore,
+        b_ready: Semaphore,
+        // Held permits count pending inputs and are released even on cancellation.
+        pending: Semaphore,
     }
 
-    // A custom consumer exercises the trait default independently of the default
-    // consumer's scheduling policy.
-    struct InputConsumer {
-        extensions: Arc<Extensions>,
-        state: Arc<SessionState>,
-        reads: Arc<Mutex<Vec<String>>>,
-        ready: Arc<Semaphore>,
-        gates: Arc<HashMap<String, Semaphore>>,
-        active: Arc<AtomicUsize>,
+    impl GatedConsumer {
+        fn new(inputs: usize) -> Self {
+            Self {
+                consumer: test_consumer(),
+                a_ready: Semaphore::new(0),
+                b_ready: Semaphore::new(0),
+                pending: Semaphore::new(inputs),
+            }
+        }
     }
 
     #[async_trait]
-    impl SubstraitConsumer for InputConsumer {
+    impl SubstraitConsumer for GatedConsumer {
         fn get_extensions(&self) -> &Extensions {
-            &self.extensions
+            self.consumer.get_extensions()
         }
-
         fn get_function_registry(&self) -> &impl FunctionRegistry {
-            self.state.as_ref()
+            self.consumer.get_function_registry()
         }
-
         async fn resolve_table_ref(
             &self,
             _: &TableReference,
         ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
             unreachable!("test consumes reads directly")
         }
-
-        async fn consume_expression(
-            &self,
-            expr: &Expression,
-            input_schema: &DFSchema,
-            context: &SubstraitConsumerContext,
-        ) -> datafusion::common::Result<Expr> {
-            self.active.fetch_add(1, Ordering::SeqCst);
-            let _active = ActiveInput(&self.active);
-            self.ready.acquire().await.unwrap().forget();
-            from_substrait_rex(self, expr, input_schema, context).await
-        }
-
         async fn consume_rel(
             &self,
             rel: &Rel,
             _context: &SubstraitConsumerContext,
         ) -> datafusion::common::Result<LogicalPlan> {
             let Some(proto::rel::RelType::Read(read)) = &rel.rel_type else {
-                panic!("expected a read")
+                panic!("expected read")
             };
             let Some(proto::read_rel::ReadType::NamedTable(table)) = &read.read_type
             else {
-                panic!("expected a named table")
+                panic!("expected named table")
             };
-            self.reads.lock().unwrap().push(table.names[0].clone());
-            self.active.fetch_add(1, Ordering::SeqCst);
-            let _active = ActiveInput(&self.active);
-            let gate = self.gates.get(&table.names[0]).unwrap_or(&self.ready);
+            let name = table.names[0].as_str();
+            let _pending = self.pending.acquire().await.unwrap();
+            let gate = if name == "a" {
+                &self.a_ready
+            } else {
+                &self.b_ready
+            };
             gate.acquire().await.unwrap().forget();
-            if table.names[0] == "fail" {
+            if name == "fail" {
                 return substrait_err!("input failed");
             }
             table_scan(
-                Some(table.names[0].as_str()),
+                Some(name),
                 &Schema::new(vec![Field::new("x", DataType::Int64, false)]),
                 None,
             )?
@@ -935,21 +927,7 @@ mod tests {
         }
     }
 
-    fn input_consumer() -> InputConsumer {
-        InputConsumer {
-            extensions: Arc::new(Extensions::default()),
-            state: Arc::new(
-                datafusion::execution::SessionStateBuilder::new_with_default_features()
-                    .build(),
-            ),
-            reads: Arc::new(Mutex::default()),
-            ready: Arc::new(Semaphore::new(0)),
-            gates: Arc::new(HashMap::new()),
-            active: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    fn input_read(name: &str) -> Rel {
+    fn read(name: &str) -> Rel {
         Rel {
             rel_type: Some(proto::rel::RelType::Read(Box::new(ReadRel {
                 read_type: Some(proto::read_rel::ReadType::NamedTable(
@@ -963,270 +941,60 @@ mod tests {
         }
     }
 
-    fn identity_lambda(kind: r#type::Kind, steps_out: u32) -> proto::expression::Lambda {
-        proto::expression::Lambda {
-            parameters: Some(r#type::Struct {
-                types: vec![Type { kind: Some(kind) }],
-                ..Default::default()
-            }),
-            body: Some(Box::new(Expression {
-                rex_type: Some(proto::expression::RexType::Selection(Box::new(
-                    FieldReference {
-                        reference_type: Some(
-                            field_reference::ReferenceType::DirectReference(
-                                ReferenceSegment {
-                                    reference_type: Some(
-                                        reference_segment::ReferenceType::StructField(
-                                            Box::new(reference_segment::StructField {
-                                                field: 0,
-                                                child: None,
-                                            }),
-                                        ),
-                                    ),
-                                },
-                            ),
-                        ),
-                        root_type: Some(
-                            field_reference::RootType::LambdaParameterReference(
-                                field_reference::LambdaParameterReference { steps_out },
-                            ),
-                        ),
-                    },
-                ))),
-            })),
-        }
-    }
-
-    fn assert_lambda_body(expr: Expr, name: &str, data_type: DataType) {
-        let Expr::Lambda(lambda) = expr else {
-            panic!("expected lambda")
-        };
-        let Expr::LambdaVariable(variable) = *lambda.body else {
-            panic!("expected lambda variable")
-        };
-        assert_eq!(variable.name, name);
-        assert_eq!(variable.field.unwrap().data_type(), &data_type);
-    }
-
     #[tokio::test]
-    async fn shared_consumer_keeps_concurrent_lambda_scopes_independent() {
-        let consumer = input_consumer();
-        let context = SubstraitConsumerContext::default();
-        let schema = DFSchema::empty();
-        let integer = identity_lambda(r#type::Kind::I64(r#type::I64::default()), 0);
-        let string = identity_lambda(r#type::Kind::String(r#type::String::default()), 0);
-        let mut first = Box::pin(consumer.consume_lambda(&integer, &schema, &context));
-        let mut second = Box::pin(consumer.consume_lambda(&string, &schema, &context));
-        assert!(poll!(first.as_mut()).is_pending());
-        assert!(poll!(second.as_mut()).is_pending());
-        assert_eq!(consumer.active.load(Ordering::SeqCst), 2);
-        consumer.ready.add_permits(2);
-        assert_lambda_body(first.await.unwrap(), "p0", DataType::Int64);
-        assert_lambda_body(second.await.unwrap(), "p0", DataType::Utf8);
-        assert!(context.lambda_variable(0, 0).is_err());
-    }
-
-    #[tokio::test]
-    async fn lambda_error_and_cancellation_preserve_parent_scope() {
-        let consumer = input_consumer();
-        let schema = DFSchema::empty();
-        let root = SubstraitConsumerContext::default();
-        let (context, names) = root
-            .with_lambda_parameters(
-                &consumer,
-                &[Type {
-                    kind: Some(r#type::Kind::I64(r#type::I64::default())),
-                }],
-                &schema,
-            )
-            .unwrap();
-        assert_eq!(names, vec!["p0"]);
-        let nested = identity_lambda(r#type::Kind::String(r#type::String::default()), 1);
-        let mut cancelled = Box::pin(consumer.consume_lambda(&nested, &schema, &context));
-        assert!(poll!(cancelled.as_mut()).is_pending());
-        drop(cancelled);
-        assert_eq!(consumer.active.load(Ordering::SeqCst), 0);
-        let mut invalid = nested.clone();
-        invalid.body = None;
-        assert!(
-            consumer
-                .consume_lambda(&invalid, &schema, &context)
-                .await
-                .is_err()
-        );
-        consumer.ready.add_permits(1);
-        let result = consumer
-            .consume_lambda(&nested, &schema, &context)
-            .await
-            .unwrap();
-        let Expr::Lambda(ref lambda) = result else {
-            panic!("expected lambda")
-        };
-        assert_eq!(lambda.params, vec!["p1"]);
-        assert_lambda_body(result, "p0", DataType::Int64);
-        assert!(context.lambda_variable(1, 0).is_err());
-        assert!(root.lambda_variable(0, 0).is_err());
-    }
-
-    #[tokio::test]
-    async fn concurrent_inputs_overlap_and_preserve_input_order() {
-        let mut consumer = input_consumer();
-        consumer.gates = Arc::new(HashMap::from([
-            ("a".into(), Semaphore::new(0)),
-            ("b".into(), Semaphore::new(0)),
-        ]));
-        let rels = [input_read("a"), input_read("b")];
-        let inputs = rels.iter().collect::<Vec<_>>();
-        let context = SubstraitConsumerContext::default();
-        let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs, &context));
-        assert!(poll!(&mut pending).is_pending());
-        assert_eq!(*consumer.reads.lock().unwrap(), ["a", "b"]);
-        assert_eq!(consumer.active.load(Ordering::SeqCst), 2);
-        consumer.gates["b"].add_permits(1);
-        assert!(poll!(&mut pending).is_pending());
-        assert_eq!(consumer.active.load(Ordering::SeqCst), 1);
-        consumer.gates["a"].add_permits(1);
-        let plans = pending.await.unwrap();
-        assert_eq!(plans.len(), 2);
-        assert!(
-            plans[0]
-                .display_indent()
-                .to_string()
-                .contains("TableScan: a")
-        );
-        assert!(
-            plans[1]
-                .display_indent()
-                .to_string()
-                .contains("TableScan: b")
-        );
-        assert_eq!(consumer.active.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn concurrent_inputs_cancel_pending_siblings_on_error() {
-        let mut consumer = input_consumer();
-        consumer.gates = Arc::new(HashMap::from([("fail".into(), Semaphore::new(0))]));
-        // Exercise more inputs than the small-future optimization in try_join_all.
-        let mut rels = (0..40)
-            .map(|i| input_read(&format!("a{i}")))
-            .collect::<Vec<_>>();
-        rels.push(input_read("fail"));
-        let inputs = rels.iter().collect::<Vec<_>>();
-        let context = SubstraitConsumerContext::default();
-        let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs, &context));
-        assert!(poll!(&mut pending).is_pending());
-        assert_eq!(consumer.active.load(Ordering::SeqCst), 41);
-        consumer.gates["fail"].add_permits(1);
-        let error = pending.await.unwrap_err();
-        assert!(error.to_string().contains("input failed"));
-        assert_eq!(consumer.active.load(Ordering::SeqCst), 0);
-    }
-
-    struct HookConsumer {
-        inner: InputConsumer,
-        calls: Mutex<Vec<usize>>,
-        truncate: bool,
-    }
-
-    #[async_trait]
-    impl SubstraitConsumer for HookConsumer {
-        fn get_extensions(&self) -> &Extensions {
-            &self.inner.extensions
-        }
-        fn get_function_registry(&self) -> &impl FunctionRegistry {
-            self.inner.state.as_ref()
-        }
-        async fn resolve_table_ref(
-            &self,
-            _: &TableReference,
-        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
-            unreachable!("test consumes reads directly")
-        }
-        async fn consume_rel_inputs(
-            &self,
-            rels: &[&Rel],
-            context: &SubstraitConsumerContext,
-        ) -> datafusion::common::Result<Vec<LogicalPlan>> {
-            self.calls.lock().unwrap().push(rels.len());
-            let mut plans = self.inner.consume_rel_inputs(rels, context).await?;
-            if self.truncate {
-                plans.pop();
-            }
-            Ok(plans)
-        }
-    }
-
-    #[tokio::test]
-    async fn join_and_union_use_the_input_hook() {
-        for truncate in [false, true] {
-            let consumer = HookConsumer {
-                inner: input_consumer(),
-                calls: Mutex::default(),
-                truncate,
-            };
-            consumer.inner.ready.add_permits(6);
-            let join = JoinRel {
-                left: Some(Box::new(input_read("a"))),
-                right: Some(Box::new(input_read("b"))),
+    async fn join_and_unions_consume_concurrently_in_input_order() {
+        let relations = [
+            proto::rel::RelType::Join(Box::new(JoinRel {
+                left: Some(Box::new(read("a"))),
+                right: Some(Box::new(read("b"))),
                 r#type: proto::join_rel::JoinType::Inner as i32,
                 ..Default::default()
+            })),
+            proto::rel::RelType::Set(SetRel {
+                inputs: vec![read("a"), read("b")],
+                op: proto::set_rel::SetOp::UnionAll as i32,
+                ..Default::default()
+            }),
+            proto::rel::RelType::Set(SetRel {
+                inputs: vec![read("a"), read("b")],
+                op: proto::set_rel::SetOp::UnionDistinct as i32,
+                ..Default::default()
+            }),
+        ];
+        for rel_type in relations {
+            let consumer = GatedConsumer::new(2);
+            let context = SubstraitConsumerContext::default();
+            let rel = Rel {
+                rel_type: Some(rel_type),
             };
-            let result = consumer
-                .consume_join(&join, &SubstraitConsumerContext::default())
-                .await;
-            if truncate {
-                assert!(
-                    result
-                        .unwrap_err()
-                        .to_string()
-                        .contains("wrong number of inputs")
-                );
-            } else {
-                let LogicalPlan::Join(join) = result.unwrap() else {
-                    panic!("expected join")
-                };
-                assert!(
-                    join.left
-                        .display_indent()
-                        .to_string()
-                        .contains("TableScan: a")
-                );
-                assert!(
-                    join.right
-                        .display_indent()
-                        .to_string()
-                        .contains("TableScan: b")
-                );
-            }
-            for op in [
-                proto::set_rel::SetOp::UnionAll,
-                proto::set_rel::SetOp::UnionDistinct,
-            ] {
-                let set = SetRel {
-                    inputs: vec![input_read("a"), input_read("b")],
-                    op: op as i32,
-                    ..Default::default()
-                };
-                let result = consumer
-                    .consume_set(&set, &SubstraitConsumerContext::default())
-                    .await;
-                if truncate {
-                    assert!(
-                        result
-                            .unwrap_err()
-                            .to_string()
-                            .contains("wrong number of inputs")
-                    );
-                } else {
-                    let plan = result.unwrap().display_indent().to_string();
-                    assert!(
-                        plan.find("TableScan: a").unwrap()
-                            < plan.find("TableScan: b").unwrap()
-                    );
-                }
-            }
-            assert_eq!(*consumer.calls.lock().unwrap(), [2, 2, 2]);
+            let mut result = Box::pin(from_substrait_rel(&consumer, &rel, &context));
+            assert!(poll!(result.as_mut()).is_pending());
+            assert_eq!(consumer.pending.available_permits(), 0);
+            consumer.b_ready.add_permits(1); // B finishes first.
+            assert!(poll!(result.as_mut()).is_pending());
+            assert_eq!(consumer.pending.available_permits(), 1);
+            consumer.a_ready.add_permits(1);
+            let plan = result.await.unwrap().display_indent().to_string();
+            assert!(
+                plan.find("TableScan: a").unwrap() < plan.find("TableScan: b").unwrap()
+            );
+            assert_eq!(consumer.pending.available_permits(), 2);
         }
+    }
+
+    #[tokio::test]
+    async fn input_failure_cancels_pending_siblings() {
+        let consumer = GatedConsumer::new(41);
+        // A later failure must not wait for earlier pending inputs, even in a wide UNION.
+        let mut inputs = vec![read("a"); 40];
+        inputs.push(read("fail"));
+        let inputs = inputs.iter().collect::<Vec<_>>();
+        let context = SubstraitConsumerContext::default();
+        let mut result = Box::pin(consumer.consume_rel_inputs(&inputs, &context));
+        assert!(poll!(result.as_mut()).is_pending());
+        assert_eq!(consumer.pending.available_permits(), 0);
+        consumer.b_ready.add_permits(1);
+        assert_contains!(result.await.unwrap_err().to_string(), "input failed");
+        assert_eq!(consumer.pending.available_permits(), 41);
     }
 }
