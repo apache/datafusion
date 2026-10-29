@@ -1387,7 +1387,7 @@ Timestamp(ns, "+00:00") 2024-07-01T06:00:00Z
 ##   ambiguous 2024-10-27 02:30:00 Europe/Brussels -> 2024-10-27 02:30:00+01
 ##   nonexistent 2024-03-31 02:30:00 Europe/Brussels -> 2024-03-31 03:30:00+02
 ##
-## KNOWN WRONG: the *parsing* routes into a named zone with a session zone
+## The *parsing* routes into a named zone with a session zone
 ## still fail with "error computing timezone offset". See
 ## See https://github.com/apache/datafusion/issues/25084
 ##########
@@ -1415,6 +1415,7 @@ SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') FROM
 2024-11-03T01:30:00-07:00
 
 # String literal parsing fails.
+# https://github.com/apache/arrow-rs/issues/11039
 query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-11\-03T01:30:00':\ error\ computing\ timezone\ offset
 SELECT arrow_cast('2024-11-03T01:30:00', 'Timestamp(Nanosecond, Some("America/Denver"))')
 
