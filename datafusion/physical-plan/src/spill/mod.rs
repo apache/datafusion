@@ -18,8 +18,10 @@
 //! Defines the spilling functions
 
 pub(crate) mod in_progress_spill_file;
+mod read_memory;
 pub(crate) mod replayable_spill_input;
 pub(crate) mod spill_manager;
+
 pub mod spill_pool;
 use datafusion_execution::spill_file::{AsyncSpillWriter, SpillWriter};
 // Moved for refactor, re-export to keep the public API stable
@@ -63,7 +65,7 @@ use log::debug;
 /// Backends handle their own threading concerns internally - OS files use
 /// `tokio::fs::File` which performs blocking IO per-syscall without holding a thread
 /// for the file's lifetime, avoiding deadlocks when concurrent reads exceed thread pool limits.
-struct SpillReaderStream {
+pub(crate) struct SpillReaderStream {
     schema: SchemaRef,
     decoder: StreamDecoder,
     byte_stream: Pin<Box<dyn Stream<Item = Result<bytes::Bytes>> + Send>>,
@@ -88,6 +90,7 @@ struct SpillReaderStream {
     _spill_file: Arc<dyn SpillFile>,
 
     schema_validated: bool,
+    decoded_memory_bound: Option<usize>,
 }
 
 // Small margin allowed to accommodate slight memory accounting variation
@@ -328,6 +331,17 @@ impl FramerState {
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
 impl SpillReaderStream {
+    fn with_decoded_memory_bound(mut self) -> Self {
+        self.decoded_memory_bound =
+            crate::sorts::schema_needs_recursive_read_bound(self.schema.as_ref())
+                .then_some(0);
+        self
+    }
+
+    pub(crate) fn last_decoded_memory_bound(&self) -> Option<usize> {
+        self.decoded_memory_bound
+    }
+
     fn new(
         schema: SchemaRef,
         spill_file: Arc<dyn SpillFile>,
@@ -348,6 +362,7 @@ impl SpillReaderStream {
             pending: VecDeque::new(),
             _spill_file: spill_file,
             schema_validated: false,
+            decoded_memory_bound: None,
         })
     }
 }
@@ -423,7 +438,21 @@ impl Stream for SpillReaderStream {
             // Then frame the next message out of the current chunk
             if !this.current_buffer.is_empty() {
                 match this.framer.push(&mut this.current_buffer) {
-                    Ok(Some(buffers)) => this.pending.extend(buffers),
+                    Ok(Some(buffers)) => {
+                        if this.decoded_memory_bound.is_some() {
+                            match read_memory::decoded_memory_bound(
+                                &buffers,
+                                this.schema.as_ref(),
+                            ) {
+                                Ok(bound) => this.decoded_memory_bound = Some(bound),
+                                Err(error) => {
+                                    this.is_done = true;
+                                    return Poll::Ready(Some(Err(error)));
+                                }
+                            }
+                        }
+                        this.pending.extend(buffers);
+                    }
                     Ok(None) => {}
                     Err(e) => {
                         this.is_done = true;
@@ -661,6 +690,9 @@ impl Drop for AsyncIPCStreamWriter {
 /// Encodes Arrow IPC streams without performing I/O.
 struct IPCStreamEncoder {
     encoder: Option<StreamEncoder>,
+    recursive_schema: bool,
+    track_read_memory: bool,
+    read_memory_bound: Option<usize>,
 }
 
 impl IPCStreamEncoder {
@@ -693,12 +725,18 @@ impl IPCStreamEncoder {
         let encoder = StreamEncoder::try_new_with_options(schema, write_options)?;
         Ok(Self {
             encoder: Some(encoder),
+            recursive_schema: crate::sorts::schema_needs_recursive_read_bound(schema),
+            track_read_memory: true,
+            read_memory_bound: None,
         })
     }
 
     fn encode(&mut self, batch: &RecordBatch) -> Result<(usize, usize, Vec<Buffer>)> {
         let buffers = self.encoder.as_mut().unwrap().encode(batch)?;
         let bytes = buffers.iter().map(Buffer::len).sum();
+        self.read_memory_bound = (self.recursive_schema && self.track_read_memory)
+            .then(|| read_memory::decoded_memory_bound(&buffers, batch.schema().as_ref()))
+            .transpose()?;
         Ok((batch.num_rows(), bytes, buffers))
     }
 

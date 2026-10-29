@@ -43,7 +43,7 @@ macro_rules! primitive_merge_helper {
 }
 
 macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $target_batch_bytes:ident, $output_construction_reservation:ident, $retain_output_construction_reservation:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
+    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $target_batch_bytes:ident, $output_construction_reservation:ident, $retain_output_construction_reservation:ident, $shared_input_buffers_reserved:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
         let streams =
             FieldCursorStream::<$t>::new($sort, $streams, $reservation.new_empty());
         return Ok(SortPreservingMergeStream::new(
@@ -58,6 +58,7 @@ macro_rules! merge_helper {
             $reservation,
             $enable_round_robin_tie_breaker,
         )
+        .with_reserved_shared_input_buffers($shared_input_buffers_reserved)
         .into_stream());
     }};
 }
@@ -87,10 +88,29 @@ impl std::fmt::Debug for SortedSpillFile {
     }
 }
 
+/// Writer-generated statistics stay attached to their file through selection,
+/// splitting and intermediate writes. External public files have no progress
+/// guarantee and retain the conservative admission path.
+pub(crate) struct SpillFileWithMemory {
+    pub file: Arc<dyn SpillFile>,
+    pub max_record_batch_memory: usize,
+    pub progress: Option<super::ProgressStats>,
+}
+
+impl From<SortedSpillFile> for SpillFileWithMemory {
+    fn from(file: SortedSpillFile) -> Self {
+        Self {
+            file: file.file,
+            max_record_batch_memory: file.max_record_batch_memory,
+            progress: None,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct StreamingMergeBuilder<'a> {
     streams: Vec<SendableRecordBatchStream>,
-    sorted_spill_files: Vec<SortedSpillFile>,
+    sorted_spill_files: Vec<SpillFileWithMemory>,
     spill_manager: Option<SpillManager>,
     schema: Option<SchemaRef>,
     expressions: Option<&'a LexOrdering>,
@@ -99,6 +119,7 @@ pub struct StreamingMergeBuilder<'a> {
     target_batch_bytes: Option<usize>,
     output_construction_reservation: Option<MemoryReservation>,
     retain_output_construction_reservation: bool,
+    shared_input_buffers_reserved: bool,
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     merge_pool: Option<Arc<MergeMemoryPool>>,
@@ -125,7 +146,13 @@ impl<'a> StreamingMergeBuilder<'a> {
         mut self,
         sorted_spill_files: Vec<SortedSpillFile>,
     ) -> Self {
-        self.sorted_spill_files = sorted_spill_files;
+        self.sorted_spill_files =
+            sorted_spill_files.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub(crate) fn with_spill_inputs(mut self, files: Vec<SpillFileWithMemory>) -> Self {
+        self.sorted_spill_files = files;
         self
     }
 
@@ -215,6 +242,12 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// Credit shared View data only while the caller's input grant is held.
+    pub(super) fn with_reserved_shared_input_buffers(mut self, covered: bool) -> Self {
+        self.shared_input_buffers_reserved = covered;
+        self
+    }
+
     /// See [SortPreservingMergeExec::with_round_robin_repartition] for more
     /// information.
     ///
@@ -249,6 +282,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             target_batch_bytes,
             output_construction_reservation,
             retain_output_construction_reservation,
+            shared_input_buffers_reserved,
             reservation,
             merge_pool,
             reserve_replay_headroom,
@@ -281,7 +315,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             let reservation =
                 reservation.expect("Reservation cannot be empty for streaming merge");
 
-            return Ok(MultiLevelMergeBuilder::new(
+            return Ok(MultiLevelMergeBuilder::new_with_memory(
                 spill_manager.expect("spill_manager should exist"),
                 schema,
                 sorted_spill_files,
@@ -315,12 +349,12 @@ impl<'a> StreamingMergeBuilder<'a> {
             let sort = expressions[0].clone();
             let data_type = sort.expr.data_type(schema.as_ref())?;
             downcast_primitive! {
-                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, fetch, reservation, enable_round_robin_tie_breaker),
-                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::Utf8View => merge_helper!(StringViewArray, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, fetch, reservation, enable_round_robin_tie_breaker)
+                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, shared_input_buffers_reserved, fetch, reservation, enable_round_robin_tie_breaker),
+                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, shared_input_buffers_reserved, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::Utf8View => merge_helper!(StringViewArray, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, shared_input_buffers_reserved, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, shared_input_buffers_reserved, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, shared_input_buffers_reserved, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, target_batch_bytes, output_construction_reservation, retain_output_construction_reservation, shared_input_buffers_reserved, fetch, reservation, enable_round_robin_tie_breaker)
                 _ => {}
             }
         }
@@ -343,6 +377,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             enable_round_robin_tie_breaker,
         )
+        .with_reserved_shared_input_buffers(shared_input_buffers_reserved)
         .into_stream())
     }
 }
@@ -356,12 +391,160 @@ mod tests {
 
     use arrow::array::{ArrayRef, RecordBatch};
     use arrow_schema::SortOptions;
-    use datafusion_common::Result;
+    use datafusion_common::{DataFusionError, Result};
     use datafusion_execution::TaskContext;
     use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
     use datafusion_physical_expr_common::metrics::{
         ExecutionPlanMetricsSet, SpillMetrics,
     };
+
+    /// Lazy one-row inputs expose retention that pre-built input vectors hide.
+    /// Without draining before input replacement, the builder retains all twenty
+    /// source arrays even though only two input cursors are live.
+    #[tokio::test]
+    async fn test_variable_merge_releases_exhausted_inputs() {
+        use arrow::array::Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryConsumer};
+        use futures::StreamExt;
+        use std::sync::{Mutex, Weak};
+
+        for (variable, nested_fixed, fetch, fail_at, stop_early) in [
+            (true, false, None, None, false),
+            (true, false, Some(7), None, false),
+            (true, false, Some(20), None, false),
+            (true, false, None, Some(4), false),
+            (true, false, None, None, true),
+            (false, false, None, None, false),
+            (false, true, None, None, false),
+            (false, true, Some(7), None, false),
+            (false, true, None, Some(4), false),
+            (false, true, None, None, true),
+        ] {
+            let schema = Arc::new(Schema::new(if variable {
+                vec![
+                    Field::new("key", DataType::Int32, false),
+                    Field::new("payload", DataType::Utf8, false),
+                ]
+            } else if nested_fixed {
+                vec![
+                    Field::new("key", DataType::Int32, false),
+                    Field::new(
+                        "payload",
+                        DataType::Struct(
+                            vec![Arc::new(Field::new("child", DataType::Int32, false))]
+                                .into(),
+                        ),
+                        false,
+                    ),
+                ]
+            } else {
+                vec![Field::new("key", DataType::Int32, false)]
+            }));
+            let seen = Arc::new(Mutex::new(Vec::<Weak<dyn Array>>::new()));
+            let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let streams = (0..2)
+                .map(|partition| {
+                    let schema = Arc::clone(&schema);
+                    let seen = Arc::clone(&seen);
+                    let peak = Arc::clone(&peak);
+                    let input_schema = Arc::clone(&schema);
+                    let input = futures::stream::iter(0..10).map(move |row| {
+                        if fail_at == Some(row) && partition == 0 {
+                            return Err(DataFusionError::Execution(
+                                "input failed".into(),
+                            ));
+                        }
+                        let key: ArrayRef =
+                            Arc::new(Int32Array::from(vec![row * 2 + partition]));
+                        let mut columns = vec![key];
+                        if variable {
+                            columns.push(Arc::new(StringArray::from(vec![
+                                "x".repeat(4096),
+                            ])));
+                        }
+                        if nested_fixed {
+                            let child: ArrayRef = Arc::new(Int32Array::from(vec![row]));
+                            columns.push(Arc::new(StructArray::new(
+                                vec![Arc::new(Field::new(
+                                    "child",
+                                    DataType::Int32,
+                                    false,
+                                ))]
+                                .into(),
+                                vec![child],
+                                None,
+                            )));
+                        }
+                        let tracked = columns.last().unwrap();
+                        let mut seen = seen.lock().unwrap();
+                        seen.push(Arc::downgrade(tracked));
+                        let live = seen.iter().filter(|a| a.strong_count() != 0).count();
+                        peak.fetch_max(live, std::sync::atomic::Ordering::Relaxed);
+                        RecordBatch::try_new(Arc::clone(&input_schema), columns)
+                            .map_err(Into::into)
+                    });
+                    Box::pin(RecordBatchStreamAdapter::new(schema, input))
+                        as SendableRecordBatchStream
+                })
+                .collect();
+            let sort: LexOrdering =
+                [PhysicalSortExpr::new_default(col("key", &schema).unwrap())].into();
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(64 * 1024));
+            let output = MemoryConsumer::new("output").register(&pool);
+            let mut stream = StreamingMergeBuilder::new()
+                .with_batch_size(20)
+                .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+                .with_bypass_mempool()
+                .with_schema(schema)
+                .with_streams(streams)
+                .with_expressions(&sort)
+                .with_target_batch_bytes(Some(64 * 1024))
+                .with_output_construction_reservation(Some(output))
+                .with_fetch(fetch)
+                .build()
+                .unwrap();
+            let mut keys = Vec::new();
+            let mut failed = false;
+            while let Some(batch) = stream.next().await {
+                match batch {
+                    Ok(batch) => {
+                        if !variable && !nested_fixed {
+                            assert_eq!(
+                                batch.num_rows(),
+                                20,
+                                "fixed-width row batching must not change"
+                            );
+                        }
+                        keys.extend_from_slice(
+                            batch
+                                .column(0)
+                                .as_primitive::<arrow::datatypes::Int32Type>()
+                                .values(),
+                        );
+                    }
+                    Err(error) => {
+                        assert!(error.to_string().contains("input failed"));
+                        failed = true;
+                        break;
+                    }
+                }
+                if stop_early {
+                    break;
+                }
+            }
+            drop(stream);
+            assert_eq!(pool.reserved(), 0);
+            assert!(seen.lock().unwrap().iter().all(|a| a.strong_count() == 0));
+            assert_eq!(failed, fail_at.is_some());
+            if !failed && !stop_early {
+                assert_eq!(keys, (0..fetch.unwrap_or(20) as i32).collect::<Vec<_>>());
+            }
+            if variable || nested_fixed {
+                assert!(peak.load(std::sync::atomic::Ordering::Relaxed) <= 2);
+            }
+        }
+    }
 
     #[tokio::test]
     async fn test_sort_merge_fetch_zero_with_only_1_stream() {

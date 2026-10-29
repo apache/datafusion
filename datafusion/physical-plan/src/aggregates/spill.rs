@@ -35,7 +35,7 @@ use super::{AggregateExec, AggregateMode};
 use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
-use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
+use crate::sorts::streaming_merge::{SpillFileWithMemory, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
 
 /// Spill configuration and accumulated runs of one grouped aggregation stream.
@@ -116,7 +116,7 @@ pub(super) struct AggregateSpill {
     /// Spill I/O and metrics manager.
     spill_manager: SpillManager,
     /// Spill runs waiting to be merged, all sorted by `spill_expr`.
-    spills: Vec<SortedSpillFile>,
+    spills: Vec<SpillFileWithMemory>,
     /// Minimum, across original runs, of each run's largest batch row count.
     min_spill_batch_rows: usize,
     /// Describes this stream's spill requests, and prefixes its internal errors.
@@ -231,18 +231,16 @@ impl AggregateSpill {
         );
         let spill_file = self
             .spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                sorted_iter,
-                self.label,
-            )?;
+            .spill_record_batch_iter_with_memory(sorted_iter, self.label)?;
 
-        let Some((file, max_record_batch_memory)) = spill_file else {
+        let Some((file, memory)) = spill_file else {
             return internal_err!("{}: produced an empty spill", self.label);
         };
 
-        self.spills.push(SortedSpillFile {
+        self.spills.push(SpillFileWithMemory {
             file,
-            max_record_batch_memory,
+            max_record_batch_memory: memory.input,
+            progress: memory.progress,
         });
         self.min_spill_batch_rows = self.min_spill_batch_rows.min(max_batch_rows);
 
@@ -277,7 +275,7 @@ impl AggregateSpill {
         let merged = StreamingMergeBuilder::new()
             .with_schema(spill_schema)
             .with_spill_manager(spill_manager)
-            .with_sorted_spill_files(spills)
+            .with_spill_inputs(spills)
             .with_expressions(&spill_expr)
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)

@@ -19,7 +19,6 @@
 
 use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 use crate::coop::cooperative;
-use crate::sorts::interleave_memory_size_from_sliced;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -116,14 +115,19 @@ impl SpillManager {
 
     /// Spill an iterator of `RecordBatch`es to disk and return the spill file and the size of the largest batch in memory
     /// Note that this expects the caller to provide *non-sliced* batches, so the memory calculation of each batch is accurate.
-    pub(crate) fn spill_record_batch_iter_and_return_max_batch_memory(
+    pub(crate) fn spill_record_batch_iter_with_memory(
         &self,
         mut iter: impl Iterator<Item = Result<impl Borrow<RecordBatch>>>,
         request_description: &str,
-    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
+    ) -> Result<
+        Option<(
+            Arc<dyn SpillFile>,
+            super::in_progress_spill_file::SpillFileMemory,
+        )>,
+    > {
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
-        let mut max_record_batch_size = 0;
+        let mut file_memory = super::in_progress_spill_file::SpillFileMemory::default();
 
         iter.try_for_each(|batch| {
             let batch = batch?;
@@ -131,48 +135,51 @@ impl SpillManager {
             if borrowed.num_rows() == 0 {
                 return Ok(());
             }
-            let gc_sliced_size = in_progress_file.append_batch(borrowed)?;
-            let output_size =
-                interleave_memory_size_from_sliced(borrowed, gc_sliced_size)
-                    .unwrap_or(gc_sliced_size);
-            max_record_batch_size = max_record_batch_size.max(output_size);
+            let memory = in_progress_file.append_batch_with_memory_size(borrowed)?;
+            file_memory.include(&memory);
             Result::<_, DataFusionError>::Ok(())
         })?;
 
         let file = in_progress_file.finish()?;
 
-        Ok(file.map(|f| (f, max_record_batch_size)))
+        Ok(file.map(|f| (f, file_memory)))
     }
 
     /// Spill a stream of `RecordBatch`es and return the file, maximum batch memory,
     /// and maximum batch row count.
-    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_stats(
+    pub(crate) async fn spill_record_batch_stream_with_memory(
         &self,
         stream: &mut SendableRecordBatchStream,
         request_description: &str,
-    ) -> Result<Option<(Arc<dyn SpillFile>, usize, usize)>> {
+    ) -> Result<
+        Option<(
+            Arc<dyn SpillFile>,
+            super::in_progress_spill_file::SpillFileMemory,
+            usize,
+        )>,
+    > {
         use futures::StreamExt;
 
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
         let result = async {
-            let mut max_record_batch_size = 0;
+            let mut file_memory =
+                super::in_progress_spill_file::SpillFileMemory::default();
             let mut max_batch_rows = 0;
 
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
-                let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
-                let output_size =
-                    interleave_memory_size_from_sliced(&batch, gc_sliced_size)
-                        .unwrap_or(gc_sliced_size);
+                let memory = in_progress_file
+                    .append_batch_async_with_memory_size(&batch)
+                    .await?;
 
-                max_record_batch_size = max_record_batch_size.max(output_size);
+                file_memory.include(&memory);
                 max_batch_rows = max_batch_rows.max(batch.num_rows());
             }
 
             let file = in_progress_file.finish_async().await?;
 
-            Ok(file.map(|f| (f, max_record_batch_size, max_batch_rows)))
+            Ok(file.map(|f| (f, file_memory, max_batch_rows)))
         }
         .await;
 
@@ -183,6 +190,29 @@ impl SpillManager {
         }
 
         result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spill_record_batch_iter_and_return_max_batch_memory(
+        &self,
+        iter: impl Iterator<Item = Result<impl Borrow<RecordBatch>>>,
+        request_description: &str,
+    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
+        Ok(self
+            .spill_record_batch_iter_with_memory(iter, request_description)?
+            .map(|(file, memory)| (file, memory.input)))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_stats(
+        &self,
+        stream: &mut SendableRecordBatchStream,
+        request_description: &str,
+    ) -> Result<Option<(Arc<dyn SpillFile>, usize, usize)>> {
+        Ok(self
+            .spill_record_batch_stream_with_memory(stream, request_description)
+            .await?
+            .map(|(file, memory, rows)| (file, memory.input, rows)))
     }
 
     /// Reads a spill file as a stream. The file must be created by the current
@@ -213,6 +243,21 @@ impl SpillManager {
         )?));
 
         Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
+    }
+
+    /// Rescan the physical message bounds without relying on this allocation's
+    /// alignment or enabling statistics for ordinary readers.
+    pub(crate) fn read_spill_with_memory_bound(
+        &self,
+        spill_file: Arc<dyn SpillFile>,
+        max_record_batch_memory: usize,
+    ) -> Result<SpillReaderStream> {
+        Ok(SpillReaderStream::new(
+            Arc::clone(&self.schema),
+            spill_file,
+            Some(max_record_batch_memory),
+        )?
+        .with_decoded_memory_bound())
     }
 
     /// Same as `read_spill_as_stream`, but without buffering.

@@ -17,6 +17,9 @@
 
 //! Define the `InProgressSpillFile` struct, which represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
 
+use crate::sorts::{
+    ProgressStats, interleave_memory_size_from_sliced, schema_needs_recursive_read_bound,
+};
 use datafusion_common::{Result, internal_datafusion_err};
 use std::sync::Arc;
 
@@ -28,6 +31,46 @@ use super::{
     AsyncIPCStreamWriter, IPCStreamEncoder, IPCStreamWriter, gc_view_arrays,
     spill_manager::{GetSlicedSize, SpillManager},
 };
+
+/// Separate the serialized size, physical read bound, and new construction
+/// buffers. Flat schemas keep their existing logical read estimate.
+pub(crate) struct SpillBatchMemory {
+    pub sliced: usize,
+    pub decoded: Option<usize>,
+    pub construction: usize,
+    pub progress: Option<ProgressStats>,
+}
+
+impl SpillBatchMemory {
+    pub fn input_memory_size(&self) -> usize {
+        // Recursive input grants cover physical reads. Construction has its own
+        // reservation; multiplying it into every read slot over-reserves memory.
+        self.decoded
+            .unwrap_or_else(|| self.sliced.max(self.construction))
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct SpillFileMemory {
+    pub input: usize,
+    pub progress: Option<ProgressStats>,
+    batches: usize,
+}
+
+impl SpillFileMemory {
+    pub fn include(&mut self, batch: &SpillBatchMemory) {
+        self.input = self.input.max(batch.input_memory_size());
+        if self.batches == 0 {
+            self.progress = batch.progress;
+        } else {
+            match (&mut self.progress, batch.progress) {
+                (Some(total), Some(current)) => total.include(current),
+                _ => self.progress = None,
+            }
+        }
+        self.batches += 1;
+    }
+}
 
 enum InProgressWriter {
     Sync(IPCStreamWriter),
@@ -70,6 +113,24 @@ impl InProgressSpillFile {
     /// - Returns an error if appending would exceed the disk usage limit configured
     ///   by `max_temp_directory_size` in `DiskManager`
     pub fn append_batch(&mut self, batch: &RecordBatch) -> Result<usize> {
+        self.append_batch_inner(batch, false)
+            .map(|memory| memory.sliced)
+    }
+
+    /// Report serialized size, physical read bound and new construction buffers
+    /// from the post-GC arrays and messages that are actually written.
+    pub(crate) fn append_batch_with_memory_size(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<SpillBatchMemory> {
+        self.append_batch_inner(batch, true)
+    }
+
+    fn append_batch_inner(
+        &mut self,
+        batch: &RecordBatch,
+        collect_stats: bool,
+    ) -> Result<SpillBatchMemory> {
         if self.in_progress_file.is_none() {
             return Err(exec_datafusion_err!(
                 "Append operation failed: No active in-progress file. The file may have already been finalized."
@@ -98,6 +159,8 @@ impl InProgressSpillFile {
             }
         }
         if let Some(InProgressWriter::Sync(writer)) = &mut self.writer {
+            // Compact-only public writes do not need the extra statistics.
+            writer.encoder.track_read_memory = collect_stats;
             // The writer calculates how many serialized bytes were emitted
             let (spilled_rows, delta_bytes) = writer.write(&gc_batch)?;
 
@@ -108,11 +171,58 @@ impl InProgressSpillFile {
                 "Cannot use synchronous append after asynchronous spill writing has started"
             ));
         }
-        gc_batch.get_sliced_size()
+        let sliced_size = gc_batch.get_sliced_size()?;
+        let decoded = match &self.writer {
+            Some(InProgressWriter::Sync(writer)) => writer.encoder.read_memory_bound,
+            Some(InProgressWriter::Async(writer)) => writer.encoder.read_memory_bound,
+            None => None,
+        };
+        let construction = if collect_stats {
+            interleave_memory_size_from_sliced(
+                &gc_batch,
+                if decoded.is_some() { 0 } else { sliced_size },
+            )
+            .unwrap_or(sliced_size)
+        } else {
+            sliced_size
+        };
+        let progress = if collect_stats
+            && schema_needs_recursive_read_bound(gc_batch.schema().as_ref())
+        {
+            Some(ProgressStats::from_batch(&gc_batch).ok_or_else(|| {
+                exec_datafusion_err!("Spill merge progress estimate exceeds usize::MAX")
+            })?)
+        } else {
+            None
+        };
+        Ok(SpillBatchMemory {
+            sliced: sliced_size,
+            decoded,
+            construction,
+            progress,
+        })
     }
 
     /// Appends a `RecordBatch` using the asynchronous spill writer.
     pub async fn append_batch_async(&mut self, batch: &RecordBatch) -> Result<usize> {
+        self.append_batch_async_inner(batch, false)
+            .await
+            .map(|memory| memory.sliced)
+    }
+
+    /// Asynchronous counterpart using the arrays passed to the writer after GC.
+    pub(crate) async fn append_batch_async_with_memory_size(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<SpillBatchMemory> {
+        self.append_batch_async_inner(batch, true).await
+    }
+
+    async fn append_batch_async_inner(
+        &mut self,
+        batch: &RecordBatch,
+        collect_stats: bool,
+    ) -> Result<SpillBatchMemory> {
         if self.in_progress_file.is_none() {
             return Err(exec_datafusion_err!(
                 "Append operation failed: No active in-progress file. The file may have already been finalized."
@@ -143,6 +253,7 @@ impl InProgressSpillFile {
 
         match &mut self.writer {
             Some(InProgressWriter::Async(writer)) => {
+                writer.encoder.track_read_memory = collect_stats;
                 let (spilled_rows, delta_bytes) = writer.write(&gc_batch).await?;
 
                 self.spill_manager.metrics.spilled_rows.add(spilled_rows);
@@ -159,7 +270,36 @@ impl InProgressSpillFile {
                 ));
             }
         }
-        gc_batch.get_sliced_size()
+        let sliced_size = gc_batch.get_sliced_size()?;
+        let decoded = match &self.writer {
+            Some(InProgressWriter::Sync(writer)) => writer.encoder.read_memory_bound,
+            Some(InProgressWriter::Async(writer)) => writer.encoder.read_memory_bound,
+            None => None,
+        };
+        let construction = if collect_stats {
+            interleave_memory_size_from_sliced(
+                &gc_batch,
+                if decoded.is_some() { 0 } else { sliced_size },
+            )
+            .unwrap_or(sliced_size)
+        } else {
+            sliced_size
+        };
+        let progress = if collect_stats
+            && schema_needs_recursive_read_bound(gc_batch.schema().as_ref())
+        {
+            Some(ProgressStats::from_batch(&gc_batch).ok_or_else(|| {
+                exec_datafusion_err!("Spill merge progress estimate exceeds usize::MAX")
+            })?)
+        } else {
+            None
+        };
+        Ok(SpillBatchMemory {
+            sliced: sliced_size,
+            decoded,
+            construction,
+            progress,
+        })
     }
 
     pub fn flush(&mut self) -> Result<()> {
@@ -255,6 +395,190 @@ mod tests {
         ExecutionPlanMetricsSet, SpillMetrics,
     };
     use futures::TryStreamExt;
+
+    #[tokio::test]
+    async fn recursive_read_bound_covers_a_body_above_64_mib() -> Result<()> {
+        use crate::spill::get_record_batch_memory_size;
+        use arrow::array::{ArrayRef, BinaryViewArray};
+        use arrow::buffer::Buffer;
+        let bytes = 65 * 1024 * 1024 + 1;
+        let view = arrow_data::ByteView::new(bytes as u32, b"xxxx").as_u128();
+        let values: ArrayRef = Arc::new(BinaryViewArray::try_new(
+            vec![view].into(),
+            vec![Buffer::from(vec![b'x'; bytes])],
+            None,
+        )?);
+        let input = RecordBatch::try_from_iter(vec![("binary", values)])?;
+        let env = RuntimeEnvBuilder::new().build_arc()?;
+        let manager = Arc::new(SpillManager::new(
+            env,
+            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            input.schema(),
+        ));
+        let mut writer = manager.create_in_progress_file("large IPC body")?;
+        let stats = writer.append_batch_with_memory_size(&input)?;
+        let file = writer.finish()?.unwrap();
+        let output: Vec<RecordBatch> = manager
+            .read_spill_as_stream(file, None)?
+            .try_collect()
+            .await?;
+        assert_eq!(output, vec![input]);
+        let retained = get_record_batch_memory_size(&output[0]);
+        assert!(retained > 64 * 1024 * 1024);
+        // This reader uses its own exact-capacity framer, not read_body_bounded.
+        assert!(retained < 66 * 1024 * 1024);
+        assert!(stats.decoded.unwrap() >= retained);
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn written_batch_memory_uses_post_gc_arrays_and_physical_ipc_bounds(
+        #[values(false, true)] asynchronous: bool,
+        #[values("view", "nested", "wide", "entropy", "utf8", "empty_nested")] kind: &str,
+        #[values(
+            datafusion_common::config::SpillCompression::Uncompressed,
+            datafusion_common::config::SpillCompression::Lz4Frame,
+            datafusion_common::config::SpillCompression::Zstd
+        )]
+        compression: datafusion_common::config::SpillCompression,
+    ) -> Result<()> {
+        use crate::spill::get_record_batch_memory_size;
+        use arrow::array::{
+            Array, ArrayRef, BinaryViewArray, BooleanArray, ListArray, StringArray,
+            StringViewArray, StructArray,
+        };
+        use arrow::buffer::OffsetBuffer;
+        let rows = 2048;
+        let strings = (0..rows)
+            .map(|row| format!("{row:08}{}", "x".repeat(55)))
+            .collect::<Vec<_>>();
+        let values: ArrayRef = if kind == "utf8" {
+            Arc::new(StringArray::from(strings))
+        } else if kind == "entropy" {
+            let mut seed = 0x1234_5678_9abc_def0_u64;
+            Arc::new(BinaryViewArray::from_iter_values((0..rows).map(|_| {
+                (0..63)
+                    .map(|_| {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        seed as u8
+                    })
+                    .collect::<Vec<_>>()
+            })))
+        } else {
+            Arc::new(StringViewArray::from(strings))
+        };
+        let values: ArrayRef = if kind == "empty_nested" {
+            Arc::new(ListArray::new(
+                Arc::new(Field::new_list_field(DataType::Utf8, false)),
+                OffsetBuffer::new(vec![0i32; rows as usize + 1].into()),
+                Arc::new(StringArray::from(Vec::<&str>::new())),
+                None,
+            ))
+        } else if kind == "nested" {
+            Arc::new(ListArray::new(
+                Arc::new(Field::new_list_field(DataType::Utf8View, false)),
+                OffsetBuffer::new((0..=rows).collect::<Vec<_>>().into()),
+                values,
+                None,
+            ))
+        } else if kind == "wide" {
+            let mut columns = (0..64)
+                .map(|n| {
+                    Arc::new(BooleanArray::from_iter(
+                        (0..rows).map(|row| (row % 3 != 0).then_some((row + n) % 2 == 0)),
+                    )) as ArrayRef
+                })
+                .collect::<Vec<_>>();
+            columns.push(values);
+            let fields = columns
+                .iter()
+                .enumerate()
+                .map(|(n, a)| {
+                    Arc::new(Field::new(format!("f{n}"), a.data_type().clone(), true))
+                })
+                .collect::<Vec<_>>()
+                .into();
+            Arc::new(StructArray::new(fields, columns, None))
+        } else {
+            values
+        };
+        let original = RecordBatch::try_from_iter(vec![("value", values)])?;
+        let env = RuntimeEnvBuilder::new().build_arc()?;
+        let manager = Arc::new(
+            SpillManager::new(
+                env,
+                SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+                original.schema(),
+            )
+            .with_compression_type(compression),
+        );
+        // Re-read an IPC body so the source's distinct Buffer slices alias one
+        // allocation. Taking a short prefix must not record that old capacity.
+        let file = manager
+            .spill_record_batch_and_finish(std::slice::from_ref(&original), "input")?
+            .unwrap();
+        let decoded: Vec<RecordBatch> = manager
+            .read_spill_as_stream(file, None)?
+            .try_collect()
+            .await?;
+        let input = decoded[0].slice(0, 64);
+        let gc = gc_view_arrays(&input)?;
+        let sliced = gc.get_sliced_size()?;
+        let mut writer = manager.create_in_progress_file("output")?;
+        let stats = if asynchronous {
+            writer.append_batch_async_with_memory_size(&input).await?
+        } else {
+            writer.append_batch_with_memory_size(&input)?
+        };
+        assert_eq!(stats.sliced, sliced);
+        let file = if asynchronous {
+            writer.finish_async().await?
+        } else {
+            writer.finish()?
+        }
+        .unwrap();
+        let read: Vec<RecordBatch> = manager
+            .read_spill_as_stream(file, None)?
+            .try_collect()
+            .await?;
+        assert_eq!(read, vec![input.clone()]);
+        if kind == "utf8" {
+            assert_eq!(stats.progress, None);
+            assert_eq!(stats.decoded, None);
+            assert_eq!(
+                stats.input_memory_size(),
+                interleave_memory_size_from_sliced(&input, sliced).unwrap()
+            );
+        } else {
+            if kind != "nested" {
+                assert!(sliced < get_record_batch_memory_size(&input));
+            }
+            assert_eq!(
+                stats.construction,
+                interleave_memory_size_from_sliced(&gc, 0).unwrap()
+            );
+            // No tolerance: this bound includes padded IPC bodies and possible
+            // independent decompression/alignment buffers, counted separately.
+            assert!(stats.decoded.unwrap() >= get_record_batch_memory_size(&read[0]));
+            let measured = ProgressStats::from_batch(&read[0]).unwrap();
+            let written = stats.progress.unwrap();
+            assert!(
+                measured.workspace <= written.workspace,
+                "decoded W: {measured:?} > written {written:?}"
+            );
+            assert!(
+                measured.row_content <= written.row_content,
+                "decoded P: {measured:?} > written {written:?}"
+            );
+            if kind != "nested" {
+                assert!(stats.input_memory_size() < get_record_batch_memory_size(&input));
+            }
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_spill_file_uses_spill_manager_schema() -> Result<()> {
