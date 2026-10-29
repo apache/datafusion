@@ -747,6 +747,8 @@ fn build_extraction_projection_impl(
         // with each expression in the canonical spelling of the input schema.
         // The same expression can appear under several aliases, so the alias
         // is part of the key.
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+        // Expr contains Arc with interior mutability but is intentionally used as hash key
         let mut extractions: HashSet<(Expr, String)> = HashSet::new();
         for e in &existing.expr {
             if let Expr::Alias(alias) = e
