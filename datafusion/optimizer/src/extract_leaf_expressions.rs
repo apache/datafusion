@@ -55,18 +55,19 @@
 //! [`OptimizeProjections`]: crate::optimize_projections::OptimizeProjections
 
 use indexmap::{IndexMap, IndexSet};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::alias::AliasGenerator;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, Result, internal_err, qualified_name};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
+use datafusion_common::{Column, DFSchema, Result, internal_err};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Expr, ExpressionPlacement, Projection};
 
 use crate::optimizer::ApplyOrder;
 use crate::projection_inliner::{DuplicationCost, PinnedDefinitions, ProjectionInliner};
-use crate::push_down_filter::replace_cols_by_name;
 use crate::utils::{ColumnReference, has_all_column_refs, schema_columns};
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -90,6 +91,65 @@ fn has_extractable_expr(exprs: &[Expr]) -> bool {
         expr.exists(|e| Ok(e.placement() == ExpressionPlacement::MoveTowardsLeafNodes))
             .unwrap_or(false)
     })
+}
+
+/// Resolves `col` to the index of the one field of `schema` that it names.
+///
+/// This is the single place where the leaf rules turn a [`Column`] into a
+/// field identity. Every later decision compares indices, so a bare `c` and a
+/// qualified `t.c` that name the same field are the same column, and two
+/// fields that share a name are never confused. Returns `None` when `col` is
+/// not in `schema` or when the name is ambiguous there.
+fn column_index(schema: &DFSchema, col: &Column) -> Option<usize> {
+    let mut matches = schema
+        .iter()
+        .enumerate()
+        .filter(|(_, (qualifier, field))| {
+            field.name() == &col.name
+                && match (&col.relation, qualifier) {
+                    (Some(r), Some(q)) => r.resolved_eq(q),
+                    (Some(_), None) => false,
+                    (None, _) => true,
+                }
+        })
+        .map(|(idx, _)| idx);
+    let idx = matches.next()?;
+    matches.next().is_none().then_some(idx)
+}
+
+/// Replaces every column of `expr` that resolves in `schema` (see
+/// [`column_index`]) with `replacement(idx)`. Columns that do not resolve are
+/// left as they are.
+fn rewrite_cols_by_index(
+    expr: Expr,
+    schema: &DFSchema,
+    replacement: impl Fn(usize) -> Result<Expr>,
+) -> Result<Expr> {
+    expr.transform_up(|e| {
+        if let Expr::Column(col) = &e
+            && let Some(idx) = column_index(schema, col)
+        {
+            replacement(idx).map(Transformed::yes)
+        } else {
+            Ok(Transformed::no(e))
+        }
+    })
+    .data()
+}
+
+/// Rewrites `expr` from `from` to `to`, two schemas with the same fields at
+/// the same positions: every column that resolves in `from` becomes the column
+/// at the same index of `to`, spelled the way `to` spells it. With `from` and
+/// `to` the same schema, this moves `expr` into the canonical spelling of that
+/// schema.
+fn respell_cols(expr: Expr, from: &DFSchema, to: &DFSchema) -> Result<Expr> {
+    rewrite_cols_by_index(expr, from, |idx| Ok(Expr::from(to.qualified_field(idx))))
+}
+
+/// Resolves `col` to the column of `schema` it names, spelled the way `schema`
+/// spells it (see [`column_index`]).
+fn resolve_against(schema: &DFSchema, col: &Column) -> Option<Column> {
+    column_index(schema, col).map(|idx| Column::from(schema.qualified_field(idx)))
 }
 
 /// Returns the definitions of an input projection that must not be merged.
@@ -302,11 +362,10 @@ fn extract_from_plan(
         .collect();
 
     // Build per-input column sets for routing expressions to the correct input
-    let input_column_sets: Vec<std::collections::HashSet<ColumnReference>> =
-        input_schemas
-            .iter()
-            .map(|schema| schema_columns(schema.as_ref()))
-            .collect();
+    let input_column_sets: Vec<HashSet<ColumnReference>> = input_schemas
+        .iter()
+        .map(|schema| schema_columns(schema.as_ref()))
+        .collect();
 
     // Transform expressions via map_expressions with routing
     let transformed = plan.map_expressions(|expr| {
@@ -360,7 +419,7 @@ fn extract_from_plan(
 /// in both sides of a join).
 fn find_owning_input(
     expr: &Expr,
-    input_column_sets: &[std::collections::HashSet<ColumnReference>],
+    input_column_sets: &[HashSet<ColumnReference>],
 ) -> Option<usize> {
     let mut found = None;
     for (idx, cols) in input_column_sets.iter().enumerate() {
@@ -380,7 +439,7 @@ fn find_owning_input(
 fn routing_extract(
     expr: Expr,
     extractors: &mut [LeafExpressionExtractor],
-    input_column_sets: &[std::collections::HashSet<ColumnReference>],
+    input_column_sets: &[HashSet<ColumnReference>],
 ) -> Result<Transformed<Expr>> {
     expr.transform_down(|e| {
         // Skip expressions already aliased with extracted expression pattern
@@ -432,12 +491,11 @@ fn routing_extract(
     })
 }
 
-/// Rewrites extraction pairs and column references from one qualifier
-/// space to another.
+/// Rewrites extraction pairs and column references from one schema to
+/// another that has the same fields at the same positions.
 ///
-/// Builds a replacement map by zipping `from_schema` (whose qualifiers
-/// currently appear in `pairs` / `columns`) with `to_schema` (the
-/// qualifiers we want), then applies `replace_cols_by_name`.
+/// Each column is resolved to its index in `from_schema` and replaced by the
+/// column at the same index of `to_schema`.
 ///
 /// Used for SubqueryAlias (alias-space -> input-space) and Union
 /// (union output-space -> per-branch input-space).
@@ -446,19 +504,12 @@ fn remap_pairs_and_columns(
     from_schema: &DFSchema,
     to_schema: &DFSchema,
 ) -> Result<ExtractionTarget> {
-    let mut replace_map = HashMap::with_capacity(from_schema.fields().len());
-    for ((from_q, from_f), (to_q, to_f)) in from_schema.iter().zip(to_schema.iter()) {
-        replace_map.insert(
-            qualified_name(from_q, from_f.name()),
-            Expr::Column(Column::new(to_q.cloned(), to_f.name())),
-        );
-    }
     let remapped_pairs: Vec<(Expr, String)> = target
         .pairs
         .iter()
         .map(|(expr, alias)| {
             Ok((
-                replace_cols_by_name(expr.clone(), &replace_map)?,
+                respell_cols(expr.clone(), from_schema, to_schema)?,
                 alias.clone(),
             ))
         })
@@ -466,14 +517,9 @@ fn remap_pairs_and_columns(
     let remap_columns = |columns: &IndexSet<Column>| -> IndexSet<Column> {
         columns
             .iter()
-            .filter_map(|col| {
-                let rewritten =
-                    replace_cols_by_name(Expr::Column(col.clone()), &replace_map).ok()?;
-                if let Expr::Column(c) = rewritten {
-                    Some(c)
-                } else {
-                    Some(col.clone())
-                }
+            .map(|col| match column_index(from_schema, col) {
+                Some(idx) => Column::from(to_schema.qualified_field(idx)),
+                None => col.clone(),
             })
             .collect()
     };
@@ -499,6 +545,21 @@ struct ExtractionTarget {
     /// extracted expressions. A merge keeps computing their definitions. See
     /// [`pinned_for_merge`].
     direct_columns: IndexSet<Column>,
+}
+
+/// The expression that defines output field `idx` of `projection`, with its
+/// columns spelled the way the projection's input schema spells them.
+///
+/// This is used to resolve column references through a renaming projection.
+/// For example, if a projection has `user AS x`, the field `x` maps to
+/// `col("t.user")`.
+fn projection_definition(projection: &Projection, idx: usize) -> Result<Expr> {
+    let input_schema = projection.input.schema();
+    respell_cols(
+        projection.expr[idx].clone().unalias(),
+        input_schema,
+        input_schema,
+    )
 }
 
 /// Build a recovery projection to restore the original output schema.
@@ -700,20 +761,6 @@ impl<'a> LeafExpressionExtractor<'a> {
     }
 }
 
-/// Resolves `col` against `schema` and returns it with the qualifier that
-/// `schema` gives the field. Returns `None` if `schema` does not hold `col`,
-/// or if the name is ambiguous in `schema`.
-///
-/// Two spellings of the same input column (a bare `c` and a qualified `t.c`)
-/// resolve to the same `Column`, so they compare equal. A column pushed into
-/// a projection this way uses the name that the input gives it.
-fn resolve_against(schema: &DFSchema, col: &Column) -> Option<Column> {
-    schema
-        .qualified_field_from_column(col)
-        .ok()
-        .map(Column::from)
-}
-
 /// Build an extraction projection above the target node (shared by both passes).
 ///
 /// If the target is an existing projection, merges into it. This requires
@@ -722,7 +769,11 @@ fn resolve_against(schema: &DFSchema, col: &Column) -> Option<Column> {
 /// `u['name']`, we must rewrite it to `user['name']` since the merged
 /// projection reads from the same input as the original.
 ///
-/// Deduplicates by resolved expression equality and adds pass-through
+/// Column references are resolved by their index in the projection's output
+/// schema (see [`column_index`]), never by name.
+///
+/// Deduplicates by resolved expression equality, comparing expressions in the
+/// canonical spelling of the projection's input schema, and adds pass-through
 /// columns as needed. Otherwise builds a fresh projection with extracted
 /// expressions + ALL input schema columns.
 ///
@@ -738,100 +789,83 @@ fn build_extraction_projection_impl(
 ) -> Result<Option<Projection>> {
     if let LogicalPlan::Projection(existing) = target.as_ref() {
         // Resolves column references through the existing projection
+        // The inliner and the merge below must agree on which output column a
+        // reference names, so check the references in the canonical spelling
+        // of the output schema (see [`column_index`]).
         let inliner = ProjectionInliner::new(existing);
-        let extracted = extracted_exprs.iter().map(|(e, _)| e);
-        if !pinned_for_merge(&inliner, extracted, direct_columns).is_empty() {
+        let extracted = extracted_exprs
+            .iter()
+            .map(|(e, _)| respell_cols(e.clone(), &existing.schema, &existing.schema))
+            .collect::<Result<Vec<_>>>()?;
+        let direct_columns: IndexSet<Column> = direct_columns
+            .iter()
+            .map(|col| {
+                resolve_against(&existing.schema, col).unwrap_or_else(|| col.clone())
+            })
+            .collect();
+        if !pinned_for_merge(&inliner, &extracted, &direct_columns).is_empty() {
             return Ok(None);
         }
 
         // Merge into existing projection
         let mut proj_exprs = existing.expr.clone();
+        let input_schema = existing.input.schema();
 
-        // Build a map of existing expressions (by Expr equality) to their aliases
-        let existing_extractions: IndexMap<Expr, String> = existing
-            .expr
-            .iter()
-            .filter_map(|e| {
-                if let Expr::Alias(alias) = e
-                    && alias.name.starts_with(EXTRACTED_EXPR_PREFIX)
-                {
-                    return Some((*alias.expr.clone(), alias.name.clone()));
-                }
-                None
-            })
-            .collect();
-
-        // Add new extracted expressions, resolving column refs through the projection
-        for (expr, alias) in extracted_exprs {
-            let resolved = inliner.substitute(expr.clone().alias(alias))?;
-            let resolved_inner = if let Expr::Alias(a) = &resolved {
-                a.expr.as_ref()
-            } else {
-                &resolved
-            };
-            if let Some(existing_alias) = existing_extractions.get(resolved_inner) {
-                // Same expression already extracted under a different alias —
-                // add the expression with the new alias so both names are
-                // available in the output. We can't reference the existing alias
-                // as a column within the same projection, so we duplicate the
-                // computation.
-                if existing_alias != alias {
-                    proj_exprs.push(resolved);
-                }
-            } else {
-                proj_exprs.push(resolved);
+        // The (expression, alias) extractions the merged projection computes,
+        // with each expression in the canonical spelling of the input schema.
+        // The same expression can appear under several aliases, so the alias
+        // is part of the key.
+        let mut extractions: HashSet<(Expr, String)> = HashSet::new();
+        for e in &existing.expr {
+            if let Expr::Alias(alias) = e
+                && alias.name.starts_with(EXTRACTED_EXPR_PREFIX)
+            {
+                let expr = respell_cols(
+                    alias.expr.as_ref().clone(),
+                    input_schema,
+                    input_schema,
+                )?;
+                extractions.insert((expr, alias.name.clone()));
             }
         }
 
-        // Add any new pass-through columns that aren't already in the projection.
-        // We check against existing.input.schema() (the projection's source) rather
-        // than target_schema (the projection's output) because columns produced
-        // by alias expressions (e.g., CSE's __common_expr_N) exist in the output but
-        // not the input, and cannot be added as pass-through Column references.
-        //
-        // Resolve the pass-through columns of `existing` (including same-name
-        // aliases such as `t.c AS c`) and the columns in `columns_needed`
-        // against the input schema before comparing them. Otherwise a bare `c`
-        // and a qualified `t.c` do not match, and the merged projection holds
-        // both, which `Projection::try_new` rejects as ambiguous.
-        let input_schema = existing.input.schema();
-        let existing_cols: IndexSet<Column> = existing
-            .expr
-            .iter()
-            .filter_map(|e| resolve_against(input_schema, passthrough_column(e)?))
-            .collect();
+        // Add new extracted expressions, resolving column refs through the
+        // projection by output index. An extraction already computed under
+        // the same alias is skipped. The same expression under a different
+        // alias is added again so both names are available in the output: we
+        // can't reference the existing alias as a column within the same
+        // projection, so we duplicate the computation.
+        for (expr, alias) in extracted_exprs {
+            let resolved =
+                rewrite_cols_by_index(expr.clone(), &existing.schema, |idx| {
+                    projection_definition(existing, idx)
+                })?;
+            if extractions.insert((resolved.clone(), alias.clone())) {
+                proj_exprs.push(resolved.alias(alias));
+            }
+        }
 
-        // The names the merged projection already produces. The merge keeps
-        // every expression of `existing`, so the parent can still read each of
-        // these names, and a pass-through column that carries one of them makes
-        // the output schema ambiguous.
-        let output_names: std::collections::HashSet<&str> = existing
-            .schema
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect();
-
+        // Add any new pass-through columns that the merged projection does not
+        // already produce. A column that resolves in the output schema of
+        // `existing` is produced already: the merge keeps every expression of
+        // `existing`. This also covers renames such as `t.a AS b` (issue
+        // #25446): the parent reads `b` from the output, not `t.a` from the
+        // input.
         for col in columns_needed {
-            // The projection produces this name, so the parent reads it from the
-            // projection's own output. Do not resolve the name through the rename
-            // map: a rename such as `t.a AS b` is a computed output, and its
-            // input column `t.a` beside the output field `a` of a second rename
-            // gives an ambiguous schema (issue #25446).
-            if output_names.contains(col.name.as_str()) {
+            if column_index(&existing.schema, col).is_some() {
                 continue;
             }
-            // `existing` does not produce this name, so `col` is not one of
-            // its outputs and has no definition to resolve: it can only be a
-            // column of the input.
+            // Columns that are not in the output: add them from the input if
+            // they resolve there and their name does not collide with an
+            // output field. Every pass-through of `existing` carries the name
+            // of an output field, so this also skips those.
             if let Some(input_col) = resolve_against(input_schema, col)
-                && !existing_cols.contains(&input_col)
-                && !output_names.contains(input_col.name.as_str())
+                && !existing
+                    .schema
+                    .has_column_with_unqualified_name(&input_col.name)
             {
                 proj_exprs.push(Expr::Column(input_col));
             }
-            // Skip a column that is not in the input or is ambiguous there: no
-            // single spelling is correct.
         }
 
         Projection::try_new(proj_exprs, Arc::clone(&existing.input)).map(Some)
@@ -1337,7 +1371,7 @@ fn push_extraction_pairs(
 fn route_to_inputs(
     target: &ExtractionTarget,
     node: &LogicalPlan,
-    input_column_sets: &[std::collections::HashSet<ColumnReference>],
+    input_column_sets: &[HashSet<ColumnReference>],
     input_schemas: &[Arc<DFSchema>],
 ) -> Result<Option<Vec<ExtractionTarget>>> {
     let num_inputs = input_schemas.len();
@@ -1458,7 +1492,7 @@ fn try_push_into_inputs(
     // Build per-input schemas and column sets for routing
     let input_schemas: Vec<Arc<DFSchema>> =
         inputs.iter().map(|i| Arc::clone(i.schema())).collect();
-    let input_column_sets: Vec<std::collections::HashSet<ColumnReference>> =
+    let input_column_sets: Vec<HashSet<ColumnReference>> =
         input_schemas.iter().map(|s| schema_columns(s)).collect();
 
     // Route pairs and columns to the appropriate inputs
@@ -2564,6 +2598,67 @@ mod tests {
                 Expr::Column(Column::new(Some("test"), "b")),
             ]
         );
+        Ok(())
+    }
+
+    /// The existing projection spells an extraction with a bare `a`, and the
+    /// caller asks for the same extraction spelled `test.a`. Both resolve to
+    /// the same input field, so the merge must find the existing extraction
+    /// and not add it a second time (issue #25447).
+    #[test]
+    fn test_merge_finds_extraction_with_other_column_spelling() -> Result<()> {
+        let alias = format!("{EXTRACTED_EXPR_PREFIX}_1");
+        let existing = Projection::try_new(
+            vec![leaf_udf(col("a"), "x").alias(&alias), col("test.a")],
+            Arc::new(test_table_scan()?),
+        )?;
+        let existing_exprs = existing.expr.clone();
+        let projection = LogicalPlan::Projection(existing);
+        let target_schema = Arc::clone(projection.schema());
+
+        let merged = build_extraction_projection_impl(
+            &[(leaf_udf(col("test.a"), "x"), alias)],
+            &IndexSet::new(),
+            &IndexSet::new(),
+            &Arc::new(projection),
+            &target_schema,
+        )?
+        .expect("the merge is allowed");
+
+        assert_eq!(merged.expr, existing_exprs);
+        Ok(())
+    }
+
+    /// The existing projection computes the same extraction under two aliases.
+    /// Asking for it under either alias must find it, whichever comes first,
+    /// and not add a second field with the same name.
+    #[test]
+    fn test_merge_finds_extraction_computed_under_two_aliases() -> Result<()> {
+        let alias_1 = format!("{EXTRACTED_EXPR_PREFIX}_1");
+        let alias_2 = format!("{EXTRACTED_EXPR_PREFIX}_2");
+        let existing = Projection::try_new(
+            vec![
+                leaf_udf(col("test.a"), "x").alias(&alias_1),
+                leaf_udf(col("test.a"), "x").alias(&alias_2),
+                col("test.a"),
+            ],
+            Arc::new(test_table_scan()?),
+        )?;
+        let existing_exprs = existing.expr.clone();
+        let projection = Arc::new(LogicalPlan::Projection(existing));
+        let target_schema = Arc::clone(projection.schema());
+
+        for alias in [alias_1, alias_2] {
+            let merged = build_extraction_projection_impl(
+                &[(leaf_udf(col("test.a"), "x"), alias)],
+                &IndexSet::new(),
+                &IndexSet::new(),
+                &projection,
+                &target_schema,
+            )?
+            .expect("the merge is allowed");
+            assert_eq!(merged.expr, existing_exprs);
+        }
         Ok(())
     }
 
