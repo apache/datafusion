@@ -5,9 +5,11 @@
 use std::sync::{Arc, LazyLock};
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayRef, AsArray, MapArray, PrimitiveArray, StringBuilder,
+    Array, ArrayAccessor, ArrayRef, AsArray, MapArray, PrimitiveArray, StringArray,
+    StringBuilder,
 };
 use arrow::buffer::OffsetBuffer;
+use arrow::compute::cast;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, FieldRef, Float32Type, Float64Type,
 };
@@ -290,14 +292,16 @@ where
     }
 }
 
-/// Encodes a map as a JSON object, always writing NULL values as `"key":null`.
+/// Encodes a map as a JSON object the way Spark does:
 ///
-/// arrow-json's own map encoder drops entries with a NULL value when
-/// `explicit_nulls` is off, but Spark's `ignoreNullFields` only applies to
-/// struct fields: map entries with a NULL value are kept.
+/// - NULL values are always written as `"key":null`. arrow-json's own map
+///   encoder drops such entries when `explicit_nulls` is off, but Spark's
+///   `ignoreNullFields` only applies to struct fields.
+/// - keys are written as strings whatever their type (`{"1":"v"}`), see
+///   `MapKeyEncoder`.
 struct SparkMapEncoder<'a> {
     offsets: OffsetBuffer<i32>,
-    keys: NullableEncoder<'a>,
+    keys: MapKeyEncoder,
     values: NullableEncoder<'a>,
 }
 
@@ -307,33 +311,48 @@ impl<'a> SparkMapEncoder<'a> {
         array: &'a MapArray,
         options: &'a EncoderOptions,
     ) -> Result<Self, ArrowError> {
-        let keys = array.keys();
-        if !matches!(
-            keys.data_type(),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-        ) {
-            return Err(ArrowError::JsonError(format!(
-                "to_json: only string map keys are supported, got {}",
-                keys.data_type()
-            )));
-        }
-
-        // Key and value encoders are built with the same options, so nested
-        // structs keep omitting NULL fields and nested maps use this encoder.
-        let keys = make_encoder(field, keys, options)?;
+        let keys = MapKeyEncoder::try_new(array.keys())?;
+        // The value encoder is built with the same options, so nested structs
+        // keep omitting NULL fields and nested maps use this encoder.
         let values = make_encoder(field, array.values(), options)?;
-
-        if keys.has_nulls() {
-            return Err(ArrowError::InvalidArgumentError(
-                "to_json: encountered a NULL map key".to_string(),
-            ));
-        }
 
         Ok(Self {
             offsets: array.offsets().clone(),
             keys,
             values,
         })
+    }
+}
+
+/// Encodes map keys as JSON strings.
+///
+/// Spark writes every map key as its string form (`{"1":"v"}`,
+/// `{"true":"v"}`), so non-string keys are cast to `Utf8` first. Key types
+/// without a string cast (lists, structs, ...) are rejected.
+struct MapKeyEncoder(StringArray);
+
+impl MapKeyEncoder {
+    fn try_new(keys: &ArrayRef) -> Result<Self, ArrowError> {
+        let strings = cast(keys, &DataType::Utf8).map_err(|e| {
+            ArrowError::JsonError(format!(
+                "to_json: unsupported map key type {}: {e}",
+                keys.data_type()
+            ))
+        })?;
+        if strings.null_count() > 0 {
+            return Err(ArrowError::InvalidArgumentError(
+                "to_json: encountered a NULL map key".to_string(),
+            ));
+        }
+        Ok(Self(strings.as_string::<i32>().clone()))
+    }
+}
+
+impl Encoder for MapKeyEncoder {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        // serde_json handles the quoting and escaping; writing to a Vec is
+        // infallible
+        serde_json::to_writer(&mut *out, self.0.value(idx)).unwrap();
     }
 }
 
@@ -402,6 +421,7 @@ mod tests {
         BinaryArray, BinaryBuilder, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
         Float32Array, Float64Array, Float64Builder, Int32Array, Int32Builder, Int64Array,
         LargeBinaryArray, ListBuilder, MapBuilder, StringArray, StructArray,
+        StructBuilder,
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{Field, Fields};
@@ -745,6 +765,63 @@ mod tests {
         );
         // NULL is still a NULL struct field -> omitted
         assert_eq!(out.value(4), r#"{"l":["NaN",1.5],"n":{}}"#);
+    }
+    #[test]
+    fn test_map_keys_are_stringified() {
+        // i: Map<Int32, Utf8> {1:"a", 2:"b"}; f: Map<Float64, Utf8> {1.5:"c"}
+        let mut i = MapBuilder::new(None, Int32Builder::new(), StringBuilder::new());
+        i.keys().append_value(1);
+        i.values().append_value("a");
+        i.keys().append_value(2);
+        i.values().append_value("b");
+        i.append(true).unwrap();
+        let i = Arc::new(i.finish()) as ArrayRef;
+
+        let mut f = MapBuilder::new(None, Float64Builder::new(), StringBuilder::new());
+        f.keys().append_value(1.5);
+        f.values().append_value("c");
+        f.append(true).unwrap();
+        let f = Arc::new(f.finish()) as ArrayRef;
+
+        let fields = Fields::from(vec![
+            Field::new("i", i.data_type().clone(), true),
+            Field::new("f", f.data_type().clone(), true),
+        ]);
+        let input = StructArray::new(fields, vec![i, f], None);
+        let field = field_of(&input);
+
+        let out = run(ColumnarValue::Array(Arc::new(input)), field).unwrap();
+        let out = as_string_array(&out).unwrap();
+
+        assert_eq!(out.value(0), r#"{"i":{"1":"a","2":"b"},"f":{"1.5":"c"}}"#);
+    }
+
+    #[test]
+    fn test_map_with_unsupported_key_type_errors() {
+        // Map<Struct<a: Int32>, Utf8>: structs have no string cast
+        // (lists do: a List<Int32> key becomes the string "[1]")
+        let key_fields = Fields::from(vec![Field::new("a", DataType::Int32, true)]);
+        let key_builder = StructBuilder::from_fields(key_fields, 1);
+        let mut m = MapBuilder::new(None, key_builder, StringBuilder::new());
+        m.keys()
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_value(1);
+        m.keys().append(true);
+        m.values().append_value("v");
+        m.append(true).unwrap();
+        let m = Arc::new(m.finish()) as ArrayRef;
+
+        let fields = Fields::from(vec![Field::new("m", m.data_type().clone(), true)]);
+        let input = StructArray::new(fields, vec![m], None);
+        let field = field_of(&input);
+
+        let err = run(ColumnarValue::Array(Arc::new(input)), field).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("to_json: unsupported map key type"),
+            "unexpected error: {err}"
+        );
     }
 }
 
@@ -1110,6 +1187,42 @@ mod dataframe_tests {
             (
                 "named_struct('m', map(make_array('k'), make_array(CAST('NaN' AS DOUBLE))))",
                 r#"{"m":{"k":"NaN"}}"#,
+            ),
+        ])
+        .await
+    }
+    #[tokio::test]
+    async fn to_json_stringifies_map_keys_sql() -> Result<()> {
+        assert_sql_json(&[
+            (
+                "named_struct('m', map(make_array(1), make_array('v')))",
+                r#"{"m":{"1":"v"}}"#,
+            ),
+            (
+                "named_struct('m', map(make_array(true), make_array('v')))",
+                r#"{"m":{"true":"v"}}"#,
+            ),
+            (
+                "named_struct('m', map(make_array(1.5), make_array('v')))",
+                r#"{"m":{"1.5":"v"}}"#,
+            ),
+            // string keys are unchanged
+            (
+                "named_struct('m', map(make_array('k'), make_array('v')))",
+                r#"{"m":{"k":"v"}}"#,
+            ),
+            // recursively: an int-keyed map inside a list, a struct and a map value
+            (
+                "named_struct('l', make_array(map(make_array(1), make_array('v'))))",
+                r#"{"l":[{"1":"v"}]}"#,
+            ),
+            (
+                "named_struct('n', named_struct('m', map(make_array(1), make_array('v'))))",
+                r#"{"n":{"m":{"1":"v"}}}"#,
+            ),
+            (
+                "named_struct('m', map(make_array('o'), make_array(map(make_array(2), make_array('v')))))",
+                r#"{"m":{"o":{"2":"v"}}}"#,
             ),
         ])
         .await
