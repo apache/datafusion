@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion::common::{DataFusionError, HashMap, plan_err};
 use substrait::proto::extensions::SimpleExtensionDeclaration;
@@ -84,7 +71,7 @@ impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
     fn try_from(
         value: &Vec<SimpleExtensionDeclaration>,
     ) -> datafusion::common::Result<Self> {
-        let mut functions = HashMap::new();
+        let mut functions = HashMap::with_capacity(value.len());
         let mut types = HashMap::new();
         let mut type_variations = HashMap::new();
 
@@ -114,7 +101,9 @@ impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
 
 impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
     fn from(val: Extensions) -> Vec<SimpleExtensionDeclaration> {
-        let mut extensions = vec![];
+        let mut extensions = Vec::with_capacity(
+            val.functions.len() + val.types.len() + val.type_variations.len(),
+        );
         for (f_anchor, f_name) in val.functions {
             let function_extension = ExtensionFunction {
                 extension_urn_reference: u32::MAX,

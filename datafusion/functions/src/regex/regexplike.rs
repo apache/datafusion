@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Regex expressions
 
@@ -327,12 +314,12 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
                 _ => {
                     let string_view_array = flags.as_string_view();
-                    let string_vec: Vec<Option<String>> = (0..string_view_array.len())
+                    let string_vec: Vec<Option<&str>> = (0..string_view_array.len())
                         .map(|i| {
                             if string_view_array.is_null(i) {
                                 None
                             } else {
-                                Some(string_view_array.value(i).to_string())
+                                Some(string_view_array.value(i))
                             }
                         })
                         .collect();

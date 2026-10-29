@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::BooleanArray;
 use arrow::array::{Array, ArrayRef, Datum, make_array, make_comparator};
@@ -23,8 +10,8 @@ use arrow::compute::kernels::cmp::{
 };
 use arrow::compute::{SortOptions, ilike, like, nilike, nlike};
 use arrow::error::ArrowError;
-use datafusion_common::utils::{
-    has_float_leaf, normalize_float_zero, normalize_float_zero_scalar,
+use datafusion_common::float_semantics::{
+    has_float_leaf, normalize_float_scalar, normalize_floats,
 };
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{arrow_datafusion_err, assert_or_internal_err, internal_err};
@@ -99,9 +86,9 @@ pub fn apply_cmp(
 
 fn normalize_cmp_input(cv: &ColumnarValue) -> ColumnarValue {
     match cv {
-        ColumnarValue::Array(a) => ColumnarValue::Array(normalize_float_zero(a)),
+        ColumnarValue::Array(a) => ColumnarValue::Array(normalize_floats(a)),
         ColumnarValue::Scalar(s) => {
-            ColumnarValue::Scalar(normalize_float_zero_scalar(s.clone()))
+            ColumnarValue::Scalar(normalize_float_scalar(s.clone()))
         }
     }
 }
@@ -151,7 +138,7 @@ pub fn compare_with_eq(
 
 fn normalize_nested_float_zero(array: &dyn Array) -> Option<ArrayRef> {
     has_float_leaf(array.data_type())
-        .then(|| normalize_float_zero(&make_array(array.to_data())))
+        .then(|| normalize_floats(&make_array(array.to_data())))
 }
 
 /// Compare on nested type List, Struct, and so on

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::{
     Unparser,
@@ -207,6 +194,9 @@ impl Unparser<'_> {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Unnest(_) => not_impl_err!("Unsupported plan: {plan:?}"),
+            LogicalPlan::MaterializedCte(_) => {
+                not_impl_err!("Unparsing a MATERIALIZED CTE is not supported: {plan:?}")
+            }
         }
     }
 
@@ -503,7 +493,8 @@ impl Unparser<'_> {
                         .iter()
                         .any(|column| column.relation.is_some())
                 });
-                let mut input_names = HashSet::new();
+                let mut input_names =
+                    HashSet::with_capacity(projection.input.schema().fields().len());
                 let unique_input_names = projection
                     .input
                     .schema()
@@ -2582,11 +2573,11 @@ impl Unparser<'_> {
                     if project_vec.is_empty() {
                         builder = builder.project(self.empty_projection_fallback())?;
                     } else {
+                        let schema = table_scan.source.schema();
                         let project_columns = project_vec
                             .iter()
                             .copied()
                             .map(|i| {
-                                let schema = table_scan.source.schema();
                                 let field = schema.field(i);
                                 if alias.is_some() {
                                     Column::new(alias.clone(), field.name().clone())

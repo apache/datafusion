@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! View data source which uses a LogicalPlan as it's input.
 
@@ -452,6 +439,77 @@ mod tests {
         | 1       |
         | 4       |
         +---------+
+        ");
+
+        Ok(())
+    }
+
+    /// A [`ViewTable`] that is not inlined: each read plans the saved query in
+    /// `scan`.
+    ///
+    /// [`ViewTable`]: crate::datasource::ViewTable
+    #[derive(Debug)]
+    struct NotInlinedView(crate::datasource::ViewTable);
+
+    #[async_trait::async_trait]
+    impl crate::datasource::TableProvider for NotInlinedView {
+        fn schema(&self) -> arrow::datatypes::SchemaRef {
+            self.0.schema()
+        }
+
+        fn table_type(&self) -> crate::datasource::TableType {
+            self.0.table_type()
+        }
+
+        async fn scan(
+            &self,
+            state: &dyn crate::catalog::Session,
+            projection: Option<&[usize]>,
+            filters: &[datafusion_expr::Expr],
+            limit: Option<usize>,
+        ) -> Result<std::sync::Arc<dyn crate::physical_plan::ExecutionPlan>> {
+            self.0.scan(state, projection, filters, limit).await
+        }
+    }
+
+    #[tokio::test]
+    async fn query_not_inlined_view_with_materialized_cte_twice() -> Result<()> {
+        // sqlparser only parses `[NOT] MATERIALIZED` for the PostgreSQL dialect.
+        let session_ctx = SessionContext::new_with_config(
+            SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL"),
+        );
+        session_ctx
+            .sql("CREATE TABLE t AS VALUES (1), (2)")
+            .await?
+            .collect()
+            .await?;
+        let plan = session_ctx
+            .sql(
+                "WITH r AS MATERIALIZED (SELECT column1 AS a FROM t) \
+                 SELECT a FROM r",
+            )
+            .await?
+            .into_optimized_plan()?;
+        let view = crate::datasource::ViewTable::new(plan, None);
+        session_ctx.register_table("w", std::sync::Arc::new(NotInlinedView(view)))?;
+
+        // Each read of `w` plans the saved query, which has the same CTE id
+        // each time.
+        let results = session_ctx
+            .sql("SELECT x.a AS x, y.a AS y FROM w x, w y ORDER BY x, y")
+            .await?
+            .collect()
+            .await?;
+
+        insta::assert_snapshot!(batches_to_string(&results),@r"
+        +---+---+
+        | x | y |
+        +---+---+
+        | 1 | 1 |
+        | 1 | 2 |
+        | 2 | 1 |
+        | 2 | 2 |
+        +---+---+
         ");
 
         Ok(())

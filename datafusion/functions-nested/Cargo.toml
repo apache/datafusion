@@ -72,11 +72,19 @@ datafusion-physical-expr = { workspace = true }
 
 [[bench]]
 harness = false
+name = "array_compact"
+
+[[bench]]
+harness = false
 name = "array_concat"
 
 [[bench]]
 harness = false
 name = "array_length"
+
+[[bench]]
+harness = false
+name = "array_filter"
 
 [[bench]]
 harness = false

@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+statement ok
+CREATE TABLE conditionless_left(a BIGINT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE conditionless_right(b BIGINT) AS VALUES (10), (20);
+
+statement ok
+CREATE TABLE conditionless_empty(b BIGINT);
+
+# Optimization removes the true filter. Substrait still requires a join condition.
+query II rowsort
+SELECT a, b FROM conditionless_left LEFT JOIN conditionless_right ON true;
+----
+1 10
+1 20
+2 10
+2 20
+
+query II rowsort
+SELECT a, b FROM conditionless_left RIGHT JOIN conditionless_right ON true;
+----
+1 10
+1 20
+2 10
+2 20
+
+query II rowsort
+SELECT a, b FROM conditionless_left FULL JOIN conditionless_right ON true;
+----
+1 10
+1 20
+2 10
+2 20
+
+query II rowsort
+SELECT a, b FROM conditionless_left LEFT JOIN conditionless_empty ON true;
+----
+1 NULL
+2 NULL
+
+# Uncorrelated EXISTS and NOT EXISTS become conditionless semi and anti joins.
+query I rowsort
+SELECT a FROM conditionless_left WHERE EXISTS (SELECT 1 FROM conditionless_right);
+----
+1
+2
+
+query I rowsort
+SELECT a FROM conditionless_left WHERE EXISTS (SELECT 1 FROM conditionless_empty);
+----
+
+query I rowsort
+SELECT a FROM conditionless_left WHERE NOT EXISTS (SELECT 1 FROM conditionless_right);
+----
+
+query I rowsort
+SELECT a FROM conditionless_left WHERE NOT EXISTS (SELECT 1 FROM conditionless_empty);
+----
+1
+2

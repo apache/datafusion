@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Define a plan for unnesting values in columns that contain a list type.
 
@@ -996,7 +983,8 @@ fn build_batch(
     let transformed = match list_type_columns.len() {
         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
         _ => {
-            let mut temp_unnested_result = HashMap::new();
+            let mut temp_unnested_result =
+                HashMap::with_capacity(list_type_columns.len());
             let max_recursion = list_type_columns
                 .iter()
                 .fold(0, |highest_depth, ListUnnest { depth, .. }| {
@@ -1036,7 +1024,7 @@ fn build_batch(
             }
             let unnested_array_map: HashMap<usize, Vec<UnnestingResult>> =
                 temp_unnested_result.into_iter().fold(
-                    HashMap::new(),
+                    HashMap::with_capacity(list_type_columns.len()),
                     |mut acc,
                      (
                         ListUnnest {

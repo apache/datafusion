@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -26,7 +13,7 @@ use crate::physical_optimizer::test_utils::{
     parquet_exec_with_sort, projection_exec, repartition_exec, sort_exec,
     sort_exec_with_fetch, sort_expr, sort_expr_options, sort_merge_join_exec,
     sort_preserving_merge_exec, sort_preserving_merge_exec_with_fetch,
-    spr_repartition_exec, stream_exec_ordered, union_exec,
+    spr_repartition_exec, stream_exec, stream_exec_ordered, union_exec,
 };
 
 use arrow::compute::{SortOptions};
@@ -40,10 +27,14 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_expr::{JoinType, SortExpr};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
+    LexOrdering, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
 };
 use datafusion_physical_expr::{Distribution, Partitioning, PhysicalExpr};
-use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+use datafusion_functions_aggregate::sum::sum_udaf;
+use datafusion_physical_plan::test::TestMemoryExec;
+use datafusion_physical_expr::expressions::{col, is_not_null, BinaryExpr, Column, NotExpr};
+use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -59,7 +50,7 @@ use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
-use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
+use datafusion_physical_optimizer::output_requirements::{OutputRequirementExec, OutputRequirements};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::*;
 use arrow::array::{record_batch, Array, ArrayRef, Int32Array, RecordBatch};
@@ -356,6 +347,150 @@ async fn test_do_not_remove_sort_with_limit() -> Result<()> {
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
     ");
     // We should keep the bottom `SortExec`.
+    Ok(())
+}
+
+#[test]
+fn test_do_not_remove_sort_with_limit_after_projection() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec(Arc::clone(&schema));
+    let sort = sort_exec([sort_expr("non_nullable_col", &schema)].into(), source);
+    // Dropping the sort key hides the output ordering, but preserves the row
+    // sequence that determines which rows a limit skips or returns.
+    let projection = projection_exec(
+        vec![(col("nullable_col", &schema)?, "nullable_col".to_string())],
+        sort,
+    )?;
+    assert!(projection.output_ordering().is_none());
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 1;
+    let filter = filter_exec(
+        is_not_null(col("nullable_col", &projection.schema())?)?,
+        Arc::clone(&projection),
+    );
+    for input in [projection, filter] {
+        for plan in [
+            global_limit_exec(Arc::clone(&input), 1, None),
+            global_limit_exec(Arc::clone(&input), 1, Some(1)),
+            global_limit_exec(Arc::clone(&input), 0, Some(1)),
+            local_limit_exec(input, 1),
+        ] {
+            let optimized =
+                EnsureRequirements::new().optimize(Arc::clone(&plan), &config)?;
+            let optimized = SanityCheckPlan::new().optimize(optimized, &config)?;
+            assert_eq!(get_plan_string(&optimized), get_plan_string(&plan));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn test_required_sort_after_projection() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec(Arc::clone(&schema));
+    let sort = sort_exec([sort_expr("non_nullable_col", &schema)].into(), source);
+    let projection = projection_exec(
+        vec![(col("nullable_col", &schema)?, "nullable_col".to_string())],
+        sort,
+    )?;
+    let filter = filter_exec(
+        is_not_null(col("nullable_col", &projection.schema())?)?,
+        projection,
+    );
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 1;
+
+    for with_limit in [false, true] {
+        let input = if with_limit {
+            global_limit_exec(Arc::clone(&filter), 1, None)
+        } else {
+            Arc::clone(&filter)
+        };
+        let window = bounded_window_exec(
+            "nullable_col",
+            [sort_expr("nullable_col", &input.schema())],
+            input,
+        );
+        let optimized = EnsureRequirements::new().optimize(window, &config)?;
+        let optimized = SanityCheckPlan::new().optimize(optimized, &config)?;
+        let twice =
+            EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
+        assert_eq!(get_plan_string(&twice), get_plan_string(&optimized));
+
+        if with_limit {
+            // The window needs its own sort, but OFFSET still depends on the
+            // hidden sort to select rows.
+            assert_snapshot!(displayable(optimized.as_ref()).indent(true), @r#"
+            BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+                GlobalLimitExec: skip=1, fetch=None
+                  FilterExec: nullable_col@0 IS NOT NULL
+                    ProjectionExec: expr=[nullable_col@0 as nullable_col]
+                      SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]
+                        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+            "#);
+        } else {
+            // Without a limit, the window's ordering supersedes the hidden sort.
+            assert_snapshot!(displayable(optimized.as_ref()).indent(true), @r#"
+            BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+                FilterExec: nullable_col@0 IS NOT NULL
+                  ProjectionExec: expr=[nullable_col@0 as nullable_col]
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+            "#);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_do_not_remove_sort_below_fetch_after_projection() -> Result<()> {
+    let batch =
+        record_batch!(("a", Int32, [30, 10, 20, 40]), ("b", Int32, [2, 4, 1, 3]))?;
+    let schema = batch.schema();
+    let source = Arc::new(DataSourceExec::new(Arc::new(
+        datafusion::datasource::memory::MemorySourceConfig::try_new(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?,
+    ))) as Arc<dyn ExecutionPlan>;
+    let sort = sort_exec([sort_expr("b", &schema)].into(), source);
+    let filter = filter_exec(is_not_null(col("a", &schema)?)?, sort)
+        .with_fetch(Some(2))
+        .unwrap();
+    let projection =
+        projection_exec(vec![(col("a", &schema)?, "a".to_string())], filter)?;
+    assert!(projection.output_ordering().is_none());
+
+    // The window needs a new ordering, but the filter's embedded limit still
+    // depends on the hidden sort to select a=20 and a=30.
+    let window =
+        bounded_window_exec("a", [sort_expr("a", &projection.schema())], projection);
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 1;
+    let optimized = EnsureRequirements::new().optimize(window, &config)?;
+    let optimized = SanityCheckPlan::new().optimize(optimized, &config)?;
+    let twice = EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
+    assert_eq!(get_plan_string(&twice), get_plan_string(&optimized));
+
+    for plan in [optimized, twice] {
+        let results =
+            datafusion_physical_plan::collect(plan, Arc::new(TaskContext::default()))
+                .await?;
+        datafusion_common::assert_batches_eq!(
+            [
+                "+----+-------+",
+                "| a  | count |",
+                "+----+-------+",
+                "| 20 | 1     |",
+                "| 30 | 2     |",
+                "+----+-------+",
+            ],
+            &results
+        );
+    }
     Ok(())
 }
 
@@ -2360,14 +2495,12 @@ fn test_spm_fetch_preserves_ordering_through_child_rewrite() -> Result<()> {
         .downcast_ref::<LocalLimitExec>()
         .expect("SPM fetch should become a local limit");
     assert_eq!(limit.fetch(), 100);
-    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
 
     let config = ConfigOptions::new();
     let optimized = ProjectionPushdown::new().optimize(optimized, &config)?;
     let limit = optimized
         .downcast_ref::<LocalLimitExec>()
         .expect("projection rewrite should retain the local limit");
-    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
     assert!(limit.input().is::<DataSourceExec>());
 
     let optimized = LimitPushdown::new().optimize(optimized, &config)?;
@@ -2379,7 +2512,7 @@ fn test_spm_fetch_preserves_ordering_through_child_rewrite() -> Result<()> {
         .downcast_ref::<FileScanConfig>()
         .expect("parquet scan should use FileScanConfig");
     assert_eq!(config.limit, Some(100));
-    assert!(config.preserve_order);
+    assert!(config.preserves_file_order());
 
     Ok(())
 }
@@ -2643,6 +2776,68 @@ async fn test_push_with_required_input_ordering_allowed() -> Result<()> {
         DataSourceExec: partitions=1, partition_sizes=[0]
     ");
     // Should be able to push down
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_push_with_required_input_ordering_conflicting_suffix() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let required: LexOrdering = [sort_expr("a", &schema), sort_expr("b", &schema)].into();
+    let requested = [sort_expr("a", &schema), sort_expr("c", &schema)].into();
+    let input = sort_exec(required.clone(), memory_exec(&schema));
+    let plan = RequirementsTestExec::new(input)
+        .with_required_input_ordering(Some(required))
+        .into_arc();
+    let plan = sort_exec(requested, plan);
+    let test = EnforceSortingTest::new(plan).with_repartition_sorts(true);
+
+    assert_snapshot!(test.run(), @r"
+    Input / Optimized Plan:
+    SortExec: expr=[a@0 ASC, c@2 ASC], preserve_partitioning=[false]
+      RequiredInputOrderingExec
+        SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]
+          DataSourceExec: partitions=1, partition_sizes=[0]
+    ");
+    Ok(())
+}
+
+#[test]
+fn test_custom_sort_pushdown_keeps_sort_above_unbounded_input() -> Result<()> {
+    let schema = create_test_schema3()?;
+    // Keep the custom node directly below the sort. It bounds the stream
+    // without advertising a fetch, so this reaches the unbounded-input guard.
+    let custom = RequirementsTestExec::new(stream_exec(&schema))
+        .with_required_input_distribution(Distribution::SinglePartition)
+        .with_bounded_output()
+        .into_arc();
+    let plan = sort_exec([sort_expr("a", &schema)].into(), custom);
+
+    assert_snapshot!(EnforceSortingTest::new(plan).run(), @r"
+    Input / Optimized Plan:
+    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+      RequiredInputOrderingExec
+        StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true
+    ");
+    Ok(())
+}
+
+#[test]
+fn test_custom_sort_pushdown_rejects_narrower_order_maintaining_input() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let narrow_schema = Arc::new(schema.project(&[0])?);
+    // b@1 is valid in the first input and output, but not the second input.
+    let custom = RequirementsTestExec::new(memory_exec(&schema))
+        .with_additional_input(memory_exec(&narrow_schema))
+        .into_arc();
+    let plan = sort_exec([sort_expr("b", &schema)].into(), custom);
+
+    assert_snapshot!(EnforceSortingTest::new(plan).run(), @r"
+    Input / Optimized Plan:
+    SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
+      RequiredInputOrderingExec
+        DataSourceExec: partitions=1, partition_sizes=[0]
+        DataSourceExec: partitions=1, partition_sizes=[0]
+    ");
     Ok(())
 }
 
@@ -3490,6 +3685,69 @@ async fn test_passthrough_wrapper_projection_keeps_ordering() -> Result<()> {
         sort_satisfied,
         "sort should be satisfied, ordering: {ordering}\nplan:\n{plan_str}"
     );
+
+    Ok(())
+}
+
+/// A parent needs `Hash(k)` and `[k, sum]` within each partition, above a
+/// Partial aggregate over input sorted on `k`. With `prefer_existing_sort`, the
+/// optimizer replaces the sort with an order-preserving repartition only when
+/// the repartitioned output satisfies `[k, sum]`. Partial aggregate output is
+/// not unique on `k` across input partitions, so the sort must stay.
+#[tokio::test]
+async fn test_keep_sort_above_repartitioned_partial_aggregate() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int64, false),
+    ]));
+    // Both partitions are sorted on `k` and contain keys 1 and 2.
+    let partitions = [
+        vec![record_batch!(("k", Int32, [1, 2]), ("v", Int64, [9, 5]))?],
+        vec![record_batch!(("k", Int32, [1, 2]), ("v", Int64, [1, 7]))?],
+    ];
+    let input = TestMemoryExec::try_new(&partitions, Arc::clone(&schema), None)?
+        .try_with_sort_information(vec![[sort_expr("k", &schema)].into()])?;
+    let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+    let partial: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]),
+        vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum_v")
+                .build()?,
+        )],
+        vec![None],
+        input,
+        Arc::clone(&schema),
+    )?);
+
+    let k: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
+    let sum: Arc<dyn PhysicalExpr> =
+        Arc::new(Column::new(partial.schema().field(1).name(), 1));
+    let requirement = LexRequirement::new([
+        PhysicalSortRequirement::new(Arc::clone(&k), Some(SortOptions::default())),
+        PhysicalSortRequirement::new(sum, Some(SortOptions::default())),
+    ])
+    .unwrap();
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
+        partial,
+        Some(OrderingRequirements::new(requirement)),
+        Distribution::KeyPartitioned(vec![k]),
+        None,
+    ));
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 2;
+    config.optimizer.prefer_existing_sort = true;
+    let optimized = EnsureRequirements::new().optimize(plan, &config)?;
+    let optimized = OutputRequirements::new_remove_mode().optimize(optimized, &config)?;
+    assert_snapshot!(displayable(optimized.as_ref()).indent(true), @r"
+    SortExec: expr=[k@0 ASC, sum_v[sum]@1 ASC], preserve_partitioning=[true]
+      RepartitionExec: partitioning=Hash([k@0], 2), input_partitions=2
+        AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum_v], group_clustering_mode=Full
+          DataSourceExec: partitions=2, partition_sizes=[1, 1], output_ordering=k@0 ASC
+    ");
 
     Ok(())
 }

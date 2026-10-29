@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
@@ -286,7 +273,9 @@ impl DFSchema {
     /// Create a new schema that contains the fields from this schema followed by the fields
     /// from the supplied schema. An error will be returned if there are duplicate field names.
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
-        let mut schema_builder = SchemaBuilder::new();
+        let mut schema_builder = SchemaBuilder::with_capacity(
+            self.inner.fields().len() + schema.fields().len(),
+        );
         schema_builder.extend(self.inner.fields().iter().cloned());
         schema_builder.extend(schema.fields().iter().cloned());
         let new_schema = schema_builder.finish();
@@ -338,7 +327,7 @@ impl DFSchema {
             .collect();
 
         let mut schema_builder = SchemaBuilder::from(self.inner.fields.clone());
-        let mut qualifiers = Vec::new();
+        let mut qualifiers = Vec::with_capacity(other_schema.inner.fields.len());
         for (qualifier, field) in other_schema.iter() {
             // skip duplicate columns
             let duplicated_field = match qualifier {

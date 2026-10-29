@@ -1,0 +1,29 @@
+name Q22
+group nlj
+
+expect_plan NestedLoopJoinExec
+expect_plan join_type=RightSemi
+
+# Materialize the threshold so the filter keeps both join inputs.
+# Keep the left input smaller so the default optimizer preserves RightSemi.
+init
+CREATE TABLE nlj_repeated_left AS
+SELECT 3277 AS threshold FROM range(4096);
+
+init
+CREATE TABLE nlj_repeated_right AS
+SELECT value AS id FROM range(8192);
+
+run
+-- Repeated 40% matches: only the first probe adds matches.
+-- With one partition and batch_size=8192, 4915 survivors exceed the 4096-row
+-- compaction threshold, so every left row probes the full right batch.
+SELECT r.id
+FROM nlj_repeated_left l
+RIGHT SEMI JOIN nlj_repeated_right r ON l.threshold > r.id;
+
+cleanup
+DROP TABLE nlj_repeated_left;
+
+cleanup
+DROP TABLE nlj_repeated_right;
