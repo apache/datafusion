@@ -1231,6 +1231,14 @@ pub trait ExprSchema: std::fmt::Debug {
 
     // Return the column's field
     fn field_from_column(&self, col: &Column) -> Result<&FieldRef>;
+
+    /// Return the field and column nullability together.
+    ///
+    /// The default preserves custom implementations of [`Self::nullable`].
+    fn field_and_nullable(&self, col: &Column) -> Result<(&FieldRef, bool)> {
+        let field = self.field_from_column(col)?;
+        Ok((field, self.nullable(col)?))
+    }
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -1254,6 +1262,10 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
     fn field_from_column(&self, col: &Column) -> Result<&FieldRef> {
         self.as_ref().field_from_column(col)
     }
+
+    fn field_and_nullable(&self, col: &Column) -> Result<(&FieldRef, bool)> {
+        self.as_ref().field_and_nullable(col)
+    }
 }
 
 impl ExprSchema for DFSchema {
@@ -1262,6 +1274,11 @@ impl ExprSchema for DFSchema {
             Some(r) => self.field_with_qualified_name(r, &col.name),
             None => self.field_with_unqualified_name(&col.name),
         }
+    }
+
+    fn field_and_nullable(&self, col: &Column) -> Result<(&FieldRef, bool)> {
+        let field = self.field_from_column(col)?;
+        Ok((field, field.is_nullable()))
     }
 }
 
