@@ -555,9 +555,9 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>false</p></td>
 <td><p>Should DataFusion provide access to <code class="docutils literal notranslate"><span class="pre">information_schema</span></code> virtual tables for displaying schema information</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.catalog.system_catalog</p></td>
-<td><p>NULL</p></td>
-<td><p>The system catalog name - when set together with <code class="docutils literal notranslate"><span class="pre">information_schema</span></code>, the <code class="docutils literal notranslate"><span class="pre">information_schema</span></code> for each catalog will only describe objects contained in the catalog itself. The global, cross-catalog <code class="docutils literal notranslate"><span class="pre">information_schema</span></code> is available under the virtual catalog named by this option.</p></td>
+<tr class="row-even"><td><p>datafusion.catalog.partition_information_schema</p></td>
+<td><p>false</p></td>
+<td><p>When set together with <code class="docutils literal notranslate"><span class="pre">information_schema</span></code>, the <code class="docutils literal notranslate"><span class="pre">information_schema</span></code> of each catalog only describes the objects in that catalog. When not set, the <code class="docutils literal notranslate"><span class="pre">information_schema</span></code> of each catalog describes all catalogs.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.catalog.location</p></td>
 <td><p>NULL</p></td>
