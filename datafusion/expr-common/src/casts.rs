@@ -22,6 +22,7 @@ use arrow::datatypes::{
 use arrow::temporal_conversions::{
     MICROSECONDS, MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS,
 };
+use datafusion_common::scalar::date_to_timestamp_multiplier;
 use datafusion_common::{Result, ScalarValue};
 
 /// Source-domain preimage of `CAST(source_expr AS target_type) OP literal`.
@@ -106,8 +107,8 @@ pub fn try_cast_literal_to_type(
 /// [`CastPredicatePreimage::Exact`] where moving the cast preserves comparison
 /// semantics subject to the documented family-level overflow exceptions, and a
 /// [`CastPredicatePreimage::Range`] for many-to-one casts with known preimages
-/// (timestamp precision narrowing) or for non-aligned timestamp widening
-/// literals.
+/// (timestamp precision narrowing) or for non-aligned timestamp widening and
+/// date-to-timestamp literals.
 pub fn cast_predicate_preimage(
     source_type: &DataType,
     target_type: &DataType,
@@ -120,6 +121,26 @@ pub fn cast_predicate_preimage(
     // another cast family.
     if let Some((source, target)) = timestamp_cast_types(source_type, target_type) {
         return Ok(timestamp_preimage(
+            source_type,
+            source,
+            target,
+            op,
+            lit_value,
+        ));
+    }
+
+    if let Some((source, target)) = date32_to_timestamp_types(source_type, target_type) {
+        return Ok(date32_to_timestamp_preimage(
+            source_type,
+            source,
+            target,
+            op,
+            lit_value,
+        ));
+    }
+
+    if let Some((source, target)) = date64_to_timestamp_types(source_type, target_type) {
+        return Ok(date64_to_timestamp_preimage(
             source_type,
             source,
             target,
@@ -151,6 +172,32 @@ pub fn exact_preimage_cast(
     // their singleton preimages are valid here.
     if let Some((source, target)) = timestamp_cast_types(source_type, target_type) {
         return match timestamp_preimage(
+            source_type,
+            source,
+            target,
+            Operator::Eq,
+            lit_value,
+        )? {
+            CastPredicatePreimage::Exact(value) => Some(value),
+            CastPredicatePreimage::Range(_) => None,
+        };
+    }
+
+    if let Some((source, target)) = date32_to_timestamp_types(source_type, target_type) {
+        return match date32_to_timestamp_preimage(
+            source_type,
+            source,
+            target,
+            Operator::Eq,
+            lit_value,
+        )? {
+            CastPredicatePreimage::Exact(value) => Some(value),
+            CastPredicatePreimage::Range(_) => None,
+        };
+    }
+
+    if let Some((source, target)) = date64_to_timestamp_types(source_type, target_type) {
+        return match date64_to_timestamp_preimage(
             source_type,
             source,
             target,
@@ -194,14 +241,52 @@ fn timestamp_cast_types<'a>(
     source_type: &'a DataType,
     target_type: &'a DataType,
 ) -> Option<(&'a DataType, &'a DataType)> {
-    let unwrap = |data_type: &'a DataType| match data_type {
-        DataType::Dictionary(_, value_type) => value_type.as_ref(),
-        data_type => data_type,
-    };
-    let (source, target) = (unwrap(source_type), unwrap(target_type));
+    let (source, target) = (
+        unwrap_dictionary_type(source_type),
+        unwrap_dictionary_type(target_type),
+    );
     (matches!(source, DataType::Timestamp(_, _))
         && matches!(target, DataType::Timestamp(_, _)))
     .then_some((source, target))
+}
+
+fn date32_to_timestamp_types<'a>(
+    source_type: &'a DataType,
+    target_type: &'a DataType,
+) -> Option<(&'a DataType, &'a DataType)> {
+    let source_type = unwrap_dictionary_type(source_type);
+    let target_type = unwrap_dictionary_type(target_type);
+    (matches!(source_type, DataType::Date32)
+        && matches!(target_type, DataType::Timestamp(_, None)))
+    .then_some((source_type, target_type))
+}
+
+fn date64_to_timestamp_types<'a>(
+    source_type: &'a DataType,
+    target_type: &'a DataType,
+) -> Option<(&'a DataType, &'a DataType)> {
+    let source_type = unwrap_dictionary_type(source_type);
+    let target_type = unwrap_dictionary_type(target_type);
+    (matches!(source_type, DataType::Date64)
+        && matches!(target_type, DataType::Timestamp(_, None)))
+    .then_some((source_type, target_type))
+}
+
+fn unwrap_dictionary_type(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, value_type) => value_type.as_ref(),
+        data_type => data_type,
+    }
+}
+
+/// Preserve the original source dictionary key on a preimage bound.
+fn wrap_dictionary_scalar(source_type: &DataType, scalar: ScalarValue) -> ScalarValue {
+    match source_type {
+        DataType::Dictionary(key_type, _) => {
+            ScalarValue::Dictionary(key_type.clone(), Box::new(scalar))
+        }
+        _ => scalar,
+    }
 }
 
 /// Returns `true` when casting `source_type` to `target_type` is exact and
@@ -391,6 +476,121 @@ fn exact_preimage_int_to_str_eq_like(
     }
 }
 
+/// Computes the source-domain preimage of a `Date32` to timezone-naive timestamp
+/// cast. Each source day maps to midnight, so aligned literals have an exact
+/// preimage. Non-midnight literals have no equality preimage; ordered predicates
+/// compare against the next day using an empty interval `[ceil, ceil)`.
+fn date32_to_timestamp_preimage(
+    source_type: &DataType,
+    source: &DataType,
+    target: &DataType,
+    op: Operator,
+    lit_value: &ScalarValue,
+) -> Option<CastPredicatePreimage> {
+    let (DataType::Date32, DataType::Timestamp(_, None)) = (source, target) else {
+        return None;
+    };
+
+    let lit_value = match lit_value {
+        ScalarValue::Dictionary(_, inner) => inner.as_ref(),
+        literal => literal,
+    };
+    if lit_value.data_type() != *target {
+        return None;
+    }
+    let (ScalarValue::TimestampSecond(value, _)
+    | ScalarValue::TimestampMillisecond(value, _)
+    | ScalarValue::TimestampMicrosecond(value, _)
+    | ScalarValue::TimestampNanosecond(value, _)) = lit_value
+    else {
+        return None;
+    };
+
+    let bound = |value| wrap_dictionary_scalar(source_type, ScalarValue::Date32(value));
+    let Some(value) = *value else {
+        return Some(CastPredicatePreimage::Exact(bound(None)));
+    };
+
+    let ticks_per_day = date_to_timestamp_multiplier(source, target)?;
+    let floor = value.div_euclid(ticks_per_day);
+    if value.rem_euclid(ticks_per_day) == 0 {
+        return Some(CastPredicatePreimage::Exact(bound(Some(
+            i32::try_from(floor).ok()?,
+        ))));
+    }
+
+    if !matches!(
+        op,
+        Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+    ) {
+        return None;
+    }
+    let ceil = i32::try_from(floor.checked_add(1)?).ok()?;
+    let bound = bound(Some(ceil));
+    Interval::try_new(bound.clone(), bound)
+        .ok()
+        .map(CastPredicatePreimage::Range)
+}
+
+/// Computes the source-domain preimage of a `Date64` to timezone-naive timestamp
+/// cast. Arrow preserves sub-day milliseconds in `Date64`, so seconds require a
+/// truncation bucket, milliseconds are exact, and finer units require checking
+/// millisecond alignment rather than midnight alignment.
+fn date64_to_timestamp_preimage(
+    source_type: &DataType,
+    source: &DataType,
+    target: &DataType,
+    op: Operator,
+    lit_value: &ScalarValue,
+) -> Option<CastPredicatePreimage> {
+    let (DataType::Date64, DataType::Timestamp(unit, None)) = (source, target) else {
+        return None;
+    };
+    let lit_value = match lit_value {
+        ScalarValue::Dictionary(_, inner) => inner.as_ref(),
+        literal => literal,
+    };
+    if lit_value.data_type() != *target {
+        return None;
+    }
+    let (ScalarValue::TimestampSecond(value, _)
+    | ScalarValue::TimestampMillisecond(value, _)
+    | ScalarValue::TimestampMicrosecond(value, _)
+    | ScalarValue::TimestampNanosecond(value, _)) = lit_value
+    else {
+        return None;
+    };
+
+    let bound = |value| wrap_dictionary_scalar(source_type, ScalarValue::Date64(value));
+    let Some(value) = *value else {
+        return (*unit != TimeUnit::Second)
+            .then(|| CastPredicatePreimage::Exact(bound(None)));
+    };
+
+    let (lower, upper) = if *unit == TimeUnit::Second {
+        let (lower, upper) = trunc_toward_zero_bucket(value, i128::from(MILLISECONDS))?;
+        (i64::try_from(lower).ok()?, i64::try_from(upper).ok()?)
+    } else {
+        let ticks_per_millisecond = timestamp_unit_scale(unit) / MILLISECONDS;
+        let floor = value.div_euclid(ticks_per_millisecond);
+        if value.rem_euclid(ticks_per_millisecond) == 0 {
+            return Some(CastPredicatePreimage::Exact(bound(Some(floor))));
+        }
+        if !matches!(
+            op,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+        ) {
+            return None;
+        }
+        let ceil = floor.checked_add(1)?;
+        (ceil, ceil)
+    };
+
+    Interval::try_new(bound(Some(lower)), bound(Some(upper)))
+        .ok()
+        .map(CastPredicatePreimage::Range)
+}
+
 /// Computes the source-domain preimage of `CAST(source AS target) OP literal`
 /// for a timestamp precision cast.
 ///
@@ -443,12 +643,7 @@ fn timestamp_preimage(
 
     let bound = |value| {
         let scalar = timestamp_scalar(source_unit, source_tz.clone(), value);
-        match source_type {
-            DataType::Dictionary(key_type, _) => {
-                ScalarValue::Dictionary(key_type.clone(), Box::new(scalar))
-            }
-            _ => scalar,
-        }
+        wrap_dictionary_scalar(source_type, scalar)
     };
 
     let source_scale = i128::from(timestamp_unit_scale(source_unit));
@@ -1767,6 +1962,406 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_preimage_date32_to_timestamp_exact() {
+        for (unit, ticks_per_day) in [
+            (TimeUnit::Second, 86_400),
+            (TimeUnit::Millisecond, 86_400_000),
+            (TimeUnit::Microsecond, 86_400_000_000),
+            (TimeUnit::Nanosecond, 86_400_000_000_000),
+        ] {
+            let target = DataType::Timestamp(unit, None);
+            for day in [-20089, -1, 0, 1, 20089] {
+                let literal =
+                    timestamp_scalar(&unit, None, Some(i64::from(day) * ticks_per_day));
+                let source = ScalarValue::Date32(Some(day));
+                assert_eq!(source.cast_to(&target).unwrap(), literal);
+                for op in [
+                    Operator::Eq,
+                    Operator::NotEq,
+                    Operator::IsDistinctFrom,
+                    Operator::IsNotDistinctFrom,
+                    Operator::Lt,
+                    Operator::LtEq,
+                    Operator::Gt,
+                    Operator::GtEq,
+                ] {
+                    assert_preimage_exact(
+                        &DataType::Date32,
+                        &target,
+                        op,
+                        &literal,
+                        source.clone(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_preimage_date32_to_timestamp_non_aligned() {
+        for (unit, ticks_per_day) in [
+            (TimeUnit::Second, 86_400),
+            (TimeUnit::Millisecond, 86_400_000),
+            (TimeUnit::Microsecond, 86_400_000_000),
+            (TimeUnit::Nanosecond, 86_400_000_000_000),
+        ] {
+            let target = DataType::Timestamp(unit, None);
+            for (value, next_day) in [
+                (-ticks_per_day - 1, -1),
+                (-ticks_per_day + 1, 0),
+                (-1, 0),
+                (1, 1),
+                (ticks_per_day - 1, 1),
+                (ticks_per_day + 1, 2),
+            ] {
+                let literal = timestamp_scalar(&unit, None, Some(value));
+                let bound = ScalarValue::Date32(Some(next_day));
+                let expected = Some(CastPredicatePreimage::Range(
+                    Interval::try_new(bound.clone(), bound).unwrap(),
+                ));
+                for op in [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq] {
+                    assert_eq!(
+                        cast_predicate_preimage(&DataType::Date32, &target, op, &literal)
+                            .unwrap(),
+                        expected,
+                        "{unit:?} {op:?} {value}"
+                    );
+                }
+                for op in [
+                    Operator::Eq,
+                    Operator::NotEq,
+                    Operator::IsDistinctFrom,
+                    Operator::IsNotDistinctFrom,
+                ] {
+                    assert_preimage_none(&DataType::Date32, &target, op, &literal);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_preimage_date32_to_timestamp_boundaries() {
+        // Only seconds and milliseconds can represent the full Date32 domain.
+        for (unit, ticks_per_day) in [
+            (TimeUnit::Second, 86_400),
+            (TimeUnit::Millisecond, 86_400_000),
+        ] {
+            let target = DataType::Timestamp(unit, None);
+            let min = i64::from(i32::MIN) * ticks_per_day;
+            let max = i64::from(i32::MAX) * ticks_per_day;
+            for (value, day) in [(min, i32::MIN), (max, i32::MAX)] {
+                assert_preimage_exact(
+                    &DataType::Date32,
+                    &target,
+                    Operator::Eq,
+                    &timestamp_scalar(&unit, None, Some(value)),
+                    ScalarValue::Date32(Some(day)),
+                );
+            }
+            // A non-aligned literal is accepted when its ceiling still fits.
+            for (value, day) in [(min - 1, i32::MIN), (max - 1, i32::MAX)] {
+                let bound = ScalarValue::Date32(Some(day));
+                assert_eq!(
+                    cast_predicate_preimage(
+                        &DataType::Date32,
+                        &target,
+                        Operator::Lt,
+                        &timestamp_scalar(&unit, None, Some(value)),
+                    )
+                    .unwrap(),
+                    Some(CastPredicatePreimage::Range(
+                        Interval::try_new(bound.clone(), bound).unwrap(),
+                    )),
+                );
+            }
+            // Neither an out-of-range aligned day nor an out-of-range ceiling
+            // may be clamped to the Date32 domain.
+            for value in [
+                min - ticks_per_day,
+                max + ticks_per_day,
+                max + 1,
+                i64::MIN,
+                i64::MAX,
+            ] {
+                for op in [Operator::Eq, Operator::Lt, Operator::GtEq] {
+                    assert_preimage_none(
+                        &DataType::Date32,
+                        &target,
+                        op,
+                        &timestamp_scalar(&unit, None, Some(value)),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_preimage_date32_to_timestamp_null_and_rejections() {
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            let target = DataType::Timestamp(unit, None);
+            for op in [
+                Operator::Eq,
+                Operator::NotEq,
+                Operator::IsDistinctFrom,
+                Operator::IsNotDistinctFrom,
+                Operator::Lt,
+                Operator::LtEq,
+                Operator::Gt,
+                Operator::GtEq,
+            ] {
+                assert_preimage_exact(
+                    &DataType::Date32,
+                    &target,
+                    op,
+                    &timestamp_scalar(&unit, None, None),
+                    ScalarValue::Date32(None),
+                );
+            }
+
+            let timezone = Some("UTC".into());
+            assert_preimage_none(
+                &DataType::Date32,
+                &DataType::Timestamp(unit, timezone.clone()),
+                Operator::Eq,
+                &timestamp_scalar(&unit, timezone.clone(), Some(0)),
+            );
+            let wrong_unit = if unit == TimeUnit::Second {
+                TimeUnit::Millisecond
+            } else {
+                TimeUnit::Second
+            };
+            for literal in [
+                timestamp_scalar(&unit, timezone, Some(0)),
+                timestamp_scalar(&wrong_unit, None, Some(0)),
+                ScalarValue::Date32(Some(0)),
+                ScalarValue::Int64(Some(0)),
+                ScalarValue::Null,
+            ] {
+                for op in [Operator::Eq, Operator::Lt] {
+                    assert_preimage_none(&DataType::Date32, &target, op, &literal);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_preimage_date32_to_timestamp_dictionary() {
+        let source_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Date32));
+        let target_type = DataType::Dictionary(
+            Box::new(DataType::Int16),
+            Box::new(DataType::Timestamp(TimeUnit::Second, None)),
+        );
+        let literal = ScalarValue::Dictionary(
+            Box::new(DataType::Int16),
+            Box::new(ScalarValue::TimestampSecond(Some(86_400), None)),
+        );
+        let expected = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Date32(Some(1))),
+        );
+
+        assert_preimage_exact(
+            &source_type,
+            &target_type,
+            Operator::Eq,
+            &literal,
+            expected.clone(),
+        );
+        let exact = exact_preimage_cast(&source_type, &target_type, &literal).unwrap();
+        assert_eq!(exact.data_type(), source_type);
+        assert_eq!(exact, expected);
+    }
+
+    #[test]
+    fn test_cast_preimage_date64_to_timestamp_seconds_range() {
+        let target = DataType::Timestamp(TimeUnit::Second, None);
+        for (value, lower, upper) in [(1, 1000, 2000), (0, -999, 1000), (-1, -1999, -999)]
+        {
+            let literal = ScalarValue::TimestampSecond(Some(value), None);
+            let expected = Some(CastPredicatePreimage::Range(
+                Interval::try_new(
+                    ScalarValue::Date64(Some(lower)),
+                    ScalarValue::Date64(Some(upper)),
+                )
+                .unwrap(),
+            ));
+            for op in [
+                Operator::Eq,
+                Operator::NotEq,
+                Operator::IsDistinctFrom,
+                Operator::IsNotDistinctFrom,
+                Operator::Lt,
+                Operator::LtEq,
+                Operator::Gt,
+                Operator::GtEq,
+            ] {
+                assert_eq!(
+                    cast_predicate_preimage(&DataType::Date64, &target, op, &literal)
+                        .unwrap(),
+                    expected,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_preimage_date64_to_timestamp_exact() {
+        for (unit, multiplier) in [
+            (TimeUnit::Millisecond, 1),
+            (TimeUnit::Microsecond, 1000),
+            (TimeUnit::Nanosecond, 1_000_000),
+        ] {
+            let target = DataType::Timestamp(unit, None);
+            // Date64 need not be midnight-aligned.
+            for value in [-43_200_001, -1, 0, 1, 43_200_001] {
+                let literal = timestamp_scalar(&unit, None, Some(value * multiplier));
+                let source = ScalarValue::Date64(Some(value));
+                assert_eq!(source.cast_to(&target).unwrap(), literal);
+                for op in [
+                    Operator::Eq,
+                    Operator::NotEq,
+                    Operator::IsDistinctFrom,
+                    Operator::IsNotDistinctFrom,
+                    Operator::Lt,
+                    Operator::LtEq,
+                    Operator::Gt,
+                    Operator::GtEq,
+                ] {
+                    assert_preimage_exact(
+                        &DataType::Date64,
+                        &target,
+                        op,
+                        &literal,
+                        source.clone(),
+                    );
+                }
+            }
+        }
+
+        for value in [i64::MIN, i64::MAX] {
+            assert_preimage_exact(
+                &DataType::Date64,
+                &DataType::Timestamp(TimeUnit::Millisecond, None),
+                Operator::Eq,
+                &ScalarValue::TimestampMillisecond(Some(value), None),
+                ScalarValue::Date64(Some(value)),
+            );
+        }
+    }
+
+    #[test]
+    fn test_cast_preimage_date64_to_timestamp_non_aligned() {
+        for (unit, value, bound) in [
+            (TimeUnit::Microsecond, 1, 1),
+            (TimeUnit::Microsecond, -1, 0),
+            (TimeUnit::Microsecond, 123_001, 124),
+            (TimeUnit::Microsecond, -123_001, -123),
+            (TimeUnit::Microsecond, i64::MAX, 9_223_372_036_854_776),
+            (TimeUnit::Microsecond, i64::MIN, -9_223_372_036_854_775),
+            (TimeUnit::Nanosecond, 1, 1),
+            (TimeUnit::Nanosecond, -1, 0),
+            (TimeUnit::Nanosecond, 123_000_001, 124),
+            (TimeUnit::Nanosecond, -123_000_001, -123),
+            (TimeUnit::Nanosecond, i64::MAX, 9_223_372_036_855),
+            (TimeUnit::Nanosecond, i64::MIN, -9_223_372_036_854),
+        ] {
+            let target = DataType::Timestamp(unit, None);
+            let literal = timestamp_scalar(&unit, None, Some(value));
+            let bound = ScalarValue::Date64(Some(bound));
+            let expected = Some(CastPredicatePreimage::Range(
+                Interval::try_new(bound.clone(), bound).unwrap(),
+            ));
+            for op in [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq] {
+                assert_eq!(
+                    cast_predicate_preimage(&DataType::Date64, &target, op, &literal)
+                        .unwrap(),
+                    expected,
+                    "{unit:?} {op:?} {value}"
+                );
+            }
+            for op in [
+                Operator::Eq,
+                Operator::NotEq,
+                Operator::IsDistinctFrom,
+                Operator::IsNotDistinctFrom,
+            ] {
+                assert_preimage_none(&DataType::Date64, &target, op, &literal);
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_preimage_date64_to_timestamp_null_and_rejections() {
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            let target = DataType::Timestamp(unit, None);
+            let null = timestamp_scalar(&unit, None, None);
+            for op in [Operator::Eq, Operator::IsNotDistinctFrom, Operator::Lt] {
+                if unit == TimeUnit::Second {
+                    assert_preimage_none(&DataType::Date64, &target, op, &null);
+                } else {
+                    assert_preimage_exact(
+                        &DataType::Date64,
+                        &target,
+                        op,
+                        &null,
+                        ScalarValue::Date64(None),
+                    );
+                }
+            }
+
+            let timezone = Some("UTC".into());
+            assert_preimage_none(
+                &DataType::Date64,
+                &DataType::Timestamp(unit, timezone.clone()),
+                Operator::Eq,
+                &timestamp_scalar(&unit, timezone.clone(), Some(0)),
+            );
+            for literal in [
+                timestamp_scalar(&unit, timezone, Some(0)),
+                ScalarValue::Date64(Some(0)),
+                ScalarValue::Int64(Some(0)),
+                timestamp_scalar(
+                    &if unit == TimeUnit::Second {
+                        TimeUnit::Millisecond
+                    } else {
+                        TimeUnit::Second
+                    },
+                    None,
+                    Some(0),
+                ),
+            ] {
+                assert_preimage_none(&DataType::Date64, &target, Operator::Eq, &literal);
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_preimage_date64_to_timestamp_seconds_out_of_range() {
+        let target = DataType::Timestamp(TimeUnit::Second, None);
+        for value in [i64::MIN, i64::MIN / 1000, i64::MAX / 1000, i64::MAX] {
+            for op in [Operator::Eq, Operator::Lt, Operator::GtEq] {
+                assert_preimage_none(
+                    &DataType::Date64,
+                    &target,
+                    op,
+                    &ScalarValue::TimestampSecond(Some(value), None),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_cast_predicate_preimage_timestamp_narrowing_range() {
         // Truncation toward zero decides the bucket by sign: positive, zero spans
         // both sides, and negative buckets shift by one.
@@ -2730,6 +3325,38 @@ mod tests {
             scalar,
             wrap(ScalarValue::TimestampMillisecond(Some(123), None))
         );
+    }
+
+    #[test]
+    fn test_cast_preimage_date64_to_timestamp_dictionary() {
+        let source_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Date64));
+        let target_type = DataType::Dictionary(
+            Box::new(DataType::Int16),
+            Box::new(DataType::Timestamp(TimeUnit::Second, None)),
+        );
+        let literal = ScalarValue::Dictionary(
+            Box::new(DataType::Int16),
+            Box::new(ScalarValue::TimestampSecond(Some(0), None)),
+        );
+        let bound = |value| {
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Date64(Some(value))),
+            )
+        };
+
+        let result =
+            cast_predicate_preimage(&source_type, &target_type, Operator::Eq, &literal)
+                .unwrap();
+        assert_preimage_data_type(result.as_ref(), &source_type);
+        assert_eq!(
+            result,
+            Some(CastPredicatePreimage::Range(
+                Interval::try_new(bound(-999), bound(1000)).unwrap()
+            ))
+        );
+        assert!(exact_preimage_cast(&source_type, &target_type, &literal).is_none());
     }
 
     // ── Gate safety tests ──────────────────────────────────────────────
