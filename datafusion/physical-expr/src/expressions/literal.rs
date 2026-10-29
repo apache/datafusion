@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Literal expressions for physical operations
 
@@ -143,11 +130,21 @@ impl PhysicalExpr for Literal {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self { value, field } = self;
+        // The field name, type, and nullability are reconstructed by new_with_metadata.
+        let expr_type = if field.metadata().is_empty() {
+            protobuf::physical_expr_node::ExprType::Literal(value.try_into()?)
+        } else {
+            protobuf::physical_expr_node::ExprType::LiteralWithMetadata(
+                protobuf::PhysicalLiteralNode {
+                    value: Some(value.try_into()?),
+                    metadata: field.metadata().into(),
+                },
+            )
+        };
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
-                (&self.value).try_into()?,
-            )),
+            expr_type: Some(expr_type),
         }))
     }
 }
@@ -159,16 +156,38 @@ impl Literal {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_common::{internal_datafusion_err, internal_err};
         use datafusion_proto_models::protobuf;
+        use protobuf::physical_expr_node::ExprType;
 
-        let scalar_proto = expect_expr_variant!(
-            node,
-            protobuf::physical_expr_node::ExprType::Literal,
-            "Literal",
-        );
-        let value = ScalarValue::try_from(scalar_proto)?;
-        Ok(Arc::new(Literal::new(value)))
+        let protobuf::PhysicalExprNode {
+            expr_type,
+            // Expression IDs are handled by the enclosing proto converter.
+            expr_id: _,
+        } = node;
+        let (value, metadata) = match expr_type {
+            Some(ExprType::Literal(scalar)) => {
+                let datafusion_proto_models::datafusion_common::ScalarValue {
+                    // The scalar payload is decoded by ScalarValue::try_from.
+                    value: _,
+                } = scalar;
+                (ScalarValue::try_from(scalar)?, None)
+            }
+            Some(ExprType::LiteralWithMetadata(protobuf::PhysicalLiteralNode {
+                value,
+                metadata,
+            })) => {
+                let value = value.as_ref().ok_or_else(|| {
+                    internal_datafusion_err!("Literal is missing required field 'value'")
+                })?;
+                (
+                    ScalarValue::try_from(value)?,
+                    Some(FieldMetadata::from(metadata)),
+                )
+            }
+            _ => return internal_err!("PhysicalExprNode is not a Literal"),
+        };
+        Ok(Arc::new(Literal::new_with_metadata(value, metadata)))
     }
 }
 
@@ -313,6 +332,26 @@ mod proto_tests {
             .downcast_ref::<Literal>()
             .expect("decoded expr should be a Literal");
         assert_eq!(lit.value(), &ScalarValue::Int32(Some(42)));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_value() {
+        let node = datafusion_proto_models::protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::LiteralWithMetadata(
+                datafusion_proto_models::protobuf::PhysicalLiteralNode {
+                    value: None,
+                    metadata: Default::default(),
+                },
+            )),
+        };
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = Literal::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("Literal is missing required field 'value'"))
+        );
     }
 
     #[test]

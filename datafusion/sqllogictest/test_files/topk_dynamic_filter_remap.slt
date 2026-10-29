@@ -68,6 +68,17 @@ physical_plan
 # remapping can change the CASE expression before the parent match. Equal `p`
 # and `q` values keep the expected rows simple, and multiple row groups provide
 # later scan input for TopK's updated dynamic filter.
+# The runtime query's `ELSE q` expression must also retain TopK dynamic
+# filtering at the Parquet scan. Ignore plan details that projection pushdown
+# can reorder.
+query TT
+EXPLAIN WITH s AS (SELECT b, 31999 - b AS p, 31999 - b AS q FROM t)
+SELECT p FROM s
+ORDER BY CASE WHEN b % 2 = 0 THEN p ELSE q END, b
+LIMIT 3;
+----
+logical_plan<slt:ignore>physical_plan<slt:ignore>SortExec: TopK(fetch=3)<slt:ignore>DataSourceExec:<slt:ignore>file_type=parquet, predicate=DynamicFilter [ empty ]<slt:ignore>
+
 query I
 WITH s AS (SELECT b, 31999 - b AS p, 31999 - b AS q FROM t)
 SELECT p FROM s

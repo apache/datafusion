@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -29,6 +16,7 @@ use datafusion_expr::{
 use datafusion_functions::math::abs::AbsFunc;
 use datafusion_functions::math::random::RandomFunc;
 use datafusion_functions_aggregate::first_last::FirstValue;
+use datafusion_functions_aggregate::min_max::Min;
 use datafusion_functions_aggregate::stddev::Stddev;
 use datafusion_functions_aggregate::sum::Sum;
 use datafusion_functions_table::generate_series::RangeFunc;
@@ -206,6 +194,12 @@ pub(crate) extern "C" fn create_ffi_first_value_func() -> FFI_AggregateUDF {
 
 pub(crate) extern "C" fn create_ffi_stddev_func() -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Stddev::new().into());
+
+    udaf.into()
+}
+
+pub(crate) extern "C" fn create_ffi_min_func() -> FFI_AggregateUDF {
+    let udaf: Arc<AggregateUDF> = Arc::new(Min::new().into());
 
     udaf.into()
 }

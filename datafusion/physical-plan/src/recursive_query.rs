@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines the recursive query plan
 
@@ -23,7 +10,7 @@ use std::task::{Context, Poll};
 
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::order::GroupClustering;
 use crate::common::project_plan_to_schema;
 use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use crate::metrics::{
@@ -464,7 +451,7 @@ struct DistinctDeduplicator {
 
 impl DistinctDeduplicator {
     fn new(schema: SchemaRef, task_context: &TaskContext) -> Result<Self> {
-        let group_values = new_group_values(schema, &GroupOrdering::None)?;
+        let group_values = new_group_values(schema, &GroupClustering::None)?;
         let reservation = MemoryConsumer::new("RecursiveQueryHashTable")
             .register(task_context.memory_pool());
         Ok(Self {

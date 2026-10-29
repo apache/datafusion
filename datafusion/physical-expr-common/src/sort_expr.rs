@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sort expressions
 
@@ -486,10 +473,11 @@ impl LexOrdering {
     /// If the vector is empty, returns `None`.
     pub fn new(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> Option<Self> {
         let exprs = exprs.into_iter();
+        let capacity = exprs.size_hint().0;
         let mut candidate = Self {
             // not valid yet; valid publicly-returned instance must be non-empty
-            exprs: Vec::new(),
-            set: IndexSet::new(),
+            exprs: Vec::with_capacity(capacity),
+            set: IndexSet::with_capacity(capacity),
         };
         for expr in exprs {
             candidate.push(expr);
@@ -736,9 +724,9 @@ impl LexRequirement {
     fn construct(
         reqs: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> (bool, Self) {
-        let mut set = HashSet::new();
+        let reqs = reqs.into_iter();
+        let mut set = HashSet::with_capacity(reqs.size_hint().0);
         let reqs = reqs
-            .into_iter()
             .filter_map(|r| set.insert(Arc::clone(&r.expr)).then_some(r))
             .collect();
         (!set.is_empty(), Self { reqs })

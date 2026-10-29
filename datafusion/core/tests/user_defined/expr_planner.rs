@@ -1,23 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::RecordBatch;
 use datafusion::common::test_util::batches_to_string;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use datafusion::common::DFSchema;
 use datafusion::error::Result;
@@ -32,6 +20,24 @@ use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
 
 #[derive(Debug)]
 struct MyCustomPlanner;
+
+#[derive(Debug)]
+struct DeferColonPlanner {
+    colon_seen: Arc<AtomicBool>,
+}
+
+impl ExprPlanner for DeferColonPlanner {
+    fn plan_binary_op(
+        &self,
+        expr: RawBinaryExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<RawBinaryExpr>> {
+        if matches!(&expr.op, BinaryOperator::Custom(op) if op == ":") {
+            self.colon_seen.store(true, Ordering::Relaxed);
+        }
+        Ok(PlannerResult::Original(expr))
+    }
+}
 
 impl ExprPlanner for MyCustomPlanner {
     fn plan_binary_op(
@@ -59,6 +65,13 @@ impl ExprPlanner for MyCustomPlanner {
                     Expr::Literal(ScalarValue::Boolean(Some(true)), None),
                     None::<&str>,
                     format!("{} ? {}", expr.left, expr.right),
+                ))))
+            }
+            BinaryOperator::Custom(op) if op == ":" => {
+                Ok(PlannerResult::Planned(Expr::Alias(Alias::new(
+                    Expr::Literal(ScalarValue::Boolean(Some(true)), None),
+                    None::<&str>,
+                    "custom colon",
                 ))))
             }
             _ => Ok(PlannerResult::Original(expr)),
@@ -124,4 +137,55 @@ async fn test_question_filter() {
     | 1 |
     +---+
     ");
+}
+
+#[tokio::test]
+async fn test_custom_struct_colon_operator() {
+    let config =
+        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "snowflake");
+    let mut ctx = SessionContext::new_with_config(config);
+    ctx.register_expr_planner(Arc::new(MyCustomPlanner))
+        .unwrap();
+
+    let actual = ctx
+        .sql("select {'a': 1}:a;")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +--------------+
+    | custom colon |
+    +--------------+
+    | true         |
+    +--------------+
+    ");
+}
+
+#[tokio::test]
+async fn test_deferred_struct_colon_operator() {
+    let config =
+        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "snowflake");
+    let mut ctx = SessionContext::new_with_config(config);
+    let colon_seen = Arc::new(AtomicBool::new(false));
+    ctx.register_expr_planner(Arc::new(DeferColonPlanner {
+        colon_seen: Arc::clone(&colon_seen),
+    }))
+    .unwrap();
+
+    let actual = ctx
+        .sql("select {'a': 1}:a;")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert!(colon_seen.load(Ordering::Relaxed));
+    assert_eq!(actual.len(), 1);
+    assert_eq!(actual[0].num_rows(), 1);
+    assert_eq!(
+        ScalarValue::try_from_array(actual[0].column(0).as_ref(), 0).unwrap(),
+        ScalarValue::Int64(Some(1))
+    );
 }

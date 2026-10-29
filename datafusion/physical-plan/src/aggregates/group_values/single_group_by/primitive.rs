@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::aggregates::group_values::GroupValues;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
@@ -23,6 +10,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
+use datafusion_common::float_semantics::normalize_float;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -31,7 +19,6 @@ use half::f16;
 use hashbrown::hash_table::HashTable;
 #[cfg(not(feature = "force_hash_collisions"))]
 use std::hash::BuildHasher;
-use std::mem::size_of;
 use std::sync::Arc;
 
 /// A trait to allow hashing of floating point numbers
@@ -40,11 +27,10 @@ pub trait HashValue {
 
     /// Return a canonical representative whose bit pattern is identical for
     /// all values that should be grouped together. Default is the identity;
-    /// floats override this to fold `-0.0` into `+0.0` so the bit-equal
-    /// `is_eq` check used during insertion treats them as the same group.
-    /// NaN payload bits are preserved.
+    /// floats override this with [`normalize_float`] so the bit-equal
+    /// `is_eq` check used during insertion follows SQL equality.
     #[inline]
-    fn canonicalize(self) -> Self
+    fn normalize_key(self) -> Self
     where
         Self: Sized,
     {
@@ -76,7 +62,7 @@ macro_rules! hash_float {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
             fn hash(&self, state: &RandomState) -> u64 {
-                state.hash_one(self.canonicalize().to_bits())
+                state.hash_one(datafusion_common::float_semantics::hash_input(*self).to_bits())
             }
 
             #[cfg(feature = "force_hash_collisions")]
@@ -85,10 +71,8 @@ macro_rules! hash_float {
             }
 
             #[inline]
-            fn canonicalize(self) -> Self {
-                let bits = self.to_bits();
-                let bits = if bits << 1 == 0 { 0 } else { bits };
-                Self::from_bits(bits)
+            fn normalize_key(self) -> Self {
+                normalize_float(self)
             }
         })+
     };
@@ -150,7 +134,7 @@ where
                     // Fold equivalence-class duplicates (e.g. `-0.0` → `+0.0`)
                     // so the bit-equal `is_eq` matches and the stored value is
                     // the canonical representative.
-                    let key = key.canonicalize();
+                    let key = key.normalize_key();
                     let state = &self.random_state;
                     let hash = key.hash(state);
                     let insert = self.map.entry(
@@ -178,7 +162,7 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<(usize, u64)>() + self.values.allocated_size()
+        size_of::<Self>() + self.map.allocation_size() + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -268,11 +252,19 @@ where
         true
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.map.shrink_to_fit(|&(_, hash)| hash);
+        self.values.shrink_to_fit();
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         self.values.clear();
         self.values.shrink_to(num_rows);
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+
+        // Reset the null group index
+        self.null_group = None;
     }
 }
 
@@ -283,6 +275,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::DataType;
     use datafusion_expr::EmitTo;
+    use std::mem::size_of;
     use std::sync::Arc;
 
     /// Mirror of the `EmitTo::take_needed` regression test, applied to the
@@ -319,6 +312,117 @@ mod tests {
             gv.values.capacity(),
             capacity_before,
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_hash_table_allocation_accounting() {
+        let mut group_values = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+        let self_size = size_of::<GroupValuesPrimitive<Int32Type>>();
+
+        // 1. Initial state: the constructor calls HashTable::with_capacity(128),
+        //    so the map already has a nonzero retained allocation. Capture it
+        //    and verify that size() accounts for it correctly.
+        let initial_map_bytes = group_values.map.allocation_size();
+        assert!(group_values.map.capacity() >= 128);
+        assert!(initial_map_bytes > 0);
+        assert_eq!(
+            group_values.size(),
+            self_size + group_values.values.allocated_size() + initial_map_bytes,
+        );
+
+        // 2. Insert keys and observe table allocation growth
+        let num_distinct = 500_i32;
+        let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..num_distinct));
+        let mut groups = vec![];
+        group_values.intern(&[arr], &mut groups).unwrap();
+        assert_eq!(groups.len(), num_distinct as usize);
+
+        let table_bytes = group_values.map.allocation_size();
+        assert!(group_values.map.capacity() >= num_distinct as usize);
+        assert!(table_bytes > 0);
+
+        // Hashbrown's layout contains entry slots, control bytes, and trailing group bytes.
+        // It must strictly exceed the naive entry-only size
+        let entry_only_bytes = group_values.map.capacity() * size_of::<(usize, u64)>();
+        assert!(table_bytes > entry_only_bytes);
+
+        assert_eq!(
+            group_values.size(),
+            self_size + group_values.values.allocated_size() + table_bytes,
+        );
+
+        // 3. Partial emit (EmitTo::First)
+        let emit_count = 200;
+        let emitted = group_values.emit(EmitTo::First(emit_count)).unwrap();
+        assert_eq!(emitted[0].len(), emit_count);
+        assert_eq!(group_values.len(), (num_distinct as usize) - emit_count);
+
+        // Retained capacity is still charged until the table releases it
+        assert_eq!(group_values.map.allocation_size(), table_bytes);
+        assert_eq!(
+            group_values.size(),
+            self_size + group_values.values.allocated_size() + table_bytes,
+        );
+
+        // 4. Emit all (EmitTo::All)
+        let remaining_count = group_values.len();
+        let emitted_all = group_values.emit(EmitTo::All).unwrap();
+        assert_eq!(emitted_all[0].len(), remaining_count);
+        assert_eq!(group_values.len(), 0);
+
+        // Clear preserves table capacity
+        assert_eq!(group_values.map.allocation_size(), table_bytes);
+
+        // 5. clear_shrink: releases/shrinks map capacity
+        group_values.clear_shrink(16);
+        let shrunken_table_bytes = group_values.map.allocation_size();
+        assert!(shrunken_table_bytes < table_bytes);
+        assert_eq!(
+            group_values.size(),
+            self_size + group_values.values.allocated_size() + shrunken_table_bytes,
+        );
+
+        // 6. Reinsert new distinct values into the shrunken table
+        let new_arr: ArrayRef = Arc::new(Int32Array::from_iter_values(
+            num_distinct..(num_distinct * 2),
+        ));
+        group_values.intern(&[new_arr], &mut groups).unwrap();
+        assert_eq!(groups.len(), num_distinct as usize);
+        assert!(group_values.map.allocation_size() > shrunken_table_bytes);
+        assert_eq!(
+            group_values.size(),
+            self_size
+                + group_values.values.allocated_size()
+                + group_values.map.allocation_size(),
+        );
+    }
+
+    #[test]
+    fn clear_shrink_reset_null_group() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+
+        // Intern some values including a null
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+
+        assert_eq!(groups.len(), 3);
+
+        let null_group = groups[1];
+        assert_eq!(null_group, 1);
+
+        // Clear and shrink
+        gv.clear_shrink(0);
+
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+        assert_eq!(groups.len(), 1);
+
+        let new_null_group = groups[0];
+        assert_eq!(new_null_group, 0);
 
         Ok(())
     }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Optimizer rule for type validation and coercion
 
@@ -28,7 +15,9 @@ use crate::utils::{NamePreserver, merge_into_schema};
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
@@ -37,10 +26,10 @@ use datafusion_common::{
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists,
     HigherOrderFunction, InList, InSubquery, Like, ScalarFunction, SetComparison, Sort,
-    WindowFunction,
+    WindowFunction, in_subquery_tuple_values,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
-use datafusion_expr::expr_schema::cast_subquery;
+use datafusion_expr::expr_schema::{cast_subquery, cast_subquery_columns};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
@@ -56,7 +45,8 @@ use datafusion_expr::type_coercion::{
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     AsOfJoin, AsOfMatch, Cast, DmlStatement, Expr, ExprSchemable, Join, Limit,
-    LogicalPlan, Operator, Projection, Union, ValueOrLambda, WindowFrame,
+    LogicalPlan, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
+    MaterializedCteScan, Operator, Projection, Union, ValueOrLambda, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WriteOp, is_false, is_not_false, is_not_true,
     is_not_unknown, is_true, is_unknown, lit, not,
 };
@@ -96,22 +86,116 @@ impl AnalyzerRule for TypeCoercion {
     }
 
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
-        static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
-
-        // recurse
-        let transformed_plan = plan
+        // Record bare row-count parameter types before coercion makes them indistinguishable
+        // from explicit casts. A type inferred elsewhere takes precedence over the default.
+        let parameter_fields = plan.get_parameter_fields()?;
+        let plan = plan
             .transform_up_with_subqueries(|plan| {
-                analyze_internal(
-                    &EMPTY_SCHEMA,
-                    plan,
-                    config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
-                )
+                if !matches!(plan, LogicalPlan::Limit(_)) {
+                    return Ok(Transformed::no(plan));
+                }
+                plan.map_expressions(|expr| match expr {
+                    Expr::Placeholder(mut placeholder) if placeholder.field.is_none() => {
+                        placeholder.field =
+                            parameter_fields.get(&placeholder.id).cloned().flatten();
+                        Ok(Transformed::yes(Expr::Placeholder(placeholder)))
+                    }
+                    expr => Ok(Transformed::no(expr)),
+                })
             })?
             .data;
+
+        // recurse
+        let transformed_plan = coerce_plan_and_subqueries(plan, config)?;
 
         // finish
         coerce_output(transformed_plan, config)
     }
+}
+
+/// Coerce each node of `plan` and of its subqueries, from the leaves up.
+fn coerce_plan_and_subqueries(
+    plan: LogicalPlan,
+    config: &ConfigOptions,
+) -> Result<LogicalPlan> {
+    static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
+
+    plan.transform_down_up_with_subqueries(
+        |plan| match plan {
+            // Coercion can change the types of the body, for example the type
+            // of a `NULL` column of a `UNION`. Coerce the body first, and give
+            // its new schema to the scans before the continuation is coerced.
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                let body =
+                    coerce_plan_and_subqueries(Arc::unwrap_or_clone(cte.cte), config)?;
+                let continuation = with_materialized_cte_scan_schema(
+                    Arc::unwrap_or_clone(cte.continuation),
+                    cte.id,
+                    body.schema(),
+                )?;
+                let continuation = coerce_plan_and_subqueries(continuation, config)?;
+                Ok(Transformed::new(
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                        MaterializedCte {
+                            cte: Arc::new(body),
+                            continuation: Arc::new(continuation),
+                            ..cte
+                        },
+                    )),
+                    true,
+                    TreeNodeRecursion::Jump,
+                ))
+            }
+            _ => Ok(Transformed::no(plan)),
+        },
+        |plan| {
+            analyze_internal(
+                &EMPTY_SCHEMA,
+                plan,
+                config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
+            )
+        },
+    )
+    .map(|t| t.data)
+}
+
+/// Give the fields of `body_schema` to each scan of the materialized CTE `id`
+/// in `continuation`, also in subquery expressions. A scan keeps its
+/// qualifiers.
+fn with_materialized_cte_scan_schema(
+    continuation: LogicalPlan,
+    id: MaterializedCteId,
+    body_schema: &DFSchemaRef,
+) -> Result<LogicalPlan> {
+    continuation
+        .transform_down_with_subqueries(|node| match node {
+            // A nested occurrence of the same CTE owns the scans below it.
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
+                if nested.id == id =>
+            {
+                Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
+            }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+                if scan.id == id && scan.schema.inner() != body_schema.inner() =>
+            {
+                let qualifiers = scan.schema.iter().map(|(q, _)| q.cloned()).collect();
+                let schema = DFSchema::from_field_specific_qualified_schema(
+                    qualifiers,
+                    body_schema.inner(),
+                )?
+                .with_functional_dependencies(
+                    body_schema.functional_dependencies().clone(),
+                )?;
+                Ok(Transformed::yes(LogicalPlan::MaterializedCte(
+                    MaterializedCtePlan::Scan(MaterializedCteScan {
+                        schema: Arc::new(schema),
+                        ..scan
+                    }),
+                )))
+            }
+            _ => Ok(Transformed::no(node)),
+        })
+        .map(|t| t.data)
 }
 
 /// use the external schema to handle the correlated subqueries case
@@ -158,8 +242,7 @@ fn analyze_internal(
         TypeCoercionRewriter::new(&schema).with_session_time_zone(session_time_zone);
 
     let name_preserver = NamePreserver::new(&plan);
-    // apply coercion rewrite all expressions in the plan individually
-    plan.map_expressions(|expr| {
+    let mut coerce_expr = |expr: Expr| {
         let original_name = name_preserver.save(&expr);
 
         // A lambda variable carries the field recorded when the plan was built, which
@@ -173,6 +256,17 @@ fn analyze_internal(
 
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
+    };
+
+    // apply coercion rewrite all expressions in the plan individually
+    plan.map_expressions(|expr| {
+        // Preserve the names of grouping set members, not of the grouping set itself.
+        // An aliased grouping set is no longer recognized as a grouping set.
+        if let Expr::GroupingSet(_) = &expr {
+            expr.map_children(&mut coerce_expr)
+        } else {
+            coerce_expr(expr)
+        }
     })?
     // some plans need extra coercion after their expressions are coerced
     .map_data(|plan| expr_rewrite.coerce_plan(plan))?
@@ -648,26 +742,49 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     self.session_time_zone,
                 )?
                 .data;
-                let expr_type = expr.get_type(self.schema)?;
-                let subquery_type = new_plan.schema().field(0).data_type();
-                let common_type = comparison_coercion_with_session_timezone(
-                    &expr_type,
-                    subquery_type,
-                    self.session_time_zone,
-                )
-                .ok_or(plan_datafusion_err!(
-                    "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
-                ))?;
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
                     spans: subquery.spans,
                 };
-                Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
-                    Box::new(expr.cast_to(&common_type, self.schema)?),
-                    cast_subquery(new_subquery, &common_type)?,
-                    negated,
-                ))))
+                let is_tuple =
+                    in_subquery_tuple_values(&expr, &new_subquery.subquery)?.is_some();
+                match *expr {
+                    // Multi-column `(a, b) IN (SELECT x, y ...)`: the tuple is
+                    // planned as a `struct` call whose arguments are compared
+                    // pairwise with the subquery columns, so coerce each pair.
+                    Expr::ScalarFunction(func) if is_tuple => {
+                        let (expr, subquery) = coerce_multi_column_in_subquery(
+                            func,
+                            new_subquery,
+                            self.schema,
+                            self.session_time_zone,
+                        )?;
+                        Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
+                            Box::new(expr),
+                            subquery,
+                            negated,
+                        ))))
+                    }
+                    expr => {
+                        let expr_type = expr.get_type(self.schema)?;
+                        let subquery_type =
+                            new_subquery.subquery.schema().field(0).data_type();
+                        let common_type = comparison_coercion_with_session_timezone(
+                            &expr_type,
+                            subquery_type,
+                            self.session_time_zone,
+                        )
+                        .ok_or(plan_datafusion_err!(
+                            "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
+                        ))?;
+                        Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
+                            Box::new(expr.cast_to(&common_type, self.schema)?),
+                            cast_subquery(new_subquery, &common_type)?,
+                            negated,
+                        ))))
+                    }
+                }
             }
             Expr::SetComparison(SetComparison {
                 expr,
@@ -1178,11 +1295,9 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
 /// run over an ORDER BY column of `col_type` even though the type has no
 /// arithmetic for finite offsets.
 ///
-/// Such a frame only compares rows to find peers, so the type must compare
-/// the same way in the RANGE peer check (`ScalarValue::partial_cmp`) as in
-/// the sort that produced the input order. That holds for durations and
-/// intervals; it does not for structs and maps, whose `ScalarValue`
-/// comparison differs from the sorter's, so they stay unsupported.
+/// This fallback admits durations and intervals, including encoded values.
+/// Admission remains conservative: Arrow peer comparison also supports nested
+/// types, but admitting structs and maps requires separate validation.
 fn supports_free_range_frame(col_type: &DataType) -> bool {
     match col_type {
         DataType::Duration(_) | DataType::Interval(_) => true,
@@ -1195,16 +1310,8 @@ fn supports_free_range_frame(col_type: &DataType) -> bool {
 }
 
 /// Whether `col_type` is a list, possibly behind dictionary or run-end
-/// encoding.
-///
-/// Lists are kept out of the free-range fallback because their peer
-/// comparison and the sort do not agree on element NULLs: `compare_rows`
-/// applies the NULLS FIRST / NULLS LAST option to the top-level value only and
-/// then calls `ScalarValue::partial_cmp`, whose `partial_cmp_list` always
-/// orders a NULL element after a non-NULL one (Postgres semantics), while the
-/// sorter's `make_comparator` applies the option to the elements as well. Under
-/// `ORDER BY d, l NULLS FIRST` with tied `d`, the sort puts `[NULL]` before
-/// `[1]` and the peer check orders them the other way round.
+/// encoding. Free-range fallback still excludes lists conservatively, although
+/// Arrow can now find peers for supported list keys.
 fn is_list_type(col_type: &DataType) -> bool {
     match col_type {
         DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
@@ -1217,8 +1324,9 @@ fn is_list_type(col_type: &DataType) -> bool {
 }
 
 /// Errors if any ORDER BY expression has a type not supported in a free RANGE
-/// frame: a type with neither an offset target nor a sound peer comparison, or
-/// a list (see `is_list_type`).
+/// frame: a type with neither an offset target nor support in the free-range
+/// fallback, or a list (see `is_list_type`). These conservative admission rules
+/// can be relaxed separately from the nested peer-comparison fix.
 fn check_free_range_order_by_types(
     expressions: &[Sort],
     schema: &DFSchema,
@@ -1260,9 +1368,8 @@ fn coerce_window_frame(
                         }
                         target_type
                     }
-                    // A free range frame has no offsets to coerce, so ORDER BY
-                    // types without arithmetic are fine as long as their peer
-                    // comparison is sound (see `supports_free_range_frame`).
+                    // A free range frame has no offsets to coerce. Check whether
+                    // its ORDER BY types are supported by the free-range fallback.
                     None if window_frame.free_range() => {
                         check_free_range_order_by_types(expressions, schema)?;
                         return Ok(window_frame);
@@ -1677,6 +1784,40 @@ fn project_with_column_index(
         .map(LogicalPlan::Projection)
 }
 
+/// Coerces a multi-column `(a, b, ...) IN (SELECT x, y, ...)`.
+///
+/// Each tuple element and the subquery column at the same position are cast
+/// to their common comparison type, like the single-column form does for its
+/// one pair.
+fn coerce_multi_column_in_subquery(
+    func: ScalarFunction,
+    subquery: Subquery,
+    schema: &DFSchema,
+    session_time_zone: Option<&str>,
+) -> Result<(Expr, Subquery)> {
+    let subquery_schema = Arc::clone(subquery.subquery.schema());
+    let mut common_types = Vec::with_capacity(func.args.len());
+    let mut args = Vec::with_capacity(func.args.len());
+    for (arg, field) in func.args.into_iter().zip(subquery_schema.fields()) {
+        let expr_type = arg.get_type(schema)?;
+        let subquery_type = field.data_type();
+        let common_type = comparison_coercion_with_session_timezone(
+            &expr_type,
+            subquery_type,
+            session_time_zone,
+        )
+        .ok_or(plan_datafusion_err!(
+            "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
+        ))?;
+        args.push(arg.cast_to(&common_type, schema)?);
+        common_types.push(common_type);
+    }
+    Ok((
+        Expr::ScalarFunction(ScalarFunction::new_udf(func.func, args)),
+        cast_subquery_columns(subquery, &common_types)?,
+    ))
+}
+
 #[cfg(test)]
 mod test {
 
@@ -1686,10 +1827,10 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
     use insta::assert_snapshot;
 
-    use crate::analyzer::Analyzer;
     use crate::analyzer::type_coercion::{
         TypeCoercion, TypeCoercionRewriter, coerce_case_expression,
     };
+    use crate::analyzer::{Analyzer, AnalyzerRule};
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
@@ -1699,13 +1840,13 @@ mod test {
     use datafusion_expr::expr::{
         self, InSubquery, Like, ScalarFunction, SetComparison, SetQuantifier,
     };
-    use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
+    use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort, table_scan};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
-        ExprSchemable, Filter, LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast,
-        col, create_udaf, is_true, lit,
+        ExprSchemable, Filter, Limit, LogicalPlan, Operator, ScalarFunctionArgs,
+        ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union,
+        Volatility, cast, col, create_udaf, grouping_set, is_true, lit, placeholder,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -1787,6 +1928,19 @@ mod test {
             }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn untyped_limit_parameter_remains_inferable_after_coercion() -> Result<()> {
+        let plan = LogicalPlan::Limit(Limit {
+            input: empty(),
+            fetch: Some(Box::new(placeholder("$1"))),
+            skip: None,
+        });
+        let analyzed = TypeCoercion::new().analyze(plan, &ConfigOptions::default())?;
+
+        assert_eq!(analyzed.get_parameter_types()?["$1"], Some(DataType::Int64));
         Ok(())
     }
 
@@ -2282,6 +2436,41 @@ mod test {
           EmptyRelation: rows=0
         "
         )
+    }
+
+    #[test]
+    fn scalar_udf_in_grouping_set() -> Result<()> {
+        let udf = ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        })
+        .call(vec![lit(123_i32)]);
+        let schema = Schema::new(vec![Field::new("a", Utf8, false)]);
+        let plan = table_scan(Some("t"), &schema, None)?
+            .aggregate(
+                vec![grouping_set(vec![
+                    vec![col("t.a"), udf.clone()],
+                    vec![udf],
+                    vec![],
+                ])],
+                Vec::<Expr>::new(),
+            )?
+            .build()?;
+
+        // Each renamed member is aliased to its original name, not the grouping set
+        let analyzed = TypeCoercion::new().analyze(plan, &ConfigOptions::default())?;
+        assert_snapshot!(
+            analyzed,
+            @r#"
+        Aggregate: groupBy=[[GROUPING SETS ((t.a, TestScalarUDF(Float32(123)) AS TestScalarUDF(Int32(123))), (TestScalarUDF(Float32(123)) AS TestScalarUDF(Int32(123))), ())]], aggr=[[]]
+          TableScan: t
+        "#
+        );
+
+        // A second pass leaves the plan unchanged
+        let reanalyzed =
+            TypeCoercion::new().analyze(analyzed.clone(), &ConfigOptions::default())?;
+        assert_eq!(analyzed, reanalyzed);
+        Ok(())
     }
 
     #[test]

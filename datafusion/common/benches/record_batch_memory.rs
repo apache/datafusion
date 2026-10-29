@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Measures the CPU overhead of accounting for the backing buffers retained by
 //! [`RecordBatch`]es. Batch construction is intentionally outside the timed
@@ -27,7 +14,7 @@ use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::utils::memory::{
-    RecordBatchMemoryCounter, get_record_batch_memory_size,
+    RecordBatchMemoryCounter, RecordBatchMemoryTracker, get_record_batch_memory_size,
 };
 
 fn make_batch(columns: Vec<ArrayRef>) -> RecordBatch {
@@ -180,11 +167,44 @@ fn benchmark_shared_slices(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_count_uncount(c: &mut Criterion) {
+    let mut group = c.benchmark_group("record_batch_memory_size/count_uncount");
+
+    // Model the sort/window workload: batches are counted as they arrive and
+    // uncounted when they are dropped. Measure the full cycle.
+    for num_columns in [4, 16, 64] {
+        let batch = make_primitive_batch(8192, num_columns);
+        let slices = (0..32)
+            .map(|index| batch.slice(index * 256, 256))
+            .collect::<Vec<_>>();
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(num_columns),
+            &slices,
+            |bencher, slices| {
+                bencher.iter(|| {
+                    let mut counter = RecordBatchMemoryTracker::new();
+                    for batch in black_box(slices) {
+                        black_box(counter.count_batch(black_box(batch)));
+                    }
+                    for batch in black_box(slices) {
+                        black_box(counter.uncount_batch(black_box(batch)));
+                    }
+                    assert_eq!(counter.memory_usage(), 0);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_column_count,
     benchmark_row_count,
     benchmark_array_layout,
-    benchmark_shared_slices
+    benchmark_shared_slices,
+    benchmark_count_uncount
 );
 criterion_main!(benches);
