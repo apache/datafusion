@@ -73,11 +73,13 @@ use datafusion_expr::expr::{
     physical_name,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
+use datafusion_expr::extension_types::field_type_display_name;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::physical_planning_context::{
     PhysicalPlanningContext, ScalarSubqueryResults, SubqueryIndex,
 };
+use datafusion_expr::registry::ExtensionTypeRegistry;
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
@@ -873,7 +875,11 @@ impl DefaultPhysicalPlanner {
                 output_schema,
             }) => {
                 let output_schema = Arc::clone(output_schema.inner());
-                self.plan_describe(&Arc::clone(schema), output_schema)?
+                self.plan_describe(
+                    &Arc::clone(schema),
+                    output_schema,
+                    session_state.extension_type_registry().as_ref(),
+                )?
             }
 
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
@@ -3436,6 +3442,7 @@ impl DefaultPhysicalPlanner {
         &self,
         table_schema: &Arc<Schema>,
         output_schema: Arc<Schema>,
+        extension_types: &dyn ExtensionTypeRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut column_names = StringBuilder::new();
         let mut data_types = StringBuilder::new();
@@ -3443,9 +3450,9 @@ impl DefaultPhysicalPlanner {
         for field in table_schema.fields() {
             column_names.append_value(field.name());
 
-            // "System supplied type" --> Use debug format of the datatype
-            let data_type = field.data_type();
-            data_types.append_value(format!("{data_type}"));
+            // "System supplied type" --> Use the display name of the extension type or the
+            // debug format of the datatype
+            data_types.append_value(field_type_display_name(extension_types, field));
 
             // "YES if the column is possibly nullable, NO if it is known not nullable. "
             let nullable_str = if field.is_nullable() { "YES" } else { "NO" };

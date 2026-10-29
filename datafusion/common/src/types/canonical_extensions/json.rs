@@ -42,4 +42,8 @@ impl DFExtensionType for DFJson {
     fn serialize_metadata(&self) -> Option<String> {
         self.inner.serialize_metadata()
     }
+
+    fn display_name(&self) -> Option<String> {
+        Some("JSON".to_owned())
+    }
 }

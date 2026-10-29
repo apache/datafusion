@@ -30,6 +30,7 @@ pub type DFExtensionTypeRef = Arc<dyn DFExtensionType>;
 /// Note that DataFusion's extension type support is still young and therefore might not cover all
 /// relevant use cases. Currently, the following operations can be customized:
 /// - Pretty-printing values in record batches
+/// - The type name shown by schema introspection (`DESCRIBE`, `information_schema.columns`)
 ///
 /// # Relation to Arrow's [`ExtensionType`](arrow_schema::extension::ExtensionType)
 ///
@@ -62,6 +63,16 @@ pub trait DFExtensionType: Debug + Send + Sync {
 
     /// Returns the serialized metadata.
     fn serialize_metadata(&self) -> Option<String>;
+
+    /// Returns the name of this type shown by schema introspection, such as `DESCRIBE`,
+    /// `SHOW COLUMNS` and `information_schema.columns`.
+    ///
+    /// The name may depend on the metadata of the type, for example `VARCHAR(10)`.
+    ///
+    /// If `None` is returned, the storage type is shown.
+    fn display_name(&self) -> Option<String> {
+        None
+    }
 
     /// Returns an [`ArrayFormatter`] that can format values of this type.
     ///
