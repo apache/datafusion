@@ -821,20 +821,17 @@ fn build_extraction_projection_impl(
             if output_names.contains(col.name.as_str()) {
                 continue;
             }
-            let resolved = inliner
-                .definition(col)
-                .cloned()
-                .unwrap_or_else(|| Expr::Column(col.clone()));
-            if let Expr::Column(resolved_col) = &resolved
-                && let Some(input_col) = resolve_against(input_schema, resolved_col)
+            // `existing` does not produce this name, so `col` is not one of
+            // its outputs and has no definition to resolve: it can only be a
+            // column of the input.
+            if let Some(input_col) = resolve_against(input_schema, col)
                 && !existing_cols.contains(&input_col)
                 && !output_names.contains(input_col.name.as_str())
             {
                 proj_exprs.push(Expr::Column(input_col));
             }
-            // Skip a column that resolves to a non-column expr: the existing
-            // projection already computes it. Also skip a column that is not in
-            // the input or is ambiguous there: no single spelling is correct.
+            // Skip a column that is not in the input or is ambiguous there: no
+            // single spelling is correct.
         }
 
         Projection::try_new(proj_exprs, Arc::clone(&existing.input)).map(Some)

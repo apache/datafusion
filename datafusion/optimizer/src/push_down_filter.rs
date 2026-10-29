@@ -56,7 +56,7 @@ use datafusion_expr::{
 
 use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
-use crate::projection_inliner::{DuplicationCost, ProjectionInliner};
+use crate::projection_inliner::{DuplicationCost, ProjectionInliner, unalias};
 use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
 use crate::utils::{
     ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
@@ -1560,20 +1560,33 @@ fn rewrite_projection(
     //   `get_field`). Re-inlining such an expression into a filter causes
     //   optimizer instability: `ExtractLeafExpressions` undoes the push-down,
     //   which creates a loop that runs until the iteration limit is hit.
+    //
+    // The references are counted over the predicates that can be pushed
+    // only: a predicate that is kept above reads the column that the
+    // projection computes, so it does not evaluate the definition again.
+    let references_leaf_expr: Vec<bool> = predicates
+        .iter()
+        .map(|expr| {
+            expr.column_refs().into_iter().any(|col| {
+                inliner.definition(col).is_some_and(|definition| {
+                    definition.placement() == ExpressionPlacement::MoveTowardsLeafNodes
+                })
+            })
+        })
+        .collect();
     let no_other_consumers: [&Expr; 0] = [];
     let pinned = inliner.pinned_with_unknown_consumers(
-        &predicates,
+        predicates
+            .iter()
+            .zip(&references_leaf_expr)
+            .filter(|(_, kept)| !**kept)
+            .map(|(expr, _)| expr),
         no_other_consumers,
         DuplicationCost::Cheap,
     );
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
-    for expr in predicates {
-        let references_leaf_expr = expr.column_refs().into_iter().any(|col| {
-            inliner.definition(col).is_some_and(|definition| {
-                definition.placement() == ExpressionPlacement::MoveTowardsLeafNodes
-            })
-        });
+    for (expr, references_leaf_expr) in predicates.into_iter().zip(references_leaf_expr) {
         if references_leaf_expr || inliner.references_pinned(&expr, &pinned) {
             keep_predicates.push(expr);
         } else {
@@ -1665,15 +1678,6 @@ fn replace_cols_by_column(
         }
     })
     .data()
-}
-
-/// Unalias expression reference.
-fn unalias(expr: &Expr) -> &Expr {
-    if let Expr::Alias(alias) = expr {
-        unalias(&alias.expr)
-    } else {
-        expr
-    }
 }
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
@@ -5006,6 +5010,33 @@ mod tests {
         Projection: keep_in_place_udf(test.a) AS c1, test.b
           TableScan: test, full_filters=[keep_in_place_udf(test.a) IS NOT NULL]
         "
+        )
+    }
+
+    /// A predicate that stays above the projection reads the computed column,
+    /// so it does not count as an evaluation of the definition. The other
+    /// predicate references `c1` one time and is pushed.
+    #[test]
+    fn kept_predicate_does_not_pin_expensive_reference() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![
+                keep_in_place_udf(col("a")).alias("c1"),
+                get_field_like(col("b"), "x").alias("c2"),
+            ])?
+            .filter(
+                col("c1")
+                    .eq(col("c2"))
+                    .and(col("c1").gt(lit(ScalarValue::UInt32(Some(1))))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Filter: c1 = c2
+          Projection: keep_in_place_udf(test.a) AS c1, get_field_like(test.b, Utf8("x")) AS c2
+            TableScan: test, full_filters=[keep_in_place_udf(test.a) > UInt32(1)]
+        "#
         )
     }
 

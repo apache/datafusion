@@ -62,9 +62,10 @@ pub(crate) enum DuplicationCost {
     /// `OptimizeProjections` (issue #8296) unchanged.
     Cheap,
     /// Contains a scalar function that reports
-    /// [`ExpressionPlacement::KeepInPlace`] for column arguments. This is the
-    /// default for a user-defined function, so the optimizer must assume that
-    /// it can be arbitrarily expensive.
+    /// [`ExpressionPlacement::KeepInPlace`] for column arguments, or a
+    /// higher-order function. This is the default for a user-defined
+    /// function, so the optimizer must assume that it can be arbitrarily
+    /// expensive.
     Expensive,
     /// Must never be evaluated more than one time: the expression is volatile
     /// (for example `random()`) or contains a subquery.
@@ -81,7 +82,8 @@ impl DuplicationCost {
         // `ExpressionPlacement::MoveTowardsLeafNodes`, and `file_row_index()`
         // does. Such a call is cheap to evaluate and still must never be
         // evaluated at two sites, because the two sites give two different
-        // answers.
+        // answers. Every kind of function node can be volatile, not only a
+        // scalar function (see [`Expr::is_volatile_node`]).
         let mut cost = Self::Cheap;
         expr.apply(|e| {
             let node_cost = match e {
@@ -89,7 +91,8 @@ impl DuplicationCost {
                 | Expr::Exists(_)
                 | Expr::InSubquery(_)
                 | Expr::SetComparison(_) => Self::Forbidden,
-                Expr::ScalarFunction(_) if e.is_volatile_node() => Self::Forbidden,
+                _ if e.is_volatile_node() => Self::Forbidden,
+                Expr::HigherOrderFunction(_) => Self::Expensive,
                 Expr::ScalarFunction(func) => {
                     // Ask the function for its own placement, as if its
                     // arguments were plain columns and literals. This isolates
@@ -150,8 +153,10 @@ impl PinnedDefinitions {
 /// caller gives. See [`ProjectionInliner::pinned`].
 #[derive(Debug)]
 pub(crate) struct ProjectionInliner<'a> {
-    /// (definition without top-level alias, cost), in output column order
-    definitions: Vec<(&'a Expr, DuplicationCost)>,
+    /// Definitions without top-level alias, in output column order. Their
+    /// [`DuplicationCost`] is computed only for the definitions that a check
+    /// references.
+    definitions: Vec<&'a Expr>,
     /// Output column -> index into `definitions`
     by_column: HashMap<Column, usize>,
     /// Output column name -> index into `definitions`, for unqualified
@@ -171,8 +176,7 @@ impl<'a> ProjectionInliner<'a> {
         for (idx, ((qualifier, field), expr)) in
             columns.zip(projection.expr.iter()).enumerate()
         {
-            let expr = unalias(expr);
-            inliner.definitions.push((expr, DuplicationCost::of(expr)));
+            inliner.definitions.push(unalias(expr));
             inliner
                 .by_column
                 .insert(Column::new(qualifier.cloned(), field.name()), idx);
@@ -259,8 +263,11 @@ impl<'a> ProjectionInliner<'a> {
         let pinned = inlined_references
             .into_iter()
             .filter(|(idx, count)| {
-                let cost = self.definitions[*idx].1;
                 let evaluations = count + usize::from(other_references.contains_key(idx));
+                if evaluations <= 1 && !pin_forbidden {
+                    return false;
+                }
+                let cost = DuplicationCost::of(self.definitions[*idx]);
                 (pin_forbidden && cost == DuplicationCost::Forbidden)
                     || (evaluations > 1 && cost > max_cost)
             })
@@ -286,7 +293,7 @@ impl<'a> ProjectionInliner<'a> {
 
     /// Returns the definition of `column`, without its top-level alias.
     pub(crate) fn definition(&self, column: &Column) -> Option<&'a Expr> {
-        self.index_of(column).map(|idx| self.definitions[idx].0)
+        self.index_of(column).map(|idx| self.definitions[idx])
     }
 
     /// Replaces each column reference in `expr` with its definition, without a
@@ -326,7 +333,7 @@ impl<'a> ProjectionInliner<'a> {
 }
 
 /// Removes all top-level aliases.
-fn unalias(expr: &Expr) -> &Expr {
+pub(crate) fn unalias(expr: &Expr) -> &Expr {
     match expr {
         Expr::Alias(alias) => unalias(&alias.expr),
         _ => expr,
