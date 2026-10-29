@@ -29,9 +29,12 @@ use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
+use datafusion_physical_expr::utils::Guarantee;
 use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::basic::ColumnOrder;
+use parquet::basic::Type;
+use parquet::bloom_filter::Sbbf;
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::schema::types::SchemaDescriptor;
 
@@ -123,11 +126,6 @@ impl RowGroupAccessPlanFilter {
     /// Returns a reference to the inner access plan.
     pub(crate) fn access_plan(&self) -> &ParquetAccessPlan {
         &self.access_plan
-    }
-
-    /// Returns a mutable reference to the inner access plan.
-    pub(crate) fn access_plan_mut(&mut self) -> &mut ParquetAccessPlan {
-        &mut self.access_plan
     }
 
     /// Returns the is_fully_matched vector.
@@ -511,11 +509,82 @@ impl RowGroupAccessPlanFilter {
 
             if prune_group {
                 metrics.row_groups_pruned_bloom_filter.add_pruned(1);
-                self.access_plan.skip(idx)
+                self.access_plan.skip(idx);
             } else {
                 metrics.row_groups_pruned_bloom_filter.add_matched(1);
             }
         }
+    }
+
+    /// Extracts column guarantees from a [`PruningPredicate`] that can be evaluated against
+    /// Parquet Bloom filters.
+    pub fn prepare_bloom_column_guarantees(
+        predicate: &PruningPredicate,
+        parquet_schema: &SchemaDescriptor,
+        file_schema: &Schema,
+    ) -> Vec<BloomColumnGuarantee> {
+        predicate
+            .literal_columns()
+            .into_iter()
+            .filter_map(|column_name| {
+                let (column_idx, _) = parquet::arrow::parquet_column(
+                    parquet_schema,
+                    file_schema,
+                    &column_name,
+                )?;
+                let in_guarantees: Vec<HashSet<ScalarValue>> = predicate
+                    .literal_guarantees()
+                    .iter()
+                    .filter(|lg| {
+                        lg.column.name == column_name && lg.guarantee == Guarantee::In
+                    })
+                    .map(|lg| lg.literals.clone())
+                    .collect();
+                Some(BloomColumnGuarantee {
+                    column_idx,
+                    physical_type: parquet_schema.column(column_idx).physical_type(),
+                    type_length: parquet_schema.column(column_idx).type_length(),
+                    in_guarantees,
+                })
+            })
+            .collect()
+    }
+
+    /// Evaluates whether a loaded column Bloom filter prunes the specified row group.
+    ///
+    /// If all values for any IN guarantee on this column are confirmed absent from the Bloom
+    /// filter, the row group is marked as skipped in the access plan, the
+    /// `row_groups_pruned_bloom_filter` metric is incremented, and `true` is returned to
+    /// indicate early rejection (allowing callers to skip loading remaining column filters).
+    pub fn prune_row_group_with_bloom_filter(
+        &mut self,
+        idx: usize,
+        guarantee: &BloomColumnGuarantee,
+        sbbf: &Sbbf,
+        metrics: &ParquetFileMetrics,
+    ) -> bool {
+        let _timer_guard = metrics.bloom_filter_eval_time.timer();
+        let prunable = guarantee.in_guarantees.iter().any(|literals| {
+            BloomFilterStatistics::is_known_not_present(
+                sbbf,
+                literals,
+                &guarantee.physical_type,
+                guarantee.type_length,
+            )
+        });
+
+        if prunable {
+            metrics.row_groups_pruned_bloom_filter.add_pruned(1);
+            self.access_plan.skip(idx);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Records that the row group was evaluated against Bloom filters but was not pruned.
+    pub fn record_bloom_filter_matched(&mut self, metrics: &ParquetFileMetrics) {
+        metrics.row_groups_pruned_bloom_filter.add_matched(1);
     }
 }
 
@@ -1780,4 +1849,20 @@ mod tests {
     fn assert_pruned(row_groups: RowGroupAccessPlanFilter, expected: ExpectedPruning) {
         expected.assert(&row_groups);
     }
+}
+
+/// Pre-extracted Bloom filter pruning guarantees for a single Parquet column.
+///
+/// Pre-extracting guarantees avoids repeatedly re-traversing the [`PruningPredicate`]
+/// expression tree for every row group and column during incremental Bloom filter loading.
+#[derive(Debug, Clone)]
+pub struct BloomColumnGuarantee {
+    /// Parquet physical column index
+    pub column_idx: usize,
+    /// Physical Parquet type of the column
+    pub physical_type: Type,
+    /// Type length for FIXED_LEN_BYTE_ARRAY, or 0
+    pub type_length: i32,
+    /// Literal sets for IN guarantees on this column
+    pub in_guarantees: Vec<HashSet<ScalarValue>>,
 }
