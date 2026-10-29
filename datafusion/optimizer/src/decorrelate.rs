@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`PullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
 
@@ -22,6 +9,7 @@ use std::sync::Arc;
 
 use crate::push_down_filter::lr_is_preserved;
 use crate::simplify_expressions::ExprSimplifier;
+use crate::utils::replace_qualified_name;
 
 use datafusion_common::nested_struct::is_injective_cast;
 use datafusion_common::tree_node::{
@@ -33,15 +21,14 @@ use datafusion_common::{
     plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
+use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::utils::{
-    collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
-};
+use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
 use datafusion_expr::{
-    Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, Extension,
-    FetchType, LogicalPlan, LogicalPlanBuilder, MaterializedCte, Operator, SkipType,
-    UserDefinedLogicalNodeCore, Window, expr, lit,
+    Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
+    LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCtePlan, Operator,
+    SkipType, Window, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -83,6 +70,9 @@ pub struct PullUpCorrelatedExpr {
     pub pull_up_having_expr: Option<Expr>,
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
+    ///
+    /// An `Aggregate` above stops the pull up when this is set. `f_up` visits
+    /// the aggregate that sets it before any node above.
     pub pulled_up_scalar_agg: bool,
     /// Every correlated conjunct that a `Filter` of the subquery applies,
     /// before `remove_duplicated_filter` drops the ones that the `IN`
@@ -205,35 +195,25 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::Subquery(_) => {
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
             }
-            LogicalPlan::Extension(Extension { node })
-                if node.as_any().is::<MaterializedCte>() =>
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref cte))
+                if !cte.cte.all_out_ref_exprs().is_empty() =>
             {
-                let cte = node.as_any().downcast_ref::<MaterializedCte>().unwrap();
-                if !cte.cte.all_out_ref_exprs().is_empty() {
-                    // A correlated body would have to run once per outer row.
-                    return Ok(
-                        self.stop_pull_up(LogicalPlan::Extension(Extension { node }))
-                    );
-                }
+                // A correlated body would have to run once per outer row.
+                Ok(self.stop_pull_up(plan))
+            }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 // Only the continuation can hold correlated expressions. Rewrite
                 // it alone, so that the body shared by every scan keeps its schema.
-                let continuation = cte.continuation.clone().rewrite(self)?;
-                if !continuation.transformed {
-                    return Ok(Transformed::new(
-                        LogicalPlan::Extension(Extension { node }),
-                        false,
-                        TreeNodeRecursion::Jump,
-                    ));
-                }
-                let cte = cte.with_exprs_and_inputs(
-                    vec![],
-                    vec![cte.cte.clone(), continuation.data],
-                )?;
+                let continuation =
+                    Arc::unwrap_or_clone(cte.continuation).rewrite(self)?;
                 Ok(Transformed::new(
-                    LogicalPlan::Extension(Extension {
-                        node: Arc::new(cte),
-                    }),
-                    true,
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                        MaterializedCte {
+                            continuation: Arc::new(continuation.data),
+                            ..cte
+                        },
+                    )),
+                    continuation.transformed,
                     TreeNodeRecursion::Jump,
                 ))
             }
@@ -347,6 +327,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::TableScan(_)
             | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
             | LogicalPlan::Values(_) => {
                 if plan.contains_outer_reference() {
                     // the unsupported cases, the plan expressions contain out
@@ -405,7 +386,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     }
                 }
                 let (mut join_filters, subquery_filters) =
-                    find_join_exprs(subquery_filter_exprs)?;
+                    find_join_exprs(subquery_filter_exprs);
                 if let Some(in_predicate) = &self.in_predicate_opt {
                     // in_predicate may be already included in the join filters, remove it from the join filters first.
                     join_filters = remove_duplicated_filter(join_filters, in_predicate)?;
@@ -491,7 +472,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                             LogicalPlanBuilder::from((*plan_filter.input).clone())
                                 .build()?;
                         self.correlated_subquery_cols_map
-                            .insert(new_plan.clone(), correlated_subquery_cols);
+                            .entry(new_plan.clone())
+                            .or_default()
+                            .extend(correlated_subquery_cols);
                         Ok(Transformed::yes(new_plan))
                     }
                     (None, _) => {
@@ -503,7 +486,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         }
                         let new_plan = plan.build()?;
                         self.correlated_subquery_cols_map
-                            .insert(new_plan.clone(), correlated_subquery_cols);
+                            .entry(new_plan.clone())
+                            .or_default()
+                            .extend(correlated_subquery_cols);
                         Ok(Transformed::yes(new_plan))
                     }
                 }
@@ -556,6 +541,14 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::Aggregate(aggregate)
                 if self.in_predicate_opt.is_some() || !self.join_filters.is_empty() =>
             {
+                // A pulled up scalar aggregate below gives no row for unmatched
+                // outer rows, so this aggregate would see an empty input. Stop
+                // the rewrite here, since rebuilding the nodes above can fail
+                // with a schema error. See https://github.com/apache/datafusion/issues/26508
+                if self.pulled_up_scalar_agg {
+                    self.can_pull_up = false;
+                    return Ok(Transformed::new(plan, false, TreeNodeRecursion::Stop));
+                }
                 // If the aggregation is from a distinct it will not change the result for
                 // exists/in subqueries so we can still pull up all predicates.
                 let is_distinct = aggregate.aggr_expr.is_empty();
@@ -647,8 +640,6 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     }
                 }
                 if aggregate.group_expr.is_empty() {
-                    // TODO: how do we handle the case where we have pulled multiple aggregations? For example,
-                    // a group agg with a scalar agg as child.
                     self.pulled_up_scalar_agg = true;
                 }
                 let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
@@ -1115,6 +1106,60 @@ fn collect_local_correlated_cols(
     }
 }
 
+/// Extracts correlated predicates, such as a comparison between a column from the
+/// subquery and a column from the outer scope.
+///
+/// Preserves [`Expr::OuterReferenceColumn`] markers so callers can distinguish
+/// inner and outer columns when qualifying join filters (see [`build_join_filter`]).
+///
+/// # Arguments
+///
+/// * `exprs` - Subquery filter predicates to classify.
+///
+/// # Return value
+///
+/// Tuple of (correlated join filters, remaining subquery filters). Correlated
+/// self-equalities are discarded from both lists.
+pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
+    let mut joins = vec![];
+    let mut others = vec![];
+    for filter in exprs {
+        // Predicates containing outer references become join filters.
+        if filter.contains_outer() {
+            // Compare with the outer-reference markers intact: inner and outer
+            // columns with the same qualified name belong to different scopes.
+            if !matches!(filter, Expr::BinaryExpr(BinaryExpr { left, op: Operator::Eq, right }) if left.eq(right))
+            {
+                joins.push(filter.clone());
+            }
+        } else {
+            others.push(filter.clone());
+        }
+    }
+    (joins, others)
+}
+
+/// Combines join filters and qualifies their inner columns with the subquery alias.
+///
+/// Aliasing must precede stripping outer references so inner and outer columns
+/// with the same qualified name remain distinguishable.
+pub(crate) fn build_join_filter<'a>(
+    join_filters: Vec<Expr>,
+    correlated_cols: impl IntoIterator<Item = &'a Column>,
+    subquery_alias: &str,
+) -> Result<Option<Expr>> {
+    let correlated_cols = correlated_cols
+        .into_iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    conjunction(join_filters)
+        .map(|filter| {
+            replace_qualified_name(filter, &correlated_cols, subquery_alias)
+                .map(strip_outer_reference)
+        })
+        .transpose()
+}
+
 fn remove_duplicated_filter(
     filters: Vec<Expr>,
     in_predicate: &Expr,
@@ -1132,6 +1177,7 @@ fn remove_duplicated_filter(
     Ok(filters
         .into_iter()
         .filter(|filter| {
+            let filter = &strip_outer_reference(filter.clone());
             if filter == in_predicate {
                 return false;
             }
@@ -1295,4 +1341,39 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         None
     };
     Ok(pull_up_expr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::DataType;
+    use datafusion_expr::{col, out_ref_col};
+
+    #[test]
+    fn test_find_join_exprs_preserves_outer_references() {
+        let outer = out_ref_col(DataType::Int32, "t.a");
+        let correlated = col("t.a").eq(outer.clone());
+        let self_equality = outer.clone().eq(outer);
+        let local = col("t.b").gt(lit(2));
+
+        assert_eq!(
+            find_join_exprs(vec![&correlated, &self_equality, &local]),
+            (vec![correlated], vec![local])
+        );
+    }
+
+    #[test]
+    fn test_build_join_filter() -> Result<()> {
+        assert_eq!(build_join_filter(vec![], [], "sq")?, None);
+
+        let column = Column::from("t.a");
+        let outer = out_ref_col(DataType::Int32, "t.a");
+        let filters = vec![col("t.a").eq(outer.clone()), outer.gt(lit(1))];
+
+        assert_eq!(
+            build_join_filter(filters, [&column, &column], "sq")?,
+            Some(col("sq.a").eq(col("t.a")).and(col("t.a").gt(lit(1))))
+        );
+        Ok(())
+    }
 }

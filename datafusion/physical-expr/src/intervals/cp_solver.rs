@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Constraint propagator/solver for custom [`PhysicalExpr`] graphs.
 //!
@@ -299,12 +286,11 @@ pub fn propagate_arithmetic(
 /// Compare two scalars the way runtime `Eq` does, instead of with
 /// `ScalarValue`'s bit-wise equality. `ScalarValue::PartialEq` is bit-wise for
 /// floats (`to_bits`), under which `-0.0 != +0.0`; runtime `Eq` normalizes
-/// them via `normalize_float_zero_scalar` (see
+/// them via `normalize_float_scalar` (see
 /// `physical-expr-common/src/datum.rs`).
 fn singleton_values_equal(left: &ScalarValue, right: &ScalarValue) -> bool {
-    use datafusion_common::utils::normalize_float_zero_scalar;
-    normalize_float_zero_scalar(left.clone())
-        == normalize_float_zero_scalar(right.clone())
+    use datafusion_common::float_semantics::normalize_float_scalar;
+    normalize_float_scalar(left.clone()) == normalize_float_scalar(right.clone())
 }
 
 /// This function refines intervals `left_child` and `right_child` by applying

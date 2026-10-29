@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Broadcast, left-preserving ASOF join execution.
 //!
@@ -79,10 +66,10 @@ use arrow::array::{
 use arrow::buffer::NullBuffer;
 use arrow::compute::{SortOptions, interleave};
 use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
-use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     ColumnStatistics, JoinSide, JoinType, NullEquality, Result, Statistics,
     assert_eq_or_internal_err, internal_err, plan_err, project_schema,
@@ -915,7 +902,7 @@ impl InputCursor {
             // Arrow's comparator distinguishes -0.0 from +0.0, while SQL does
             // not. Normalizing once here is cheaper than fixing every row-level
             // comparison and lets the cached comparator use the arrays directly.
-            self.match_array = Some(normalize_float_zero(&match_array));
+            self.match_array = Some(normalize_floats(&match_array));
             self.key_batch_id += 1;
             self.batch = Some(batch);
         }

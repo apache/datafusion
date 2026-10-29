@@ -74,7 +74,15 @@ cmd_semver_check() {
     args+=(--package "$pkg")
   done
 
-  cargo semver-checks --baseline-rev "$base_ref" "${args[@]}"
+  # cargo-semver-checks builds the rustdoc for each crate, current and
+  # baseline, in a separate placeholder project. Each project has its own
+  # target directory unless CARGO_TARGET_DIR is set, so a shared directory
+  # lets those builds reuse the compiled dependencies.
+  local target_dir
+  target_dir=$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)
+
+  CARGO_TARGET_DIR="${target_dir}/semver-checks-shared" \
+    cargo semver-checks --baseline-rev "$base_ref" "${args[@]}"
 }
 
 # ── main ────────────────────────────────────────────────────────────

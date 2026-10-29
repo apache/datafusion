@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
@@ -2859,7 +2846,9 @@ mod tests {
     async fn sql_create_catalog() -> Result<()> {
         // the information schema used to introduce cyclic Arcs
         let ctx = SessionContext::new_with_config(
-            SessionConfig::new().with_information_schema(true),
+            SessionConfig::new()
+                .with_information_schema(true)
+                .with_system_catalog(Some(String::from("system"))),
         );
 
         // Create catalog
@@ -2875,7 +2864,7 @@ mod tests {
             .await?;
 
         // Check table exists in schema
-        let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
+        let results = ctx.sql("SELECT * FROM system.information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
         Ok(())
