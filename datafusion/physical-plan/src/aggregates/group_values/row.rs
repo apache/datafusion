@@ -279,6 +279,16 @@ impl GroupValues for GroupValuesRows {
         true
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.map.shrink_to_fit(|(hash, _)| *hash);
+        // Scratch for one `intern` call.
+        self.hashes_buffer.clear();
+        self.hashes_buffer.shrink_to_fit();
+        if self.rows_buffer.size() > self.initial_rows_buffer_size {
+            self.rows_buffer = Self::new_rows_buffer(&self.row_converter);
+        }
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         self.group_values = if num_rows == 0 {
             None

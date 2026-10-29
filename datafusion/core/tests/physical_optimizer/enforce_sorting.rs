@@ -13,7 +13,7 @@ use crate::physical_optimizer::test_utils::{
     parquet_exec_with_sort, projection_exec, repartition_exec, sort_exec,
     sort_exec_with_fetch, sort_expr, sort_expr_options, sort_merge_join_exec,
     sort_preserving_merge_exec, sort_preserving_merge_exec_with_fetch,
-    spr_repartition_exec, stream_exec_ordered, union_exec,
+    spr_repartition_exec, stream_exec, stream_exec_ordered, union_exec,
 };
 
 use arrow::compute::{SortOptions};
@@ -27,10 +27,14 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_expr::{JoinType, SortExpr};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
+    LexOrdering, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
 };
 use datafusion_physical_expr::{Distribution, Partitioning, PhysicalExpr};
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+use datafusion_functions_aggregate::sum::sum_udaf;
+use datafusion_physical_plan::test::TestMemoryExec;
 use datafusion_physical_expr::expressions::{col, is_not_null, BinaryExpr, Column, NotExpr};
+use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -46,7 +50,7 @@ use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
-use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
+use datafusion_physical_optimizer::output_requirements::{OutputRequirementExec, OutputRequirements};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::*;
 use arrow::array::{record_batch, Array, ArrayRef, Int32Array, RecordBatch};
@@ -2776,6 +2780,68 @@ async fn test_push_with_required_input_ordering_allowed() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_push_with_required_input_ordering_conflicting_suffix() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let required: LexOrdering = [sort_expr("a", &schema), sort_expr("b", &schema)].into();
+    let requested = [sort_expr("a", &schema), sort_expr("c", &schema)].into();
+    let input = sort_exec(required.clone(), memory_exec(&schema));
+    let plan = RequirementsTestExec::new(input)
+        .with_required_input_ordering(Some(required))
+        .into_arc();
+    let plan = sort_exec(requested, plan);
+    let test = EnforceSortingTest::new(plan).with_repartition_sorts(true);
+
+    assert_snapshot!(test.run(), @r"
+    Input / Optimized Plan:
+    SortExec: expr=[a@0 ASC, c@2 ASC], preserve_partitioning=[false]
+      RequiredInputOrderingExec
+        SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]
+          DataSourceExec: partitions=1, partition_sizes=[0]
+    ");
+    Ok(())
+}
+
+#[test]
+fn test_custom_sort_pushdown_keeps_sort_above_unbounded_input() -> Result<()> {
+    let schema = create_test_schema3()?;
+    // Keep the custom node directly below the sort. It bounds the stream
+    // without advertising a fetch, so this reaches the unbounded-input guard.
+    let custom = RequirementsTestExec::new(stream_exec(&schema))
+        .with_required_input_distribution(Distribution::SinglePartition)
+        .with_bounded_output()
+        .into_arc();
+    let plan = sort_exec([sort_expr("a", &schema)].into(), custom);
+
+    assert_snapshot!(EnforceSortingTest::new(plan).run(), @r"
+    Input / Optimized Plan:
+    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+      RequiredInputOrderingExec
+        StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true
+    ");
+    Ok(())
+}
+
+#[test]
+fn test_custom_sort_pushdown_rejects_narrower_order_maintaining_input() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let narrow_schema = Arc::new(schema.project(&[0])?);
+    // b@1 is valid in the first input and output, but not the second input.
+    let custom = RequirementsTestExec::new(memory_exec(&schema))
+        .with_additional_input(memory_exec(&narrow_schema))
+        .into_arc();
+    let plan = sort_exec([sort_expr("b", &schema)].into(), custom);
+
+    assert_snapshot!(EnforceSortingTest::new(plan).run(), @r"
+    Input / Optimized Plan:
+    SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
+      RequiredInputOrderingExec
+        DataSourceExec: partitions=1, partition_sizes=[0]
+        DataSourceExec: partitions=1, partition_sizes=[0]
+    ");
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_replace_with_partial_sort() -> Result<()> {
     let schema = create_test_schema3()?;
     let input_ordering = [sort_expr("a", &schema)].into();
@@ -3619,6 +3685,69 @@ async fn test_passthrough_wrapper_projection_keeps_ordering() -> Result<()> {
         sort_satisfied,
         "sort should be satisfied, ordering: {ordering}\nplan:\n{plan_str}"
     );
+
+    Ok(())
+}
+
+/// A parent needs `Hash(k)` and `[k, sum]` within each partition, above a
+/// Partial aggregate over input sorted on `k`. With `prefer_existing_sort`, the
+/// optimizer replaces the sort with an order-preserving repartition only when
+/// the repartitioned output satisfies `[k, sum]`. Partial aggregate output is
+/// not unique on `k` across input partitions, so the sort must stay.
+#[tokio::test]
+async fn test_keep_sort_above_repartitioned_partial_aggregate() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int64, false),
+    ]));
+    // Both partitions are sorted on `k` and contain keys 1 and 2.
+    let partitions = [
+        vec![record_batch!(("k", Int32, [1, 2]), ("v", Int64, [9, 5]))?],
+        vec![record_batch!(("k", Int32, [1, 2]), ("v", Int64, [1, 7]))?],
+    ];
+    let input = TestMemoryExec::try_new(&partitions, Arc::clone(&schema), None)?
+        .try_with_sort_information(vec![[sort_expr("k", &schema)].into()])?;
+    let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+    let partial: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]),
+        vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum_v")
+                .build()?,
+        )],
+        vec![None],
+        input,
+        Arc::clone(&schema),
+    )?);
+
+    let k: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
+    let sum: Arc<dyn PhysicalExpr> =
+        Arc::new(Column::new(partial.schema().field(1).name(), 1));
+    let requirement = LexRequirement::new([
+        PhysicalSortRequirement::new(Arc::clone(&k), Some(SortOptions::default())),
+        PhysicalSortRequirement::new(sum, Some(SortOptions::default())),
+    ])
+    .unwrap();
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
+        partial,
+        Some(OrderingRequirements::new(requirement)),
+        Distribution::KeyPartitioned(vec![k]),
+        None,
+    ));
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 2;
+    config.optimizer.prefer_existing_sort = true;
+    let optimized = EnsureRequirements::new().optimize(plan, &config)?;
+    let optimized = OutputRequirements::new_remove_mode().optimize(optimized, &config)?;
+    assert_snapshot!(displayable(optimized.as_ref()).indent(true), @r"
+    SortExec: expr=[k@0 ASC, sum_v[sum]@1 ASC], preserve_partitioning=[true]
+      RepartitionExec: partitioning=Hash([k@0], 2), input_partitions=2
+        AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum_v], group_clustering_mode=Full
+          DataSourceExec: partitions=2, partition_sizes=[1, 1], output_ordering=k@0 ASC
+    ");
 
     Ok(())
 }

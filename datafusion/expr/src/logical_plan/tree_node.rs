@@ -396,7 +396,7 @@ impl TreeNode for LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
-            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            | LogicalPlan::Show(_) => Transformed::no(self),
         })
     }
 }
@@ -533,7 +533,7 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => Ok(TreeNodeRecursion::Continue),
+            | LogicalPlan::Show(_) => Ok(TreeNodeRecursion::Continue),
         }
     }
 
@@ -821,7 +821,7 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            | LogicalPlan::Show(_) => Transformed::no(self),
         })
     }
 
