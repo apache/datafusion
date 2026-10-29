@@ -36,6 +36,8 @@ use datafusion::common::{
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::LambdaVariable;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
+use futures::TryStreamExt;
+use futures::stream::FuturesUnordered;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use substrait::proto::expression as substrait_expression;
@@ -215,22 +217,52 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         from_substrait_rel(self, rel).await
     }
 
+    /// Creates a consumer for an independent branch, inheriting the current scope.
+    ///
+    /// Return `Some` only when mutable traversal state (including outer-query and
+    /// lambda scopes) is independent of both this consumer and all other forks.
+    /// Immutable configuration and concurrency-safe services may be shared.
+    /// Forking must not mutate this consumer's scope. A shallow clone of shared
+    /// scope stacks does not satisfy this contract.
+    ///
+    /// The default returns `None`, preserving sequential input consumption.
+    fn fork_for_branch(&self) -> Option<Self> {
+        None
+    }
+
     /// Consumes independent inputs of a relation, returning plans in input order.
     ///
     /// Implementations must return exactly one plan per input, in the same order.
     /// On error, implementations must drop any unfinished input futures.
     ///
-    /// The default preserves sequential consumption. Implementations may override it
-    /// when they can isolate mutable traversal state between inputs.
+    /// The default creates a [`Self::fork_for_branch`] for each input before
+    /// consuming any input. If every fork succeeds, inputs are consumed concurrently.
+    /// If any fork returns `None`, all inputs are consumed sequentially on `self`.
+    /// Overrides can provide a different scheduling policy.
     async fn consume_rel_inputs(
         &self,
         rels: &[&Rel],
     ) -> datafusion::common::Result<Vec<LogicalPlan>> {
-        let mut plans = Vec::with_capacity(rels.len());
-        for rel in rels {
-            plans.push(self.consume_rel(rel).await?);
+        let mut branches = Vec::with_capacity(rels.len());
+        for _ in rels {
+            let Some(branch) = self.fork_for_branch() else {
+                let mut plans = Vec::with_capacity(rels.len());
+                for rel in rels {
+                    plans.push(self.consume_rel(rel).await?);
+                }
+                return Ok(plans);
+            };
+            branches.push(branch);
         }
-        Ok(plans)
+        let pending = FuturesUnordered::new();
+        for (index, (branch, rel)) in branches.into_iter().zip(rels).enumerate() {
+            pending.push(async move {
+                branch.consume_rel(rel).await.map(|plan| (index, plan))
+            });
+        }
+        let mut completed = pending.try_collect::<Vec<_>>().await?;
+        completed.sort_unstable_by_key(|(index, _)| *index);
+        Ok(completed.into_iter().map(|(_, plan)| plan).collect())
     }
 
     async fn consume_read(
@@ -616,6 +648,15 @@ impl<'a> DefaultSubstraitConsumer<'a> {
 
 #[async_trait]
 impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
+    fn fork_for_branch(&self) -> Option<Self> {
+        Some(Self {
+            extensions: self.extensions,
+            state: self.state,
+            outer_schemas: RwLock::new(self.outer_schemas.read().unwrap().clone()),
+            lambda_consumer: self.lambda_consumer.fork_for_branch(),
+        })
+    }
+
     async fn resolve_table_ref(
         &self,
         table_ref: &TableReference,
@@ -738,6 +779,7 @@ pub struct DefaultSubstraitLambdaConsumer {
     inner: RwLock<DefaultSubstraitLambdaConsumerInner>,
 }
 
+#[derive(Clone)]
 struct DefaultSubstraitLambdaConsumerInner {
     /// Parameters of the lambdas currently in scope, ordered from innermost
     /// to outermost. Index 0 is the lambda being consumed; higher indices
@@ -760,6 +802,15 @@ impl DefaultSubstraitLambdaConsumer {
                 lambda_parameters: VecDeque::new(),
                 next_lambda_parameter: 0,
             }),
+        }
+    }
+
+    /// Copies the current lambda scopes into independent storage for a branch.
+    ///
+    /// Custom consumers can use this in [`SubstraitConsumer::fork_for_branch`].
+    pub fn fork_for_branch(&self) -> Self {
+        Self {
+            inner: RwLock::new(self.inner.read().unwrap().clone()),
         }
     }
 
@@ -850,6 +901,19 @@ mod tests {
     use crate::logical_plan::consumer::utils::tests::test_consumer;
     use datafusion::arrow::datatypes::{Field, Schema};
     use datafusion::logical_expr::logical_plan::builder::table_scan;
+    use futures::poll;
+    use std::slice;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Semaphore;
+
+    struct ActiveInput<'a>(&'a AtomicUsize);
+
+    impl Drop for ActiveInput<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
 
     fn make_schema(fields: &[(&str, DataType)]) -> Arc<DFSchema> {
         let arrow_fields: Vec<Field> = fields
@@ -923,20 +987,35 @@ mod tests {
     // A custom consumer exercises the trait default independently of the default
     // consumer's scheduling policy.
     struct InputConsumer {
-        extensions: Extensions,
-        state: SessionState,
-        reads: std::sync::Mutex<Vec<String>>,
-        ready: tokio::sync::Semaphore,
+        extensions: Arc<Extensions>,
+        state: Arc<SessionState>,
+        reads: Arc<Mutex<Vec<String>>>,
+        ready: Arc<Semaphore>,
+        gates: Arc<HashMap<String, Semaphore>>,
+        active: Arc<AtomicUsize>,
+        forkable: bool,
     }
 
     #[async_trait]
     impl SubstraitConsumer for InputConsumer {
+        fn fork_for_branch(&self) -> Option<Self> {
+            self.forkable.then(|| Self {
+                extensions: Arc::clone(&self.extensions),
+                state: Arc::clone(&self.state),
+                reads: Arc::clone(&self.reads),
+                ready: Arc::clone(&self.ready),
+                gates: Arc::clone(&self.gates),
+                active: Arc::clone(&self.active),
+                forkable: true,
+            })
+        }
+
         fn get_extensions(&self) -> &Extensions {
             &self.extensions
         }
 
         fn get_function_registry(&self) -> &impl FunctionRegistry {
-            &self.state
+            self.state.as_ref()
         }
 
         async fn resolve_table_ref(
@@ -958,7 +1037,10 @@ mod tests {
                 panic!("expected a named table")
             };
             self.reads.lock().unwrap().push(table.names[0].clone());
-            self.ready.acquire().await.unwrap().forget();
+            self.active.fetch_add(1, Ordering::SeqCst);
+            let _active = ActiveInput(&self.active);
+            let gate = self.gates.get(&table.names[0]).unwrap_or(&self.ready);
+            gate.acquire().await.unwrap().forget();
             if table.names[0] == "fail" {
                 return substrait_err!("input failed");
             }
@@ -973,12 +1055,16 @@ mod tests {
 
     fn input_consumer() -> InputConsumer {
         InputConsumer {
-            extensions: Extensions::default(),
-            state: datafusion::execution::SessionStateBuilder::new_with_default_features(
-            )
-            .build(),
-            reads: std::sync::Mutex::default(),
-            ready: tokio::sync::Semaphore::new(0),
+            extensions: Arc::new(Extensions::default()),
+            state: Arc::new(
+                datafusion::execution::SessionStateBuilder::new_with_default_features()
+                    .build(),
+            ),
+            reads: Arc::new(Mutex::default()),
+            ready: Arc::new(Semaphore::new(0)),
+            gates: Arc::new(HashMap::new()),
+            active: Arc::new(AtomicUsize::new(0)),
+            forkable: false,
         }
     }
 
@@ -1021,9 +1107,101 @@ mod tests {
         assert_eq!(*consumer.reads.lock().unwrap(), ["a", "fail"]);
     }
 
+    #[tokio::test]
+    async fn forked_inputs_overlap_and_preserve_input_order() {
+        let mut consumer = input_consumer();
+        consumer.forkable = true;
+        consumer.gates = Arc::new(HashMap::from([
+            ("a".into(), Semaphore::new(0)),
+            ("b".into(), Semaphore::new(0)),
+        ]));
+        let rels = [input_read("a"), input_read("b")];
+        let inputs = rels.iter().collect::<Vec<_>>();
+        let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs));
+        assert!(poll!(&mut pending).is_pending());
+        assert_eq!(*consumer.reads.lock().unwrap(), ["a", "b"]);
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 2);
+        consumer.gates["b"].add_permits(1);
+        assert!(poll!(&mut pending).is_pending());
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 1);
+        consumer.gates["a"].add_permits(1);
+        let plans = pending.await.unwrap();
+        assert_eq!(plans.len(), 2);
+        assert!(
+            plans[0]
+                .display_indent()
+                .to_string()
+                .contains("TableScan: a")
+        );
+        assert!(
+            plans[1]
+                .display_indent()
+                .to_string()
+                .contains("TableScan: b")
+        );
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn forked_inputs_cancel_pending_siblings_on_error() {
+        let mut consumer = input_consumer();
+        consumer.forkable = true;
+        consumer.gates = Arc::new(HashMap::from([("fail".into(), Semaphore::new(0))]));
+        // Exercise more inputs than the small-future optimization in try_join_all.
+        let mut rels = (0..40)
+            .map(|i| input_read(&format!("a{i}")))
+            .collect::<Vec<_>>();
+        rels.push(input_read("fail"));
+        let inputs = rels.iter().collect::<Vec<_>>();
+        let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs));
+        assert!(poll!(&mut pending).is_pending());
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 41);
+        consumer.gates["fail"].add_permits(1);
+        let error = pending.await.unwrap_err();
+        assert!(error.to_string().contains("input failed"));
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn default_fork_inherits_and_isolates_scopes() {
+        let consumer = test_consumer();
+        consumer.push_outer_schema(make_schema(&[("outer", DataType::Int64)]));
+        let ty = Type {
+            kind: Some(r#type::Kind::I64(r#type::I64::default())),
+        };
+        consumer
+            .push_lambda_parameters(slice::from_ref(&ty), &DFSchema::empty())
+            .unwrap();
+        let branch = consumer.fork_for_branch().unwrap();
+        let sibling = consumer.fork_for_branch().unwrap();
+        assert_eq!(branch.get_outer_schema(1), consumer.get_outer_schema(1));
+        assert_eq!(
+            branch.lambda_variable(0, 0).unwrap(),
+            consumer.lambda_variable(0, 0).unwrap()
+        );
+        let names = branch
+            .push_lambda_parameters(&[ty], &DFSchema::empty())
+            .unwrap();
+        assert_eq!(names, ["p1"]);
+        assert_eq!(
+            branch.lambda_variable(1, 0).unwrap(),
+            consumer.lambda_variable(0, 0).unwrap()
+        );
+        branch.pop_outer_schema();
+        branch.pop_lambda_parameters();
+        branch.pop_lambda_parameters();
+        assert!(branch.get_outer_schema(1).is_none());
+        assert!(branch.lambda_variable(0, 0).is_err());
+        assert_eq!(sibling.get_outer_schema(1), consumer.get_outer_schema(1));
+        assert_eq!(
+            sibling.lambda_variable(0, 0).unwrap(),
+            consumer.lambda_variable(0, 0).unwrap()
+        );
+    }
+
     struct HookConsumer {
         inner: InputConsumer,
-        calls: std::sync::Mutex<Vec<usize>>,
+        calls: Mutex<Vec<usize>>,
         truncate: bool,
     }
 
@@ -1033,7 +1211,7 @@ mod tests {
             &self.inner.extensions
         }
         fn get_function_registry(&self) -> &impl FunctionRegistry {
-            &self.inner.state
+            self.inner.state.as_ref()
         }
         async fn resolve_table_ref(
             &self,
