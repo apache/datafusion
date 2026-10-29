@@ -26,11 +26,13 @@ use datafusion_expr::{
 };
 use datafusion_functions::core::expr_fn::named_struct;
 
-/// Spark-compatible to_json expression
-///
-/// <https://spark.apache.org/docs/latest/api/sql/index.html#to_json>
+/// Spark-compatible version of the [to_json] function.
 ///
 /// Serializes a struct value to a JSON string, one JSON object per row.
+/// Differs from arrow-json's default output in the Spark-specific rules
+/// listed below, which are implemented by `spark_encoder_options`.
+///
+/// [to_json]: https://spark.apache.org/docs/latest/api/sql/index.html#to_json
 ///
 /// to_json(struct<...>) -> Utf8
 ///
@@ -51,17 +53,17 @@ use datafusion_functions::core::expr_fn::named_struct;
 /// Not yet supported (Spark accepts these): map/array top-level inputs and the
 /// options map argument (`ignoreNullFields`, timestampFormat, ...).
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ToJson {
+pub struct SparkToJson {
     signature: Signature,
 }
 
-impl Default for ToJson {
+impl Default for SparkToJson {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ToJson {
+impl SparkToJson {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
@@ -69,7 +71,7 @@ impl ToJson {
     }
 }
 
-impl ScalarUDFImpl for ToJson {
+impl ScalarUDFImpl for SparkToJson {
     fn name(&self) -> &str {
         "to_json"
     }
@@ -111,19 +113,40 @@ impl ScalarUDFImpl for ToJson {
     }
 }
 
-/// Encodes every row of a struct array as a JSON object string.
-///
-/// field describes array (its name and the nested field names/types are
-/// what the encoder uses for the JSON keys).
+/// Serializes a struct array with Spark's output rules.
 fn struct_to_json(field: &FieldRef, array: &ArrayRef) -> Result<ArrayRef> {
-    // Spark default: ignoreNullFields = true -> NULL struct fields are omitted.
-    // The factory covers the places where Spark's output differs from arrow's
-    // defaults (NULL map entries are kept, binary is Base64, non-finite floats
-    // are strings; see `SparkJsonEncoderFactory`).
-    let options = EncoderOptions::default()
+    encode_struct_rows(field, array, &spark_encoder_options())
+}
+
+/// arrow-json options that reproduce Spark's `to_json` output.
+///
+/// This is the only Spark-specific input to the serialization: everything
+/// else (`encode_struct_rows`, `IntoJsonStruct`, the UDF plumbing) is
+/// independent of the output flavor and can be shared with other `to_json`
+/// variants, e.g. a Postgres-style one with explicit nulls.
+fn spark_encoder_options() -> EncoderOptions {
+    EncoderOptions::default()
+        // Spark default: ignoreNullFields = true -> NULL struct fields are omitted
         .with_explicit_nulls(false)
-        .with_encoder_factory(Arc::new(SparkJsonEncoderFactory));
-    let mut encoder = make_encoder(field, array.as_ref(), &options)?;
+        // where Spark's output differs from arrow's defaults: NULL map entries
+        // are kept, map keys are strings, binary is Base64, non-finite floats
+        // are strings (see `SparkJsonEncoderFactory`)
+        .with_encoder_factory(Arc::new(SparkJsonEncoderFactory))
+}
+
+/// Encodes every row of a struct array as a JSON object string using the
+/// given arrow-json options, one output string per input row.
+///
+/// `field` describes `array` (its name and the nested field names/types are
+/// what the encoder uses for the JSON keys). A NULL struct row produces a
+/// NULL output; everything else about the output is decided by `options`,
+/// which makes this loop independent of the JSON flavor.
+fn encode_struct_rows(
+    field: &FieldRef,
+    array: &ArrayRef,
+    options: &EncoderOptions,
+) -> Result<ArrayRef> {
+    let mut encoder = make_encoder(field, array.as_ref(), options)?;
     let mut builder = StringBuilder::with_capacity(array.len(), array.len() * 32);
     let mut buf: Vec<u8> = Vec::with_capacity(128);
     for row in 0..array.len() {
@@ -445,7 +468,9 @@ mod tests {
             return_field: Field::new("to_json", DataType::Utf8, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
-        ToJson::new().invoke_with_args(args)?.to_array(number_rows)
+        SparkToJson::new()
+            .invoke_with_args(args)?
+            .to_array(number_rows)
     }
 
     fn sample_struct() -> StructArray {
@@ -468,7 +493,7 @@ mod tests {
 
     #[test]
     fn test_return_type() {
-        let func = ToJson::new();
+        let func = SparkToJson::new();
         let fields = Fields::from(vec![Field::new("a", DataType::Int32, true)]);
         assert_eq!(
             func.return_type(&[DataType::Struct(fields)]).unwrap(),
@@ -478,10 +503,12 @@ mod tests {
 
     #[test]
     fn test_return_type_rejects_non_struct() {
-        let err = ToJson::new().return_type(&[DataType::Utf8]).unwrap_err();
+        let err = SparkToJson::new()
+            .return_type(&[DataType::Utf8])
+            .unwrap_err();
         assert!(err.to_string().contains("expects a struct argument"));
 
-        let err = ToJson::new().return_type(&[]).unwrap_err();
+        let err = SparkToJson::new().return_type(&[]).unwrap_err();
         assert!(err.to_string().contains("exactly one argument"));
     }
 
@@ -498,6 +525,27 @@ mod tests {
         assert_eq!(out.value(1), r#"{"a":2,"c":false}"#);
         // NULL struct row -> NULL
         assert!(out.is_null(2));
+    }
+
+    #[test]
+    fn test_encode_struct_rows_is_independent_of_the_json_flavor() {
+        // The output flavor is decided entirely by the options: the same loop
+        // with explicit nulls (what a Postgres-style `to_json` would use)
+        // keeps the NULL fields that the Spark options omit.
+        let input = sample_struct();
+        let field = field_of(&input);
+        let array = Arc::new(input) as ArrayRef;
+
+        let spark = encode_struct_rows(&field, &array, &spark_encoder_options()).unwrap();
+        let spark = as_string_array(&spark).unwrap();
+        assert_eq!(spark.value(1), r#"{"a":2,"c":false}"#);
+
+        let explicit = EncoderOptions::default().with_explicit_nulls(true);
+        let other = encode_struct_rows(&field, &array, &explicit).unwrap();
+        let other = as_string_array(&other).unwrap();
+        assert_eq!(other.value(1), r#"{"a":2,"b":null,"c":false}"#);
+        // a NULL struct row is NULL in both
+        assert!(spark.is_null(2) && other.is_null(2));
     }
 
     #[test]

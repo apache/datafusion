@@ -23,7 +23,7 @@ use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 make_udf_function!(json_tuple::JsonTuple, json_tuple);
-make_udf_function!(to_json::ToJson, to_json);
+make_udf_function!(to_json::SparkToJson, to_json);
 
 pub mod expr_fn {
     use datafusion_expr::Expr;
