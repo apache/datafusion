@@ -534,6 +534,24 @@ the Rust standard <a class="reference external" href="https://doc.rust-lang.org/
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>nextest<span class="w"> </span>run
 </pre></div>
 </div>
+<section id="code-coverage">
+<h3>Code coverage<a class="headerlink" href="#code-coverage" title="Link to this heading">#</a></h3>
+<p>The <a class="reference external" href="https://app.codecov.io/gh/apache/datafusion">Codecov</a> bot posts a coverage report on GitHub pull requests with:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">all-tests</span></code>: coverage from the workspace test suite.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sqllogictests</span></code>: coverage from SQLLogicTests alone.</p></li>
+</ul>
+<p>We <a class="reference internal" href="#choosing-what-kind-of-test-to-write">prefer end-to-end tests</a> because they are
+easier to maintain and verify final results through the full query pipeline,
+including optimizer passes. The SLT report helps ensure good coverage from these
+tests alone.</p>
+<p>Coverage helps find missing tests; high coverage does not guarantee good tests:</p>
+<ul class="simple">
+<li><p><strong>Do:</strong> Enumerate edge cases to build comprehensive tests, then check the
+coverage report for gaps.</p></li>
+<li><p><strong>Don’t:</strong> Use Codecov to choose a minimal set of tests that covers a new feature.</p></li>
+</ul>
+</section>
 </section>
 <section id="choosing-what-kind-of-test-to-write">
 <h2>Choosing What Kind of Test to Write<a class="headerlink" href="#choosing-what-kind-of-test-to-write" title="Link to this heading">#</a></h2>
@@ -888,7 +906,10 @@ run the affected benchmarks and include the commands and results in your PR.</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#testing-quick-start">Testing Quick Start</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#testing-overview">Testing Overview</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#testing-overview">Testing Overview</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#code-coverage">Code coverage</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choosing-what-kind-of-test-to-write">Choosing What Kind of Test to Write</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#unit-tests">Unit tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sqllogictests-tests">sqllogictests Tests</a></li>
