@@ -184,17 +184,17 @@ pub fn adjust_input_keys_ordering(
         requirements.children[1].data =
             shift_right_required(&requirements.data, left_columns_len)
                 .unwrap_or_default();
-    } else if let Some(SortMergeJoinExec {
-        left,
-        right,
-        on,
-        filter,
-        join_type,
-        sort_options,
-        null_equality,
-        ..
-    }) = plan.downcast_ref::<SortMergeJoinExec>()
-    {
+    } else if let Some(origin_exec) = plan.downcast_ref::<SortMergeJoinExec>() {
+        let SortMergeJoinExec {
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            sort_options,
+            null_equality,
+            ..
+        } = origin_exec;
         let join_constructor = |new_conditions: (
             Vec<(PhysicalExprRef, PhysicalExprRef)>,
             Vec<SortOptions>,
@@ -207,6 +207,7 @@ pub fn adjust_input_keys_ordering(
                 *join_type,
                 new_conditions.1,
                 *null_equality,
+                origin_exec.null_aware(),
             )
             .map(|e| Arc::new(e) as _)
         };
@@ -469,17 +470,17 @@ pub fn reorder_join_keys_to_inputs(
                     .build_exec();
             }
         }
-    } else if let Some(SortMergeJoinExec {
-        left,
-        right,
-        on,
-        filter,
-        join_type,
-        sort_options,
-        null_equality,
-        ..
-    }) = plan.downcast_ref::<SortMergeJoinExec>()
-    {
+    } else if let Some(origin_exec) = plan.downcast_ref::<SortMergeJoinExec>() {
+        let SortMergeJoinExec {
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            sort_options,
+            null_equality,
+            ..
+        } = origin_exec;
         let (join_keys, positions) = reorder_current_join_keys(
             extract_join_keys(on),
             Some(left.output_partitioning()),
@@ -506,6 +507,7 @@ pub fn reorder_join_keys_to_inputs(
                 *join_type,
                 new_sort_options,
                 *null_equality,
+                origin_exec.null_aware(),
             )
             .map(|smj| Arc::new(smj) as _);
         }
@@ -686,6 +688,7 @@ fn reorder_join_keys_to_range_inputs(
             join.join_type,
             new_sort_options,
             join.null_equality,
+            join.null_aware(),
         )?
         .with_projection(join.projection.clone())?;
         return Ok(Arc::new(reordered) as _);

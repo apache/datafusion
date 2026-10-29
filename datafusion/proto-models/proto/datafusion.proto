@@ -1835,6 +1835,12 @@ message SortMergeJoinExecNode {
   repeated SortExprNode sort_options = 6;
   datafusion_common.NullEquality null_equality = 7;
   repeated uint32 projection = 8;
+  // Enables null-aware (`NOT IN`) semantics.
+  // (See `SortMergeJoinExec::null_aware`)
+  //
+  // Currently supported only for uncorrelated `LeftAnti` joins with one
+  // join key and no join filter.
+  bool null_aware = 9;
 }
 
 message PiecewiseMergeJoinExecNode {

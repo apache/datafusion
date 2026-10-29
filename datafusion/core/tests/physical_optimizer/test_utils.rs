@@ -191,6 +191,7 @@ pub fn sort_merge_join_exec(
             *join_type,
             vec![SortOptions::default(); join_on.len()],
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     )

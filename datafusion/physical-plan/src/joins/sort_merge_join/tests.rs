@@ -24,19 +24,19 @@ use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::sorts::sort::SortExec;
 use crate::spill::spill_manager::SpillManager;
 use crate::test::TestMemoryExec;
+use crate::test::build_table_i32;
 use crate::test::exec::{BarrierExec, PanicExec};
-use crate::test::{build_table_i32, build_table_i32_two_cols};
 use crate::{ExecutionPlan, RecordBatchStream, common};
 use crate::{
     expressions::Column, joins::sort_merge_join::filter::get_corrected_filter_mask,
     joins::sort_merge_join::materializing_stream::JoinedRecordBatches,
 };
 use arrow::array::{
-    BinaryArray, BooleanArray, Date32Array, Date64Array, FixedSizeBinaryArray,
-    Int32Array, RecordBatch, UInt64Array,
+    ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, DictionaryArray,
+    FixedSizeBinaryArray, Int32Array, RecordBatch, UInt64Array,
 };
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use arrow_ord::sort::SortColumn;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
@@ -209,11 +209,47 @@ pub fn build_table_i32_nullable(
     TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
 }
 
-pub fn build_table_two_cols(
-    a: (&str, &Vec<i32>),
-    b: (&str, &Vec<i32>),
+/// Builds a record batch with two nullable columns.
+fn build_batch_two_cols(a: (&str, ArrayRef), b: (&str, ArrayRef)) -> Result<RecordBatch> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(a.0, a.1.data_type().clone(), true),
+        Field::new(b.0, b.1.data_type().clone(), true),
+    ]));
+    Ok(RecordBatch::try_new(schema, vec![a.1, b.1])?)
+}
+
+/// Builds a two-column batch whose join key is a dictionary.
+///
+/// All dictionary indices are physically valid. NULL dictionary values
+/// exercise logical NULL handling.
+fn build_batch_dict_key(
+    key_name: &str,
+    dict_values: Vec<Option<i32>>,
+    keys: Vec<i32>,
+    row_id_name: &str,
+    row_ids: Vec<i32>,
+) -> Result<RecordBatch> {
+    let dict = DictionaryArray::<Int32Type>::try_new(
+        Int32Array::from(keys),
+        Arc::new(Int32Array::from(dict_values)),
+    )?;
+
+    build_batch_two_cols(
+        (key_name, Arc::new(dict)),
+        (row_id_name, Arc::new(Int32Array::from(row_ids))),
+    )
+}
+
+/// Builds a single-batch table with two nullable Int32 columns.
+fn build_table_two_cols(
+    a: (&str, &[Option<i32>]),
+    b: (&str, &[Option<i32>]),
 ) -> Arc<dyn ExecutionPlan> {
-    let batch = build_table_i32_two_cols(a, b);
+    let batch = build_batch_two_cols(
+        (a.0, Arc::new(Int32Array::from(a.1.to_vec()))),
+        (b.0, Arc::new(Int32Array::from(b.1.to_vec()))),
+    )
+    .unwrap();
     let schema = batch.schema();
     TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
 }
@@ -233,6 +269,7 @@ fn join(
         join_type,
         sort_options,
         NullEquality::NullEqualsNothing,
+        false,
     )
 }
 
@@ -252,6 +289,7 @@ fn join_with_options(
         join_type,
         sort_options,
         null_equality,
+        false,
     )
 }
 
@@ -272,6 +310,7 @@ fn join_with_filter(
         join_type,
         sort_options,
         null_equality,
+        false,
     )
 }
 
@@ -379,6 +418,7 @@ fn join_and_projection_for_pushdown(
         Inner,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        false,
     )?);
     let input: Arc<dyn ExecutionPlan> = Arc::clone(&join) as _;
     let projection = ProjectionExec::try_new(
@@ -1246,8 +1286,8 @@ async fn join_right_different_columns_count_with_filter() -> Result<()> {
     );
 
     let right = build_table_two_cols(
-        ("a2", &vec![10, 20, 30]),
-        ("b1", &vec![4, 5, 6]), // 6 does not exist on the left
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]), // 6 does not exist on the left
     );
 
     let on = vec![(
@@ -1298,8 +1338,8 @@ async fn join_left_different_columns_count_with_filter() -> Result<()> {
     // left join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
 
     let left = build_table_two_cols(
-        ("a2", &vec![10, 20, 30]),
-        ("b1", &vec![4, 5, 6]), // 6 does not exist on the right
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]), // 6 does not exist on the right
     );
 
     let right = build_table(
@@ -1358,8 +1398,8 @@ async fn join_left_with_filter_columns_right_before_left() -> Result<()> {
     // left join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
 
     let left = build_table_two_cols(
-        ("a2", &vec![10, 20, 30]),
-        ("b1", &vec![4, 5, 6]), // 6 does not exist on the right
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]), // 6 does not exist on the right
     );
 
     let right = build_table(
@@ -1418,7 +1458,10 @@ async fn join_right_with_filter_columns_right_before_left() -> Result<()> {
     // from t2
     // right join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
 
-    let left = build_table_two_cols(("a2", &vec![10, 20, 30]), ("b1", &vec![4, 5, 6]));
+    let left = build_table_two_cols(
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]),
+    );
 
     let right = build_table(
         ("a1", &vec![1, 21, 3]), // 20(t2.a2) > 21(t1.a1) is false
@@ -1550,8 +1593,8 @@ async fn join_left_mark_different_columns_count_with_filter() -> Result<()> {
     // left mark join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
 
     let left = build_table_two_cols(
-        ("a2", &vec![10, 20, 30]),
-        ("b1", &vec![4, 5, 6]), // 6 does not exist on the right
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]), // 6 does not exist on the right
     );
 
     let right = build_table(
@@ -1652,8 +1695,8 @@ async fn join_right_mark_different_columns_count_with_filter() -> Result<()> {
     );
 
     let right = build_table_two_cols(
-        ("a2", &vec![10, 20, 30]),
-        ("b1", &vec![4, 5, 6]), // 6 does not exist on the left
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]), // 6 does not exist on the left
     );
 
     let on = vec![(
@@ -1761,6 +1804,313 @@ async fn join_left_anti() -> Result<()> {
     Ok(())
 }
 
+mod null_aware_tests {
+    use super::*;
+    use arrow::array::Array;
+
+    /// Runs a null-aware LeftAnti join and collects the surviving left-side row IDs.
+    /// Expects `key` as the first column and `row_id` as the second column.
+    async fn collect_left_anti_ids(
+        left_batches: Vec<RecordBatch>,
+        right_batches: Vec<RecordBatch>,
+        batch_size: usize,
+    ) -> Result<Vec<i32>> {
+        let left = build_table_from_batches(left_batches);
+        // Unlike build_table_from_batches, this must also accept zero batches.
+        let right = TestMemoryExec::try_new_exec(&[right_batches], left.schema(), None)?;
+        let on: JoinOn = vec![(
+            Arc::new(Column::new("key", 0)),
+            Arc::new(Column::new("key", 0)),
+        )];
+        // Direct execution does not insert sorts. Fixtures are globally sorted
+        // ASC NULLS FIRST, including across batch boundaries.
+        let join = SortMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            LeftAnti,
+            vec![SortOptions::new(false, true)],
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(batch_size)),
+        );
+        let batches = common::collect(join.execute(0, context)?).await?;
+        let mut row_ids = Vec::new();
+        for batch in batches {
+            let ids = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("Int32 row IDs");
+            row_ids.extend(ids.values().iter().copied());
+        }
+        Ok(row_ids)
+    }
+
+    #[tokio::test]
+    async fn empty_rhs_keeps_nulls_and_duplicates() -> Result<()> {
+        let left = vec![
+            build_batch_two_cols(
+                (
+                    "key",
+                    Arc::new(Int32Array::from(vec![None, Some(1), Some(2)])),
+                ),
+                ("row_id", Arc::new(Int32Array::from(vec![0, 1, 2]))),
+            )?,
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(vec![Some(3), Some(3)]))),
+                ("row_id", Arc::new(Int32Array::from(vec![3, 4]))),
+            )?,
+        ];
+        // EOF without any batch and EOF after empty batches are both empty RHS.
+        for right in [
+            vec![],
+            vec![
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(Vec::<Option<i32>>::new()))),
+                    ("row_id", Arc::new(Int32Array::from(Vec::<i32>::new()))),
+                )?,
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(Vec::<Option<i32>>::new()))),
+                    ("row_id", Arc::new(Int32Array::from(Vec::<i32>::new()))),
+                )?,
+            ],
+        ] {
+            let actual = collect_left_anti_ids(left.clone(), right, 2).await?;
+            assert_eq!(actual, vec![0, 1, 2, 3, 4]);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rhs_null_after_empty_batch_with_null_lhs_returns_no_rows() -> Result<()> {
+        let left = vec![build_batch_two_cols(
+            (
+                "key",
+                Arc::new(Int32Array::from(vec![None, Some(1), Some(2)])),
+            ),
+            ("row_id", Arc::new(Int32Array::from(vec![0, 1, 2]))),
+        )?];
+        // Cover an all-NULL RHS and a NULL followed by a non-NULL batch.
+        for right in [
+            vec![
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(Vec::<Option<i32>>::new()))),
+                    ("row_id", Arc::new(Int32Array::from(Vec::<i32>::new()))),
+                )?,
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(vec![None]))),
+                    ("row_id", Arc::new(Int32Array::from(vec![10]))),
+                )?,
+            ],
+            vec![
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(Vec::<Option<i32>>::new()))),
+                    ("row_id", Arc::new(Int32Array::from(Vec::<i32>::new()))),
+                )?,
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(vec![None]))),
+                    ("row_id", Arc::new(Int32Array::from(vec![10]))),
+                )?,
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(vec![Some(2)]))),
+                    ("row_id", Arc::new(Int32Array::from(vec![11]))),
+                )?,
+            ],
+        ] {
+            let actual = collect_left_anti_ids(left.clone(), right, 2).await?;
+            assert!(actual.is_empty(), "unexpected rows: {actual:?}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rhs_null_after_empty_batch_without_null_lhs_returns_no_rows() -> Result<()> {
+        let left = vec![build_batch_two_cols(
+            ("key", Arc::new(Int32Array::from(vec![Some(1), Some(2)]))),
+            ("row_id", Arc::new(Int32Array::from(vec![0, 1]))),
+        )?];
+        // Cover an all-NULL RHS and a NULL followed by a non-NULL batch.
+        for right in [
+            vec![
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(Vec::<Option<i32>>::new()))),
+                    ("row_id", Arc::new(Int32Array::from(Vec::<i32>::new()))),
+                )?,
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(vec![None]))),
+                    ("row_id", Arc::new(Int32Array::from(vec![10]))),
+                )?,
+            ],
+            vec![
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(Vec::<Option<i32>>::new()))),
+                    ("row_id", Arc::new(Int32Array::from(Vec::<i32>::new()))),
+                )?,
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(vec![None]))),
+                    ("row_id", Arc::new(Int32Array::from(vec![10]))),
+                )?,
+                build_batch_two_cols(
+                    ("key", Arc::new(Int32Array::from(vec![Some(2)]))),
+                    ("row_id", Arc::new(Int32Array::from(vec![11]))),
+                )?,
+            ],
+        ] {
+            let actual = collect_left_anti_ids(left.clone(), right, 2).await?;
+            assert!(actual.is_empty(), "unexpected rows: {actual:?}");
+        }
+        Ok(())
+    }
+
+    // Initialization reads the first nonempty RHS batch to check for NULL keys.
+    // The merge scan must reuse that batch: skipping its sole key (2) would
+    // incorrectly retain both left rows with key 2.
+    //
+    // Left key 2 and right key 4 span batch boundaries, with empty batches
+    // interspersed to exercise skipping them without treating them as EOF.
+    // Both left rows with key 3 must survive. Run with batch sizes 1 and 2 to
+    // verify the same result when output is emitted in small batches.
+    //
+    // Also covers a nonempty RHS without NULL keys: retain only unmatched,
+    // non-NULL left keys, preserving duplicate rows.
+    #[tokio::test]
+    async fn startup_preserves_first_rhs_batch_across_key_groups() -> Result<()> {
+        let left = vec![
+            build_batch_two_cols(
+                (
+                    "key",
+                    Arc::new(Int32Array::from(vec![None, Some(1), Some(2)])),
+                ),
+                ("row_id", Arc::new(Int32Array::from(vec![0, 1, 2]))),
+            )?,
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(Vec::<Option<i32>>::new()))),
+                ("row_id", Arc::new(Int32Array::from(Vec::<i32>::new()))),
+            )?,
+            build_batch_two_cols(
+                (
+                    "key",
+                    Arc::new(Int32Array::from(vec![Some(2), Some(3), Some(3)])),
+                ),
+                ("row_id", Arc::new(Int32Array::from(vec![3, 4, 5]))),
+            )?,
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(vec![Some(4), Some(5)]))),
+                ("row_id", Arc::new(Int32Array::from(vec![6, 7]))),
+            )?,
+        ];
+        let right = vec![
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(Vec::<Option<i32>>::new()))),
+                ("row_id", Arc::new(Int32Array::from(Vec::<i32>::new()))),
+            )?,
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(vec![Some(2)]))),
+                ("row_id", Arc::new(Int32Array::from(vec![10]))),
+            )?,
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(Vec::<Option<i32>>::new()))),
+                ("row_id", Arc::new(Int32Array::from(Vec::<i32>::new()))),
+            )?,
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(vec![Some(4)]))),
+                ("row_id", Arc::new(Int32Array::from(vec![11]))),
+            )?,
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(vec![Some(4)]))),
+                ("row_id", Arc::new(Int32Array::from(vec![12]))),
+            )?,
+        ];
+        for batch_size in [1, 2] {
+            let actual =
+                collect_left_anti_ids(left.clone(), right.clone(), batch_size).await?;
+            // Keep 1, 3, 3, 5; both occurrences of 2 must match the first RHS batch.
+            assert_eq!(actual, vec![1, 4, 5, 7], "batch size {batch_size}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn exhausted_rhs_drains_remaining_left_batches() -> Result<()> {
+        let left = vec![
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(vec![None, Some(1)]))),
+                ("row_id", Arc::new(Int32Array::from(vec![0, 1]))),
+            )?,
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(vec![Some(2)]))),
+                ("row_id", Arc::new(Int32Array::from(vec![2]))),
+            )?,
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(vec![Some(3), Some(3)]))),
+                ("row_id", Arc::new(Int32Array::from(vec![3, 4]))),
+            )?,
+            build_batch_two_cols(
+                ("key", Arc::new(Int32Array::from(vec![Some(4), Some(5)]))),
+                ("row_id", Arc::new(Int32Array::from(vec![5, 6]))),
+            )?,
+        ];
+        let right = vec![build_batch_two_cols(
+            ("key", Arc::new(Int32Array::from(vec![Some(2)]))),
+            ("row_id", Arc::new(Int32Array::from(vec![10]))),
+        )?];
+        let actual = collect_left_anti_ids(left, right, 2).await?;
+        // Exclude the initial NULL and retain unmatched rows after RHS EOF,
+        // including duplicates and the final partial output batch.
+        assert_eq!(actual, vec![1, 3, 4, 5, 6]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dictionary_value_nulls_follow_not_in_semantics() -> Result<()> {
+        let left = build_batch_dict_key(
+            "key",
+            vec![None, Some(1), Some(2), Some(3)],
+            vec![0, 1, 2, 3, 3],
+            "row_id",
+            vec![0, 1, 2, 3, 4],
+        )?;
+        assert_eq!(left.column(0).null_count(), 0);
+        assert_eq!(left.column(0).logical_null_count(), 1);
+
+        // The same logical key (2) has a different dictionary index on each side.
+        let rhs_with_null = build_batch_dict_key(
+            "key",
+            vec![None, Some(2)],
+            vec![0, 1],
+            "row_id",
+            vec![10, 11],
+        )?;
+        assert_eq!(rhs_with_null.column(0).null_count(), 0);
+        assert_eq!(rhs_with_null.column(0).logical_null_count(), 1);
+
+        let cases = [
+            (vec![], vec![0, 1, 2, 3, 4]),
+            (
+                vec![build_batch_dict_key(
+                    "key",
+                    vec![Some(2)],
+                    vec![0],
+                    "row_id",
+                    vec![10],
+                )?],
+                vec![1, 3, 4],
+            ),
+            (vec![rhs_with_null], vec![]),
+        ];
+        for (right, expected) in cases {
+            let actual = collect_left_anti_ids(vec![left.clone()], right, 2).await?;
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn join_right_anti_one_one() -> Result<()> {
     let left = build_table(
@@ -1768,7 +2118,10 @@ async fn join_right_anti_one_one() -> Result<()> {
         ("b1", &vec![4, 5, 5]),
         ("c1", &vec![7, 8, 8]),
     );
-    let right = build_table_two_cols(("a2", &vec![10, 20, 30]), ("b1", &vec![4, 5, 6]));
+    let right = build_table_two_cols(
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]),
+    );
     let on = vec![(
         Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
         Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
@@ -1820,7 +2173,10 @@ async fn join_right_anti_two_two() -> Result<()> {
         ("b1", &vec![4, 5, 5]),
         ("c1", &vec![7, 8, 8]),
     );
-    let right = build_table_two_cols(("a2", &vec![10, 20, 30]), ("b1", &vec![4, 5, 6]));
+    let right = build_table_two_cols(
+        ("a2", &[Some(10), Some(20), Some(30)]),
+        ("b1", &[Some(4), Some(5), Some(6)]),
+    );
     let on = vec![
         (
             Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
@@ -1931,7 +2287,10 @@ async fn join_right_anti_two_with_filter() -> Result<()> {
 
 #[tokio::test]
 async fn join_right_anti_filtered_with_mismatched_columns() -> Result<()> {
-    let left = build_table_two_cols(("a1", &vec![31, 31]), ("b1", &vec![32, 33]));
+    let left = build_table_two_cols(
+        ("a1", &[Some(31), Some(31)]),
+        ("b1", &[Some(32), Some(33)]),
+    );
     let right = build_table(
         ("a2", &vec![31, 31]),
         ("b2", &vec![32, 35]),
@@ -2867,8 +3226,14 @@ async fn join_full_multiple_batches() -> Result<()> {
 async fn join_full_null_filter_result() -> Result<()> {
     // Left: (a, b) all non-null, sorted on a
     let left = build_table_two_cols(
-        ("a1", &vec![1, 1, 2, 2, 3, 3]),
-        ("b1", &vec![1, 2, 1, 2, 1, 2]),
+        (
+            "a1",
+            &[Some(1), Some(1), Some(2), Some(2), Some(3), Some(3)],
+        ),
+        (
+            "b1",
+            &[Some(1), Some(2), Some(1), Some(2), Some(1), Some(2)],
+        ),
     );
 
     // Right: (a, b) with b nullable, sorted on a
@@ -4587,6 +4952,7 @@ async fn join_get_stream_and_get_expected(
         join_type,
         sort_options,
         null_equality,
+        false,
     )?;
 
     let stream = join.execute(0, task_ctx)?;
@@ -5371,10 +5737,7 @@ async fn assert_key_batch_boundaries(
             )?;
         }
         let batch = RecordBatch::try_from_iter(vec![
-            (
-                "id",
-                Arc::new(Int32Array::from(ids)) as arrow::array::ArrayRef,
-            ),
+            ("id", Arc::new(Int32Array::from(ids)) as ArrayRef),
             ("key", keys),
         ])?;
         Ok(build_table_from_batches(
@@ -5601,6 +5964,7 @@ async fn bitwise_emits_completed_batches_before_pending_outer(
         Arc::clone(&schema),
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        None,
         outer,
         inner,
         vec![Arc::new(Column::new("key", 1))],
@@ -5700,6 +6064,7 @@ fn join_time_test_join(
         outer_schema,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        None,
         outer,
         inner,
         vec![Arc::new(Column::new("b1", 1)) as PhysicalExprRef],
@@ -6085,6 +6450,7 @@ async fn filter_buffer_pending_loses_inner_rows() -> Result<()> {
         left_schema, // output schema = outer schema for semi
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        None,
         outer,
         inner,
         on_outer,
@@ -6179,6 +6545,7 @@ async fn no_filter_boundary_pending_loses_outer_rows() -> Result<()> {
         left_schema,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        None,
         outer,
         inner,
         on_outer,
@@ -6270,6 +6637,7 @@ async fn no_filter_boundary_pending_with_unmatched_prefix() -> Result<()> {
             Arc::clone(&left_schema),
             vec![SortOptions::default()],
             NullEquality::NullEqualsNothing,
+            None,
             outer,
             inner,
             on_outer.clone(),
@@ -6390,6 +6758,7 @@ async fn filtered_boundary_pending_outer_rows() -> Result<()> {
         left_schema,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        None,
         outer,
         inner,
         on_outer,
@@ -6494,6 +6863,7 @@ async fn bitwise_spill_with_filter() -> Result<()> {
                 join_type,
                 sort_options.clone(),
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
             let stream = join.execute(0, task_ctx)?;
             let spilled_result = common::collect(stream).await.unwrap();
@@ -6543,6 +6913,7 @@ async fn bitwise_spill_with_filter() -> Result<()> {
                 join_type,
                 sort_options.clone(),
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
             let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
             let no_spill_result = common::collect(stream).await.unwrap();
@@ -6604,6 +6975,7 @@ async fn bitwise_filtered_no_spill() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            false,
         )?;
         let stream = join.execute(0, task_ctx)?;
         let err = common::collect(stream).await.unwrap_err();
@@ -6889,6 +7261,7 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            false,
         )?;
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
@@ -6994,6 +7367,7 @@ async fn bitwise_spill_null_key_group() -> Result<()> {
         LeftSemi,
         sort_options,
         NullEquality::NullEqualsNull,
+        false,
     )?;
     let stream = join.execute(0, task_ctx)?;
     let batches = common::collect(stream).await?;
@@ -7135,6 +7509,7 @@ async fn spill_filtered_boundary_loses_outer_rows() -> Result<()> {
             Arc::clone(&left_schema),
             vec![SortOptions::default()],
             NullEquality::NullEqualsNothing,
+            None,
             outer,
             inner,
             on_outer.clone(),
@@ -7664,6 +8039,7 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            false,
         )?;
         let stream = join.execute(0, task_ctx)?;
         let spilled_result = common::collect(stream).await.unwrap();
@@ -7683,6 +8059,7 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            false,
         )?;
         let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
         let no_spill_result = common::collect(stream).await.unwrap();
@@ -7723,6 +8100,7 @@ async fn swap_inputs_swaps_the_projection() -> Result<()> {
         Inner,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        false,
     )?
     .with_projection(Some(vec![4, 2]))?;
 
@@ -7794,6 +8172,7 @@ async fn swap_inputs_swaps_the_filter() -> Result<()> {
             join_type,
             vec![SortOptions::default()],
             NullEquality::NullEqualsNothing,
+            false,
         )?;
 
         let swapped = join.swap_inputs()?;
@@ -7843,6 +8222,7 @@ async fn an_empty_projection_keeps_the_rows() -> Result<()> {
         Inner,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        false,
     )?
     .with_projection(Some(vec![]))?;
 
@@ -7933,6 +8313,7 @@ async fn collect_streamed_keys(
         join_type,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        false,
     )?;
 
     // A small batch size keeps the gate firing often enough to interleave the
