@@ -681,6 +681,7 @@ fn project_output_partitioning(
                 .unwrap_or_else(|| Partitioning::UnknownPartitioning(partition_count))
         }
         Partitioning::Range(_)
+        | Partitioning::Grouped(_)
         | Partitioning::RoundRobinBatch(_)
         | Partitioning::UnknownPartitioning(_) => {
             partitioning.project(mapping, &input_eq_properties)

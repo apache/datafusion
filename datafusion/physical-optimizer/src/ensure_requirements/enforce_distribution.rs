@@ -1876,7 +1876,12 @@ pub fn ensure_distribution_with_stats(
                             partitioning_satisfied,
                             child_partitions,
                             target_partitions,
-                        );
+                        )
+                        && (!partitioning_satisfied
+                            || !matches!(
+                                child.plan.output_partitioning(),
+                                Partitioning::Grouped(_)
+                            ));
 
                     // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
                     // Enforce unmet requirements, or increase parallelism when beneficial.
@@ -1932,7 +1937,12 @@ pub fn ensure_distribution_with_stats(
                     }
                 }
                 Distribution::UnspecifiedDistribution => {
-                    if policy.add_roundrobin {
+                    if policy.add_roundrobin
+                        && !matches!(
+                            child.plan.output_partitioning(),
+                            Partitioning::Grouped(_)
+                        )
+                    {
                         // Add round-robin repartitioning on top of the operator
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
