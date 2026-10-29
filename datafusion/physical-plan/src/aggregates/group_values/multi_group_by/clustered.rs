@@ -168,6 +168,12 @@ impl GroupValues for GroupValuesClustered {
         true
     }
 
+    fn shrink_to_fit(&mut self) {
+        // Scratch for one `intern` call.
+        self.new_groups.clear();
+        self.new_groups.shrink_to_fit();
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         self.columns = GroupValuesColumn::<true>::build_group_columns(&self.schema)
             .expect("schema validated by GroupValuesClustered::try_new");
