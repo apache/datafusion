@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::{
     Column, JoinType, NullEquality, internal_datafusion_err, not_impl_err, plan_err,
     substrait_err,
@@ -18,6 +18,7 @@ use substrait::proto::{JoinRel, join_rel};
 pub async fn from_join_rel(
     consumer: &impl SubstraitConsumer,
     join: &JoinRel,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     if join.post_join_filter.is_some() {
         return not_impl_err!("JoinRel with post_join_filter is not yet supported");
@@ -27,7 +28,7 @@ pub async fn from_join_rel(
         return substrait_err!("JoinRel requires left and right inputs");
     };
     let [left, right] = consumer
-        .consume_rel_inputs(&[left, right])
+        .consume_rel_inputs(&[left, right], context)
         .await?
         .try_into()
         .map_err(|_| {
@@ -48,7 +49,9 @@ pub async fn from_join_rel(
     // Otherwise, build join with only the filter, without join keys
     match &join.expression.as_ref() {
         Some(expr) => {
-            let on = consumer.consume_expression(expr, &in_join_schema).await?;
+            let on = consumer
+                .consume_expression(expr, &in_join_schema, context)
+                .await?;
             // The join expression can contain both equal and non-equal ops.
             // As of datafusion 31.0.0, the equal and non equal join conditions are in separate fields.
             // So we extract each part as follows:
