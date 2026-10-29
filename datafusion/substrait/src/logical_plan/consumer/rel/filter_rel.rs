@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use async_recursion::async_recursion;
 use datafusion::common::not_impl_err;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
@@ -25,12 +25,13 @@ use substrait::proto::FilterRel;
 pub async fn from_filter_rel(
     consumer: &impl SubstraitConsumer,
     filter: &FilterRel,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     if let Some(input) = filter.input.as_ref() {
-        let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
+        let input = LogicalPlanBuilder::from(consumer.consume_rel(input, context).await?);
         if let Some(condition) = filter.condition.as_ref() {
             let expr = consumer
-                .consume_expression(condition, input.schema())
+                .consume_expression(condition, input.schema(), context)
                 .await?;
             input.filter(expr)?.build()
         } else {

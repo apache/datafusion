@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::consumer::SubstraitConsumerContext;
+
 use datafusion::{
     common::{DFSchema, substrait_err},
     prelude::{Expr, lambda},
@@ -27,26 +29,29 @@ pub async fn from_lambda(
     consumer: &impl SubstraitConsumer,
     expr: &proto::expression::Lambda,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Expr> {
     let Some(parameters) = expr.parameters.as_ref() else {
         return substrait_err!("Lambda expression without parameters is not allowed");
     };
 
-    let names = consumer.push_lambda_parameters(&parameters.types, input_schema)?;
+    let (child_context, names) =
+        context.with_lambda_parameters(consumer, &parameters.types, input_schema)?;
 
     let Some(body) = expr.body.as_ref() else {
         return substrait_err!("Lambda expression without body is not allowed");
     };
 
-    let body = consumer.consume_expression(body, input_schema).await?;
-
-    consumer.pop_lambda_parameters();
+    let body = consumer
+        .consume_expression(body, input_schema, &child_context)
+        .await?;
 
     Ok(lambda(names, body))
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::logical_plan::consumer::SubstraitConsumerContext;
     use datafusion::{
         common::{DFSchema, assert_contains},
         prelude::SessionContext,
@@ -69,9 +74,14 @@ mod tests {
         let session_state = SessionContext::new().state();
         let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
 
-        let err = from_lambda(&consumer, &lambda, DFSchema::empty_ref())
-            .await
-            .unwrap_err();
+        let err = from_lambda(
+            &consumer,
+            &lambda,
+            DFSchema::empty_ref(),
+            &SubstraitConsumerContext::default(),
+        )
+        .await
+        .unwrap_err();
 
         assert_contains!(
             err.to_string(),
@@ -90,9 +100,14 @@ mod tests {
         let session_state = SessionContext::new().state();
         let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
 
-        let err = from_lambda(&consumer, &lambda, DFSchema::empty_ref())
-            .await
-            .unwrap_err();
+        let err = from_lambda(
+            &consumer,
+            &lambda,
+            DFSchema::empty_ref(),
+            &SubstraitConsumerContext::default(),
+        )
+        .await
+        .unwrap_err();
 
         assert_contains!(
             err.to_string(),

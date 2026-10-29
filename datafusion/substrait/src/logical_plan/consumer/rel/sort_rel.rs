@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::consumer::SubstraitConsumerContext;
+
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_sorts};
 use datafusion::common::not_impl_err;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
@@ -23,10 +25,12 @@ use substrait::proto::SortRel;
 pub async fn from_sort_rel(
     consumer: &impl SubstraitConsumer,
     sort: &SortRel,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     if let Some(input) = sort.input.as_ref() {
-        let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
-        let sorts = from_substrait_sorts(consumer, &sort.sorts, input.schema()).await?;
+        let input = LogicalPlanBuilder::from(consumer.consume_rel(input, context).await?);
+        let sorts =
+            from_substrait_sorts(consumer, &sort.sorts, input.schema(), context).await?;
         input.sort(sorts)?.build()
     } else {
         not_impl_err!("Sort without an input is not valid")

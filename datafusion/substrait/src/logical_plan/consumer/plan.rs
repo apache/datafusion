@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::consumer::SubstraitConsumerContext;
+
 use super::utils::{make_renamed_schema, rename_expressions};
 use super::{DefaultSubstraitConsumer, SubstraitConsumer};
 use crate::extensions::Extensions;
@@ -48,10 +50,16 @@ pub async fn from_substrait_plan_with_consumer(
         1 => {
             match plan.relations[0].rel_type.as_ref() {
                 Some(rt) => match rt {
-                    plan_rel::RelType::Rel(rel) => Ok(consumer.consume_rel(rel).await?),
+                    plan_rel::RelType::Rel(rel) => Ok(consumer
+                        .consume_rel(rel, &SubstraitConsumerContext::default())
+                        .await?),
                     plan_rel::RelType::Root(root) => {
-                        let plan =
-                            consumer.consume_rel(root.input.as_ref().unwrap()).await?;
+                        let plan = consumer
+                            .consume_rel(
+                                root.input.as_ref().unwrap(),
+                                &SubstraitConsumerContext::default(),
+                            )
+                            .await?;
                         if root.names.is_empty() {
                             // Backwards compatibility for plans missing names
                             return Ok(plan);

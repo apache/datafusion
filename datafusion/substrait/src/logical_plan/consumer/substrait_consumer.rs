@@ -36,8 +36,10 @@ use datafusion::common::{
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::LambdaVariable;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
+use futures::TryStreamExt;
+use futures::stream::FuturesUnordered;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use substrait::proto::expression as substrait_expression;
 use substrait::proto::expression::{
     Enum, FieldReference, IfThen, Literal, MultiOrList, Nested, ScalarFunction,
@@ -53,6 +55,11 @@ use substrait::proto::{
 #[async_trait]
 /// This trait is used to consume Substrait plans, converting them into DataFusion Logical Plans.
 /// It can be implemented by users to allow for custom handling of relations, expressions, etc.
+///
+/// Relation and expression callbacks receive their lexical scope explicitly.
+/// Independent inputs may invoke callbacks concurrently on the same consumer.
+/// Keep traversal scopes in the context and make shared services concurrency-safe,
+/// or override [`Self::consume_rel_inputs`] to consume inputs sequentially.
 ///
 /// Combined with the [crate::logical_plan::producer::SubstraitProducer] this allows for fully
 /// customizable Substrait serde.
@@ -73,14 +80,12 @@ use substrait::proto::{
 /// # use datafusion::logical_expr::expr::ScalarFunction;
 /// # use datafusion_substrait::extensions::Extensions;
 /// # use datafusion_substrait::logical_plan::consumer::{
-/// #     from_project_rel, from_substrait_rel, from_substrait_rex, SubstraitConsumer, DefaultSubstraitLambdaConsumer
+/// #     from_project_rel, from_substrait_rel, from_substrait_rex, SubstraitConsumer, SubstraitConsumerContext
 /// # };
 ///
 /// struct CustomSubstraitConsumer {
 ///     extensions: Arc<Extensions>,
 ///     state: Arc<SessionState>,
-///     // You can reuse existing consumer code related to lambdas
-///     lambda_consumer: DefaultSubstraitLambdaConsumer,
 /// }
 ///
 /// #[async_trait]
@@ -103,33 +108,9 @@ use substrait::proto::{
 ///         self.state.as_ref()
 ///     }
 ///
-///     fn push_lambda_parameters(
-///        &self,
-///        lambda_parameters: &[Type],
-///        input_schema: &DFSchema,
-///    ) -> datafusion::common::Result<Vec<String>> {
-///        self.lambda_consumer.push_lambda_parameters(
-///            self,
-///            lambda_parameters,
-///            input_schema,
-///        )
-///    }
-///
-///     fn pop_lambda_parameters(&self) {
-///        self.lambda_consumer.pop_lambda_parameters();
-///    }
-///
-///    fn lambda_variable(
-///        &self,
-///        steps_out: usize,
-///        field_idx: usize,
-///    ) -> datafusion::common::Result<Expr> {
-///        self.lambda_consumer.lambda_variable(steps_out, field_idx)
-///    }
-///
 ///     // You can reuse existing consumer code to assist in handling advanced extensions
-///     async fn consume_project(&self, rel: &ProjectRel) -> Result<LogicalPlan> {
-///         let df_plan = from_project_rel(self, rel).await?;
+///     async fn consume_project(&self, rel: &ProjectRel, context: &SubstraitConsumerContext) -> Result<LogicalPlan> {
+///         let df_plan = from_project_rel(self, rel, context).await?;
 ///         if let Some(advanced_extension) = rel.advanced_extension.as_ref() {
 ///             not_impl_err!(
 ///                 "decode and handle an advanced extension: {:?}",
@@ -141,10 +122,10 @@ use substrait::proto::{
 ///     }
 ///
 ///     // You can implement a fully custom consumer method if you need special handling
-///     async fn consume_filter(&self, rel: &FilterRel) -> Result<LogicalPlan> {
-///         let input = self.consume_rel(rel.input.as_ref().unwrap()).await?;
+///     async fn consume_filter(&self, rel: &FilterRel, context: &SubstraitConsumerContext) -> Result<LogicalPlan> {
+///         let input = self.consume_rel(rel.input.as_ref().unwrap(), context).await?;
 ///         let expression =
-///             self.consume_expression(rel.condition.as_ref().unwrap(), input.schema())
+///             self.consume_expression(rel.condition.as_ref().unwrap(), input.schema(), context)
 ///                 .await?;
 ///         // though this one is quite boring
 ///         LogicalPlanBuilder::from(input).filter(expression)?.build()
@@ -154,6 +135,7 @@ use substrait::proto::{
 ///     async fn consume_extension_leaf(
 ///         &self,
 ///         rel: &ExtensionLeafRel,
+///         _context: &SubstraitConsumerContext,
 ///     ) -> Result<LogicalPlan> {
 ///         not_impl_err!(
 ///             "handle protobuf Any {} as you need",
@@ -211,8 +193,12 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 
     /// All [Rel]s to be converted pass through this method.
     /// You can provide your own implementation if you wish to customize the conversion behaviour.
-    async fn consume_rel(&self, rel: &Rel) -> datafusion::common::Result<LogicalPlan> {
-        from_substrait_rel(self, rel).await
+    async fn consume_rel(
+        &self,
+        rel: &Rel,
+        context: &SubstraitConsumerContext,
+    ) -> datafusion::common::Result<LogicalPlan> {
+        from_substrait_rel(self, rel, context).await
     }
 
     /// Consumes independent inputs of a JOIN or UNION, returning plans in input order.
@@ -220,82 +206,102 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     /// Implementations must return exactly one plan per input, in the same order.
     /// On error, implementations must drop any unfinished input futures.
     ///
-    /// The default preserves sequential consumption. Implementations may override it
-    /// when they can isolate mutable traversal state between inputs.
+    /// The default consumes inputs concurrently using the same immutable context.
+    /// Overrides can provide a different scheduling policy.
     async fn consume_rel_inputs(
         &self,
         rels: &[&Rel],
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Vec<LogicalPlan>> {
-        let mut plans = Vec::with_capacity(rels.len());
-        for rel in rels {
-            plans.push(self.consume_rel(rel).await?);
+        let pending = FuturesUnordered::new();
+        for (index, rel) in rels.iter().enumerate() {
+            pending.push(async move {
+                self.consume_rel(rel, context)
+                    .await
+                    .map(|plan| (index, plan))
+            });
         }
-        Ok(plans)
+        let mut completed = pending.try_collect::<Vec<_>>().await?;
+        completed.sort_unstable_by_key(|(index, _)| *index);
+        Ok(completed.into_iter().map(|(_, plan)| plan).collect())
     }
 
     async fn consume_read(
         &self,
         rel: &ReadRel,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
-        from_read_rel(self, rel).await
+        from_read_rel(self, rel, context).await
     }
 
     async fn consume_filter(
         &self,
         rel: &FilterRel,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
-        from_filter_rel(self, rel).await
+        from_filter_rel(self, rel, context).await
     }
 
     async fn consume_fetch(
         &self,
         rel: &FetchRel,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
-        from_fetch_rel(self, rel).await
+        from_fetch_rel(self, rel, context).await
     }
 
     async fn consume_aggregate(
         &self,
         rel: &AggregateRel,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
-        from_aggregate_rel(self, rel).await
+        from_aggregate_rel(self, rel, context).await
     }
 
     async fn consume_sort(
         &self,
         rel: &SortRel,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
-        from_sort_rel(self, rel).await
+        from_sort_rel(self, rel, context).await
     }
 
     async fn consume_join(
         &self,
         rel: &JoinRel,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
-        from_join_rel(self, rel).await
+        from_join_rel(self, rel, context).await
     }
 
     async fn consume_project(
         &self,
         rel: &ProjectRel,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
-        from_project_rel(self, rel).await
+        from_project_rel(self, rel, context).await
     }
 
-    async fn consume_set(&self, rel: &SetRel) -> datafusion::common::Result<LogicalPlan> {
-        from_set_rel(self, rel).await
+    async fn consume_set(
+        &self,
+        rel: &SetRel,
+        context: &SubstraitConsumerContext,
+    ) -> datafusion::common::Result<LogicalPlan> {
+        from_set_rel(self, rel, context).await
     }
 
     async fn consume_cross(
         &self,
         rel: &CrossRel,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
-        from_cross_rel(self, rel).await
+        from_cross_rel(self, rel, context).await
     }
 
     async fn consume_consistent_partition_window(
         &self,
         _rel: &ConsistentPartitionWindowRel,
+        _context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
         not_impl_err!("Consistent Partition Window Rel not supported")
     }
@@ -303,8 +309,9 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     async fn consume_exchange(
         &self,
         rel: &ExchangeRel,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
-        from_exchange_rel(self, rel).await
+        from_exchange_rel(self, rel, context).await
     }
 
     // Expression Methods
@@ -318,11 +325,16 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         &self,
         expr: &Expression,
         input_schema: &DFSchema,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
-        from_substrait_rex(self, expr, input_schema).await
+        from_substrait_rex(self, expr, input_schema, context).await
     }
 
-    async fn consume_literal(&self, expr: &Literal) -> datafusion::common::Result<Expr> {
+    async fn consume_literal(
+        &self,
+        expr: &Literal,
+        _context: &SubstraitConsumerContext,
+    ) -> datafusion::common::Result<Expr> {
         from_literal(self, expr).await
     }
 
@@ -330,38 +342,43 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         &self,
         expr: &FieldReference,
         input_schema: &DFSchema,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
-        from_field_reference(self, expr, input_schema).await
+        from_field_reference(self, expr, input_schema, context).await
     }
 
     async fn consume_scalar_function(
         &self,
         expr: &ScalarFunction,
         input_schema: &DFSchema,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
-        from_scalar_function(self, expr, input_schema).await
+        from_scalar_function(self, expr, input_schema, context).await
     }
 
     async fn consume_window_function(
         &self,
         expr: &WindowFunction,
         input_schema: &DFSchema,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
-        from_window_function(self, expr, input_schema).await
+        from_window_function(self, expr, input_schema, context).await
     }
 
     async fn consume_if_then(
         &self,
         expr: &IfThen,
         input_schema: &DFSchema,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
-        from_if_then(self, expr, input_schema).await
+        from_if_then(self, expr, input_schema, context).await
     }
 
     async fn consume_switch(
         &self,
         _expr: &SwitchExpression,
         _input_schema: &DFSchema,
+        _context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
         not_impl_err!("Switch expression not supported")
     }
@@ -370,14 +387,16 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         &self,
         expr: &SingularOrList,
         input_schema: &DFSchema,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
-        from_singular_or_list(self, expr, input_schema).await
+        from_singular_or_list(self, expr, input_schema, context).await
     }
 
     async fn consume_multi_or_list(
         &self,
         _expr: &MultiOrList,
         _input_schema: &DFSchema,
+        _context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
         not_impl_err!("Multi Or List expression not supported")
     }
@@ -386,30 +405,34 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         &self,
         expr: &substrait_expression::Cast,
         input_schema: &DFSchema,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
-        from_cast(self, expr, input_schema).await
+        from_cast(self, expr, input_schema, context).await
     }
 
     async fn consume_subquery(
         &self,
         expr: &substrait_expression::Subquery,
         input_schema: &DFSchema,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
-        from_subquery(self, expr, input_schema).await
+        from_subquery(self, expr, input_schema, context).await
     }
 
     async fn consume_nested(
         &self,
         expr: &Nested,
         input_schema: &DFSchema,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
-        from_nested(self, expr, input_schema).await
+        from_nested(self, expr, input_schema, context).await
     }
 
     async fn consume_enum(
         &self,
         _expr: &Enum,
         _input_schema: &DFSchema,
+        _context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
         not_impl_err!("Enum expression not supported")
     }
@@ -418,6 +441,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         &self,
         expr: &DynamicParameter,
         _input_schema: &DFSchema,
+        _context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
         let id = format!("${}", expr.parameter_reference + 1);
         let field = expr
@@ -438,28 +462,9 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         &self,
         expr: &proto::expression::Lambda,
         input_schema: &DFSchema,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
-        from_lambda(self, expr, input_schema).await
-    }
-
-    // Outer Schema Stack
-    // These methods manage a stack of outer schemas for correlated subquery support.
-    // When entering a subquery, the enclosing query's schema is pushed onto the stack.
-    // Field references with OuterReference root_type use these to resolve columns.
-
-    /// Push an outer schema onto the stack when entering a subquery.
-    fn push_outer_schema(&self, _schema: Arc<DFSchema>) {}
-
-    /// Pop an outer schema from the stack when leaving a subquery.
-    fn pop_outer_schema(&self) {}
-
-    /// Get the outer schema at the given nesting depth.
-    /// `steps_out = 1` is the immediately enclosing query, `steps_out = 2`
-    /// is two levels out, etc. Returns `None` if `steps_out` is 0 or
-    /// exceeds the current nesting depth (the caller should treat this as
-    /// an error in the Substrait plan).
-    fn get_outer_schema(&self, _steps_out: usize) -> Option<Arc<DFSchema>> {
-        None
+        from_lambda(self, expr, input_schema, context).await
     }
 
     // User-Defined Functionality
@@ -470,6 +475,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     async fn consume_extension_leaf(
         &self,
         rel: &ExtensionLeafRel,
+        _context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
         if let Some(detail) = rel.detail.as_ref() {
             return substrait_err!(
@@ -483,6 +489,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     async fn consume_extension_single(
         &self,
         rel: &ExtensionSingleRel,
+        _context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
         if let Some(detail) = rel.detail.as_ref() {
             return substrait_err!(
@@ -496,6 +503,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     async fn consume_extension_multi(
         &self,
         rel: &ExtensionMultiRel,
+        _context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
         if let Some(detail) = rel.detail.as_ref() {
             return substrait_err!(
@@ -561,35 +569,6 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         };
         substrait_err!("Missing handler for user-defined literals {}", type_ref)
     }
-
-    // Lambda related methods
-
-    /// Push the given lambda parameters onto the stack when entering a lambda and
-    /// returns the names they got assigned
-    ///
-    /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaConsumer] and forward this method to it
-    fn push_lambda_parameters(
-        &self,
-        _lambda_parameters: &[Type],
-        _input_schema: &DFSchema,
-    ) -> datafusion::common::Result<Vec<String>> {
-        not_impl_err!("SubstraitConsumer::push_lambda_parameters")
-    }
-
-    /// Pop lambda parameters from the stack when leaving a lambda.
-    fn pop_lambda_parameters(&self) {}
-
-    /// Returns an expression corresponding to the lambda variable with the given field_idx within the lambda it originates from,
-    /// at the lambda `step_outs` of the current scope
-    ///
-    /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaConsumer] and forward this method to it
-    fn lambda_variable(
-        &self,
-        _steps_out: usize,
-        _field_idx: usize,
-    ) -> datafusion::common::Result<Expr> {
-        not_impl_err!("SubstraitConsumer::lambda_variable")
-    }
 }
 
 /// Default SubstraitConsumer for converting standard Substrait without user-defined extensions.
@@ -598,18 +577,11 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 pub struct DefaultSubstraitConsumer<'a> {
     pub(super) extensions: &'a Extensions,
     pub(super) state: &'a SessionState,
-    outer_schemas: RwLock<Vec<Arc<DFSchema>>>,
-    lambda_consumer: DefaultSubstraitLambdaConsumer,
 }
 
 impl<'a> DefaultSubstraitConsumer<'a> {
     pub fn new(extensions: &'a Extensions, state: &'a SessionState) -> Self {
-        DefaultSubstraitConsumer {
-            extensions,
-            state,
-            outer_schemas: RwLock::new(Vec::new()),
-            lambda_consumer: DefaultSubstraitLambdaConsumer::new(),
-        }
+        DefaultSubstraitConsumer { extensions, state }
     }
 }
 
@@ -633,27 +605,10 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
         self.state
     }
 
-    fn push_outer_schema(&self, schema: Arc<DFSchema>) {
-        self.outer_schemas.write().unwrap().push(schema);
-    }
-
-    fn pop_outer_schema(&self) {
-        self.outer_schemas.write().unwrap().pop();
-    }
-
-    fn get_outer_schema(&self, steps_out: usize) -> Option<Arc<DFSchema>> {
-        let schemas = self.outer_schemas.read().unwrap();
-        // steps_out=1 → last element, steps_out=2 → second-to-last, etc.
-        // Returns None for steps_out=0 or steps_out > stack depth.
-        schemas
-            .len()
-            .checked_sub(steps_out)
-            .and_then(|idx| schemas.get(idx).cloned())
-    }
-
     async fn consume_extension_leaf(
         &self,
         rel: &ExtensionLeafRel,
+        _context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
         let Some(ext_detail) = &rel.detail else {
             return substrait_err!("Unexpected empty detail in ExtensionLeafRel");
@@ -668,6 +623,7 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
     async fn consume_extension_single(
         &self,
         rel: &ExtensionSingleRel,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
         let Some(ext_detail) = &rel.detail else {
             return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
@@ -681,7 +637,7 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
                 "ExtensionSingleRel missing input rel, try using ExtensionLeafRel instead"
             );
         };
-        let input_plan = self.consume_rel(input_rel).await?;
+        let input_plan = self.consume_rel(input_rel, context).await?;
         let plan = plan.with_exprs_and_inputs(plan.expressions(), vec![input_plan])?;
         Ok(LogicalPlan::Extension(Extension { node: plan }))
     }
@@ -689,6 +645,7 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
     async fn consume_extension_multi(
         &self,
         rel: &ExtensionMultiRel,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
         let Some(ext_detail) = &rel.detail else {
             return substrait_err!("Unexpected empty detail in ExtensionMultiRel");
@@ -699,82 +656,62 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
             .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
         let mut inputs = Vec::with_capacity(rel.inputs.len());
         for input in &rel.inputs {
-            let input_plan = self.consume_rel(input).await?;
+            let input_plan = self.consume_rel(input, context).await?;
             inputs.push(input_plan);
         }
         let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
         Ok(LogicalPlan::Extension(Extension { node: plan }))
     }
-
-    fn push_lambda_parameters(
-        &self,
-        lambda_parameters: &[Type],
-        input_schema: &DFSchema,
-    ) -> datafusion::common::Result<Vec<String>> {
-        self.lambda_consumer
-            .push_lambda_parameters(self, lambda_parameters, input_schema)
-    }
-
-    fn pop_lambda_parameters(&self) {
-        self.lambda_consumer.pop_lambda_parameters()
-    }
-
-    fn lambda_variable(
-        &self,
-        steps_out: usize,
-        field_idx: usize,
-    ) -> datafusion::common::Result<Expr> {
-        self.lambda_consumer.lambda_variable(steps_out, field_idx)
-    }
 }
 
-/// Default implementation of lambda related methods of the [SubstraitConsumer] trait
+/// Immutable lexical scope for one path through a Substrait plan.
 ///
-/// Can be embedded into a custom [SubstraitConsumer] to implement them
-pub struct DefaultSubstraitLambdaConsumer {
-    inner: RwLock<DefaultSubstraitLambdaConsumerInner>,
-}
-
-struct DefaultSubstraitLambdaConsumerInner {
-    /// Parameters of the lambdas currently in scope, ordered from innermost
-    /// to outermost. Index 0 is the lambda being consumed; higher indices
-    /// are enclosing lambdas, matching the `steps_out` value used by
-    /// [`DefaultSubstraitLambdaConsumer::lambda_variable`] and `LambdaParameterReference`.
+/// Pass the current context to child conversions. Enter a subquery or lambda by
+/// deriving a child context; the parent stays unchanged, including on errors or
+/// cancellation. Independent inputs may borrow the same context concurrently.
+#[derive(Debug, Clone, Default)]
+pub struct SubstraitConsumerContext {
+    outer_schemas: Vec<Arc<DFSchema>>,
     lambda_parameters: VecDeque<Vec<FieldRef>>,
     next_lambda_parameter: usize,
 }
 
-impl Default for DefaultSubstraitLambdaConsumer {
-    fn default() -> Self {
-        Self::new()
+impl SubstraitConsumerContext {
+    /// Derives a child scope whose immediately enclosing query has `schema`.
+    pub fn with_outer_schema(&self, schema: Arc<DFSchema>) -> Self {
+        let mut child = self.clone();
+        child.outer_schemas.push(schema);
+        child
     }
-}
 
-impl DefaultSubstraitLambdaConsumer {
-    pub fn new() -> Self {
-        Self {
-            inner: RwLock::new(DefaultSubstraitLambdaConsumerInner {
-                lambda_parameters: VecDeque::new(),
-                next_lambda_parameter: 0,
-            }),
+    /// Returns the enclosing query schema; one means the immediate parent.
+    /// Zero or a depth beyond the enclosing queries returns `None`.
+    pub fn get_outer_schema(&self, steps_out: usize) -> Option<Arc<DFSchema>> {
+        if steps_out == 0 {
+            return None;
         }
+        self.outer_schemas
+            .len()
+            .checked_sub(steps_out)
+            .map(|index| Arc::clone(&self.outer_schemas[index]))
     }
 
-    pub fn push_lambda_parameters(
+    /// Derives a child lambda scope and returns its assigned parameter names.
+    pub fn with_lambda_parameters(
         &self,
         consumer: &impl SubstraitConsumer,
         lambda_parameters: &[Type],
         input_schema: &DFSchema,
-    ) -> datafusion::common::Result<Vec<String>> {
-        let mut inner = self.inner.write().unwrap();
+    ) -> datafusion::common::Result<(Self, Vec<String>)> {
+        let mut child = self.clone();
 
         let lambda_parameters = lambda_parameters
             .iter()
             .map(|ty| {
                 let (assigned_number, default_name) =
-                    next_lambda_parameter_name(inner.next_lambda_parameter, input_schema);
+                    next_lambda_parameter_name(child.next_lambda_parameter, input_schema);
 
-                inner.next_lambda_parameter = assigned_number + 1;
+                child.next_lambda_parameter = assigned_number + 1;
 
                 Ok(field_from_substrait_type_without_names(consumer, ty)?
                     .renamed(&default_name))
@@ -783,21 +720,18 @@ impl DefaultSubstraitLambdaConsumer {
 
         let names = lambda_parameters.iter().map(|f| f.name().clone()).collect();
 
-        inner.lambda_parameters.push_front(lambda_parameters);
+        child.lambda_parameters.push_front(lambda_parameters);
 
-        Ok(names)
+        Ok((child, names))
     }
 
-    pub fn pop_lambda_parameters(&self) {
-        self.inner.write().unwrap().lambda_parameters.pop_front();
-    }
-
+    /// Resolves a parameter in the current lambda (zero) or an enclosing lambda.
     pub fn lambda_variable(
         &self,
         steps_out: usize,
         field_idx: usize,
     ) -> datafusion::common::Result<Expr> {
-        let lambda_parameters = &self.inner.read().unwrap().lambda_parameters;
+        let lambda_parameters = &self.lambda_parameters;
 
         let Some(lambda_parameters) = lambda_parameters.get(steps_out) else {
             return substrait_err!(
@@ -844,8 +778,21 @@ fn next_lambda_parameter_name(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::consumer::utils::tests::test_consumer;
     use datafusion::arrow::datatypes::{Field, Schema};
+
+    use futures::poll;
+    use proto::expression::{ReferenceSegment, field_reference, reference_segment};
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Semaphore;
+
+    struct ActiveInput<'a>(&'a AtomicUsize);
+
+    impl Drop for ActiveInput<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
 
     fn make_schema(fields: &[(&str, DataType)]) -> Arc<DFSchema> {
         let arrow_fields: Vec<Field> = fields
@@ -860,69 +807,73 @@ mod tests {
 
     #[test]
     fn test_get_outer_schema_empty_stack() {
-        let consumer = test_consumer();
+        let context = SubstraitConsumerContext::default();
 
         // No schemas pushed — any steps_out should return None
-        assert!(consumer.get_outer_schema(0).is_none());
-        assert!(consumer.get_outer_schema(1).is_none());
-        assert!(consumer.get_outer_schema(2).is_none());
+        assert!(context.get_outer_schema(0).is_none());
+        assert!(context.get_outer_schema(1).is_none());
+        assert!(context.get_outer_schema(2).is_none());
     }
 
     #[test]
     fn test_get_outer_schema_single_level() {
-        let consumer = test_consumer();
+        let context = SubstraitConsumerContext::default();
 
         let schema_a = make_schema(&[("a", DataType::Int64)]);
-        consumer.push_outer_schema(Arc::clone(&schema_a));
+        let parent = context.clone();
+        let context = context.with_outer_schema(Arc::clone(&schema_a));
 
         // steps_out=1 returns the one pushed schema
-        let result = consumer.get_outer_schema(1).unwrap();
+        let result = context.get_outer_schema(1).unwrap();
         assert_eq!(result.fields().len(), 1);
         assert_eq!(result.fields()[0].name(), "a");
 
         // steps_out=0 and steps_out=2 are out of range
-        assert!(consumer.get_outer_schema(0).is_none());
-        assert!(consumer.get_outer_schema(2).is_none());
+        assert!(context.get_outer_schema(0).is_none());
+        assert!(context.get_outer_schema(2).is_none());
 
-        consumer.pop_outer_schema();
-        assert!(consumer.get_outer_schema(1).is_none());
+        let context = parent;
+        assert!(context.get_outer_schema(1).is_none());
     }
 
     #[test]
     fn test_get_outer_schema_nested() {
-        let consumer = test_consumer();
+        let context = SubstraitConsumerContext::default();
 
         let schema_a = make_schema(&[("a", DataType::Int64)]);
         let schema_b = make_schema(&[("b", DataType::Utf8)]);
 
-        consumer.push_outer_schema(Arc::clone(&schema_a));
-        consumer.push_outer_schema(Arc::clone(&schema_b));
+        let context = context.with_outer_schema(Arc::clone(&schema_a));
+        let parent = context.clone();
+        let context = context.with_outer_schema(Arc::clone(&schema_b));
 
         // steps_out=1 returns the most recent (schema_b)
-        let result = consumer.get_outer_schema(1).unwrap();
+        let result = context.get_outer_schema(1).unwrap();
         assert_eq!(result.fields()[0].name(), "b");
 
         // steps_out=2 returns the grandparent (schema_a)
-        let result = consumer.get_outer_schema(2).unwrap();
+        let result = context.get_outer_schema(2).unwrap();
         assert_eq!(result.fields()[0].name(), "a");
 
         // steps_out=3 exceeds depth
-        assert!(consumer.get_outer_schema(3).is_none());
+        assert!(context.get_outer_schema(3).is_none());
 
-        // Pop one level — now steps_out=1 returns schema_a
-        consumer.pop_outer_schema();
-        let result = consumer.get_outer_schema(1).unwrap();
+        // The parent is unchanged — steps_out=1 still returns schema_a
+        let context = parent;
+        let result = context.get_outer_schema(1).unwrap();
         assert_eq!(result.fields()[0].name(), "a");
-        assert!(consumer.get_outer_schema(2).is_none());
+        assert!(context.get_outer_schema(2).is_none());
     }
 
     // A custom consumer exercises the trait default independently of the default
     // consumer's scheduling policy.
     struct InputConsumer {
-        extensions: Extensions,
-        state: SessionState,
-        reads: std::sync::Mutex<Vec<String>>,
-        ready: tokio::sync::Semaphore,
+        extensions: Arc<Extensions>,
+        state: Arc<SessionState>,
+        reads: Arc<Mutex<Vec<String>>>,
+        ready: Arc<Semaphore>,
+        gates: Arc<HashMap<String, Semaphore>>,
+        active: Arc<AtomicUsize>,
     }
 
     #[async_trait]
@@ -932,7 +883,7 @@ mod tests {
         }
 
         fn get_function_registry(&self) -> &impl FunctionRegistry {
-            &self.state
+            self.state.as_ref()
         }
 
         async fn resolve_table_ref(
@@ -942,9 +893,22 @@ mod tests {
             unreachable!("test consumes reads directly")
         }
 
+        async fn consume_expression(
+            &self,
+            expr: &Expression,
+            input_schema: &DFSchema,
+            context: &SubstraitConsumerContext,
+        ) -> datafusion::common::Result<Expr> {
+            self.active.fetch_add(1, Ordering::SeqCst);
+            let _active = ActiveInput(&self.active);
+            self.ready.acquire().await.unwrap().forget();
+            from_substrait_rex(self, expr, input_schema, context).await
+        }
+
         async fn consume_rel(
             &self,
             rel: &Rel,
+            _context: &SubstraitConsumerContext,
         ) -> datafusion::common::Result<LogicalPlan> {
             let Some(proto::rel::RelType::Read(read)) = &rel.rel_type else {
                 panic!("expected a read")
@@ -954,7 +918,10 @@ mod tests {
                 panic!("expected a named table")
             };
             self.reads.lock().unwrap().push(table.names[0].clone());
-            self.ready.acquire().await.unwrap().forget();
+            self.active.fetch_add(1, Ordering::SeqCst);
+            let _active = ActiveInput(&self.active);
+            let gate = self.gates.get(&table.names[0]).unwrap_or(&self.ready);
+            gate.acquire().await.unwrap().forget();
             if table.names[0] == "fail" {
                 return substrait_err!("input failed");
             }
@@ -973,12 +940,15 @@ mod tests {
 
     fn input_consumer() -> InputConsumer {
         InputConsumer {
-            extensions: Extensions::default(),
-            state: datafusion::execution::SessionStateBuilder::new_with_default_features(
-            )
-            .build(),
-            reads: std::sync::Mutex::default(),
-            ready: tokio::sync::Semaphore::new(0),
+            extensions: Arc::new(Extensions::default()),
+            state: Arc::new(
+                datafusion::execution::SessionStateBuilder::new_with_default_features()
+                    .build(),
+            ),
+            reads: Arc::new(Mutex::default()),
+            ready: Arc::new(Semaphore::new(0)),
+            gates: Arc::new(HashMap::new()),
+            active: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -996,34 +966,169 @@ mod tests {
         }
     }
 
+    fn identity_lambda(kind: r#type::Kind, steps_out: u32) -> proto::expression::Lambda {
+        proto::expression::Lambda {
+            parameters: Some(r#type::Struct {
+                types: vec![Type { kind: Some(kind) }],
+                ..Default::default()
+            }),
+            body: Some(Box::new(Expression {
+                rex_type: Some(proto::expression::RexType::Selection(Box::new(
+                    FieldReference {
+                        reference_type: Some(
+                            field_reference::ReferenceType::DirectReference(
+                                ReferenceSegment {
+                                    reference_type: Some(
+                                        reference_segment::ReferenceType::StructField(
+                                            Box::new(reference_segment::StructField {
+                                                field: 0,
+                                                child: None,
+                                            }),
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                        root_type: Some(
+                            field_reference::RootType::LambdaParameterReference(
+                                field_reference::LambdaParameterReference { steps_out },
+                            ),
+                        ),
+                    },
+                ))),
+            })),
+        }
+    }
+
+    fn assert_lambda_body(expr: Expr, name: &str, data_type: DataType) {
+        let Expr::Lambda(lambda) = expr else {
+            panic!("expected lambda")
+        };
+        let Expr::LambdaVariable(variable) = *lambda.body else {
+            panic!("expected lambda variable")
+        };
+        assert_eq!(variable.name, name);
+        assert_eq!(variable.field.unwrap().data_type(), &data_type);
+    }
+
     #[tokio::test]
-    async fn input_hook_default_is_sequential_and_stops_on_error() {
-        use std::future::{Future, poll_fn};
-        use std::task::Poll;
+    async fn shared_consumer_keeps_concurrent_lambda_scopes_independent() {
         let consumer = input_consumer();
-        let rels = [input_read("a"), input_read("fail"), input_read("unreached")];
-        let inputs = rels.iter().collect::<Vec<_>>();
-        let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs));
-        poll_fn(|cx| {
-            assert!(pending.as_mut().poll(cx).is_pending());
-            Poll::Ready(())
-        })
-        .await;
-        assert_eq!(*consumer.reads.lock().unwrap(), ["a"]);
-        consumer.ready.add_permits(3);
+        let context = SubstraitConsumerContext::default();
+        let schema = DFSchema::empty();
+        let integer = identity_lambda(r#type::Kind::I64(r#type::I64::default()), 0);
+        let string = identity_lambda(r#type::Kind::String(r#type::String::default()), 0);
+        let mut first = Box::pin(consumer.consume_lambda(&integer, &schema, &context));
+        let mut second = Box::pin(consumer.consume_lambda(&string, &schema, &context));
+        assert!(poll!(first.as_mut()).is_pending());
+        assert!(poll!(second.as_mut()).is_pending());
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 2);
+        consumer.ready.add_permits(2);
+        assert_lambda_body(first.await.unwrap(), "p0", DataType::Int64);
+        assert_lambda_body(second.await.unwrap(), "p0", DataType::Utf8);
+        assert!(context.lambda_variable(0, 0).is_err());
+    }
+
+    #[tokio::test]
+    async fn lambda_error_and_cancellation_preserve_parent_scope() {
+        let consumer = input_consumer();
+        let schema = DFSchema::empty();
+        let root = SubstraitConsumerContext::default();
+        let (context, names) = root
+            .with_lambda_parameters(
+                &consumer,
+                &[Type {
+                    kind: Some(r#type::Kind::I64(r#type::I64::default())),
+                }],
+                &schema,
+            )
+            .unwrap();
+        assert_eq!(names, vec!["p0"]);
+        let nested = identity_lambda(r#type::Kind::String(r#type::String::default()), 1);
+        let mut cancelled = Box::pin(consumer.consume_lambda(&nested, &schema, &context));
+        assert!(poll!(cancelled.as_mut()).is_pending());
+        drop(cancelled);
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 0);
+        let mut invalid = nested.clone();
+        invalid.body = None;
         assert!(
-            pending
+            consumer
+                .consume_lambda(&invalid, &schema, &context)
                 .await
-                .unwrap_err()
-                .to_string()
-                .contains("input failed")
+                .is_err()
         );
-        assert_eq!(*consumer.reads.lock().unwrap(), ["a", "fail"]);
+        consumer.ready.add_permits(1);
+        let result = consumer
+            .consume_lambda(&nested, &schema, &context)
+            .await
+            .unwrap();
+        let Expr::Lambda(ref lambda) = result else {
+            panic!("expected lambda")
+        };
+        assert_eq!(lambda.params, vec!["p1"]);
+        assert_lambda_body(result, "p0", DataType::Int64);
+        assert!(context.lambda_variable(1, 0).is_err());
+        assert!(root.lambda_variable(0, 0).is_err());
+    }
+
+    #[tokio::test]
+    async fn concurrent_inputs_overlap_and_preserve_input_order() {
+        let mut consumer = input_consumer();
+        consumer.gates = Arc::new(HashMap::from([
+            ("a".into(), Semaphore::new(0)),
+            ("b".into(), Semaphore::new(0)),
+        ]));
+        let rels = [input_read("a"), input_read("b")];
+        let inputs = rels.iter().collect::<Vec<_>>();
+        let context = SubstraitConsumerContext::default();
+        let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs, &context));
+        assert!(poll!(&mut pending).is_pending());
+        assert_eq!(*consumer.reads.lock().unwrap(), ["a", "b"]);
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 2);
+        consumer.gates["b"].add_permits(1);
+        assert!(poll!(&mut pending).is_pending());
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 1);
+        consumer.gates["a"].add_permits(1);
+        let plans = pending.await.unwrap();
+        assert_eq!(plans.len(), 2);
+        assert!(
+            plans[0]
+                .display_indent()
+                .to_string()
+                .contains("TableScan: a")
+        );
+        assert!(
+            plans[1]
+                .display_indent()
+                .to_string()
+                .contains("TableScan: b")
+        );
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn concurrent_inputs_cancel_pending_siblings_on_error() {
+        let mut consumer = input_consumer();
+        consumer.gates = Arc::new(HashMap::from([("fail".into(), Semaphore::new(0))]));
+        // Exercise more inputs than the small-future optimization in try_join_all.
+        let mut rels = (0..40)
+            .map(|i| input_read(&format!("a{i}")))
+            .collect::<Vec<_>>();
+        rels.push(input_read("fail"));
+        let inputs = rels.iter().collect::<Vec<_>>();
+        let context = SubstraitConsumerContext::default();
+        let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs, &context));
+        assert!(poll!(&mut pending).is_pending());
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 41);
+        consumer.gates["fail"].add_permits(1);
+        let error = pending.await.unwrap_err();
+        assert!(error.to_string().contains("input failed"));
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 0);
     }
 
     struct HookConsumer {
         inner: InputConsumer,
-        calls: std::sync::Mutex<Vec<usize>>,
+        calls: Mutex<Vec<usize>>,
         truncate: bool,
     }
 
@@ -1033,7 +1138,7 @@ mod tests {
             &self.inner.extensions
         }
         fn get_function_registry(&self) -> &impl FunctionRegistry {
-            &self.inner.state
+            self.inner.state.as_ref()
         }
         async fn resolve_table_ref(
             &self,
@@ -1044,9 +1149,10 @@ mod tests {
         async fn consume_rel_inputs(
             &self,
             rels: &[&Rel],
+            context: &SubstraitConsumerContext,
         ) -> datafusion::common::Result<Vec<LogicalPlan>> {
             self.calls.lock().unwrap().push(rels.len());
-            let mut plans = self.inner.consume_rel_inputs(rels).await?;
+            let mut plans = self.inner.consume_rel_inputs(rels, context).await?;
             if self.truncate {
                 plans.pop();
             }
@@ -1059,7 +1165,7 @@ mod tests {
         for truncate in [false, true] {
             let consumer = HookConsumer {
                 inner: input_consumer(),
-                calls: std::sync::Mutex::default(),
+                calls: Mutex::default(),
                 truncate,
             };
             consumer.inner.ready.add_permits(6);
@@ -1069,7 +1175,9 @@ mod tests {
                 r#type: proto::join_rel::JoinType::Inner as i32,
                 ..Default::default()
             };
-            let result = consumer.consume_join(&join).await;
+            let result = consumer
+                .consume_join(&join, &SubstraitConsumerContext::default())
+                .await;
             if truncate {
                 assert!(
                     result
@@ -1103,7 +1211,9 @@ mod tests {
                     op: op as i32,
                     ..Default::default()
                 };
-                let result = consumer.consume_set(&set).await;
+                let result = consumer
+                    .consume_set(&set, &SubstraitConsumerContext::default())
+                    .await;
                 if truncate {
                     assert!(
                         result

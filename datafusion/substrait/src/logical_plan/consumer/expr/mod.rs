@@ -41,6 +41,8 @@ pub use singular_or_list::*;
 pub use subquery::*;
 pub use window_function::*;
 
+use crate::logical_plan::consumer::SubstraitConsumerContext;
+
 use crate::extensions::Extensions;
 use crate::logical_plan::consumer::{
     DefaultSubstraitConsumer, SubstraitConsumer, from_substrait_named_struct,
@@ -59,46 +61,71 @@ pub async fn from_substrait_rex(
     consumer: &impl SubstraitConsumer,
     expression: &Expression,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Expr> {
     match &expression.rex_type {
         Some(t) => match t {
-            RexType::Literal(expr) => consumer.consume_literal(expr).await,
+            RexType::Literal(expr) => consumer.consume_literal(expr, context).await,
             RexType::Selection(expr) => {
-                consumer.consume_field_reference(expr, input_schema).await
+                consumer
+                    .consume_field_reference(expr, input_schema, context)
+                    .await
             }
             RexType::ScalarFunction(expr) => {
-                consumer.consume_scalar_function(expr, input_schema).await
+                consumer
+                    .consume_scalar_function(expr, input_schema, context)
+                    .await
             }
             RexType::WindowFunction(expr) => {
-                consumer.consume_window_function(expr, input_schema).await
+                consumer
+                    .consume_window_function(expr, input_schema, context)
+                    .await
             }
-            RexType::IfThen(expr) => consumer.consume_if_then(expr, input_schema).await,
+            RexType::IfThen(expr) => {
+                consumer.consume_if_then(expr, input_schema, context).await
+            }
             RexType::SwitchExpression(expr) => {
-                consumer.consume_switch(expr, input_schema).await
+                consumer.consume_switch(expr, input_schema, context).await
             }
             RexType::SingularOrList(expr) => {
-                consumer.consume_singular_or_list(expr, input_schema).await
+                consumer
+                    .consume_singular_or_list(expr, input_schema, context)
+                    .await
             }
 
             RexType::MultiOrList(expr) => {
-                consumer.consume_multi_or_list(expr, input_schema).await
+                consumer
+                    .consume_multi_or_list(expr, input_schema, context)
+                    .await
             }
 
             RexType::Cast(expr) => {
-                consumer.consume_cast(expr.as_ref(), input_schema).await
+                consumer
+                    .consume_cast(expr.as_ref(), input_schema, context)
+                    .await
             }
 
             RexType::Subquery(expr) => {
-                consumer.consume_subquery(expr.as_ref(), input_schema).await
+                consumer
+                    .consume_subquery(expr.as_ref(), input_schema, context)
+                    .await
             }
-            RexType::Nested(expr) => consumer.consume_nested(expr, input_schema).await,
+            RexType::Nested(expr) => {
+                consumer.consume_nested(expr, input_schema, context).await
+            }
             #[expect(deprecated)]
-            RexType::Enum(expr) => consumer.consume_enum(expr, input_schema).await,
+            RexType::Enum(expr) => {
+                consumer.consume_enum(expr, input_schema, context).await
+            }
             RexType::DynamicParameter(expr) => {
-                consumer.consume_dynamic_parameter(expr, input_schema).await
+                consumer
+                    .consume_dynamic_parameter(expr, input_schema, context)
+                    .await
             }
             RexType::Lambda(lambda) => {
-                consumer.consume_lambda(lambda.as_ref(), input_schema).await
+                consumer
+                    .consume_lambda(lambda.as_ref(), input_schema, context)
+                    .await
             }
             RexType::LambdaInvocation(_) => {
                 not_impl_err!("Lambda invocations are not supported")
@@ -153,7 +180,11 @@ pub async fn from_substrait_extended_expr(
             }
         }?;
         let expr = consumer
-            .consume_expression(scalar_expr, &input_schema)
+            .consume_expression(
+                scalar_expr,
+                &input_schema,
+                &SubstraitConsumerContext::default(),
+            )
             .await?;
         let output_field = expr.to_field(&input_schema)?.1;
         let mut names_idx = 0;
@@ -192,10 +223,13 @@ pub async fn from_substrait_rex_vec(
     consumer: &impl SubstraitConsumer,
     exprs: &Vec<Expression>,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Vec<Expr>> {
     let mut expressions: Vec<Expr> = Vec::with_capacity(exprs.len());
     for expr in exprs {
-        let expression = consumer.consume_expression(expr, input_schema).await?;
+        let expression = consumer
+            .consume_expression(expr, input_schema, context)
+            .await?;
         expressions.push(expression);
     }
     Ok(expressions)
@@ -204,6 +238,7 @@ pub async fn from_substrait_rex_vec(
 #[cfg(test)]
 mod tests {
     use crate::extensions::Extensions;
+    use crate::logical_plan::consumer::SubstraitConsumerContext;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
     use crate::logical_plan::consumer::*;
     use datafusion::common::{DFSchema, assert_contains};
@@ -234,7 +269,14 @@ mod tests {
         extensions.register_function("count");
         consumer.extensions = &extensions;
 
-        match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
+        match from_substrait_rex(
+            &consumer,
+            &substrait,
+            &DFSchema::empty(),
+            &SubstraitConsumerContext::default(),
+        )
+        .await?
+        {
             Expr::WindowFunction(window_function) => {
                 assert_eq!(window_function.params.order_by.len(), 1)
             }
@@ -261,7 +303,14 @@ mod tests {
         extensions.register_function("count");
         consumer.extensions = &extensions;
 
-        match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
+        match from_substrait_rex(
+            &consumer,
+            &substrait,
+            &DFSchema::empty(),
+            &SubstraitConsumerContext::default(),
+        )
+        .await?
+        {
             Expr::WindowFunction(window_function) => {
                 assert_eq!(window_function.params.args.len(), 1)
             }
@@ -288,9 +337,14 @@ mod tests {
         extensions.register_function("count");
         consumer.extensions = &extensions;
 
-        let err = from_substrait_rex(&consumer, &substrait, &DFSchema::empty())
-            .await
-            .unwrap_err();
+        let err = from_substrait_rex(
+            &consumer,
+            &substrait,
+            &DFSchema::empty(),
+            &SubstraitConsumerContext::default(),
+        )
+        .await
+        .unwrap_err();
         assert_contains!(err.to_string(), "Invalid window aggregation invocation 3");
     }
 }
