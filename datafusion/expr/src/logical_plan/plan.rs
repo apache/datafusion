@@ -10,12 +10,12 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
 
-use super::DdlStatement;
 use super::dml::CopyTo;
 use super::invariants::{
     InvariantLevel, assert_always_invariants_at_current_node,
     assert_executable_invariants,
 };
+use super::{DdlStatement, information_schema};
 use crate::builder::{unique_field_aliases, unnest_with_options};
 use crate::expr::{
     Alias, Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams,
@@ -42,6 +42,7 @@ use crate::{
     requalify_sides_if_needed,
 };
 
+use crate::logical_plan::information_schema::ColumnsDetail;
 use crate::statistics::StatisticsRequest;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
@@ -342,9 +343,10 @@ pub enum LogicalPlan {
     Ddl(DdlStatement),
     /// `COPY TO` for writing plan results to files
     Copy(CopyTo),
-    /// Describe the schema of the table. This is used to implement the
-    /// SQL `DESCRIBE` command from MySQL.
-    DescribeTable(DescribeTable),
+    /// A `SHOW`-class SQL statement: `SHOW TABLES`, `SHOW COLUMNS`,
+    /// `SHOW FUNCTIONS`, `SHOW <variable>`, `SHOW CREATE TABLE`, and
+    /// `DESCRIBE` (MySQL's alias for `SHOW COLUMNS FROM`).
+    Show(Show),
     /// Unnest a column that contains a nested list type such as an
     /// ARRAY. This is used to implement SQL `UNNEST`
     Unnest(Unnest),
@@ -415,9 +417,7 @@ impl LogicalPlan {
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => cte.schema(),
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => &scan.schema,
             LogicalPlan::Union(Union { schema, .. }) => schema,
-            LogicalPlan::DescribeTable(DescribeTable { output_schema, .. }) => {
-                output_schema
-            }
+            LogicalPlan::Show(Show { output_schema, .. }) => output_schema,
             LogicalPlan::Dml(DmlStatement { output_schema, .. }) => output_schema,
             LogicalPlan::Copy(CopyTo { output_schema, .. }) => output_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
@@ -454,11 +454,7 @@ impl LogicalPlan {
 
     /// Returns the (fixed) output schema for `DESCRIBE` plans
     pub fn describe_schema() -> Schema {
-        Schema::new(vec![
-            Field::new("column_name", DataType::Utf8, false),
-            Field::new("data_type", DataType::Utf8, false),
-            Field::new("is_nullable", DataType::Utf8, false),
-        ])
+        information_schema::columns_schema(ColumnsDetail::Describe)
     }
 
     /// Returns all expressions (non-recursively) evaluated by the current
@@ -560,7 +556,7 @@ impl LogicalPlan {
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::DescribeTable(_) => vec![],
+            | LogicalPlan::Show(_) => vec![],
         }
     }
 
@@ -688,7 +684,7 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::Ddl(_)
-            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Show(_)
             | LogicalPlan::Unnest(_) => Ok(None),
         }
     }
@@ -871,7 +867,7 @@ impl LogicalPlan {
             LogicalPlan::TableScan(_) => Ok(self),
             LogicalPlan::EmptyRelation(_) => Ok(self),
             LogicalPlan::Statement(_) => Ok(self),
-            LogicalPlan::DescribeTable(_) => Ok(self),
+            LogicalPlan::Show(_) => Ok(self),
             LogicalPlan::Unnest(Unnest {
                 input,
                 exec_columns,
@@ -1353,7 +1349,7 @@ impl LogicalPlan {
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::DescribeTable(_) => {
+            | LogicalPlan::Show(_) => {
                 // All of these plan types have no inputs / exprs so should not be called
                 self.assert_no_expressions(expr)?;
                 self.assert_no_inputs(inputs)?;
@@ -1617,7 +1613,7 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Show(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Extension(_)
             | LogicalPlan::MaterializedCte(_) => None,
@@ -1695,7 +1691,7 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Show(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Extension(_)
             | LogicalPlan::MaterializedCte(_) => 0,
@@ -1736,7 +1732,7 @@ impl LogicalPlan {
             LogicalPlan::Dml(_) => Ok(None),
             LogicalPlan::Ddl(_) => Ok(None),
             LogicalPlan::Copy(_) => Ok(None),
-            LogicalPlan::DescribeTable(_) => Ok(None),
+            LogicalPlan::Show(_) => Ok(None),
             LogicalPlan::Unnest(_) => Ok(None),
             LogicalPlan::RecursiveQuery(_) => Ok(None),
         }
@@ -1776,7 +1772,7 @@ impl LogicalPlan {
             LogicalPlan::Dml(_) => Ok(None),
             LogicalPlan::Ddl(_) => Ok(None),
             LogicalPlan::Copy(_) => Ok(None),
-            LogicalPlan::DescribeTable(_) => Ok(None),
+            LogicalPlan::Show(_) => Ok(None),
             LogicalPlan::Unnest(_) => Ok(None),
             LogicalPlan::RecursiveQuery(_) => Ok(None),
         }
@@ -2528,9 +2524,18 @@ impl LogicalPlan {
                     )) => {
                         write!(f, "MaterializedCteScan: name={name}")
                     }
-                    LogicalPlan::DescribeTable(DescribeTable { .. }) => {
-                        write!(f, "DescribeTable")
-                    }
+                    LogicalPlan::Show(Show { kind, .. }) => match kind {
+                        ShowKind::Describe { .. }
+                        | ShowKind::Columns {
+                            detail: ColumnsDetail::Describe,
+                            ..
+                        } => write!(f, "DescribeTable"),
+                        ShowKind::Tables => write!(f, "ShowTables"),
+                        ShowKind::Columns { .. } => write!(f, "ShowColumns"),
+                        ShowKind::CreateTable { .. } => write!(f, "ShowCreateTable"),
+                        ShowKind::Variables { .. } => write!(f, "ShowVariables"),
+                        ShowKind::Functions { .. } => write!(f, "ShowFunctions"),
+                    },
                     LogicalPlan::Unnest(Unnest {
                         input: plan,
                         list_type_columns: list_col_indices,
@@ -3770,9 +3775,10 @@ impl PartialOrd for Union {
     }
 }
 
-/// Describe the schema of table
+/// A `SHOW`-class SQL statement: `SHOW TABLES`, `SHOW COLUMNS`, `SHOW
+/// FUNCTIONS`, `SHOW <variable>`, `SHOW CREATE TABLE`, and `DESCRIBE`.
 ///
-/// # Example output:
+/// # Example output (`DESCRIBE`):
 ///
 /// ```sql
 /// > describe traces;
@@ -3793,16 +3799,52 @@ impl PartialOrd for Union {
 /// +--------------------+-----------------------------+-------------+
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DescribeTable {
-    /// Table schema
-    pub schema: Arc<Schema>,
-    /// schema of describe table output
+pub struct Show {
+    /// Which `SHOW`-class statement this is, and any parameters it carries
+    pub kind: ShowKind,
+    /// schema of the output produced by this statement
     pub output_schema: DFSchemaRef,
 }
 
+/// The specific `SHOW`-class statement carried by a [`Show`] plan.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ShowKind {
+    /// `DESCRIBE <query>`
+    Describe {
+        /// The schema to describe
+        schema: Arc<Schema>,
+    },
+    /// `SHOW TABLES`
+    Tables,
+    /// `SHOW [FULL|EXTENDED] COLUMNS FROM <table>` and `DESCRIBE <table>`
+    Columns {
+        /// Table to describe
+        table_ref: TableReference,
+        /// How detailed the output should be
+        detail: ColumnsDetail,
+    },
+    /// `SHOW CREATE TABLE <table>`
+    CreateTable {
+        /// Table to describe
+        table_ref: TableReference,
+    },
+    /// `SHOW <variable>` / `SHOW ALL`
+    Variables {
+        /// The name of the variable to show, or `None` if all variables should be shown.
+        name: Option<String>,
+        /// Whether to include the `description` column (`SHOW ... VERBOSE`)
+        verbose: bool,
+    },
+    /// `SHOW FUNCTIONS [LIKE <pattern>]`
+    Functions {
+        /// The `LIKE` pattern to filter function names by, if any
+        filter: Option<String>,
+    },
+}
+
 // Manual implementation of `PartialOrd`, returning none since there are no comparable types in
-// `DescribeTable`. This allows `LogicalPlan` to derive `PartialOrd`.
-impl PartialOrd for DescribeTable {
+// `Show`. This allows `LogicalPlan` to derive `PartialOrd`.
+impl PartialOrd for Show {
     fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
         // There is no relevant comparison for schemas
         None
@@ -6906,21 +6948,25 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
         });
 
-        let describe_table = LogicalPlan::DescribeTable(DescribeTable {
-            schema: Arc::new(Schema::new(vec![Field::new(
-                "foo",
-                DataType::Int32,
-                false,
-            )])),
+        let describe_table = LogicalPlan::Show(Show {
+            kind: ShowKind::Describe {
+                schema: Arc::new(Schema::new(vec![Field::new(
+                    "foo",
+                    DataType::Int32,
+                    false,
+                )])),
+            },
             output_schema: DFSchemaRef::new(DFSchema::empty()),
         });
 
-        let describe_table_clone = LogicalPlan::DescribeTable(DescribeTable {
-            schema: Arc::new(Schema::new(vec![Field::new(
-                "foo",
-                DataType::Int32,
-                false,
-            )])),
+        let describe_table_clone = LogicalPlan::Show(Show {
+            kind: ShowKind::Describe {
+                schema: Arc::new(Schema::new(vec![Field::new(
+                    "foo",
+                    DataType::Int32,
+                    false,
+                )])),
+            },
             output_schema: DFSchemaRef::new(DFSchema::empty()),
         });
 

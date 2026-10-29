@@ -229,11 +229,10 @@ config_namespace! {
         /// virtual tables for displaying schema information
         pub information_schema: bool, default = false
 
-        /// The system catalog name - when set together with `information_schema`, the
-        /// `information_schema` for each catalog will only describe objects contained in the
-        /// catalog itself. The global, cross-catalog `information_schema` is available under
-        /// the virtual catalog named by this option.
-        pub system_catalog: Option<String>, default = None
+        /// When set together with `information_schema`, the `information_schema`
+        /// of each catalog only describes the objects in that catalog. When not
+        /// set, the `information_schema` of each catalog describes all catalogs.
+        pub partition_information_schema: bool, default = false
 
         /// Location scanned to load tables for `default` schema
         pub location: Option<String>, default = None
