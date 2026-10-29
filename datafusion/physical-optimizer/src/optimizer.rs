@@ -176,6 +176,41 @@ impl Default for PhysicalOptimizer {
 
 impl PhysicalOptimizer {
     /// Create a new optimizer using the recommended list of rules
+    ///
+    /// # Built-in Physical Optimizer Rules
+    ///
+    /// The rules run in the order listed below. The rule names match the names
+    /// shown by `EXPLAIN VERBOSE`. The same rule name may appear more than
+    /// once when the default pipeline runs it in multiple phases.
+    ///
+    /// Rule order matters. The default list may change between releases. See
+    /// the [`PhysicalOptimizer`](Self) documentation for the contract that
+    /// governs reordering or extending this list.
+    ///
+    /// | order | rule                           | struct                           | phase                   | summary                                                                                                      |
+    /// | ----- | ------------------------------ | -------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------ |
+    /// | 1     | `OutputRequirements`           | [`OutputRequirements`]           | add phase               | Adds helper nodes so output requirements survive later physical rewrites.                                    |
+    /// | 2     | `aggregate_statistics`         | [`AggregateStatistics`]          | -                       | Uses exact source statistics to answer some aggregates without scanning data.                                |
+    /// | 3     | `EliminateConstantJoin`        | [`EliminateConstantJoin`]        | -                       | Replaces inner joins against a single row of literals with a filter that keeps the other input's order.      |
+    /// | 4     | `join_selection`               | [`JoinSelection`]                | -                       | Chooses join implementation, build side, and partition mode from statistics and stream properties.           |
+    /// | 5     | `LimitedDistinctAggregation`   | [`LimitedDistinctAggregation`]   | -                       | Pushes limit hints into grouped distinct-style aggregations when only a small result is needed.              |
+    /// | 6     | `FilterPushdown`               | [`FilterPushdown`]               | pre-optimization phase  | Pushes supported physical filters down toward data sources before distribution and sorting are enforced.     |
+    /// | 7     | `WindowTopN`                   | [`WindowTopN`]                   | -                       | Replaces eligible row-number window and filter patterns with per-partition TopK execution.                   |
+    /// | 8     | `EnsureRequirements`           | [`EnsureRequirements`]           | -                       | Enforces both distribution and sorting requirements in a single idempotent rule.                             |
+    /// | 9     | `CombinePartialFinalAggregate` | [`CombinePartialFinalAggregate`] | -                       | Collapses adjacent partial and final aggregates when the distributed shape makes them redundant.             |
+    /// | 10    | `OptimizeAggregateOrder`       | [`OptimizeAggregateOrder`]       | -                       | Updates aggregate expressions to use the best ordering once sort requirements are known.                     |
+    /// | 11    | `ProjectionPushdown`           | [`ProjectionPushdown`]           | early pass              | Pushes projections toward inputs before later physical rewrites add more limit and TopK structure.           |
+    /// | 12    | `OutputRequirements`           | [`OutputRequirements`]           | remove phase            | Removes the temporary output-requirement helper nodes after requirement-sensitive planning is done.          |
+    /// | 13    | `LimitAggregation`             | [`TopKAggregation`]              | -                       | Passes a limit hint into eligible aggregations so they can keep fewer accumulator buckets.                   |
+    /// | 14    | `LimitPushPastWindows`         | [`LimitPushPastWindows`]         | -                       | Pushes fetch limits through bounded window operators when doing so keeps the result correct.                 |
+    /// | 15    | `HashJoinBuffering`            | [`HashJoinBuffering`]            | -                       | Adds buffering on the probe side of hash joins so probing can start before build completion.                 |
+    /// | 16    | `LimitPushdown`                | [`LimitPushdown`]                | -                       | Moves physical limits into child operators or fetch-enabled variants to cut data early.                      |
+    /// | 17    | `TopKRepartition`              | [`TopKRepartition`]              | -                       | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.                       |
+    /// | 18    | `ProjectionPushdown`           | [`ProjectionPushdown`]           | late pass               | Runs projection pushdown again after limit and TopK rewrites expose new pruning opportunities.               |
+    /// | 19    | `PushdownSort`                 | [`PushdownSort`]                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                            |
+    /// | 20    | `EnsureCooperative`            | [`EnsureCooperative`]            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                         |
+    /// | 21    | `FilterPushdown(Post)`         | [`FilterPushdown`]               | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                        |
+    /// | 22    | `SanityCheckPlan`              | [`SanityCheckPlan`]              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements. |
     pub fn new() -> Self {
         // NOTEs:
         // - The order of rules in this list is important, as it determines the

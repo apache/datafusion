@@ -20,6 +20,8 @@ use datafusion_expr::{
 use log::debug;
 use std::sync::Arc;
 
+/// Optimizer rule that merges `UNION DISTINCT` branches that share the same
+/// source into a single filtered branch with a disjunctive predicate.
 #[derive(Default, Debug)]
 pub struct UnionsToFilter;
 

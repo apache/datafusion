@@ -290,6 +290,14 @@
 //!    [`PhysicalOptimizerRule`]s, such as sort and join selection, to
 //!    improve its efficiency.
 //!
+//! The built-in rules, in the order they run by default, are listed in the
+//! documentation of [`Analyzer::new`], [`Optimizer::new`] and
+//! [`PhysicalOptimizer::new`].
+//!
+//! [`Analyzer::new`]: datafusion_optimizer::Analyzer::new
+//! [`Optimizer::new`]: datafusion_optimizer::Optimizer::new
+//! [`PhysicalOptimizer::new`]: datafusion_physical_optimizer::optimizer::PhysicalOptimizer::new
+//!
 //! ## Data Sources
 //!
 //! ```text
@@ -748,7 +756,6 @@
 //! [`RecordBatch`]: arrow::array::RecordBatch
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
-#![cfg_attr(doc, doc = include_str!("optimizer_rule_reference.md"))]
 
 extern crate core;
 #[cfg(feature = "sql")]
@@ -773,9 +780,6 @@ pub use parquet;
 
 #[cfg(feature = "avro")]
 pub use datafusion_datasource_avro::arrow_avro;
-
-#[cfg(test)]
-mod optimizer_rule_reference;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
