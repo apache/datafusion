@@ -368,22 +368,10 @@ impl ScalarUDF {
     pub fn supports_range_key_locality_analysis(
         &self,
         argument_types: &[DataType],
-    ) -> bool {
-        self.inner
-            .supports_range_key_locality_analysis(argument_types)
-    }
-
-    /// See [`ScalarUDFImpl::supports_range_key_locality_analysis_with_args`] for
-    /// more details.
-    pub fn supports_range_key_locality_analysis_with_args(
-        &self,
-        argument_types: &[DataType],
         literal_arguments: &[Option<&ScalarValue>],
     ) -> bool {
-        self.inner.supports_range_key_locality_analysis_with_args(
-            argument_types,
-            literal_arguments,
-        )
+        self.inner
+            .supports_range_key_locality_analysis(argument_types, literal_arguments)
     }
 
     pub fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
@@ -1005,13 +993,11 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         Ok(inner(inputs))
     }
 
-    /// Returns whether this function and argument-type combination has been
-    /// audited for range-partitioning locality analysis.
+    /// Returns whether this function has been audited for range-key locality
+    /// analysis with these argument types and literal values.
     ///
     /// Range-boundary analysis has subtle correctness requirements, so the
     /// policy is default-deny. Functions may opt in only after individual audit.
-    /// Use [`Self::supports_range_key_locality_analysis_with_args`] if the audit
-    /// depends on literal argument values as well as types.
     /// At minimum, an opted-in combination must:
     ///
     /// - have same-direction [`SortProperties::Ordered`] metadata over the
@@ -1026,28 +1012,16 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// This does not claim a concrete partition layout or cross-input
     /// co-partitioning compatibility. Boundary evaluation errors cause the
     /// analysis to return `false`. This capability is not transported across FFI.
-    fn supports_range_key_locality_analysis(&self, _argument_types: &[DataType]) -> bool {
-        false
-    }
-
-    /// Returns whether this function has been audited for range-key locality
-    /// analysis with these argument types and literal values.
-    ///
-    /// The safety requirements of [`Self::supports_range_key_locality_analysis`]
-    /// apply to every admitted combination. Override this method when admission
-    /// depends on literal values rather than argument types alone.
     ///
     /// `literal_arguments` has one entry per argument. `None` means the argument
     /// is not a literal; `Some(value)` supplies its value, which may itself be
     /// NULL. Non-literal expressions are not evaluated to obtain these values.
-    ///
-    /// The default delegates to the type-only hook, preserving existing opt-ins.
-    fn supports_range_key_locality_analysis_with_args(
+    fn supports_range_key_locality_analysis(
         &self,
-        argument_types: &[DataType],
+        _argument_types: &[DataType],
         _literal_arguments: &[Option<&ScalarValue>],
     ) -> bool {
-        self.supports_range_key_locality_analysis(argument_types)
+        false
     }
 
     /// Returns true if the function preserves lexicographical ordering based on
@@ -1272,20 +1246,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.output_ordering(inputs)
     }
 
-    fn supports_range_key_locality_analysis(&self, argument_types: &[DataType]) -> bool {
-        self.inner
-            .supports_range_key_locality_analysis(argument_types)
-    }
-
-    fn supports_range_key_locality_analysis_with_args(
+    fn supports_range_key_locality_analysis(
         &self,
         argument_types: &[DataType],
         literal_arguments: &[Option<&ScalarValue>],
     ) -> bool {
-        self.inner.supports_range_key_locality_analysis_with_args(
-            argument_types,
-            literal_arguments,
-        )
+        self.inner
+            .supports_range_key_locality_analysis(argument_types, literal_arguments)
     }
 
     fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
@@ -1373,8 +1340,7 @@ mod tests {
     #[test]
     fn range_key_locality_analysis_is_disabled_by_default() {
         let function = test_func("range_function", "a");
-        assert!(!function.supports_range_key_locality_analysis(&[DataType::Int64]));
-        assert!(!function.supports_range_key_locality_analysis_with_args(
+        assert!(!function.supports_range_key_locality_analysis(
             &[DataType::Int64],
             &[Some(&ScalarValue::Int64(Some(1)))],
         ));

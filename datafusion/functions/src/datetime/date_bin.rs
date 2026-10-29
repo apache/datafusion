@@ -289,7 +289,7 @@ impl ScalarUDFImpl for DateBinFunc {
         }
     }
 
-    fn supports_range_key_locality_analysis_with_args(
+    fn supports_range_key_locality_analysis(
         &self,
         argument_types: &[DataType],
         literal_arguments: &[Option<&ScalarValue>],
@@ -1063,7 +1063,7 @@ mod tests {
         ];
         for (description, stride, expected) in cases {
             assert_eq!(
-                function.supports_range_key_locality_analysis_with_args(
+                function.supports_range_key_locality_analysis(
                     &[stride.data_type(), timestamp_type.clone()],
                     &[Some(&stride), None],
                 ),
@@ -1088,7 +1088,7 @@ mod tests {
             Time64(Nanosecond),
         ] {
             assert!(
-                !function.supports_range_key_locality_analysis_with_args(
+                !function.supports_range_key_locality_analysis(
                     &[stride.data_type(), source_type.clone()],
                     &[Some(&stride), None],
                 ),
@@ -1106,10 +1106,10 @@ mod tests {
             DataType::Interval(MonthDayNano),
             DataType::Timestamp(TimeUnit::Nanosecond, None),
         ];
-        assert!(!function.supports_range_key_locality_analysis_with_args(
-            &argument_types,
-            &[None, None],
-        ));
+        assert!(
+            !function
+                .supports_range_key_locality_analysis(&argument_types, &[None, None])
+        );
     }
 
     #[test]
@@ -1117,7 +1117,7 @@ mod tests {
         let function = DateBinFunc::new();
         let stride = ScalarValue::new_interval_mdn(0, 0, 3_600_000_000_000);
         let epoch = ScalarValue::TimestampNanosecond(Some(0), None);
-        assert!(!function.supports_range_key_locality_analysis_with_args(
+        assert!(!function.supports_range_key_locality_analysis(
             &[
                 stride.data_type(),
                 DataType::Timestamp(TimeUnit::Nanosecond, None),

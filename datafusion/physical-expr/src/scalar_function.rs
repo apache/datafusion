@@ -177,10 +177,9 @@ impl ScalarFunctionExpr {
             .iter()
             .map(|argument| argument.downcast_ref::<Literal>().map(Literal::value))
             .collect::<Vec<_>>();
-        Ok(self.fun.supports_range_key_locality_analysis_with_args(
-            &argument_types,
-            &literal_arguments,
-        ))
+        Ok(self
+            .fun
+            .supports_range_key_locality_analysis(&argument_types, &literal_arguments))
     }
 
     /// Given an arbitrary PhysicalExpr attempt to downcast it to a ScalarFunctionExpr
@@ -507,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn range_key_locality_analysis_preserves_type_only_opt_ins() -> Result<()> {
+    fn range_key_locality_analysis_accepts_date_trunc() -> Result<()> {
         let schema = Schema::new(vec![Field::new(
             "ts",
             DataType::Timestamp(TimeUnit::Nanosecond, None),
