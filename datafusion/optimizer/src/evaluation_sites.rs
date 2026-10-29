@@ -45,19 +45,20 @@
 //!
 //! # What is counted
 //!
-//! A *site* is one volatile [`Expr::ScalarFunction`] node. Volatile calls
-//! only: two evaluations of a volatile call give two different answers, so a
-//! new site is always a wrong results bug.
+//! A *site* is one volatile function call: an [`Expr`] for which
+//! [`Expr::is_volatile_node`] holds, so a scalar, aggregate, window or higher
+//! order function. Volatile calls only: two evaluations of a volatile call
+//! give two different answers, so a new site is always a wrong results bug.
 //!
-//! A new evaluation site of an
+//! A new evaluation site of a call that is not volatile, such as an
 //! [`ExpressionPlacement::KeepInPlace`](datafusion_expr_common::placement::ExpressionPlacement::KeepInPlace)
-//! call is not counted, because it is not an invariant: pushing a predicate
+//! one, is not counted, because it is not an invariant: pushing a predicate
 //! through a projection that computes such an expression one time is a decided
 //! trade-off, since the predicate can then reach the scan. See the decisions
 //! table of <https://github.com/apache/datafusion/issues/25459>.
 //!
-//! Sites are keyed by a structural form of the call, in which every column is
-//! reduced to its unqualified name. A rule that duplicates a call and
+//! Sites are keyed by a structural form of the call, in which every column,
+//! outer reference columns included, is reduced to its unqualified name. A rule that duplicates a call and
 //! re-qualifies its columns, for example from `f(a)` to `f(test.a)`, must not
 //! escape the check. Only a call that is already in the input plan is checked.
 //! A rule is free to rewrite `concat_ws` into `concat`, or one Spark function
@@ -82,12 +83,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_common::{
-    Result, internal_err,
-    tree_node::{TreeNode, TreeNodeRecursion},
+    Column, Result, internal_err,
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion},
 };
-use datafusion_expr::expr::{Exists, InSubquery, ScalarFunction, SetComparison};
-use datafusion_expr::expr_rewriter::unnormalize_col;
-use datafusion_expr::{Expr, LogicalPlan, Volatility};
+use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
+use datafusion_expr::{Expr, LogicalPlan};
 
 /// Report a volatile call that the optimizer run made the plan evaluate at
 /// more sites than the input plan does.
@@ -197,8 +197,9 @@ impl EvaluationSites {
 }
 
 /// `own_sites(plan) + max over inputs of count_plan(input)`.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn count_plan(plan: &LogicalPlan, acc: &mut Counts) {
-    count_own(plan, acc);
+    let subqueries = count_own(plan, acc);
 
     let mut branch_max = Counts::new();
     let mut branch = Counts::new();
@@ -207,7 +208,7 @@ fn count_plan(plan: &LogicalPlan, acc: &mut Counts) {
     }
     // A subquery runs over its own rows, so it is another lineage, not a
     // continuation of this one.
-    for subquery in subquery_plans(plan) {
+    for subquery in subqueries {
         merge_branch(&subquery, &mut branch, &mut branch_max);
     }
 
@@ -227,68 +228,57 @@ fn merge_branch(branch_plan: &LogicalPlan, branch: &mut Counts, branch_max: &mut
     }
 }
 
-/// The evaluation sites in the expressions of `plan` itself.
-fn count_own(plan: &LogicalPlan, acc: &mut Counts) {
+/// Count the evaluation sites in the expressions of `plan` itself into `acc`,
+/// and return the plans of the subqueries that those expressions reference.
+fn count_own(plan: &LogicalPlan, acc: &mut Counts) -> Vec<Arc<LogicalPlan>> {
     // `TableScan::filters` is a copy of a predicate that the source evaluates.
     // Unless the source reports `Exact` support the `Filter` node stays above
     // the scan, so counting both would report every filter pushdown.
-    if matches!(plan, LogicalPlan::TableScan(_)) {
-        return;
-    }
+    let count_sites = !matches!(plan, LogicalPlan::TableScan(_));
+    let mut subqueries = Vec::new();
     let _ = plan.apply_expressions(|expr| {
-        count_expr(expr, acc);
-        Ok(TreeNodeRecursion::Continue)
-    });
-}
-
-fn count_expr(expr: &Expr, acc: &mut Counts) {
-    let _ = expr.apply(|expr| {
-        if let Expr::ScalarFunction(func) = expr
-            && is_site(func)
-        {
-            *acc.entry(structural_key(expr)).or_insert(0) += 1;
-        }
-        Ok(TreeNodeRecursion::Continue)
-    });
-}
-
-/// True while a call needs a guard.
-///
-/// A volatile call is a site whatever its arguments are. `random()` takes no
-/// argument at all, and the constant folder does not fold it.
-fn is_site(func: &ScalarFunction) -> bool {
-    func.func.signature().volatility == Volatility::Volatile
-}
-
-/// The key of a call: its text, with every column reduced to its unqualified
-/// name.
-///
-/// A rule may re-qualify the columns of a call while it moves it, so the
-/// printed text of a call is not stable enough to key by. `f(a)` and
-/// `f(test.a)` are the same call.
-fn structural_key(expr: &Expr) -> String {
-    unnormalize_col(expr.clone()).to_string()
-}
-
-/// The plans of the subqueries referenced by the expressions of `plan`.
-fn subquery_plans(plan: &LogicalPlan) -> Vec<Arc<LogicalPlan>> {
-    let mut plans = Vec::new();
-    let _ = plan.apply_expressions(|expr| {
-        let _ = expr.apply(|expr| {
+        expr.apply(|expr| {
             match expr {
                 Expr::Exists(Exists { subquery, .. })
                 | Expr::InSubquery(InSubquery { subquery, .. })
                 | Expr::SetComparison(SetComparison { subquery, .. })
                 | Expr::ScalarSubquery(subquery) => {
-                    plans.push(Arc::clone(&subquery.subquery));
+                    subqueries.push(Arc::clone(&subquery.subquery));
+                }
+                // A volatile call is a site whatever its arguments are.
+                // `random()` takes no argument at all, and the constant folder
+                // does not fold it.
+                _ if count_sites && expr.is_volatile_node() => {
+                    *acc.entry(structural_key(expr)).or_insert(0) += 1;
                 }
                 _ => {}
             }
             Ok(TreeNodeRecursion::Continue)
-        });
-        Ok(TreeNodeRecursion::Continue)
+        })
     });
-    plans
+    subqueries
+}
+
+/// The key of a call: its text, with every column, outer reference columns
+/// included, reduced to its unqualified name.
+///
+/// A rule may re-qualify the columns of a call while it moves it, so the
+/// printed text of a call is not stable enough to key by. `f(a)` and
+/// `f(test.a)` are the same call. Decorrelating a subquery turns
+/// `f(outer_ref(t.a))` into `f(t.a)`, which is the same call too.
+fn structural_key(expr: &Expr) -> String {
+    expr.clone()
+        .transform(|expr| {
+            Ok(match expr {
+                Expr::Column(c) | Expr::OuterReferenceColumn(_, c) => {
+                    Transformed::yes(Expr::Column(Column::new_unqualified(c.name)))
+                }
+                _ => Transformed::no(expr),
+            })
+        })
+        .data()
+        .expect("structural_key is infallible")
+        .to_string()
 }
 
 #[cfg(test)]
@@ -297,9 +287,11 @@ mod tests {
     use crate::test::udfs::PlacementTestUDF;
     use crate::test::{test_table_scan, test_table_scan_with_name};
     use crate::{Optimizer, OptimizerContext};
+    use arrow::datatypes::DataType;
     use datafusion_common::Result;
     use datafusion_expr::{
-        ExpressionPlacement, JoinType, LogicalPlanBuilder, ScalarUDF, col, exists, lit,
+        ExpressionPlacement, JoinType, LogicalPlanBuilder, ScalarUDF, Volatility, col,
+        exists, lit, out_ref_col,
     };
 
     /// `leaf_udf(arg)`, made volatile. Its placement says that it may move to
@@ -421,6 +413,16 @@ mod tests {
     fn the_key_ignores_column_qualifiers() {
         assert_eq!(
             structural_key(&volatile(col("test.a"))),
+            structural_key(&volatile(col("a")))
+        );
+    }
+
+    /// Decorrelating a subquery turns an outer reference into a plain column,
+    /// which must not change the key of the call that reads it.
+    #[test]
+    fn the_key_ignores_outer_references() {
+        assert_eq!(
+            structural_key(&volatile(out_ref_col(DataType::UInt32, "test.a"))),
             structural_key(&volatile(col("a")))
         );
     }
