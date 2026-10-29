@@ -1845,13 +1845,13 @@ impl Unparser<'_> {
             }
             DataType::Boolean => Ok(ast::DataType::Bool),
             DataType::Int8 => Ok(self.dialect.int8_cast_dtype()),
-            DataType::Int16 => Ok(ast::DataType::SmallInt(None)),
+            DataType::Int16 => Ok(self.dialect.int16_cast_dtype()),
             DataType::Int32 => Ok(self.dialect.int32_cast_dtype()),
             DataType::Int64 => Ok(self.dialect.int64_cast_dtype()),
-            DataType::UInt8 => Ok(ast::DataType::TinyIntUnsigned(None)),
-            DataType::UInt16 => Ok(ast::DataType::SmallIntUnsigned(None)),
-            DataType::UInt32 => Ok(ast::DataType::IntegerUnsigned(None)),
-            DataType::UInt64 => Ok(ast::DataType::BigIntUnsigned(None)),
+            DataType::UInt8 => Ok(self.dialect.uint8_cast_dtype()),
+            DataType::UInt16 => Ok(self.dialect.uint16_cast_dtype()),
+            DataType::UInt32 => Ok(self.dialect.uint32_cast_dtype()),
+            DataType::UInt64 => Ok(self.dialect.uint64_cast_dtype()),
             DataType::Float16 => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
@@ -3150,6 +3150,65 @@ mod tests {
         let expr = Expr::Cast(Cast::new(Box::new(col("a")), Int8));
         let ast = unparser.expr_to_sql(&expr)?;
         assert_eq!(format!("{ast}"), "CAST(`a` AS SIGNED)");
+        Ok(())
+    }
+
+    // MySQL's `CAST` rejects `SMALLINT` and the `... UNSIGNED` integer types.
+    #[test]
+    fn mysql_int16_and_unsigned_casts() -> Result<()> {
+        let unparser = Unparser::new(&MySqlDialect {});
+        for (data_type, expected) in [
+            (DataType::Int16, "CAST(`a` AS SIGNED)"),
+            (DataType::UInt8, "CAST(`a` AS UNSIGNED)"),
+            (DataType::UInt16, "CAST(`a` AS UNSIGNED)"),
+            (DataType::UInt32, "CAST(`a` AS UNSIGNED)"),
+            (DataType::UInt64, "CAST(`a` AS UNSIGNED)"),
+        ] {
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), data_type));
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(format!("{ast}"), expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn default_dialect_int16_and_unsigned_casts() -> Result<()> {
+        let unparser = Unparser::new(&DefaultDialect {});
+        for (data_type, expected) in [
+            (DataType::Int16, "CAST(a AS SMALLINT)"),
+            (DataType::UInt8, "CAST(a AS TINYINT UNSIGNED)"),
+            (DataType::UInt16, "CAST(a AS SMALLINT UNSIGNED)"),
+            (DataType::UInt32, "CAST(a AS INTEGER UNSIGNED)"),
+            (DataType::UInt64, "CAST(a AS BIGINT UNSIGNED)"),
+        ] {
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), data_type));
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(format!("{ast}"), expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_int16_and_unsigned_casts() -> Result<()> {
+        let dialect = CustomDialectBuilder::new()
+            .with_int16_cast_dtype(ast::DataType::Integer(None))
+            .with_uint8_cast_dtype(ast::DataType::SmallInt(None))
+            .with_uint16_cast_dtype(ast::DataType::Integer(None))
+            .with_uint32_cast_dtype(ast::DataType::BigInt(None))
+            .with_uint64_cast_dtype(ast::DataType::Numeric(ExactNumberInfo::None))
+            .build();
+        let unparser = Unparser::new(&dialect);
+        for (data_type, expected) in [
+            (DataType::Int16, "CAST(a AS INTEGER)"),
+            (DataType::UInt8, "CAST(a AS SMALLINT)"),
+            (DataType::UInt16, "CAST(a AS INTEGER)"),
+            (DataType::UInt32, "CAST(a AS BIGINT)"),
+            (DataType::UInt64, "CAST(a AS NUMERIC)"),
+        ] {
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), data_type));
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(format!("{ast}"), expected);
+        }
         Ok(())
     }
 
