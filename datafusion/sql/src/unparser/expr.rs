@@ -1973,8 +1973,8 @@ mod tests {
 
     use crate::unparser::dialect::{
         BigQueryDialect, CharacterLengthStyle, CustomDialect, CustomDialectBuilder,
-        DateFieldExtractStyle, DefaultDialect, Dialect, DuckDBDialect, MySqlDialect,
-        PostgreSqlDialect, ScalarFnToSqlHandler,
+        DateFieldExtractStyle, DefaultDialect, Dialect, DuckDBDialect, PostgreSqlDialect,
+        ScalarFnToSqlHandler,
     };
 
     use super::*;
