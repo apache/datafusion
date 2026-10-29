@@ -593,3 +593,43 @@ async fn test_recursive_cte_batch_schema_stable_with_order_by_limit() -> Result<
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn test_conditional_functions_field_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+    let a_metadata = HashMap::from([
+        ("shared".to_string(), "a".to_string()),
+        ("only_a".to_string(), "a".to_string()),
+    ]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("flag", DataType::Utf8, true).with_metadata(HashMap::from([(
+            "only_flag".to_string(),
+            "flag".to_string(),
+        )])),
+        Field::new("a", DataType::Utf8, true).with_metadata(a_metadata.clone()),
+        Field::new("b", DataType::Utf8, true).with_metadata(HashMap::from([
+            ("shared".to_string(), "b".to_string()),
+            ("only_b".to_string(), "b".to_string()),
+        ])),
+    ]));
+    ctx.register_batch("t", RecordBatch::new_empty(schema))?;
+
+    let merged = HashMap::from([
+        ("shared".to_string(), "a".to_string()),
+        ("only_a".to_string(), "a".to_string()),
+        ("only_b".to_string(), "b".to_string()),
+    ]);
+    // `df.schema()` is the schema of the plan as first built, before these
+    // functions are rewritten to CASE.
+    for (sql, expected) in [
+        ("SELECT coalesce(a, b) FROM t", &merged),
+        ("SELECT nvl(a, b) FROM t", &merged),
+        ("SELECT ifnull(a, b) FROM t", &merged),
+        ("SELECT nvl2(flag, a, b) FROM t", &merged),
+        ("SELECT coalesce(NULL, a) FROM t", &a_metadata),
+    ] {
+        let df = ctx.sql(sql).await?;
+        assert_eq!(df.schema().field(0).metadata(), expected, "{sql}");
+    }
+    Ok(())
+}
