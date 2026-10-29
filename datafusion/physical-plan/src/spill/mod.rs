@@ -998,6 +998,7 @@ mod tests {
     use arrow::ipc::reader::StreamReader;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::StreamExt as _;
+    use futures::future::BoxFuture;
     use std::io::Cursor;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1026,76 +1027,96 @@ mod tests {
         cleanup_done: Arc<Notify>,
     }
 
-    #[async_trait::async_trait]
     impl AsyncSpillWriter for FailingAsyncWriter {
-        async fn write_all(&mut self, _data: bytes::Bytes) -> Result<()> {
-            datafusion_common::exec_err!("injected spill write failure")
+        fn write_all<'a>(&'a mut self, _data: bytes::Bytes) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                datafusion_common::exec_err!("injected spill write failure")
+            })
         }
 
-        async fn finish(&mut self) -> Result<()> {
-            Ok(())
+        fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                Ok(())
+            })
         }
 
-        async fn abort(&mut self) -> Result<()> {
-            self.aborted.store(true, Ordering::Relaxed);
-            Ok(())
+        fn abort<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                self.aborted.store(true, Ordering::Relaxed);
+                Ok(())
+            })
         }
     }
 
-    #[async_trait::async_trait]
     impl AsyncSpillWriter for YieldingAsyncWriter {
-        async fn write_all(&mut self, data: bytes::Bytes) -> Result<()> {
-            tokio::task::yield_now().await;
-            self.writes.fetch_add(1, Ordering::Relaxed);
-            self.data.lock().unwrap().extend_from_slice(&data);
-            Ok(())
+        fn write_all<'a>(&'a mut self, data: bytes::Bytes) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                tokio::task::yield_now().await;
+                self.writes.fetch_add(1, Ordering::Relaxed);
+                self.data.lock().unwrap().extend_from_slice(&data);
+                Ok(())
+            })
         }
 
-        async fn finish(&mut self) -> Result<()> {
-            self.finished.store(true, Ordering::Relaxed);
-            Ok(())
+        fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                self.finished.store(true, Ordering::Relaxed);
+                Ok(())
+            })
         }
 
-        async fn abort(&mut self) -> Result<()> {
-            self.aborted.store(true, Ordering::Relaxed);
-            Ok(())
+        fn abort<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                self.aborted.store(true, Ordering::Relaxed);
+                Ok(())
+            })
         }
     }
 
-    #[async_trait::async_trait]
     impl AsyncSpillWriter for PendingFinishAsyncWriter {
-        async fn write_all(&mut self, _data: bytes::Bytes) -> Result<()> {
-            Ok(())
+        fn write_all<'a>(&'a mut self, _data: bytes::Bytes) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                Ok(())
+            })
         }
 
-        async fn finish(&mut self) -> Result<()> {
-            self.finish_started.notify_one();
-            std::future::pending().await
+        fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                self.finish_started.notify_one();
+                std::future::pending().await
+            })
         }
 
-        async fn abort(&mut self) -> Result<()> {
-            self.abort_count.fetch_add(1, Ordering::Relaxed);
-            self.aborted.notify_one();
-            Ok(())
+        fn abort<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                self.abort_count.fetch_add(1, Ordering::Relaxed);
+                self.aborted.notify_one();
+                Ok(())
+            })
         }
     }
 
-    #[async_trait::async_trait]
     impl AsyncSpillWriter for FailOnceAbortWriter {
-        async fn write_all(&mut self, _data: bytes::Bytes) -> Result<()> {
-            Ok(())
+        fn write_all<'a>(&'a mut self, _data: bytes::Bytes) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                Ok(())
+            })
         }
 
-        async fn finish(&mut self) -> Result<()> {
-            Ok(())
+        fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                Ok(())
+            })
         }
 
-        async fn abort(&mut self) -> Result<()> {
-            if self.abort_count.fetch_add(1, Ordering::Relaxed) == 0 {
-                return datafusion_common::exec_err!("injected spill abort failure");
-            }
-            self.cleanup_done.notify_one();
-            Ok(())
+        fn abort<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                if self.abort_count.fetch_add(1, Ordering::Relaxed) == 0 {
+                    return datafusion_common::exec_err!("injected spill abort failure");
+                }
+                self.cleanup_done.notify_one();
+                Ok(())
+            })
         }
     }
 

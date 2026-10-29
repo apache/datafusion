@@ -241,7 +241,7 @@ mod tests {
         array::{ArrayRef, Int32Array, StringArray, StringViewArray},
         record_batch::RecordBatch,
     };
-    use async_trait::async_trait;
+    use futures::future::BoxFuture;
     use bytes::Bytes;
     use datafusion_common::{DataFusionError, Result, not_impl_err};
     use datafusion_execution::disk_manager::DiskManagerBuilder;
@@ -272,7 +272,6 @@ mod tests {
         abort_count: Arc<AtomicUsize>,
     }
 
-    #[async_trait]
     impl SpillFile for AbortTrackingSpillFile {
         fn path(&self) -> Option<&Path> {
             None
@@ -292,10 +291,14 @@ mod tests {
             not_impl_err!("test backend only supports asynchronous writes")
         }
 
-        async fn open_async_writer(&self) -> Result<Box<dyn AsyncSpillWriter>> {
-            Ok(Box::new(AbortTrackingWriter {
-                abort_count: Arc::clone(&self.abort_count),
-            }))
+        fn open_async_writer<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Result<Box<dyn AsyncSpillWriter>>> {
+            Box::pin(async move {
+                Ok(Box::new(AbortTrackingWriter {
+                    abort_count: Arc::clone(&self.abort_count),
+                }) as Box<dyn AsyncSpillWriter>)
+            })
         }
     }
 
@@ -303,19 +306,20 @@ mod tests {
         abort_count: Arc<AtomicUsize>,
     }
 
-    #[async_trait]
     impl AsyncSpillWriter for AbortTrackingWriter {
-        async fn write_all(&mut self, _data: Bytes) -> Result<()> {
-            Ok(())
+        fn write_all<'a>(&'a mut self, _data: Bytes) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async { Ok(()) })
         }
 
-        async fn finish(&mut self) -> Result<()> {
-            Ok(())
+        fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async { Ok(()) })
         }
 
-        async fn abort(&mut self) -> Result<()> {
-            self.abort_count.fetch_add(1, Ordering::Relaxed);
-            Ok(())
+        fn abort<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                self.abort_count.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
         }
     }
 

@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 pub use crate::schema::SchemaProvider;
 use crate::session::Session;
-use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::not_impl_err;
 use datafusion_expr::CreateExternalCatalog;
+use futures::future::BoxFuture;
 
 /// A catalog list that contains no catalogs.
 ///
@@ -258,14 +258,13 @@ impl dyn CatalogProviderList {
 }
 
 /// A factory which creates [`CatalogProvider`]s at runtime given a URL.
-#[async_trait]
 pub trait CatalogProviderFactory: Debug + Sync + Send {
     /// Create a [`CatalogProvider`] using the given `cmd`
-    async fn create(
-        &self,
-        state: &dyn Session,
-        cmd: &CreateExternalCatalog,
-    ) -> Result<Arc<dyn CatalogProvider>>;
+    fn create<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        cmd: &'a CreateExternalCatalog,
+    ) -> BoxFuture<'a, Result<Arc<dyn CatalogProvider>>>;
 }
 
 #[cfg(test)]

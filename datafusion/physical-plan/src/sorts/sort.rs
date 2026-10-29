@@ -2310,7 +2310,6 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
-    use async_trait::async_trait;
     use bytes::Bytes;
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::as_primitive_array;
@@ -2331,6 +2330,7 @@ mod tests {
     use datafusion_physical_expr::{DynamicFilterTracking, EquivalenceProperties};
 
     use datafusion_physical_expr_common::metrics::MetricValue;
+    use futures::future::BoxFuture;
     use futures::{FutureExt, Stream, TryStreamExt};
     use insta::assert_snapshot;
     use tokio::sync::Notify;
@@ -2357,7 +2357,6 @@ mod tests {
         abort_count: Arc<AtomicUsize>,
     }
 
-    #[async_trait]
     impl SpillFile for PendingWriteSpillFile {
         fn path(&self) -> Option<&Path> {
             None
@@ -2379,12 +2378,16 @@ mod tests {
             )
         }
 
-        async fn open_async_writer(&self) -> Result<Box<dyn AsyncSpillWriter>> {
-            Ok(Box::new(PendingWriteWriter {
-                write_started: Arc::clone(&self.write_started),
-                aborted: Arc::clone(&self.aborted),
-                abort_count: Arc::clone(&self.abort_count),
-            }))
+        fn open_async_writer<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Result<Box<dyn AsyncSpillWriter>>> {
+            Box::pin(async move {
+                Ok(Box::new(PendingWriteWriter {
+                    write_started: Arc::clone(&self.write_started),
+                    aborted: Arc::clone(&self.aborted),
+                    abort_count: Arc::clone(&self.abort_count),
+                }) as Box<dyn AsyncSpillWriter>)
+            })
         }
     }
 
@@ -2394,21 +2397,24 @@ mod tests {
         abort_count: Arc<AtomicUsize>,
     }
 
-    #[async_trait]
     impl AsyncSpillWriter for PendingWriteWriter {
-        async fn write_all(&mut self, _data: Bytes) -> Result<()> {
-            self.write_started.notify_one();
-            std::future::pending().await
+        fn write_all<'a>(&'a mut self, _data: Bytes) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                self.write_started.notify_one();
+                std::future::pending().await
+            })
         }
 
-        async fn finish(&mut self) -> Result<()> {
-            Ok(())
+        fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async { Ok(()) })
         }
 
-        async fn abort(&mut self) -> Result<()> {
-            self.abort_count.fetch_add(1, AtomicOrdering::Relaxed);
-            self.aborted.notify_one();
-            Ok(())
+        fn abort<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                self.abort_count.fetch_add(1, AtomicOrdering::Relaxed);
+                self.aborted.notify_one();
+                Ok(())
+            })
         }
     }
 

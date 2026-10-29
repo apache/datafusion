@@ -20,13 +20,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::common::{Result, not_impl_err};
 use datafusion::execution::disk_manager::DiskManagerBuilder;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{AsyncSpillWriter, SpillFile, SpillWriter, TempFileFactory};
 use datafusion::prelude::{SessionConfig, SessionContext};
+use futures::future::BoxFuture;
 use futures::{Stream, StreamExt, TryStreamExt, stream};
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
@@ -170,7 +170,6 @@ struct ObjectStoreSpillFile {
     size: Arc<AtomicU64>,
 }
 
-#[async_trait]
 impl SpillFile for ObjectStoreSpillFile {
     /// Return no local filesystem path because the spill file is accessed through ObjectStore.
     fn path(&self) -> Option<&StdPath> {
@@ -205,14 +204,18 @@ impl SpillFile for ObjectStoreSpillFile {
     }
 
     /// Open an asynchronous, multipart-capable writer for this spill file.
-    async fn open_async_writer(&self) -> Result<Box<dyn AsyncSpillWriter>> {
-        let upload = self.store.put_multipart(&self.location).await?;
-        Ok(Box::new(ObjectStoreSpillWriter {
-            upload,
-            buffer: PutPayloadMut::new(),
-            size: Arc::clone(&self.size),
-            bytes_written: 0,
-        }))
+    fn open_async_writer<'a>(
+        &'a self,
+    ) -> BoxFuture<'a, Result<Box<dyn AsyncSpillWriter>>> {
+        Box::pin(async move {
+            let upload = self.store.put_multipart(&self.location).await?;
+            Ok(Box::new(ObjectStoreSpillWriter {
+                upload,
+                buffer: PutPayloadMut::new(),
+                size: Arc::clone(&self.size),
+                bytes_written: 0,
+            }) as Box<dyn AsyncSpillWriter>)
+        })
     }
 }
 
@@ -243,39 +246,44 @@ impl ObjectStoreSpillWriter {
     }
 }
 
-#[async_trait]
 impl AsyncSpillWriter for ObjectStoreSpillWriter {
-    async fn write_all(&mut self, mut data: Bytes) -> Result<()> {
-        let len = data.len() as u64;
-        while !data.is_empty() {
-            let remaining = OBJECT_STORE_PART_SIZE - self.buffer.content_length();
-            if data.len() < remaining {
-                // A Bytes slice can pin an entire Arrow allocation. Copy only
-                // the tail retained after this call so it remains accurately
-                // bounded after DataFusion releases the batch reservation.
-                self.buffer.push(Bytes::copy_from_slice(&data));
-                break;
+    fn write_all<'a>(&'a mut self, mut data: Bytes) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let len = data.len() as u64;
+            while !data.is_empty() {
+                let remaining = OBJECT_STORE_PART_SIZE - self.buffer.content_length();
+                if data.len() < remaining {
+                    // A Bytes slice can pin an entire Arrow allocation. Copy only
+                    // the tail retained after this call so it remains accurately
+                    // bounded after DataFusion releases the batch reservation.
+                    self.buffer.push(Bytes::copy_from_slice(&data));
+                    break;
+                }
+
+                self.buffer.push(data.split_to(remaining));
+                self.flush_part().await?;
             }
+            self.bytes_written += len;
+            Ok(())
+        })
+    }
 
-            self.buffer.push(data.split_to(remaining));
+    fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
             self.flush_part().await?;
-        }
-        self.bytes_written += len;
-        Ok(())
+            self.upload.complete().await?;
+            self.size.store(self.bytes_written, Ordering::Relaxed);
+            Ok(())
+        })
     }
 
-    async fn finish(&mut self) -> Result<()> {
-        self.flush_part().await?;
-        self.upload.complete().await?;
-        self.size.store(self.bytes_written, Ordering::Relaxed);
-        Ok(())
-    }
-
-    async fn abort(&mut self) -> Result<()> {
-        // Release locally buffered spill data before waiting on remote cleanup.
-        self.buffer = PutPayloadMut::new();
-        self.upload.abort().await?;
-        Ok(())
+    fn abort<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            // Release locally buffered spill data before waiting on remote cleanup.
+            self.buffer = PutPayloadMut::new();
+            self.upload.abort().await?;
+            Ok(())
+        })
     }
 }
 
@@ -291,22 +299,25 @@ mod tests {
         part_sizes: Arc<Mutex<Vec<usize>>>,
     }
 
-    #[async_trait]
     impl MultipartUpload for RecordingMultipartUpload {
         fn put_part(&mut self, data: PutPayload) -> UploadPart {
             self.part_sizes.lock().unwrap().push(data.content_length());
             Box::pin(async { Ok(()) })
         }
 
-        async fn complete(&mut self) -> object_store::Result<PutResult> {
-            Ok(PutResult {
-                e_tag: None,
-                version: None,
+        fn complete<'a>(
+            &'a mut self,
+        ) -> BoxFuture<'a, object_store::Result<PutResult>> {
+            Box::pin(async move {
+                Ok(PutResult {
+                    e_tag: None,
+                    version: None,
+                })
             })
         }
 
-        async fn abort(&mut self) -> object_store::Result<()> {
-            Ok(())
+        fn abort<'a>(&'a mut self) -> BoxFuture<'a, object_store::Result<()>> {
+            Box::pin(async move { Ok(()) })
         }
     }
 
