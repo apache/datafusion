@@ -79,12 +79,17 @@ use datafusion_expr::{Expr, LogicalPlan};
 /// Report a volatile call that the optimizer run made the plan evaluate at
 /// more sites than the input plan does.
 ///
-/// On. The last shape that failed on `main`, `random() BETWEEN 0.0 AND 1.0`
-/// (<https://github.com/apache/datafusion/issues/25457>), is fixed by
-/// <https://github.com/apache/datafusion/pull/25476>.
+/// On. `random() BETWEEN 0.0 AND 1.0`
+/// (<https://github.com/apache/datafusion/issues/25457>) is fixed by
+/// <https://github.com/apache/datafusion/pull/25476>, and a preimage rewrite
+/// such as `floor(random() * 10) = 3` no longer duplicates its volatile
+/// argument.
 ///
-/// One other shape is worth recording here,
-/// because it is what an end of run check buys: `file_row_index()` re-inlined
+/// Known false positive: a volatile call with column arguments over a
+/// renamed column, see `reports_renamed_column_merge_as_a_new_site`.
+///
+/// One other shape is worth recording here, because it is what an end of run
+/// check buys: `file_row_index()` re-inlined
 /// by `optimize_projections` in `file_row_index.slt`. A per rule check reports
 /// it, this check does not, because `CommonSubexprEliminate` hoists the call
 /// and `optimize_projections` puts it back, which leaves the final plan with
@@ -515,10 +520,18 @@ mod tests {
                 .project(vec![col("a"), col("a").alias("y")])?
                 .project(vec![udf.call(vec![col("a")]), udf.call(vec![col("y")])])?
                 .build()?;
-            let error = Optimizer::new()
-                .optimize(input, &OptimizerContext::new(), |_, _| {})
-                .unwrap_err()
-                .to_string();
+            let before = EvaluationSites::count(&input);
+            // The optimizer runs the check in debug builds only, so check the
+            // optimized plan here when it did not.
+            let error = match Optimizer::new().optimize(
+                input,
+                &OptimizerContext::new(),
+                |_, _| {},
+            ) {
+                Ok(optimized) => before.check(&optimized).unwrap_err(),
+                Err(error) => error,
+            }
+            .to_string();
             assert!(
                 error.contains("_udf(a)` is evaluated at 2 sites, against 1"),
                 "{placement:?}: {error:?}"

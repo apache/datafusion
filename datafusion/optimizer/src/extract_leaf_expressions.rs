@@ -180,13 +180,27 @@ fn resolve_against(schema: &DFSchema, col: &Column) -> Option<Column> {
 ///
 /// `inlined` are the expressions that the merge resolves, and
 /// `direct_columns` the columns that the nodes above reference directly.
+///
+/// The inliner and the merge must agree on which output column a reference
+/// names, so the references are checked in the canonical spelling of
+/// `schema`, the output schema of the projection (see [`column_index`]).
 fn pinned_for_merge<'a>(
     inliner: &ProjectionInliner<'_>,
+    schema: &DFSchema,
     inlined: impl IntoIterator<Item = &'a Expr>,
     direct_columns: &IndexSet<Column>,
-) -> PinnedDefinitions {
-    let direct: Vec<Expr> = direct_columns.iter().cloned().map(Expr::Column).collect();
-    inliner.pinned_with_unknown_consumers(inlined, &direct, DuplicationCost::Free)
+) -> Result<PinnedDefinitions> {
+    let inlined = inlined
+        .into_iter()
+        .map(|expr| respell_cols(expr.clone(), schema, schema))
+        .collect::<Result<Vec<_>>>()?;
+    let direct: Vec<Expr> = direct_columns
+        .iter()
+        .map(|col| {
+            Expr::Column(resolve_against(schema, col).unwrap_or_else(|| col.clone()))
+        })
+        .collect();
+    Ok(inliner.pinned_with_unknown_consumers(&inlined, &direct, DuplicationCost::Free))
 }
 
 /// Extracts `MoveTowardsLeafNodes` sub-expressions from non-projection nodes
@@ -359,7 +373,7 @@ fn extract_from_plan(
             LeafExpressionExtractor::new(schema.as_ref(), alias_generator)
                 .with_input_projection(projection.as_ref(), &node_exprs, &IndexSet::new())
         })
-        .collect();
+        .collect::<Result<_>>()?;
 
     // Build per-input column sets for routing expressions to the correct input
     let input_column_sets: Vec<HashSet<ColumnReference>> = input_schemas
@@ -691,13 +705,18 @@ impl<'a> LeafExpressionExtractor<'a> {
         projection: Option<&'a Projection>,
         consumers: impl IntoIterator<Item = &'e Expr>,
         direct_columns: &IndexSet<Column>,
-    ) -> Self {
+    ) -> Result<Self> {
         if let Some(projection) = projection {
             let inliner = ProjectionInliner::new(projection);
-            self.pinned = pinned_for_merge(&inliner, consumers, direct_columns);
+            self.pinned = pinned_for_merge(
+                &inliner,
+                &projection.schema,
+                consumers,
+                direct_columns,
+            )?;
             self.input_inliner = Some(inliner);
         }
-        self
+        Ok(self)
     }
 
     /// Returns `true` if `expr` can be extracted into the input. See
@@ -788,22 +807,11 @@ fn build_extraction_projection_impl(
     target_schema: &DFSchema,
 ) -> Result<Option<Projection>> {
     if let LogicalPlan::Projection(existing) = target.as_ref() {
-        // Resolves column references through the existing projection
-        // The inliner and the merge below must agree on which output column a
-        // reference names, so check the references in the canonical spelling
-        // of the output schema (see [`column_index`]).
         let inliner = ProjectionInliner::new(existing);
-        let extracted = extracted_exprs
-            .iter()
-            .map(|(e, _)| respell_cols(e.clone(), &existing.schema, &existing.schema))
-            .collect::<Result<Vec<_>>>()?;
-        let direct_columns: IndexSet<Column> = direct_columns
-            .iter()
-            .map(|col| {
-                resolve_against(&existing.schema, col).unwrap_or_else(|| col.clone())
-            })
-            .collect();
-        if !pinned_for_merge(&inliner, &extracted, &direct_columns).is_empty() {
+        let extracted = extracted_exprs.iter().map(|(e, _)| e);
+        if !pinned_for_merge(&inliner, &existing.schema, extracted, direct_columns)?
+            .is_empty()
+        {
             return Ok(None);
         }
 
@@ -1062,7 +1070,7 @@ fn split_and_push_projection(
             input_projection,
             consumers,
             known_direct_columns.unwrap_or(&no_direct_columns),
-        );
+        )?;
     let mut extractors = vec![extractor];
     let input_column_sets = vec![schema_columns(input_schema.as_ref())];
 
@@ -1155,9 +1163,10 @@ fn split_and_push_projection(
     if let Some(inliner) = &extractor.input_inliner
         && !pinned_for_merge(
             inliner,
+            input_schema.as_ref(),
             extraction_pairs.iter().map(|(expr, _)| expr),
             &direct_columns,
-        )
+        )?
         .is_empty()
     {
         return Ok(None);
@@ -1407,11 +1416,16 @@ fn route_to_inputs(
                 None => return Ok(None), // Ambiguous column — bail out
             }
         }
-        // A direct reference counts for every input that can own it.
+        // A direct reference counts for every input that can own it: by
+        // name, or resolved like the merge resolves it (see [`column_index`]).
         for col in &target.direct_columns {
             let col_ref = ColumnReference::new(col.relation.as_ref(), col.name());
-            for (idx, cols) in input_column_sets.iter().enumerate() {
-                if cols.contains(&col_ref) {
+            for (idx, (cols, schema)) in
+                input_column_sets.iter().zip(input_schemas).enumerate()
+            {
+                if let Some(resolved) = resolve_against(schema, col) {
+                    per_input[idx].direct_columns.insert(resolved);
+                } else if cols.contains(&col_ref) {
                     per_input[idx].direct_columns.insert(col.clone());
                 }
             }
@@ -4119,8 +4133,14 @@ mod tests {
         )?;
         let inliner = ProjectionInliner::new(&child);
         let blocks = |pairs: &[(Expr, String)], columns: &IndexSet<Column>| {
-            !pinned_for_merge(&inliner, pairs.iter().map(|(expr, _)| expr), columns)
-                .is_empty()
+            !pinned_for_merge(
+                &inliner,
+                &child.schema,
+                pairs.iter().map(|(expr, _)| expr),
+                columns,
+            )
+            .unwrap()
+            .is_empty()
         };
         let no_columns = IndexSet::new();
 
