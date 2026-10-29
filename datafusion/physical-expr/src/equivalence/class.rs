@@ -836,21 +836,35 @@ impl EquivalenceGroup {
         let group = match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
                 let mut result = Self::new(
-                    self.iter().cloned().chain(
-                        right_equivalences
-                            .iter()
-                            .map(|cls| {
-                                let mut cls = cls.try_with_offset(left_size as _)?;
-                                // Rows without a match on the right side are
-                                // padded with NULLs, so its constants no
-                                // longer hold.
-                                if matches!(join_type, JoinType::Left | JoinType::Full) {
-                                    cls.constant = None;
-                                }
-                                Ok(cls)
-                            })
-                            .collect::<Result<Vec<_>>>()?,
-                    ),
+                    self.iter()
+                        .cloned()
+                        .map(|mut cls| {
+                            // Rows without a match on the left side are
+                            // padded with NULLs, so its constants no
+                            // longer hold.
+                            if matches!(join_type, JoinType::Right | JoinType::Full) {
+                                cls.constant = None;
+                            }
+                            cls
+                        })
+                        .chain(
+                            right_equivalences
+                                .iter()
+                                .map(|cls| {
+                                    let mut cls = cls.try_with_offset(left_size as _)?;
+                                    // Rows without a match on the right side are
+                                    // padded with NULLs, so its constants no
+                                    // longer hold.
+                                    if matches!(
+                                        join_type,
+                                        JoinType::Left | JoinType::Full
+                                    ) {
+                                        cls.constant = None;
+                                    }
+                                    Ok(cls)
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                        ),
                 );
                 // In we have an inner join, expressions in the "on" condition
                 // are equal in the resulting table.
@@ -1376,8 +1390,6 @@ mod tests {
         Ok(())
     }
 
-    /// A constant on the right side of a join stays constant in the join
-    /// output, unless unmatched rows pad the right side with NULLs.
     /// An uncorrelated scalar subquery is a leaf with no columns, so the only
     /// way to know it is constant is to ask the expression itself.
     /// <https://github.com/apache/datafusion/issues/26572>
@@ -1489,6 +1501,8 @@ mod tests {
         Ok(())
     }
 
+    /// A constant on the right side of a join stays constant in the join
+    /// output, unless unmatched rows pad the right side with NULLs.
     /// <https://github.com/apache/datafusion/issues/26283>
     #[test]
     fn test_join_keeps_right_constants() -> Result<()> {
@@ -1507,6 +1521,31 @@ mod tests {
             let joined = EquivalenceGroup::default().join(&right, &join_type, 4, &[])?;
             assert_eq!(
                 joined.is_expr_constant(&right_a).is_some(),
+                expected,
+                "{join_type}"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// The same for a constant on the left side, whose rows are padded with
+    /// NULLs by a right or full join.
+    #[test]
+    fn test_join_keeps_left_constants() -> Result<()> {
+        let schema = abc_schema();
+        let mut left = EquivalenceGroup::default();
+        left.add_constant(ConstExpr::from(col("a", &schema)?));
+        let left_a = col("a", &schema)?;
+        for (join_type, expected) in [
+            (JoinType::Inner, true),
+            (JoinType::Left, true),
+            (JoinType::Right, false),
+            (JoinType::Full, false),
+        ] {
+            let joined = left.join(&EquivalenceGroup::default(), &join_type, 4, &[])?;
+            assert_eq!(
+                joined.is_expr_constant(&left_a).is_some(),
                 expected,
                 "{join_type}"
             );

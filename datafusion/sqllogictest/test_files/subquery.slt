@@ -4349,5 +4349,29 @@ FROM t26572 ORDER BY y, x, a DESC;
 statement ok
 DROP TABLE t26572;
 
+# A LEFT JOIN can be swapped into a physical RIGHT join with the subquery side
+# on the left. Its rows without a match are padded with NULLs, so `m` is not
+# constant there and the sort on it must stay.
+statement ok
+CREATE TABLE p26572 (a INT, b INT) AS VALUES (1, 10), (2, 20), (3, 30), (2, 5), (NULL, 7);
+
+query III
+SELECT x.a, s.a, s.m
+FROM p26572 x LEFT JOIN (
+  SELECT a, (SELECT max(a) FROM p26572) AS m FROM p26572 WHERE a > 1
+) s ON x.a = s.a
+ORDER BY s.m, x.a, s.a;
+----
+2 2 3
+2 2 3
+2 2 3
+2 2 3
+3 3 3
+1 NULL NULL
+NULL NULL NULL
+
+statement ok
+DROP TABLE p26572;
+
 statement ok
 RESET datafusion.execution.batch_size;
