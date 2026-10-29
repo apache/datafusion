@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Expression utilities
 
@@ -862,15 +849,11 @@ fn find_exprs_in_exprs<'a, F>(
 where
     F: Fn(&Expr) -> bool,
 {
-    exprs
-        .into_iter()
-        .flat_map(|expr| find_exprs_in_expr(expr, test_fn))
-        .fold(vec![], |mut acc, expr| {
-            if !acc.contains(&expr) {
-                acc.push(expr)
-            }
-            acc
-        })
+    let mut found = IndexSet::new();
+    for expr in exprs {
+        collect_exprs_in_expr(expr, test_fn, &mut found);
+    }
+    found.into_iter().collect()
 }
 
 /// Search an `Expr`, and all of its nested `Expr`'s, for any that pass the
@@ -880,11 +863,17 @@ fn find_exprs_in_expr<F>(expr: &Expr, test_fn: &F) -> Vec<Expr>
 where
     F: Fn(&Expr) -> bool,
 {
-    let mut exprs = vec![];
+    find_exprs_in_exprs(std::iter::once(expr), test_fn)
+}
+
+fn collect_exprs_in_expr<F>(expr: &Expr, test_fn: &F, found: &mut IndexSet<Expr>)
+where
+    F: Fn(&Expr) -> bool,
+{
     expr.apply(|expr| {
         if test_fn(expr) {
-            if !(exprs.contains(expr)) {
-                exprs.push(expr.clone())
+            if !found.contains(expr) {
+                found.insert(expr.clone());
             }
             // Stop recursing down this expr once we find a match
             return Ok(TreeNodeRecursion::Jump);
@@ -894,7 +883,6 @@ where
     })
     // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");
-    exprs
 }
 
 /// Recursively inspect an [`Expr`] and all its children.
@@ -1664,6 +1652,21 @@ mod tests {
         // computed, even though it is named `b.id`
         assert_eq!(index(crate::cast(col("b.id"), DataType::Int64)), None);
         Ok(())
+    }
+
+    #[test]
+    fn find_aggregate_exprs_dedups_in_order_of_appearance() {
+        use crate::test::function_stub::{count, sum};
+
+        let exprs = [
+            sum(col("a")) + count(col("b")),
+            count(col("b")) * sum(col("c")),
+            sum(col("a")) + sum(col("a")),
+        ];
+        assert_eq!(
+            find_aggregate_exprs(&exprs),
+            vec![sum(col("a")), count(col("b")), sum(col("c"))]
+        );
     }
 
     #[test]

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Benchmark for `UnionExec` construction cost as a function of child count.
 //!
@@ -25,6 +12,9 @@
 //!   the scan runs, fails on the final child, then the full merge runs anyway.
 //! - `names_differ`: the first field is renamed in every child but the first,
 //!   the common real-world unequal union where equality fails immediately.
+//!
+//! The non-nullable cases also require scanning all children to determine
+//! output nullability, rather than stopping at the first nullable field.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,10 +35,10 @@ fn metadata(tag: &str, i: usize) -> HashMap<String, String> {
         .collect()
 }
 
-fn flat_schema() -> Schema {
+fn flat_schema(nullable: bool) -> Schema {
     let fields: Vec<Field> = (0..NUM_FIELDS)
         .map(|i| {
-            Field::new(format!("col_{i}"), DataType::Int64, true)
+            Field::new(format!("col_{i}"), DataType::Int64, nullable)
                 .with_metadata(metadata("f", i))
         })
         .collect();
@@ -120,8 +110,9 @@ fn children_last_differs(schema: &Schema, n: usize) -> Vec<Arc<dyn ExecutionPlan
 
 fn bench_union_construction(c: &mut Criterion) {
     for (suffix, schema, sizes) in [
-        ("", flat_schema(), &[100usize, 1000, 4000][..]),
+        ("", flat_schema(true), &[100usize, 1000, 4000][..]),
         ("_nested", nested_schema(), &[1000, 4000][..]),
+        ("_non_nullable", flat_schema(false), &[10, 100, 1000][..]),
     ] {
         let mut group = c.benchmark_group(format!("union_exec_try_new{suffix}"));
         for &n in sizes {

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module provides a builder for creating LogicalPlans
 
@@ -2200,58 +2187,31 @@ fn project_with_validation(
     let mut normalizer = ColumnNormalizer::new(&plan);
     let columnizer = Columnizer::new(&plan);
     for (e, validate) in expr {
-        let e = e.into();
-        match e {
+        let mut push_validated = |e: Expr| -> Result<()> {
+            if validate {
+                projected_expr.push(columnizer.columnize(normalizer.normalize(e)?)?)
+            } else {
+                projected_expr.push(e)
+            }
+            Ok(())
+        };
+        match e.into() {
             SelectExpr::Wildcard(opt) => {
                 has_wildcard = true;
                 let expanded = expand_wildcard(plan.schema(), &plan, Some(&opt))?;
-
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                let expanded = if let Some(replace) = opt.replace {
-                    replace_columns(expanded, &replace)?
-                } else {
-                    expanded
-                };
-
-                for e in expanded {
-                    if validate {
-                        projected_expr
-                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
-                    } else {
-                        projected_expr.push(e)
-                    }
-                }
+                apply_replace(expanded, opt.replace.as_ref())?
+                    .into_iter()
+                    .try_for_each(push_validated)?;
             }
             SelectExpr::QualifiedWildcard(table_ref, opt) => {
                 has_wildcard = true;
                 let expanded =
                     expand_qualified_wildcard(&table_ref, plan.schema(), Some(&opt))?;
-
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                let expanded = if let Some(replace) = opt.replace {
-                    replace_columns(expanded, &replace)?
-                } else {
-                    expanded
-                };
-
-                for e in expanded {
-                    if validate {
-                        projected_expr
-                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
-                    } else {
-                        projected_expr.push(e)
-                    }
-                }
+                apply_replace(expanded, opt.replace.as_ref())?
+                    .into_iter()
+                    .try_for_each(push_validated)?;
             }
-            SelectExpr::Expression(e) => {
-                if validate {
-                    projected_expr.push(columnizer.columnize(normalizer.normalize(e)?)?)
-                } else {
-                    projected_expr.push(e)
-                }
-            }
+            SelectExpr::Expression(e) => push_validated(e)?,
         }
     }
 
@@ -2277,6 +2237,18 @@ fn project_with_validation(
     // `columnizer` borrows `plan`, which moves into the projection below.
     drop(columnizer);
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+}
+
+/// Applies a wildcard's REPLACE statement, if it has one, to the columns the
+/// wildcard expanded to.
+fn apply_replace(
+    expanded: Vec<Expr>,
+    replace: Option<&PlannedReplaceSelectItem>,
+) -> Result<Vec<Expr>> {
+    match replace {
+        Some(replace) => replace_columns(expanded, replace),
+        None => Ok(expanded),
+    }
 }
 
 /// If there is a REPLACE statement in the projected expression in the form of
