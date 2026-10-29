@@ -943,7 +943,7 @@ fn contains_subquery(expr: &Expr) -> bool {
                 | Expr::ScalarSubquery(_)
         ))
     })
-    .unwrap_or(true)
+    .expect("exists closure is infallible")
 }
 
 /// Builds the output schema of a projection that keeps only the fields at

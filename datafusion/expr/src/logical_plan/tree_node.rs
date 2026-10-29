@@ -545,7 +545,8 @@ impl LogicalPlan {
     /// * Similar to [`TreeNode::map_children`] but for this node's expressions.
     /// * Visits only the top level expressions (Does not recurse into each expression)
     /// * A `Projection` whose expressions were rewritten gets its schema derived
-    ///   again from the new expressions; other nodes keep their schema.
+    ///   again from the new expressions, so the new expressions must resolve
+    ///   against the current input.
     pub fn map_expressions<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
         self,
         mut f: F,
