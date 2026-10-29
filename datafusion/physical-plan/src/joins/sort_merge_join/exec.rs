@@ -51,7 +51,7 @@ use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 use futures::StreamExt;
 
-/// Null-aware (`NOT IN`) semantics of a soft merge join, derived from
+/// Null-aware (`NOT IN`) semantics of a sort merge join, derived from
 /// [`SortMergeJoinExec::null_aware`] and the join type.
 ///
 /// Only these combinations are legal (see [`Self::try_new`]), so the
@@ -384,7 +384,7 @@ impl SortMergeJoinExec {
         self.null_equality
     }
 
-    /// Null aware
+    /// Return whether this join uses null-aware (NOT IN) semantics
     pub fn null_aware(&self) -> bool {
         self.null_aware
     }
