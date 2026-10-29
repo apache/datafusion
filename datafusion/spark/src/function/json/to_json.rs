@@ -17,9 +17,15 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, StringBuilder};
+use arrow::array::{Array, ArrayAccessor, ArrayRef, AsArray, MapArray, StringBuilder};
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
-use arrow::json::writer::{EncoderOptions, make_encoder};
+use arrow::error::ArrowError;
+use arrow::json::writer::{
+    Encoder, EncoderFactory, EncoderOptions, NullableEncoder, make_encoder,
+};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Column, Result, ScalarValue, exec_datafusion_err, plan_err};
 use datafusion_expr::{
@@ -114,8 +120,13 @@ impl ScalarUDFImpl for ToJson {
 /// field describes array (its name and the nested field names/types are
 /// what the encoder uses for the JSON keys).
 fn struct_to_json(field: &FieldRef, array: &ArrayRef) -> Result<ArrayRef> {
-    // Spark default: ignoreNullFields = true -> omit null fields entirely
-    let options = EncoderOptions::default().with_explicit_nulls(false);
+    // Spark default: ignoreNullFields = true -> NULL struct fields are omitted.
+    // The factory covers the places where Spark's output differs from arrow's
+    // defaults (NULL map entries are kept, binary is Base64; see
+    // `SparkJsonEncoderFactory`).
+    let options = EncoderOptions::default()
+        .with_explicit_nulls(false)
+        .with_encoder_factory(Arc::new(SparkJsonEncoderFactory));
     let mut encoder = make_encoder(field, array.as_ref(), &options)?;
     let mut builder = StringBuilder::with_capacity(array.len(), array.len() * 32);
     let mut buf: Vec<u8> = Vec::with_capacity(128);
@@ -132,6 +143,152 @@ fn struct_to_json(field: &FieldRef, array: &ArrayRef) -> Result<ArrayRef> {
     }
 
     Ok(Arc::new(builder.finish()))
+}
+
+/// Overrides arrow-json's default encoders where Spark's `to_json` output
+/// differs from arrow's. `make_encoder` consults the factory for every array at
+/// every nesting level, so the overrides also apply inside lists, structs and
+/// maps.
+#[derive(Debug, Default)]
+struct SparkJsonEncoderFactory;
+
+impl EncoderFactory for SparkJsonEncoderFactory {
+    fn make_default_encoder<'a>(
+        &self,
+        field: &'a FieldRef,
+        array: &'a dyn Array,
+        options: &'a EncoderOptions,
+    ) -> Result<Option<NullableEncoder<'a>>, ArrowError> {
+        match array.data_type() {
+            DataType::Map(_, _) => {
+                let array = array.as_map();
+                let encoder = SparkMapEncoder::try_new(field, array, options)?;
+                Ok(Some(NullableEncoder::new(
+                    Box::new(encoder),
+                    array.nulls().cloned(),
+                )))
+            }
+            // Spark serializes binary values as Base64 strings, arrow-json as hex
+            DataType::Binary => Ok(Some(base64_encoder(array.as_binary::<i32>()))),
+            DataType::LargeBinary => {
+                Ok(Some(base64_encoder(array.as_binary::<i64>())))
+            }
+            DataType::BinaryView => Ok(Some(base64_encoder(array.as_binary_view()))),
+            DataType::FixedSizeBinary(_) => {
+                Ok(Some(base64_encoder(array.as_fixed_size_binary())))
+            }
+            // everything else uses arrow's default encoder
+            _ => Ok(None),
+        }
+    }
+}
+
+/// Builds a Base64 encoder for any of arrow's binary array types.
+fn base64_encoder<'a, B>(array: B) -> NullableEncoder<'a>
+where
+    B: ArrayAccessor<Item = &'a [u8]> + Array + 'a,
+{
+    let nulls = array.nulls().cloned();
+    NullableEncoder::new(Box::new(Base64Encoder::new(array)), nulls)
+}
+
+/// Encodes binary values as Base64 strings (standard alphabet, padded), which
+/// is what Spark's `to_json` produces; arrow-json's default is hexadecimal.
+struct Base64Encoder<B> {
+    array: B,
+    scratch: String,
+}
+
+impl<B> Base64Encoder<B> {
+    fn new(array: B) -> Self {
+        Self {
+            array,
+            scratch: String::new(),
+        }
+    }
+}
+
+impl<'a, B> Encoder for Base64Encoder<B>
+where
+    B: ArrayAccessor<Item = &'a [u8]>,
+{
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        self.scratch.clear();
+        BASE64.encode_string(self.array.value(idx), &mut self.scratch);
+        // Base64 output is [A-Za-z0-9+/=], so it needs no JSON escaping
+        out.push(b'"');
+        out.extend_from_slice(self.scratch.as_bytes());
+        out.push(b'"');
+    }
+}
+
+/// Encodes a map as a JSON object, always writing NULL values as `"key":null`.
+///
+/// arrow-json's own map encoder drops entries with a NULL value when
+/// `explicit_nulls` is off, but Spark's `ignoreNullFields` only applies to
+/// struct fields: map entries with a NULL value are kept.
+struct SparkMapEncoder<'a> {
+    offsets: OffsetBuffer<i32>,
+    keys: NullableEncoder<'a>,
+    values: NullableEncoder<'a>,
+}
+
+impl<'a> SparkMapEncoder<'a> {
+    fn try_new(
+        field: &'a FieldRef,
+        array: &'a MapArray,
+        options: &'a EncoderOptions,
+    ) -> Result<Self, ArrowError> {
+        let keys = array.keys();
+        if !matches!(
+            keys.data_type(),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
+            return Err(ArrowError::JsonError(format!(
+                "to_json: only string map keys are supported, got {}",
+                keys.data_type()
+            )));
+        }
+
+        // Key and value encoders are built with the same options, so nested
+        // structs keep omitting NULL fields and nested maps use this encoder.
+        let keys = make_encoder(field, keys, options)?;
+        let values = make_encoder(field, array.values(), options)?;
+
+        if keys.has_nulls() {
+            return Err(ArrowError::InvalidArgumentError(
+                "to_json: encountered a NULL map key".to_string(),
+            ));
+        }
+
+        Ok(Self {
+            offsets: array.offsets().clone(),
+            keys,
+            values,
+        })
+    }
+}
+
+impl Encoder for SparkMapEncoder<'_> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let start = self.offsets[idx] as usize;
+        let end = self.offsets[idx + 1] as usize;
+
+        out.push(b'{');
+        for i in start..end {
+            if i != start {
+                out.push(b',');
+            }
+            self.keys.encode(i, out);
+            out.push(b':');
+            if self.values.is_null(i) {
+                out.extend_from_slice(b"null");
+            } else {
+                self.values.encode(i, out);
+            }
+        }
+        out.push(b'}');
+    }
 }
 
 /// Input accepted by the to_json expression builder.
@@ -174,7 +331,9 @@ mod tests {
     use super::*;
 
     use arrow::array::{
-        BooleanArray, Int32Array, Int64Array, ListBuilder, StringArray, StructArray,
+        BinaryArray, BinaryBuilder, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
+        Int32Array, Int32Builder, Int64Array, LargeBinaryArray, ListBuilder, MapBuilder,
+        StringArray, StructArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{Field, Fields};
@@ -362,6 +521,99 @@ mod tests {
         // ...while the column reference keeps its qualifier
         assert_eq!(args[1], Expr::Column(Column::from_qualified_name("t.foo")));
     }
+    #[test]
+    fn test_map_null_values_kept_but_null_struct_fields_omitted() {
+        // m: Map<Utf8, Int32> with rows {"k":null}, {"a":1,"b":null}, NULL
+        let mut mb = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        mb.keys().append_value("k");
+        mb.values().append_null();
+        mb.append(true).unwrap();
+        mb.keys().append_value("a");
+        mb.values().append_value(1);
+        mb.keys().append_value("b");
+        mb.values().append_null();
+        mb.append(true).unwrap();
+        mb.append(false).unwrap();
+        let m = Arc::new(mb.finish()) as ArrayRef;
+
+        // s: Int32 with a NULL in row 1
+        let s = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef;
+
+        let fields = Fields::from(vec![
+            Field::new("m", m.data_type().clone(), true),
+            Field::new("s", DataType::Int32, true),
+        ]);
+        let input = StructArray::new(fields, vec![m, s], None);
+        let field = field_of(&input);
+
+        let out = run(ColumnarValue::Array(Arc::new(input)), field).unwrap();
+        let out = as_string_array(&out).unwrap();
+
+        // a NULL map *value* is written explicitly (Spark keeps map entries)
+        assert_eq!(out.value(0), r#"{"m":{"k":null},"s":1}"#);
+        // ...while a NULL struct *field* (`s`) is still omitted
+        assert_eq!(out.value(1), r#"{"m":{"a":1,"b":null}}"#);
+        // a NULL map is a NULL struct field, so it is omitted as well
+        assert_eq!(out.value(2), r#"{"s":3}"#);
+    }
+    #[test]
+    fn test_binary_is_base64_encoded() {
+        // b: Binary ["abc", "", NULL] -> "YWJj", "", omitted
+        let b = Arc::new(BinaryArray::from(vec![
+            Some(b"abc".as_slice()),
+            Some(b"".as_slice()),
+            None,
+        ])) as ArrayRef;
+        let abc = vec![Some(b"abc".as_slice()); 3];
+        let lb = Arc::new(LargeBinaryArray::from(abc.clone())) as ArrayRef;
+        let bv = Arc::new(BinaryViewArray::from(abc)) as ArrayRef;
+        let fsb = Arc::new(
+            FixedSizeBinaryArray::try_from_iter(vec![b"ab".as_slice(); 3].into_iter())
+                .unwrap(),
+        ) as ArrayRef;
+
+        // l: List<Binary> [["abc"]] per row; n: Struct<b: Binary> {"abc"} per row
+        let mut l = ListBuilder::new(BinaryBuilder::new());
+        for _ in 0..3 {
+            l.values().append_value(b"abc");
+            l.append(true);
+        }
+        let l = Arc::new(l.finish()) as ArrayRef;
+        let n = Arc::new(StructArray::new(
+            Fields::from(vec![Field::new("b", DataType::LargeBinary, true)]),
+            vec![Arc::clone(&lb)],
+            None,
+        )) as ArrayRef;
+
+        let fields = Fields::from(vec![
+            Field::new("b", DataType::Binary, true),
+            Field::new("lb", DataType::LargeBinary, true),
+            Field::new("bv", DataType::BinaryView, true),
+            Field::new("fsb", DataType::FixedSizeBinary(2), true),
+            Field::new("l", l.data_type().clone(), true),
+            Field::new("n", n.data_type().clone(), true),
+        ]);
+        let input = StructArray::new(fields, vec![b, lb, bv, fsb, l, n], None);
+        let field = field_of(&input);
+
+        let out = run(ColumnarValue::Array(Arc::new(input)), field).unwrap();
+        let out = as_string_array(&out).unwrap();
+
+        assert_eq!(
+            out.value(0),
+            r#"{"b":"YWJj","lb":"YWJj","bv":"YWJj","fsb":"YWI=","l":["YWJj"],"n":{"b":"YWJj"}}"#
+        );
+        // empty binary is an empty string, not NULL
+        assert_eq!(
+            out.value(1),
+            r#"{"b":"","lb":"YWJj","bv":"YWJj","fsb":"YWI=","l":["YWJj"],"n":{"b":"YWJj"}}"#
+        );
+        // NULL binary is a NULL struct field -> omitted
+        assert_eq!(
+            out.value(2),
+            r#"{"lb":"YWJj","bv":"YWJj","fsb":"YWI=","l":["YWJj"],"n":{"b":"YWJj"}}"#
+        );
+    }
 }
 
 /// DataFrame-level tests: to_json used through DataFrame::with_column
@@ -372,6 +624,7 @@ mod dataframe_tests {
 
     use datafusion::prelude::*;
     use datafusion::test_util::{register_aggregate_csv, test_table};
+    use datafusion_common::cast::as_string_array;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common::{assert_batches_sorted_eq, assert_contains};
     use datafusion_functions_nested::expr_fn::make_array;
@@ -613,5 +866,83 @@ mod dataframe_tests {
         assert_contains!(err, "'named_struct' does not support zero arguments");
 
         Ok(())
+    }
+    /// Evaluates `SELECT to_json(<expr>)` for each `(expr, expected)` pair and
+    /// checks the JSON string.
+    ///
+    /// The `datafusion` dev-dependency is built without the
+    /// `nested_expressions` feature, so the nested functions used to build
+    /// test values (`make_array`, `map`, ...) are registered here explicitly.
+    async fn assert_sql_json(cases: &[(&str, &str)]) -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.register_udf((*crate::function::json::to_json()).clone());
+        for udf in datafusion_functions_nested::all_default_nested_functions() {
+            ctx.register_udf((*udf).clone());
+        }
+
+        for (expr, expected) in cases {
+            let batches = ctx
+                .sql(&format!("SELECT to_json({expr}) AS j"))
+                .await?
+                .collect()
+                .await?;
+            let j = as_string_array(batches[0].column(0))?;
+            assert_eq!(j.value(0), *expected, "expression: {expr}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn to_json_keeps_null_map_values_sql() -> Result<()> {
+        assert_sql_json(&[
+            // NULL map value is kept
+            (
+                "named_struct('m', map(make_array('k'), make_array(CAST(NULL AS INT))))",
+                r#"{"m":{"k":null}}"#,
+            ),
+            // nested map inside a map value
+            (
+                "named_struct('m', map(make_array('o'), make_array(map(make_array('k'), make_array(CAST(NULL AS INT))))))",
+                r#"{"m":{"o":{"k":null}}}"#,
+            ),
+            // a struct inside a map value still omits its NULL fields
+            (
+                "named_struct('m', map(make_array('k'), make_array(named_struct('a', 1, 'b', CAST(NULL AS INT)))))",
+                r#"{"m":{"k":{"a":1}}}"#,
+            ),
+        ])
+        .await
+    }
+
+    #[tokio::test]
+    async fn to_json_encodes_binary_as_base64_sql() -> Result<()> {
+        assert_sql_json(&[
+            (
+                "named_struct('b', arrow_cast('abc', 'Binary'))",
+                r#"{"b":"YWJj"}"#,
+            ),
+            (
+                "named_struct('b', arrow_cast('abc', 'LargeBinary'))",
+                r#"{"b":"YWJj"}"#,
+            ),
+            (
+                "named_struct('b', arrow_cast('abc', 'BinaryView'))",
+                r#"{"b":"YWJj"}"#,
+            ),
+            // nested in a list, in a struct and in a map value
+            (
+                "named_struct('l', make_array(arrow_cast('abc', 'Binary')))",
+                r#"{"l":["YWJj"]}"#,
+            ),
+            (
+                "named_struct('n', named_struct('b', arrow_cast('abc', 'Binary')))",
+                r#"{"n":{"b":"YWJj"}}"#,
+            ),
+            (
+                "named_struct('m', map(make_array('k'), make_array(arrow_cast('abc', 'Binary'))))",
+                r#"{"m":{"k":"YWJj"}}"#,
+            ),
+        ])
+        .await
     }
 }
