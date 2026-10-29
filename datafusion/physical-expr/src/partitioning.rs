@@ -118,6 +118,8 @@ pub enum Partitioning {
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Partition rows by source-declared ranges
     Range(RangePartitioning),
+    /// Source-defined key groups, with an explicit semantic domain and index mapping.
+    Grouped(GroupedPartitioning),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
 }
@@ -135,10 +137,105 @@ impl Display for Partitioning {
                 write!(f, "Hash([{phy_exprs_str}], {size})")
             }
             Partitioning::Range(range) => write!(f, "{range}"),
+            Partitioning::Grouped(grouped) => write!(
+                f,
+                "Grouped({}, {:?}, {})",
+                grouped.scheme(),
+                grouped.group_ids(),
+                grouped.partition_count()
+            ),
             Partitioning::UnknownPartitioning(size) => {
                 write!(f, "UnknownPartitioning({size})")
             }
         }
+    }
+}
+
+/// Source-defined key grouping, distinct from DataFusion hash routing.
+///
+/// The source guarantees that equal `keys` values occur in one output group.
+/// `scheme` is a namespaced, versioned semantic descriptor including key types,
+/// transforms, encoding, hash seeds and reduction rules. Equal descriptors must
+/// mean the same key-to-group function, independently of table or query identity.
+/// Each entry in `group_ids` is that function's canonical group label for the
+/// corresponding output partition. Labels are unique; empty groups may be kept
+/// to align different inputs. No executable row router is implied by this type.
+#[derive(Debug, Clone)]
+pub struct GroupedPartitioning {
+    keys: Vec<Arc<dyn PhysicalExpr>>,
+    layout: Arc<GroupLayout>,
+}
+
+/// Immutable across key projection and join-output remapping.
+#[derive(Debug, PartialEq, Eq)]
+struct GroupLayout {
+    scheme: String,
+    group_ids: Vec<Vec<u8>>,
+}
+
+impl GroupedPartitioning {
+    /// Declare complete source groups in execution-partition order.
+    pub fn try_new(
+        keys: Vec<Arc<dyn PhysicalExpr>>,
+        scheme: String,
+        group_ids: Vec<Vec<u8>>,
+    ) -> Result<Self> {
+        if keys.is_empty() || scheme.is_empty() || group_ids.is_empty() {
+            return datafusion_common::plan_err!(
+                "Grouped partitioning requires keys, a semantic scheme, and groups"
+            );
+        }
+        let unique: std::collections::HashSet<_> = group_ids.iter().collect();
+        if unique.len() != group_ids.len() {
+            return datafusion_common::plan_err!("Grouped partition IDs must be unique");
+        }
+        Ok(Self {
+            keys,
+            layout: Arc::new(GroupLayout { scheme, group_ids }),
+        })
+    }
+
+    /// Original keys whose equal values are guaranteed to stay together.
+    pub fn keys(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.keys
+    }
+
+    /// Canonical, namespaced description of the key-to-group semantics.
+    pub fn scheme(&self) -> &str {
+        &self.layout.scheme
+    }
+
+    /// Canonical group labels, in execution-partition order.
+    pub fn group_ids(&self) -> &[Vec<u8>] {
+        &self.layout.group_ids
+    }
+
+    /// Number of complete logical groups.
+    pub fn partition_count(&self) -> usize {
+        self.layout.group_ids.len()
+    }
+
+    /// Whether matching partition indexes represent identical key domains.
+    /// The caller separately checks the corresponding key expressions.
+    pub fn compatible_layout(&self, other: &Self) -> bool {
+        self.layout == other.layout
+    }
+
+    /// Preserve group identity while remapping key expressions.
+    pub fn with_keys(&self, keys: Vec<Arc<dyn PhysicalExpr>>) -> Result<Self> {
+        if keys.len() != self.keys.len() {
+            return datafusion_common::plan_err!("Grouped key remapping changed arity");
+        }
+        Ok(Self {
+            keys,
+            layout: Arc::clone(&self.layout),
+        })
+    }
+}
+
+impl PartialEq for GroupedPartitioning {
+    fn eq(&self, other: &Self) -> bool {
+        self.compatible_layout(other) && physical_exprs_equal(&self.keys, &other.keys)
     }
 }
 
@@ -741,6 +838,7 @@ impl Partitioning {
         match self {
             RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
             Range(range) => range.partition_count(),
+            Grouped(grouped) => grouped.partition_count(),
         }
     }
 
@@ -818,6 +916,12 @@ impl Partitioning {
                         allow_subset,
                     )
                 }
+                Partitioning::Grouped(grouped) => Self::key_satisfaction(
+                    grouped.keys(),
+                    required_exprs,
+                    eq_properties,
+                    false,
+                ),
                 Partitioning::RoundRobinBatch(_)
                 | Partitioning::UnknownPartitioning(_) => {
                     PartitioningSatisfaction::NotSatisfied
@@ -858,6 +962,7 @@ impl Partitioning {
             ),
             Self::RoundRobinBatch(_)
             | Self::Hash(_, _)
+            | Self::Grouped(_)
             | Self::UnknownPartitioning(_) => false,
         }
     }
@@ -923,6 +1028,18 @@ impl Partitioning {
                     Partitioning::Range(projected)
                 } else {
                     Partitioning::UnknownPartitioning(range.partition_count())
+                }
+            }
+            Partitioning::Grouped(grouped) => {
+                let keys = input_eq_properties
+                    .project_expressions(grouped.keys(), mapping)
+                    .collect::<Option<Vec<_>>>();
+                match keys {
+                    Some(keys) => Partitioning::Grouped(GroupedPartitioning {
+                        keys,
+                        layout: Arc::clone(&grouped.layout),
+                    }),
+                    None => Partitioning::UnknownPartitioning(grouped.partition_count()),
                 }
             }
             Partitioning::RoundRobinBatch(_) | Partitioning::UnknownPartitioning(_) => {
@@ -994,6 +1111,15 @@ impl Partitioning {
                     protobuf::PhysicalHashRepartition {
                         hash_expr: ctx.encode_children_expressions(exprs)?,
                         partition_count: partition_count(*n)?,
+                    },
+                )
+            }
+            Partitioning::Grouped(grouped) => {
+                protobuf::partitioning::PartitionMethod::Grouped(
+                    protobuf::PhysicalGroupedPartitioning {
+                        keys: ctx.encode_children_expressions(grouped.keys())?,
+                        scheme: grouped.scheme().to_owned(),
+                        group_ids: grouped.group_ids().to_vec(),
                     },
                 )
             }
@@ -1069,6 +1195,18 @@ impl Partitioning {
             protobuf::partitioning::PartitionMethod::Unknown(n) => {
                 Partitioning::UnknownPartitioning(partition_count(*n)?)
             }
+            protobuf::partitioning::PartitionMethod::Grouped(grouped) => {
+                let keys = grouped
+                    .keys
+                    .iter()
+                    .map(|key| ctx.decode(key))
+                    .collect::<Result<Vec<_>>>()?;
+                Partitioning::Grouped(GroupedPartitioning::try_new(
+                    keys,
+                    grouped.scheme.clone(),
+                    grouped.group_ids.clone(),
+                )?)
+            }
             protobuf::partitioning::PartitionMethod::Range(range) => {
                 let sort_exprs = sort_exprs_try_from_proto(&range.sort_expr, ctx)?;
                 let sort_expr_count = sort_exprs.len();
@@ -1139,6 +1277,7 @@ impl PartialEq for Partitioning {
                 true
             }
             (Partitioning::Range(left), Partitioning::Range(right)) => left == right,
+            (Partitioning::Grouped(left), Partitioning::Grouped(right)) => left == right,
             _ => false,
         }
     }
@@ -3065,5 +3204,56 @@ mod partition_count_proto_tests {
             [sort_options],
         );
         assert_eq!(decoded_range.split_points(), split_points);
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod grouped_tests {
+    use super::*;
+    use crate::expressions::Column;
+    use crate::proto_test_util::{StubDecoder, StubEncoder};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr_common::physical_expr::{
+        proto_decode::PhysicalExprDecodeCtx, proto_encode::PhysicalExprEncodeCtx,
+    };
+
+    #[test]
+    fn grouped_wire_identity_is_not_just_partition_count() -> Result<()> {
+        let keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("a", 0))];
+        let grouped = GroupedPartitioning::try_new(
+            keys,
+            "test:integer-modulo:4".into(),
+            vec![vec![0], vec![2]],
+        )?;
+        let encoder = StubEncoder::ok();
+        let encoded = Partitioning::Grouped(grouped.clone())
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))?;
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let decoder = StubDecoder::ok();
+        let decoded = Partitioning::try_from_proto(
+            &encoded,
+            &PhysicalExprDecodeCtx::new(&schema, &decoder),
+        )?
+        .unwrap();
+        let Partitioning::Grouped(decoded) = decoded else {
+            panic!("lost source grouping on the wire")
+        };
+        // The shared expression decoder is a stub; this test owns the scheme
+        // and index mapping, while file-scan integration covers real expressions.
+        assert!(decoded.compatible_layout(&grouped));
+        assert_eq!(decoded.keys().len(), grouped.keys().len());
+        let reordered = GroupedPartitioning::try_new(
+            grouped.keys().to_vec(),
+            grouped.scheme().into(),
+            vec![vec![2], vec![0]],
+        )?;
+        assert!(!grouped.compatible_layout(&reordered));
+        let another_scheme = GroupedPartitioning::try_new(
+            grouped.keys().to_vec(),
+            "test:other-hash:4".into(),
+            grouped.group_ids().to_vec(),
+        )?;
+        assert!(!grouped.compatible_layout(&another_scheme));
+        Ok(())
     }
 }
