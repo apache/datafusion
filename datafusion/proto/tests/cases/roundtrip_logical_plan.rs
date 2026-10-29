@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{
     ArrayRef, FixedSizeListArray, Int32Builder, LargeListViewArray, ListViewArray,
@@ -3850,6 +3837,34 @@ async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
         format!("{}", plan.display_indent_schema()),
         format!("{}", restored.display_indent_schema()),
     );
+    Ok(())
+}
+
+// Regression test for https://github.com/apache/datafusion/issues/25937:
+// the optimizer reduces `LIMIT 0` and `WHERE false` to an `EmptyRelation`, which
+// must keep its schema across a to_proto -> from_proto round trip: on its own,
+// and under a node that still references its columns.
+#[tokio::test]
+async fn roundtrip_empty_relation_schema() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    for query in [
+        "SELECT * FROM empty LIMIT 0",
+        "SELECT max(id), count(*) FROM empty WHERE false",
+    ] {
+        let plan = ctx.sql(query).await?.into_optimized_plan()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+        assert_eq!(plan, restored, "{query}");
+    }
     Ok(())
 }
 

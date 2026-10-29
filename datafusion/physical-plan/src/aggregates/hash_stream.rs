@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! 2-stage hash aggregation stream implementation.
 //!
@@ -34,16 +21,17 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{
-    AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, PartialMarker,
+    AggregateHashTable, ClusteredAggregateTableMetrics, FinalMarker, PartialMarker,
     PartialSkipMarker,
 };
+use super::order::GroupClusteringMode;
 use super::skip_partial::SkipAggregationProbe;
 use super::spill::AggregateSpill;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
-use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
+use crate::{SendableRecordBatchStream, metrics};
 
 /// Hash aggregation is implemented in two stages: partial and final. This
 /// stream implements the partial stage.
@@ -136,7 +124,7 @@ use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 /// 3. Perform a sort-preserving merge of all spill files and feed the merged output
 ///    into an ordered streaming aggregation, which ensures bounded memory usage and
 ///    evaluates the final result.
-///    - [`OrderedFinalAggregateStream`](super::ordered_final_stream::OrderedFinalAggregateStream) is reused for the streaming aggregation.
+///    - [`ClusteredFinalAggregateStream`](super::clustered_final_stream::ClusteredFinalAggregateStream) is reused for the streaming aggregation.
 pub(crate) struct PartialHashAggregateStream {
     /// Output schema: group columns followed by partial aggregate state columns.
     schema: SchemaRef,
@@ -217,7 +205,7 @@ impl PartialHashAggregateStream {
         partition: usize,
     ) -> Result<Self> {
         debug_assert_eq!(agg.mode, super::AggregateMode::Partial);
-        debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_eq!(agg.group_clustering_mode, GroupClusteringMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -548,7 +536,7 @@ impl FinalHashAggregateStream {
             agg.mode,
             super::AggregateMode::Final | super::AggregateMode::FinalPartitioned
         ));
-        debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_eq!(agg.group_clustering_mode, GroupClusteringMode::None);
 
         let input = agg.input.execute(partition, Arc::clone(context))?;
         Self::new_with_input(agg, context, partition, input)
@@ -582,7 +570,7 @@ impl FinalHashAggregateStream {
                 context,
                 partition,
                 batch_size,
-                &InputOrderMode::Linear,
+                &GroupClusteringMode::None,
                 &input_schema,
                 spill_metrics,
             )?))
@@ -631,14 +619,17 @@ impl FinalHashAggregateStream {
                 .await?;
             self.close_input();
 
-            match spill_context.filter(|s| s.has_spills()) {
+            match spill_context {
                 // - If spilled before, perform merging spill runs
-                Some(spill_context) => {
+                Some(spill_context) if spill_context.has_spills() => {
                     self.produce_output_from_spills(hash_table, spill_context, emitter)
                         .await?
                 }
                 // Either all the input fit in memory or hit soft group limit with no spilling
-                None => self.produce_output_from_memory(hash_table, emitter).await?,
+                spill_context => {
+                    self.produce_output_from_memory(hash_table, spill_context, emitter)
+                        .await?
+                }
             }
 
             Ok(())
@@ -758,7 +749,7 @@ impl FinalHashAggregateStream {
 
     /// Produce output from spills
     /// 1. Spill in progress in-memory hash table
-    /// 2. Switch to ordered final stream
+    /// 2. Switch to clustered final stream
     /// 3. passthrough stream output
     async fn produce_output_from_spills(
         &mut self,
@@ -776,7 +767,7 @@ impl FinalHashAggregateStream {
 
         // Construct the ordered input used to merge all spill files.
         let mut output_stream =
-            self.switch_to_ordered_final_stream(hash_table, spill_context)?;
+            self.switch_to_clustered_final_stream(hash_table, spill_context)?;
 
         timer.done();
 
@@ -794,16 +785,16 @@ impl FinalHashAggregateStream {
 
     /// 1. Constructs a globally ordered input stream by applying a sort-preserving
     ///    merge to all spills.
-    /// 2. Constructs a replay stream: an ordered final aggregate stream over the
+    /// 2. Constructs a replay stream: a clustered final aggregate stream over the
     ///    fully ordered input constructed from the spills.
     ///
     /// Returns the replay stream
-    fn switch_to_ordered_final_stream(
+    fn switch_to_clustered_final_stream(
         &mut self,
         hash_table: AggregateHashTable<FinalMarker>,
         spill_context: Box<AggregateSpill>,
     ) -> Result<SendableRecordBatchStream> {
-        let metrics = OrderedAggregateTableMetrics::from_hash_table(&hash_table);
+        let metrics = ClusteredAggregateTableMetrics::from_hash_table(&hash_table);
         drop(hash_table);
         self.reservation.try_resize(0)?;
         spill_context.into_replay_stream(
@@ -818,6 +809,7 @@ impl FinalHashAggregateStream {
     async fn produce_output_from_memory(
         &mut self,
         mut hash_table: AggregateHashTable<FinalMarker>,
+        spill_context: Option<Box<AggregateSpill>>,
         mut emitter: TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
@@ -837,7 +829,33 @@ impl FinalHashAggregateStream {
             // The table hands over its groups as they are materialized and
             // reports a size of 0 once it reaches `Done`, so this releases the
             // reservation before the final batch goes downstream.
-            self.reservation.try_resize(hash_table.memory_size())?;
+            match self.reservation.try_resize(hash_table.memory_size()) {
+                Ok(()) => {}
+                // The materialized output is bigger than the table was. Write
+                // it to disk and stream it back instead of failing the query.
+                Err(e @ DataFusionError::ResourcesExhausted(_)) => {
+                    let spill_context = spill_context.ok_or_else(|| e.context(
+                        "Final hash aggregate cannot spill its output because temporary files are not enabled in the DiskManager",
+                    ))?;
+                    let remaining =
+                        std::iter::from_fn(|| hash_table.next_output_batch().transpose());
+                    let mut output = spill_context.spill_output(
+                        Arc::clone(&self.schema),
+                        std::iter::once(Ok(batch)).chain(remaining),
+                    )?;
+                    drop(hash_table);
+                    self.reservation.try_resize(0)?;
+                    timer.done();
+
+                    while let Some(batch) = output.next().await.transpose()? {
+                        emitter
+                            .emit(batch.record_output(&self.baseline_metrics))
+                            .await;
+                    }
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            }
 
             timer.done();
             emitter
@@ -854,6 +872,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::aggregates::GroupClusteringMode;
     use crate::aggregates::{AggregateMode, PhysicalGroupBy};
     use crate::common::collect;
     use crate::execution_plan::ExecutionPlan;
@@ -1458,7 +1477,10 @@ mod tests {
             input,
             schema,
         )?;
-        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::None
+        );
 
         let pool: Arc<dyn MemoryPool> = match limit {
             Some(limit) => Arc::new(GreedyMemoryPool::new(limit)),

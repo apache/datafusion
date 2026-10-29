@@ -1,20 +1,8 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::logical_plan::MaterializedCtePlan;
 use datafusion_common::{
     DFSchemaRef, Result, assert_or_internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
@@ -355,6 +343,9 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
             }
         },
         LogicalPlan::Extension(_) => Ok(()),
+        // A materialized CTE is not checked, as when it was an extension
+        // node. `PullUpCorrelatedExpr` rewrites its continuation, or stops.
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(_)) => Ok(()),
         plan => check_no_outer_references(plan),
     }
 }
@@ -383,15 +374,10 @@ fn check_aggregation_in_scalar_subquery(
         let correlated_exprs = get_correlated_expressions(inner_plan)?;
         let inner_subquery_cols =
             collect_subquery_cols(&correlated_exprs, agg.input.schema())?;
-        let mut group_columns = agg
-            .group_expr
-            .iter()
-            .map(|group| Ok(group.column_refs().into_iter().cloned().collect::<Vec<_>>()))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten();
+        let mut group_columns =
+            agg.group_expr.iter().flat_map(|group| group.column_refs());
 
-        if !group_columns.all(|group| inner_subquery_cols.contains(&group)) {
+        if !group_columns.all(|group| inner_subquery_cols.contains(group)) {
             // Group BY columns must be a subset of columns in the correlated expressions
             return plan_err!(
                 "A GROUP BY clause in a scalar correlated subquery cannot contain non-correlated columns"

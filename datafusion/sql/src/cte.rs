@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -24,16 +11,41 @@ use datafusion_common::{
     Result, TableReference, not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
 };
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
-use sqlparser::ast::{Ident, Query, SetExpr, SetOperator, With};
+use datafusion_expr::{
+    LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCteId,
+    MaterializedCtePlan, MaterializedCteScan, TableSource,
+};
+use sqlparser::ast::{CteAsMaterialized, Ident, Query, SetExpr, SetOperator, With};
+
+/// A `WITH x AS MATERIALIZED (...)` CTE whose body must wrap the query that
+/// declared it. See [`MaterializedCte`].
+pub(crate) struct PendingMaterializedCte {
+    id: MaterializedCteId,
+    name: String,
+    cte: LogicalPlan,
+}
+
+impl PendingMaterializedCte {
+    /// Wrap `continuation` so that its scans of this CTE read one shared result.
+    pub(crate) fn wrap(self, continuation: LogicalPlan) -> Result<LogicalPlan> {
+        MaterializedCte::try_new(
+            self.id,
+            self.name,
+            Arc::new(self.cte),
+            Arc::new(continuation),
+        )
+        .map(|cte| LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)))
+    }
+}
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn plan_with_clause(
         &self,
         with: With,
         planner_context: &mut PlannerContext,
-    ) -> Result<()> {
+    ) -> Result<Vec<PendingMaterializedCte>> {
         let is_recursive = with.recursive;
+        let mut materialized = vec![];
         // Process CTEs from top to bottom
         for cte in with.cte_tables {
             // A `WITH` block can't use the same name more than once
@@ -55,6 +67,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // Each `WITH` block can change the column names in the last projection
             // (e.g. "WITH table(t1, t2) AS SELECT 1, 2"). Recursive CTEs apply those
             // to the static term in recursive_cte(), so only the relation name here.
+            // A body that refers to an outer query would have to run once
+            // per outer row, which is not supported. Such a CTE is inlined,
+            // as if MATERIALIZED was not given.
+            let is_materialized = cte.materialized
+                == Some(CteAsMaterialized::Materialized)
+                && cte_plan.all_out_ref_exprs().is_empty();
             let final_plan = if is_recursive {
                 LogicalPlanBuilder::from(cte_plan)
                     .alias(TableReference::bare(
@@ -64,10 +82,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } else {
                 self.apply_table_alias(cte_plan, cte.alias)?
             };
+            if is_materialized {
+                // Every reference reads the shared result instead of a copy
+                // of the body. The body is already planned, so a reference
+                // of a recursive CTE to itself stays a work table scan.
+                let id = MaterializedCteId::next();
+                let scan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+                    MaterializedCteScan::new(
+                        id,
+                        cte_name.clone(),
+                        Arc::clone(final_plan.schema()),
+                    ),
+                ));
+                materialized.push(PendingMaterializedCte {
+                    id,
+                    name: cte_name.clone(),
+                    cte: final_plan,
+                });
+                planner_context.insert_cte(cte_name, scan);
+                continue;
+            }
             // Export the CTE to the outer query
             planner_context.insert_cte(cte_name, final_plan);
         }
-        Ok(())
+        Ok(materialized)
     }
 
     fn non_recursive_cte(

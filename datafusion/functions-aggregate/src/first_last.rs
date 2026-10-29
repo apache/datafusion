@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
@@ -824,14 +811,14 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let (val_arr, orderings, is_sets) = self.take_state(emit_to)?;
-        let mut result = Vec::with_capacity(self.orderings.len() + 2);
+        let mut result = Vec::with_capacity(self.ordering_req.len() + 2);
 
         result.push(val_arr);
 
         let ordering_cols = {
             let mut ordering_cols = Vec::with_capacity(self.ordering_req.len());
             for _ in 0..self.ordering_req.len() {
-                ordering_cols.push(Vec::with_capacity(self.orderings.len()));
+                ordering_cols.push(Vec::with_capacity(orderings.len()));
             }
             for row in orderings.into_iter() {
                 debug_assert_eq!(row.len(), self.ordering_req.len());
@@ -977,6 +964,7 @@ impl Accumulator for TrivialFirstValueAccumulator {
                 && !first.is_empty()
             {
                 self.first = ScalarValue::try_from_array(first, 0)?;
+                self.first.compact();
                 self.is_set = true;
             }
         }
@@ -1091,7 +1079,8 @@ impl FirstValueAccumulator {
 
 impl Accumulator for FirstValueAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut result = vec![self.first.clone()];
+        let mut result = Vec::with_capacity(self.orderings.len() + 2);
+        result.push(self.first.clone());
         result.extend(self.orderings.iter().cloned());
         result.push(ScalarValue::from(self.is_set));
         Ok(result)
@@ -1484,8 +1473,9 @@ impl LastValueAccumulator {
 
 impl Accumulator for LastValueAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut result = vec![self.last.clone()];
-        result.extend(self.orderings.clone());
+        let mut result = Vec::with_capacity(self.orderings.len() + 2);
+        result.push(self.last.clone());
+        result.extend(self.orderings.iter().cloned());
         result.push(ScalarValue::from(self.is_set));
         Ok(result)
     }
@@ -2968,6 +2958,28 @@ mod tests {
         acc.update_batch(&vo_batch(&[Some(500)], &[5], &[1]), &[0], None, 1)?;
         let out = acc.evaluate(EmitTo::All)?;
         assert_eq!(int64_values(&out), vec![Some(500)]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_value_merge_compacts_list_state() -> Result<()> {
+        let values: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+                repeat_with(|| Some(vec![Some(1)])).take(10_000),
+            ));
+
+        let mut updated =
+            TrivialFirstValueAccumulator::try_new(values.data_type(), false)?;
+        let mut merged =
+            TrivialFirstValueAccumulator::try_new(values.data_type(), false)?;
+
+        updated.update_batch(&[Arc::clone(&values)])?;
+
+        let flags: ArrayRef = Arc::new(BooleanArray::from(vec![true; values.len()]));
+        merged.merge_batch(&[values, flags])?;
+
+        assert_eq!(merged.evaluate()?, updated.evaluate()?);
+        assert_eq!(merged.size(), updated.size());
         Ok(())
     }
 }
