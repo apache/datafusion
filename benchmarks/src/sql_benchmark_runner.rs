@@ -835,18 +835,15 @@ mod tests {
         config.options_mut().execution.hash_join_buffering_capacity = 4096;
         let ctx = SessionContext::new_with_config(config);
         let directory = default_sql_benchmark_directory();
-        let benchmark = SqlBenchmark::new(
-            &ctx,
-            directory.join("tpch/benchmarks/q01.benchmark"),
-            &directory,
-        )
-        .await
-        .unwrap();
-
         // Exercise the suite's real init SQL without loading the TPC-H dataset.
-        if let Some(queries) = benchmark.queries().get(&QueryDirective::Init) {
-            for query in queries {
-                ctx.sql(query).await.unwrap().collect().await.unwrap();
+        for entry in fs::read_dir(directory.join("tpch/benchmarks")).unwrap() {
+            let benchmark = SqlBenchmark::new(&ctx, entry.unwrap().path(), &directory)
+                .await
+                .unwrap();
+            if let Some(queries) = benchmark.queries().get(&QueryDirective::Init) {
+                for query in queries {
+                    ctx.sql(query).await.unwrap().collect().await.unwrap();
+                }
             }
         }
         let config = ctx.copied_config();
