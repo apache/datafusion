@@ -1590,15 +1590,18 @@ fn rewrite_projection(
             Ok(TreeNodeRecursion::Continue)
         })?;
     }
-    let repeated: HashMap<Column, ()> = cse_references
+    let repeated: HashSet<Column> = cse_references
         .into_iter()
         .filter(|(_, count)| *count > 1)
-        .map(|(column, _)| (column.clone(), ()))
+        .map(|(column, _)| column.clone())
         .collect();
     if !repeated.is_empty() {
-        let (push, keep): (Vec<_>, Vec<_>) = push_predicates
-            .into_iter()
-            .partition(|expr| !contains_column(expr, &repeated));
+        let (push, keep): (Vec<_>, Vec<_>) =
+            push_predicates.into_iter().partition(|expr| {
+                !expr
+                    .exists(|e| Ok(matches!(e, Expr::Column(c) if repeated.contains(c))))
+                    .unwrap()
+            });
         push_predicates = push;
         keep_predicates.extend(keep);
     }

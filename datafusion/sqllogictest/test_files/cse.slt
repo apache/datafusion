@@ -383,20 +383,19 @@ a
 a
 
 # Filter shape: `arrow_field(a)` appears one time in the physical plan.
-# PushDownFilter still inlines it and CommonSubexprEliminate hoists it again
-# in every pass, which renumbers the alias. That is the convergence issue, not
-# fixed here.
+# PushDownFilter keeps the predicates above the CSE projection, so the plan
+# converges and the alias is not renumbered.
 query TT
 EXPLAIN SELECT a FROM cse_keep_in_place WHERE CASE WHEN arrow_field(a) IS NOT NULL THEN arrow_field(a)['nullable'] IS NOT NULL END;
 ----
 logical_plan
 01)Projection: cse_keep_in_place.a
-02)--Filter: CASE WHEN __common_expr_3 IS NOT NULL THEN get_field(__common_expr_3, Utf8("nullable")) IS NOT NULL END
-03)----Projection: arrow_field(cse_keep_in_place.a) AS __common_expr_3, cse_keep_in_place.a
+02)--Filter: CASE WHEN __common_expr_1 IS NOT NULL THEN get_field(__common_expr_1, Utf8("nullable")) IS NOT NULL END
+03)----Projection: arrow_field(cse_keep_in_place.a) AS __common_expr_1, cse_keep_in_place.a
 04)------TableScan: cse_keep_in_place projection=[a]
 physical_plan
-01)FilterExec: CASE WHEN __common_expr_3@0 IS NOT NULL THEN get_field(__common_expr_3@0, nullable) IS NOT NULL END, projection=[a@1]
-02)--ProjectionExec: expr=[arrow_field(a@0) as __common_expr_3, a@0 as a]
+01)FilterExec: CASE WHEN __common_expr_1@0 IS NOT NULL THEN get_field(__common_expr_1@0, nullable) IS NOT NULL END, projection=[a@1]
+02)--ProjectionExec: expr=[arrow_field(a@0) as __common_expr_1, a@0 as a]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
