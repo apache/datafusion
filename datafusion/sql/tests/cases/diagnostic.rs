@@ -859,19 +859,11 @@ fn test_duplicate_cte_name_without_spans() {
 }
 
 #[test]
-fn test_duplicate_table_name() {
+fn test_duplicate_table_name_spans() {
     // The duplicated name in each query is marked `a` at its first occurrence
     // and `b` at the repeated one.
-    // Cases that fail planning because the merged schema holds the same
-    // qualified field twice, as before the warning was added. Every other case
-    // plans successfully.
-    const FAILING: &[&str] = &[
-        "comma_basic_alias",
-        "comma_alias_not_first",
-        "comma_bare_table",
-        "comma_nested_join",
-        "explicit_join_bare_table",
-    ];
+    // Whether each case plans or fails is covered in join.slt.part; here only
+    // the diagnostics are checked.
     let cases: &[(&str, &str, &str)] = &[
         // (label, query, duplicated name)
         (
@@ -1016,27 +1008,16 @@ fn test_duplicate_table_name() {
             );
         };
 
-        // Planning outcome is unchanged by the duplicate; exactly one warning
-        // is always reported.
+        // Exactly one warning is always reported.
         assert_eq!(warnings.len(), 1, "expected 1 warning in {label}");
         check(&warnings[0], DiagnosticKind::Warning);
 
-        match (result, FAILING.contains(&label)) {
-            (Ok(()), false) => {}
-            (Err(err), true) => {
-                // The original error text is kept.
-                assert!(
-                    err.strip_backtrace()
-                        .contains("duplicate qualified field name"),
-                    "unexpected error in {label}: {err}"
-                );
-                check(
-                    err.diagnostic().expect("expected diagnostic"),
-                    DiagnosticKind::Error,
-                );
-            }
-            (Ok(()), true) => panic!("expected {label} to fail planning"),
-            (Err(err), false) => panic!("expected {label} to plan, got: {err}"),
+        // A planning failure carries the same diagnostic as an error.
+        if let Err(err) = result {
+            check(
+                err.diagnostic().expect("expected diagnostic"),
+                DiagnosticKind::Error,
+            );
         }
     }
 }
