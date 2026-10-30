@@ -52,7 +52,7 @@ async fn float_zero_fixed() {
     }
 
     let mut errors = vec![];
-    for (template, setting, result) in check_all(&data::fixed()).await {
+    for (template, setting, result) in check_all(&data::fixed(), |_, _| false).await {
         match (result, KnownFailure::matches(template, &setting)) {
             (Ok(()), None) | (Err(Failure::Mismatch(_)), Some(_)) => {}
             (Err(failure), None) => errors.push(failure.to_string()),
@@ -82,10 +82,9 @@ async fn float_zero_fuzz() {
     let mut errors = vec![];
     for &num_rows in ROUND_SIZES {
         let data = data::random(&mut rng, num_rows);
-        for (template, setting, result) in check_all(&data).await {
-            if let Err(failure) = result
-                && KnownFailure::matches(template, &setting).is_none()
-            {
+        let known = |t: &Template, s: &Setting| KnownFailure::matches(t, s).is_some();
+        for (_, _, result) in check_all(&data, known).await {
+            if let Err(failure) = result {
                 errors.push(format!("seed {seed}, {num_rows} rows: {failure}"));
             }
         }
@@ -122,35 +121,44 @@ impl std::fmt::Display for Failure {
     }
 }
 
-/// Runs every template under every setting on `data`, each pair in its own
-/// task. The queries are tiny, so planning dominates and running them in
-/// parallel is what makes the test fast. Templates without a zero literal
-/// skip the `negative_literals` settings, which would run the same queries
-/// again.
+/// Runs every template under every setting on `data`, except the pairs
+/// `skip` returns true for, and returns the results in a fixed order. Each
+/// pair runs in its own task: the queries are tiny, so planning dominates and
+/// running them in parallel is what makes the test fast. Templates without a
+/// zero literal skip the `negative_literals` settings, which would run the
+/// same queries again.
 async fn check_all(
     data: &data::Dataset,
+    skip: impl Fn(&Template, &Setting) -> bool,
 ) -> Vec<(&'static Template, Setting, Result<(), Failure>)> {
     let mut join_set = JoinSet::new();
+    let mut num_pairs = 0;
     for setting in Setting::all() {
         let ctx = setting.context(data).unwrap();
         for template in TEMPLATES {
-            if setting.negative_literals && !template.sql.contains("{z}") {
+            if (setting.negative_literals && !template.sql.contains("{z}"))
+                || skip(template, &setting)
+            {
                 continue;
             }
             let ctx = ctx.clone();
+            let index = num_pairs;
+            num_pairs += 1;
             join_set.spawn(async move {
                 let result = check(&ctx, template, &setting).await;
-                (template, setting, result)
+                (index, (template, setting, result))
             });
         }
     }
-    let mut results = vec![];
+    let mut results = Vec::with_capacity(num_pairs);
     while let Some(joined) = join_set.join_next().await {
         // Re-raise a panic from `check` with its own message.
         results
             .push(joined.unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic())));
     }
-    results
+    // Tasks finish in any order; report failures in the order they ran.
+    results.sort_unstable_by_key(|(index, _)| *index);
+    results.into_iter().map(|(_, result)| result).collect()
 }
 
 /// Runs `template` on `raw` and `canon` and compares the results with all

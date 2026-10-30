@@ -147,9 +147,10 @@ pub const TEMPLATES: &[Template] = &[
     ),
 ];
 
-/// A (template, setting) pair that is known to be wrong. The fixed-data test
-/// requires every listed pair to still fail, so the PR that fixes one must
-/// remove its entry.
+/// A (template, setting) pair that is known to give a wrong result. The
+/// fixed-data test requires every listed pair to still give a wrong result,
+/// not an error, so the PR that fixes one must remove its entry. The random
+/// test skips listed pairs.
 pub struct KnownFailure {
     pub template: &'static str,
     pub applies: fn(&Setting) -> bool,
