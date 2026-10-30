@@ -376,7 +376,7 @@ fn optimize_projections(
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
-        | LogicalPlan::DescribeTable(_) => {
+        | LogicalPlan::Show(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }

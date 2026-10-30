@@ -122,6 +122,39 @@ pub fn format_type_and_metadata(
     }
 }
 
+/// Merges the field or schema metadata of the inputs of a `UNION`.
+///
+/// Inputs are merged in order: keys present in only some inputs are kept, and
+/// when inputs disagree on a key's value, the last input wins. Inputs without
+/// metadata (e.g. `NULL` literals) contribute nothing.
+///
+/// # Example
+/// ```
+/// # use arrow::datatypes::Metadata;
+/// # use datafusion_common::metadata::merge_metadata_for_union;
+/// let first = Metadata::new().with("id", "1").with("only_first", "a");
+/// let last = Metadata::new().with("id", "2");
+/// assert_eq!(
+///     merge_metadata_for_union([&first, &last]),
+///     Metadata::new().with("id", "2").with("only_first", "a"),
+/// );
+/// ```
+pub fn merge_metadata_for_union<'a>(
+    metadatas: impl IntoIterator<Item = &'a Metadata>,
+) -> Metadata {
+    metadatas
+        .into_iter()
+        .fold(Metadata::new(), |mut merged, metadata| {
+            if merged.is_empty() {
+                // Shares the underlying map rather than copying it
+                metadata.clone()
+            } else {
+                merged.extend(metadata);
+                merged
+            }
+        })
+}
+
 /// Literal metadata
 ///
 /// Stores metadata associated with a literal expressions

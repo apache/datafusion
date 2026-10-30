@@ -633,6 +633,10 @@ pub type SchemaFieldMetadata = Metadata;
 /// # Returns
 ///
 /// A new `SchemaFieldMetadata` containing only the intersected metadata
+#[deprecated(
+    since = "56.0.0",
+    note = "UNION now merges metadata with `datafusion_common::metadata::merge_metadata_for_union`"
+)]
 pub fn intersect_metadata_for_union<'a>(
     metadatas: impl IntoIterator<Item = &'a SchemaFieldMetadata>,
 ) -> SchemaFieldMetadata {
@@ -4670,6 +4674,7 @@ mod test {
         }
     }
 
+    #[expect(deprecated)]
     mod intersect_metadata_tests {
         use super::super::intersect_metadata_for_union;
         use arrow::datatypes::Metadata;
