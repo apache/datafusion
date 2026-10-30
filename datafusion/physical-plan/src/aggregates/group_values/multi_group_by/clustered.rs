@@ -404,8 +404,6 @@ mod tests {
         for key_type in key_types {
             for nullable in [false, true] {
                 for batch_size in [1, 2, 7, 8, 63, 1024] {
-                    // Small batches need only enough rows to cross key runs and null
-                    // bitmap boundaries. The 1024-row batch still uses 1025 rows.
                     let rows = 129.max(batch_size + 1);
                     let first: ArrayRef =
                         Arc::new(Int32Array::from_iter((0..rows).map(|row| {
