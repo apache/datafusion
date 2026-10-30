@@ -361,6 +361,22 @@ mod tests {
         })
     }
 
+    /// Build `GlobalLimitExec(100) → BoundedWindowAggExec(row_number) → SortExec
+    /// → BoundedWindowAggExec(at_least_200) → SortExec → PlaceholderRowExec`.
+    ///
+    /// The outer sort consumes the limit, so the inner window is reached with
+    /// nothing in hand and the inner sort has no limit above it at all. Only this
+    /// PR makes the shape reachable: before it, applying a fetch ended the walk,
+    /// so nothing below the outer sort was ever visited.
+    fn build_nested_absolute_plan() -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
+        let udwf = Arc::new(WindowUDF::from(AtLeast200(RowNumber::new())));
+        let inner = sort_then_window(&udwf, "at_least_200", input)?;
+        let outer = sort_then_window(&row_number_udwf(), "row_number", inner)?;
+
+        Ok(Arc::new(GlobalLimitExec::new(outer, 0, Some(100))))
+    }
+
     /// With no limit in the plan there is nothing to raise, so the sort must stay a
     /// full sort. Turning it into a TopK here would drop rows the query asked for.
     #[test]
@@ -385,6 +401,23 @@ mod tests {
           BoundedWindowAggExec: wdw=[at_least_200: Field { "at_least_200": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
             SortExec: TopK(fetch=200), expr=[a@0 ASC], preserve_partitioning=[true]
               PlaceholderRowExec
+        "#);
+    }
+
+    /// The nested shape from review: the limit is spent on the outer sort, so the
+    /// inner window's `Absolute(200)` has nothing to raise. It must not become a
+    /// fetch on the inner sort, which no `LIMIT` sits above.
+    #[test]
+    fn absolute_limit_effect_does_not_invent_a_limit_below_an_applied_sort() {
+        let plan = build_nested_absolute_plan().unwrap();
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        GlobalLimitExec: skip=0, fetch=100
+          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true], sort_prefix=[a@0 ASC]
+              BoundedWindowAggExec: wdw=[at_least_200: Field { "at_least_200": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                  PlaceholderRowExec
         "#);
     }
 }
