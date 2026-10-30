@@ -189,6 +189,58 @@ bar 1 100
 baz 1 200
 foo 1 100
 
+query I
+copy (values(1))
+to 'test_files/scratch/listing_table_partitions/partition_filename/year=2024/a=b.parquet';
+----
+1
+
+statement count 0
+create external table partition_filename (column1 bigint, year varchar)
+stored as parquet
+partitioned by (year)
+location 'test_files/scratch/listing_table_partitions/partition_filename/';
+
+query IT
+select * from partition_filename;
+----
+1 2024
+
+query I
+copy (values(2))
+to 'test_files/scratch/listing_table_partitions/partition_filename/year=2025.parquet';
+----
+1
+
+query error File '.*partition_filename/year=2025\.parquet'.*does not match partition columns \["year"\]: it is not under a directory for every partition column
+select * from partition_filename;
+
+query I
+copy (values(3))
+to 'test_files/scratch/listing_table_partitions/nested_partition_filename/year=2024/month=01/a=b.parquet';
+----
+1
+
+statement count 0
+create external table nested_partition_filename (column1 bigint, year varchar, month varchar)
+stored as parquet
+partitioned by (year, month)
+location 'test_files/scratch/listing_table_partitions/nested_partition_filename/';
+
+query ITT
+select * from nested_partition_filename;
+----
+3 2024 01
+
+query I
+copy (values(4))
+to 'test_files/scratch/listing_table_partitions/nested_partition_filename/year=2024/month=02.parquet';
+----
+1
+
+query error File '.*nested_partition_filename/year=2024/month=02\.parquet'.*does not match partition columns \["year", "month"\]: it is not under a directory for every partition column
+select * from nested_partition_filename;
+
 statement count 0
 set datafusion.execution.listing_table_strict_partitions = false;
 

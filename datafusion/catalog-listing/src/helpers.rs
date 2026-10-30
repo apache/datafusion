@@ -373,11 +373,7 @@ fn try_into_partitioned_file(
     };
 
     if strict {
-        check_no_undeclared_partitions(
-            table_path,
-            &object_meta.location,
-            partition_cols,
-        )?;
+        check_partition_directories(table_path, &object_meta.location, partition_cols)?;
     }
 
     let partition_values = parsed
@@ -433,7 +429,7 @@ pub async fn pruned_partition_list<'a>(
         Ok(objects
             .try_filter_map(move |object_meta| {
                 let checked = if strict {
-                    check_no_undeclared_partitions(
+                    check_partition_directories(
                         table_path,
                         &object_meta.location,
                         partition_cols,
@@ -474,9 +470,7 @@ pub async fn pruned_partition_list<'a>(
     }
 }
 
-/// Returns an error if `file_path` has a `key=value` directory below the declared
-/// partition directories, i.e. it is partitioned by more columns than declared.
-fn check_no_undeclared_partitions(
+fn check_partition_directories(
     table_path: &ListingTableUrl,
     file_path: &Path,
     partition_cols: &[(String, DataType)],
@@ -491,6 +485,14 @@ fn check_no_undeclared_partitions(
     };
     let mut dirs: Vec<&str> = segments.collect();
     dirs.pop();
+    if dirs.len() < partition_cols.len() {
+        return strict_partitions_err(
+            table_path,
+            file_path,
+            partition_cols,
+            "it is not under a directory for every partition column",
+        );
+    }
     match dirs
         .into_iter()
         .skip(partition_cols.len())
@@ -968,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_no_undeclared_partitions() {
+    fn test_check_partition_directories() {
         let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
         let year = [("year".to_string(), DataType::Utf8)];
         for (location, partition_cols, ok) in [
@@ -988,7 +990,7 @@ mod tests {
             ),
             ("bucket/mytable/year=2024/a=b.parquet", &year[..], true),
         ] {
-            let result = check_no_undeclared_partitions(
+            let result = check_partition_directories(
                 &table_path,
                 &Path::from(location),
                 partition_cols,
