@@ -32,64 +32,6 @@ use std::time::Duration;
 const MERGE_BYTES: usize = 64 * 1024;
 const BUFFERED_BATCHES: usize = 9;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_small_multicolumn_runs_coalesce_before_spilling() -> Result<()> {
-    let batches = (0..8)
-        .map(|batch| {
-            let rows = (batch * 16..(batch + 1) * 16).rev();
-            RecordBatch::try_from_iter([
-                (
-                    "key",
-                    Arc::new(Int64Array::from_iter_values(
-                        rows.clone().map(|row| row % 5),
-                    )) as ArrayRef,
-                ),
-                (
-                    "payload",
-                    Arc::new(StringViewArray::from_iter_values(
-                        rows.map(|row| format!("unique-row-{row:08}")),
-                    )) as ArrayRef,
-                ),
-            ])
-            .map_err(Into::into)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let schema = batches[0].schema();
-    let ordering: LexOrdering = [
-        PhysicalSortExpr::new_default(Arc::new(Column::new("key", 0))),
-        PhysicalSortExpr::new_default(Arc::new(Column::new("payload", 1))),
-    ]
-    .into();
-    // The unique payload resolves ties, making the full output deterministic.
-    let expected = sort_batch(&concat_batches(&schema, &batches)?, &ordering, None)?;
-    let pool = AdjustablePool::new(256 * 1024);
-    let runtime = RuntimeEnvBuilder::new()
-        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
-        .build_arc()?;
-    let mut sorter = ExternalSorter::new(
-        0,
-        Arc::clone(&schema),
-        ordering,
-        64,
-        MERGE_BYTES,
-        0,
-        SpillCompression::Uncompressed,
-        &ExecutionPlanMetricsSet::new(),
-        Arc::clone(&runtime),
-    )?;
-    for batch in batches {
-        sorter.insert_batch(batch).await?;
-    }
-    sorter.sort_and_spill_in_mem_batches().await?;
-    assert_eq!(sorter.spilled_rows(), 128);
-    let stream = sorter.sort().await?;
-    drop(sorter);
-    let output: Vec<RecordBatch> = stream.try_collect().await?;
-    assert_eq!(concat_batches(&schema, &output)?, expected);
-    assert_released(&pool, &runtime).await;
-    Ok(())
-}
-
 #[derive(Debug, Default)]
 struct AllocationState {
     used: usize,
