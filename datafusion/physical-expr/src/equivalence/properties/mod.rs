@@ -233,7 +233,9 @@ impl EquivalenceProperties {
             return None;
         }
         let dependencies = Dependencies::new(std::iter::once(sort_expr.clone()));
-        let properties = get_expr_properties(&r_expr, &dependencies, schema).ok()?;
+        let properties =
+            get_expr_properties(&r_expr, &dependencies, schema, &ColumnRanges::default())
+                .ok()?;
         (properties.strictly_order_preserving
             && properties.sort_properties == SortProperties::Ordered(sort_expr.options))
         .then(|| PhysicalSortExpr::new(r_expr, sort_expr.options))
@@ -1112,11 +1114,16 @@ impl EquivalenceProperties {
         // Get dependency map for existing orderings:
         oeq_class = Self::substitute_oeq_class(&self.schema, &mapping, oeq_class);
         let dependency_map = self.construct_dependency_map(oeq_class, &mapping);
+        // Every source is examined, even one that refers to no ordered column (it then gets an
+        // empty set of dependencies), so a wide column referenced by many sources would have its
+        // unbounded range built once per reference.
+        let column_ranges = ColumnRanges::default();
         let orderings = mapping.iter().flat_map(|(source, targets)| {
             referred_dependencies(&dependency_map, source)
                 .into_iter()
                 .filter_map(|deps| {
-                    let ep = get_expr_properties(source, &deps, &self.schema);
+                    let ep =
+                        get_expr_properties(source, &deps, &self.schema, &column_ranges);
                     let sort_properties = ep.map(|prop| prop.sort_properties);
                     if let Ok(SortProperties::Ordered(options)) = sort_properties {
                         Some((options, deps))
@@ -1416,7 +1423,12 @@ impl EquivalenceProperties {
             options,
         )));
         matches!(
-            get_expr_properties(transformed_expr, &dependencies, &self.schema)
+            get_expr_properties(
+                transformed_expr,
+                &dependencies,
+                &self.schema,
+                &ColumnRanges::default(),
+            )
                 .map(|properties| properties.sort_properties),
             Ok(SortProperties::Ordered(actual)) if actual == options
         )
@@ -1599,6 +1611,34 @@ fn expr_refers(
             .any(|child| expr_refers(child, referred_expr))
 }
 
+/// Unbounded ranges of the columns of one schema, built on first use.
+///
+/// Building the unbounded range of a nested type materializes a null array of that type, so
+/// a wide struct referenced by many projection sources is costly to rebuild per reference.
+/// Only `Column`s are cached, by index: the schema is fixed for the cache's lifetime. Other
+/// expressions and failures are computed as before and never cached. Cloning a cached range
+/// clones its two endpoints, which for nested types share their arrays.
+#[derive(Default)]
+struct ColumnRanges(std::cell::RefCell<HashMap<usize, Interval>>);
+
+impl ColumnRanges {
+    fn unbounded(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+    ) -> Result<Interval> {
+        let Some(column) = expr.downcast_ref::<Column>() else {
+            return Interval::make_unbounded(&expr.data_type(schema)?);
+        };
+        if let Some(range) = self.0.borrow().get(&column.index()) {
+            return Ok(range.clone());
+        }
+        let range = Interval::make_unbounded(&expr.data_type(schema)?)?;
+        self.0.borrow_mut().insert(column.index(), range.clone());
+        Ok(range)
+    }
+}
+
 /// This function examines the given expression and its properties to determine
 /// the ordering properties of the expression. The range knowledge is not utilized
 /// yet in the scope of this function.
@@ -1618,6 +1658,7 @@ fn get_expr_properties(
     expr: &Arc<dyn PhysicalExpr>,
     dependencies: &Dependencies,
     schema: &SchemaRef,
+    column_ranges: &ColumnRanges,
 ) -> Result<ExprProperties> {
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
         // If exact match is found, return its ordering. This is a base case
@@ -1630,14 +1671,14 @@ fn get_expr_properties(
         // sort key, so their strictness only has to be relative to it.
         Ok(ExprProperties {
             sort_properties: SortProperties::Ordered(column_order.options),
-            range: Interval::make_unbounded(&expr.data_type(schema)?)?,
+            range: column_ranges.unbounded(expr, schema)?,
             preserves_lex_ordering: false,
             strictly_order_preserving: true,
         })
     } else if expr.downcast_ref::<Column>().is_some() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Unordered,
-            range: Interval::make_unbounded(&expr.data_type(schema)?)?,
+            range: column_ranges.unbounded(expr, schema)?,
             preserves_lex_ordering: false,
             // A base case of the recursion: a column is the identity mapping
             // of itself, which is trivially one-to-one.
@@ -1656,7 +1697,7 @@ fn get_expr_properties(
         let child_states = expr
             .children()
             .iter()
-            .map(|child| get_expr_properties(child, dependencies, schema))
+            .map(|child| get_expr_properties(child, dependencies, schema, column_ranges))
             .collect::<Result<Vec<_>>>()?;
         // Calculate expression ordering using ordering of its children.
         expr.get_properties(&child_states)
