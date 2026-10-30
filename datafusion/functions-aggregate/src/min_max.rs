@@ -9,7 +9,7 @@ mod min_max_bytes;
 mod min_max_struct;
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, downcast_primitive};
-use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
+use arrow::datatypes::{DataType, FieldRef, Float16Type, Float32Type, Float64Type};
 use datafusion_common::float_semantics::{float_gt, float_lt};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, exec_err, internal_err};
@@ -17,6 +17,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_o
 use datafusion_physical_expr::expressions;
 use std::cmp::Ordering;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
@@ -24,7 +25,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::DistinctHandling;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, SetMonotonicity, Signature, Volatility,
-    function::AccumulatorArgs,
+    function::AccumulatorArgs, udaf_default_return_field,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
@@ -207,6 +208,18 @@ impl FromColumnStatistics for Max {
     }
 }
 
+/// Returns the field of the result of `min` or `max`. The result has the type of the argument,
+/// so it keeps the metadata of the argument field, such as an extension type.
+fn min_max_return_field(
+    func: &impl AggregateUDFImpl,
+    arg_fields: &[FieldRef],
+) -> Result<FieldRef> {
+    let field = udaf_default_return_field(func, arg_fields)?;
+    Ok(Arc::new(
+        Arc::unwrap_or_clone(field).with_metadata(arg_fields[0].metadata().clone()),
+    ))
+}
+
 impl AggregateUDFImpl for Max {
     fn name(&self) -> &str {
         "max"
@@ -218,6 +231,10 @@ impl AggregateUDFImpl for Max {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].to_owned())
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        min_max_return_field(self, arg_fields)
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -446,6 +463,10 @@ impl AggregateUDFImpl for Min {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].to_owned())
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        min_max_return_field(self, arg_fields)
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

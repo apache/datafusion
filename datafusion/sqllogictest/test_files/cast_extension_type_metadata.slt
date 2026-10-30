@@ -84,3 +84,23 @@ FROM (
 );
 ----
 00010203040506070809000102030506 NULL
+
+# max and min keep the extension type of their argument. The NULL row makes the column
+# nullable, see https://github.com/apache/datafusion/issues/26469 for a non-null column.
+query ?T?T
+SELECT
+    max(uuid_val),
+    arrow_metadata(max(uuid_val), 'ARROW:extension:name'),
+    min(uuid_val),
+    arrow_metadata(min(uuid_val), 'ARROW:extension:name')
+FROM (
+    SELECT CAST(arrow_cast(raw, 'FixedSizeBinary(16)') AS UUID) AS uuid_val
+    FROM (
+        VALUES
+            (X'00010203040506070809000102030506'),
+            (X'00010203040506070809000102030507'),
+            (NULL)
+    ) AS uuids(raw)
+);
+----
+00010203040506070809000102030507 arrow.uuid 00010203040506070809000102030506 arrow.uuid

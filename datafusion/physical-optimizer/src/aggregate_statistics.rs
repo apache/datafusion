@@ -5,18 +5,20 @@
 //! Utilizing exact statistics from sources to avoid scanning data
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateInputMode, AggregateMode,
 };
+use datafusion_physical_plan::expressions::Literal;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::udaf::{
     AggregateFunctionExpr, StatisticsArgs as PlanStatisticsArgs,
 };
-use datafusion_physical_plan::{ExecutionPlan, expressions};
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
@@ -67,8 +69,14 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 if let Some((optimizable_statistic, name)) =
                     take_optimizable_value_from_statistics(&statistics_args, expr)
                 {
+                    // Keep the metadata of the aggregate field, such as an extension type
+                    let metadata = Some(FieldMetadata::from(field.as_ref()))
+                        .filter(|metadata| !metadata.is_empty());
                     projections.push(ProjectionExpr {
-                        expr: expressions::lit(optimizable_statistic),
+                        expr: Arc::new(Literal::new_with_metadata(
+                            optimizable_statistic,
+                            metadata,
+                        )),
                         alias: name,
                     });
                 } else {

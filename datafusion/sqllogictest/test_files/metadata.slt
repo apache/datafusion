@@ -346,6 +346,30 @@ from table_with_metadata;
 ----
 3 the id field
 
+# Regression test: max and min should preserve metadata
+query ITIT
+select
+  max(id), arrow_metadata(max(id), 'metadata_key'),
+  min(id), arrow_metadata(min(id), 'metadata_key')
+from table_with_metadata;
+----
+3 the id field 1 the id field
+
+# Regression test: max and min with GROUP BY (groups accumulator) should preserve metadata
+query ITTT
+select
+  id,
+  arrow_metadata(max(name), 'metadata_key'),
+  arrow_metadata(min(name), 'metadata_key'),
+  max(name)
+from table_with_metadata
+group by id
+order by id asc nulls last;
+----
+1 the name field the name field NULL
+3 the name field the name field baz
+NULL the name field the name field bar
+
 # Regression test: DISTINCT ON should preserve metadata (uses first_value internally)
 query ITTT
 select distinct on (id) id, arrow_metadata(id, 'metadata_key'), name, arrow_metadata(name, 'metadata_key')
@@ -498,6 +522,15 @@ from table_with_metadata limit 1;
 ----
 1 the id field
 
+# Test MAX and MIN window functions preserve metadata
+query IT
+select
+  max(id) over (order by id asc nulls last) as mx,
+  arrow_metadata(min(id) over (order by id asc nulls last), 'metadata_key') as meta
+from table_with_metadata limit 1;
+----
+1 the id field
+
 # Test LAST_VALUE window function preserves metadata
 query IT
 select
@@ -547,6 +580,41 @@ query ?
 select arrow_metadata((select id from table_with_metadata where id = 1));
 ----
 {metadata_key: the id field}
+
+# Regression test: max and min answered from Parquet statistics should preserve metadata
+statement ok
+COPY (SELECT id FROM table_with_metadata) TO 'test_files/scratch/metadata/min_max.parquet';
+
+statement ok
+SET datafusion.execution.parquet.skip_metadata = false;
+
+statement ok
+CREATE EXTERNAL TABLE min_max_with_metadata STORED AS PARQUET
+LOCATION 'test_files/scratch/metadata/min_max.parquet';
+
+query ITIT
+SELECT
+  max(id), arrow_metadata(max(id), 'metadata_key'),
+  min(id), arrow_metadata(min(id), 'metadata_key')
+FROM min_max_with_metadata;
+----
+3 the id field 1 the id field
+
+query TT
+EXPLAIN SELECT max(id), min(id) FROM min_max_with_metadata;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[max(min_max_with_metadata.id), min(min_max_with_metadata.id)]]
+02)--TableScan: min_max_with_metadata projection=[id]
+physical_plan
+01)ProjectionExec: expr=[3 as max(min_max_with_metadata.id), 1 as min(min_max_with_metadata.id)]
+02)--PlaceholderRowExec
+
+statement ok
+DROP TABLE min_max_with_metadata;
+
+statement ok
+RESET datafusion.execution.parquet.skip_metadata;
 
 statement ok
 drop table table_with_metadata;
