@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{DataFusionError, Result};
@@ -76,6 +76,19 @@ pub(super) fn aggregate_over_sorted_input(
     batches: Vec<Vec<Vec<i64>>>,
     udaf: Arc<AggregateUDF>,
 ) -> Result<AggregateExec> {
+    aggregate_expr_over_sorted_input(mode, keys, batches, udaf, |builder, _| Ok(builder))
+}
+
+/// Like [`aggregate_over_sorted_input`], but `configure` can change the
+/// aggregate expression, given the input schema. For example, it can add
+/// `ORDER BY v`.
+pub(super) fn aggregate_expr_over_sorted_input(
+    mode: AggregateMode,
+    keys: &[&str],
+    batches: Vec<Vec<Vec<i64>>>,
+    udaf: Arc<AggregateUDF>,
+    configure: impl FnOnce(AggregateExprBuilder, &SchemaRef) -> Result<AggregateExprBuilder>,
+) -> Result<AggregateExec> {
     let fields = keys
         .iter()
         .chain(&["v"])
@@ -88,10 +101,13 @@ pub(super) fn aggregate_over_sorted_input(
             .collect::<Result<_>>()?,
     );
     let aggregate_exprs = vec![Arc::new(
-        AggregateExprBuilder::new(Arc::clone(&udaf), vec![col("v", &schema)?])
-            .schema(Arc::clone(&schema))
-            .alias(udaf.name())
-            .build()?,
+        configure(
+            AggregateExprBuilder::new(Arc::clone(&udaf), vec![col("v", &schema)?]),
+            &schema,
+        )?
+        .schema(Arc::clone(&schema))
+        .alias(udaf.name())
+        .build()?,
     )];
 
     let (input_schema, group_by) = if mode == AggregateMode::Final {

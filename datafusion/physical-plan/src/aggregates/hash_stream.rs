@@ -843,6 +843,7 @@ mod tests {
 
     use super::*;
     use crate::aggregates::GroupClusteringMode;
+    use crate::aggregates::clustered_test_util::collect_under_limit;
     use crate::aggregates::{AggregateMode, PhysicalGroupBy};
     use crate::common::collect;
     use crate::execution_plan::ExecutionPlan;
@@ -1691,21 +1692,17 @@ mod tests {
             aggregate.group_clustering_mode(),
             &GroupClusteringMode::None
         );
-        let context =
-            Arc::new(
-                TaskContext::default()
-                    .with_session_config(SessionConfig::new().set_bool(
-                        "datafusion.execution.enable_migration_aggregate",
-                        true,
-                    ))
-                    .with_runtime(
-                        RuntimeEnvBuilder::new()
-                            .with_memory_pool(Arc::new(GreedyMemoryPool::new(64 * 1024)))
-                            .build_arc()?,
-                    ),
-            );
-        let output = collect(aggregate.execute(0, context)?).await?;
+        let output = collect_under_limit(&aggregate, 64 * 1024).await?;
         assert_eq!(output.iter().map(|b| b.num_rows()).sum::<usize>(), 24576);
+        assert!(
+            aggregate
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize()
+                > 0
+        );
         Ok(())
     }
 }

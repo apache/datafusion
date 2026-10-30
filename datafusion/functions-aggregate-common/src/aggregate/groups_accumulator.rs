@@ -660,6 +660,15 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
     fn shrink_to_fit(&mut self) {
         self.free_scratch();
+        // Each group keeps the capacity of its row indices after a batch, so
+        // a group that had many rows in the last batch still holds them
+        let mut freed = 0;
+        for state in &mut self.states {
+            if state.indices.is_empty() {
+                freed += std::mem::take(&mut state.indices).allocated_size();
+            }
+        }
+        self.free_allocation(freed);
     }
 
     fn convert_to_state(
