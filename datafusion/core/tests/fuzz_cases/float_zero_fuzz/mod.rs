@@ -23,6 +23,7 @@ use arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::prelude::SessionContext;
 use datafusion_common::ScalarValue;
 use datafusion_common::float_semantics::normalize_floats;
+use datafusion_common_runtime::JoinSet;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -121,22 +122,33 @@ impl std::fmt::Display for Failure {
     }
 }
 
-/// Runs every template under every setting on `data`. Templates without a
-/// zero literal skip the `negative_literals` settings, which would run the
-/// same queries again.
+/// Runs every template under every setting on `data`, each pair in its own
+/// task. The queries are tiny, so planning dominates and running them in
+/// parallel is what makes the test fast. Templates without a zero literal
+/// skip the `negative_literals` settings, which would run the same queries
+/// again.
 async fn check_all(
     data: &data::Dataset,
 ) -> Vec<(&'static Template, Setting, Result<(), Failure>)> {
-    let mut results = vec![];
+    let mut join_set = JoinSet::new();
     for setting in Setting::all() {
         let ctx = setting.context(data).unwrap();
         for template in TEMPLATES {
             if setting.negative_literals && !template.sql.contains("{z}") {
                 continue;
             }
-            let result = check(&ctx, template, &setting).await;
-            results.push((template, setting, result));
+            let ctx = ctx.clone();
+            join_set.spawn(async move {
+                let result = check(&ctx, template, &setting).await;
+                (template, setting, result)
+            });
         }
+    }
+    let mut results = vec![];
+    while let Some(joined) = join_set.join_next().await {
+        // Re-raise a panic from `check` with its own message.
+        results
+            .push(joined.unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic())));
     }
     results
 }
