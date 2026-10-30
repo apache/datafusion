@@ -91,28 +91,35 @@ git push -u apache branch-56 # push branch to apache remote
 ### 1b. Bump Version on main
 
 After creating a new major release branch, open a "version bump PR"
-against `main` that bumps the version to the next development version. 
+against `main` that bumps the version to the next development version.
 
 For example, after creating `branch-56` from `main`, bump `main` to `57.0.0-dev`:
 
+```shell
+python3 dev/update_datafusion_versions.py 57.0.0-dev
+cargo update --workspace       # updates Cargo.lock
+./dev/update_config_docs.sh    # regenerates docs/source/user-guide/configs.md
+```
+
+Development versions are never published to crates.io, so the script leaves
+the user facing examples (such as `docs/source/download.md`) pointing at the
+latest released version.
+
 ### 2. Prepare PR to Update the Release Version
 
-On the release branch, update the DataFusion version in the root `Cargo.toml`,
-in `Cargo.lock` and in the user documentation. At the time of this writing the
-documentation files are
-
-- `docs/source/download.md`
-- `docs/source/user-guide/configs.md`
-- `docs/source/user-guide/crate-configuration.md`
-- `docs/source/user-guide/example-usage.md`
-
-For example, to update the version from `56.0.0-dev` to `56.0.0` for a new
-major release:
+On the release branch, update the DataFusion version using the following
+Python script:
 
 ```shell
-# version and lockfile
-sed -i '' 's/"56\.0\.0-dev"/"56.0.0"/g' Cargo.toml
-sed -i '' 's/55\.1\.0/56.0.0/' docs/source/download.md docs/source/user-guide/{crate-configuration,example-usage}.md
+# replace NEW_VERSION before executing (e.g., 56.0.0)
+python3 dev/update_datafusion_versions.py NEW_VERSION
+```
+
+This updates the DataFusion version across all files, including documentation.
+The only extra steps required are to update the `Cargo.lock` file and
+regenerate the configuration docs, using the following commands:
+
+```shell
 cargo update --workspace
 ./dev/update_config_docs.sh    # regenerates docs/source/user-guide/configs.md
 ```

@@ -2709,6 +2709,7 @@ name = "datafusion-sql"
 version = "56.0.0-dev"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "bigdecimal",
  "chrono",
  "ctor",
