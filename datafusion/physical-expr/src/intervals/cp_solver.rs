@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Constraint propagator/solver for custom [`PhysicalExpr`] graphs.
 //!
@@ -153,6 +140,7 @@ use crate::expressions::{BinaryExpr, Literal};
 use crate::utils::{ExprTreeNode, build_dag};
 
 use arrow::datatypes::{DataType, Schema};
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_expr::Operator;
 use datafusion_expr::interval_arithmetic::{Interval, apply_operator, satisfy_greater};
@@ -299,12 +287,11 @@ pub fn propagate_arithmetic(
 /// Compare two scalars the way runtime `Eq` does, instead of with
 /// `ScalarValue`'s bit-wise equality. `ScalarValue::PartialEq` is bit-wise for
 /// floats (`to_bits`), under which `-0.0 != +0.0`; runtime `Eq` normalizes
-/// them via `normalize_float_zero_scalar` (see
+/// them via `normalize_float_scalar` (see
 /// `physical-expr-common/src/datum.rs`).
 fn singleton_values_equal(left: &ScalarValue, right: &ScalarValue) -> bool {
-    use datafusion_common::utils::normalize_float_zero_scalar;
-    normalize_float_zero_scalar(left.clone())
-        == normalize_float_zero_scalar(right.clone())
+    use datafusion_common::float_semantics::normalize_float_scalar;
+    normalize_float_scalar(left.clone()) == normalize_float_scalar(right.clone())
 }
 
 /// This function refines intervals `left_child` and `right_child` by applying
@@ -430,14 +417,26 @@ impl ExprIntervalGraph {
         self.graph.node_count()
     }
 
-    /// Estimate size of bytes including `Self`.
+    /// Returns retained bytes, including `Self`, backing capacity and interval
+    /// heaps, but excluding shared [`PhysicalExpr`] pointees.
     pub fn size(&self) -> usize {
-        let node_memory_usage = self.graph.node_count()
-            * (size_of::<ExprIntervalGraphNode>() + size_of::<NodeIndex>());
-        let edge_memory_usage =
-            self.graph.edge_count() * (size_of::<usize>() + size_of::<NodeIndex>() * 2);
+        // StableGraph stores a Graph<Option<N>, Option<E>>. Its vacant slots
+        // and spare capacity remain allocated after nodes/edges are removed.
+        let (nodes, edges) = self.graph.capacity();
+        let node_memory_usage =
+            nodes * size_of::<petgraph::graph::Node<Option<ExprIntervalGraphNode>>>();
+        let edge_memory_usage = edges * size_of::<petgraph::graph::Edge<Option<usize>>>();
+        let mut ctx = DFHeapSizeCtx::default();
+        let interval_memory_usage: usize = self
+            .graph
+            .node_weights()
+            .map(|node| {
+                node.interval.lower().heap_size(&mut ctx)
+                    + node.interval.upper().heap_size(&mut ctx)
+            })
+            .sum();
 
-        size_of_val(self) + node_memory_usage + edge_memory_usage
+        size_of_val(self) + node_memory_usage + edge_memory_usage + interval_memory_usage
     }
 
     // Sometimes, we do not want to calculate and/or propagate intervals all
@@ -816,6 +815,110 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
     use rstest::*;
+
+    fn expected_graph_backing_size(graph: &ExprIntervalGraph) -> usize {
+        let (nodes, edges) = graph.graph.capacity();
+        size_of_val(graph)
+            + nodes * size_of::<petgraph::graph::Node<Option<ExprIntervalGraphNode>>>()
+            + edges * size_of::<petgraph::graph::Edge<Option<usize>>>()
+    }
+
+    fn graph_with_capacity(nodes: usize, edges: usize) -> ExprIntervalGraph {
+        ExprIntervalGraph {
+            graph: StableGraph::with_capacity(nodes, edges),
+            root: NodeIndex::new(0),
+        }
+    }
+
+    fn add_interval_node(
+        graph: &mut ExprIntervalGraph,
+        expr: Arc<dyn PhysicalExpr>,
+        lower: ScalarValue,
+        upper: ScalarValue,
+    ) -> Result<NodeIndex> {
+        let node = ExprIntervalGraphNode::new_with_interval(
+            expr,
+            Interval::try_new(lower, upper)?,
+        );
+        Ok(graph.graph.add_node(node))
+    }
+
+    #[test]
+    fn graph_size_counts_retained_capacity() -> Result<()> {
+        let mut graph = graph_with_capacity(0, 0);
+        assert_eq!(graph.size(), size_of_val(&graph));
+
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let node = ExprIntervalGraphNode::new_unbounded(expr, &DataType::Int32)?;
+        for _ in 0..17 {
+            let index = graph.graph.add_node(node.clone());
+            if index.index() > 0 {
+                graph.graph.add_edge(graph.root, index, 0);
+            }
+        }
+        assert_eq!(graph.size(), expected_graph_backing_size(&graph));
+
+        let grown_size = graph.size();
+        graph.graph.remove_node(NodeIndex::new(1));
+        assert_eq!(graph.size(), grown_size);
+        graph.graph.clear();
+        assert_eq!(graph.size(), grown_size);
+        Ok(())
+    }
+
+    #[test]
+    fn graph_size_counts_interval_heaps_not_expression_pointees() -> Result<()> {
+        let mut lower = String::with_capacity(73);
+        lower.push('a');
+        let mut upper = String::with_capacity(91);
+        upper.push('z');
+        let string_bytes = lower.capacity() + upper.capacity();
+        // A large expression allocation is shared, not owned by the graph.
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(Literal::new(ScalarValue::Utf8(Some("x".repeat(4096)))));
+        let mut graph = graph_with_capacity(8, 8);
+        add_interval_node(
+            &mut graph,
+            Arc::clone(&expr),
+            ScalarValue::Utf8(Some(lower)),
+            ScalarValue::Utf8(Some(upper)),
+        )?;
+        assert_eq!(
+            graph.size(),
+            expected_graph_backing_size(&graph) + string_bytes
+        );
+
+        // All timestamp endpoints share one timezone allocation, including
+        // across nodes. Charge the Arc allocation only once.
+        let timezone: Arc<str> = Arc::from("UTC");
+        let timezone_bytes = 2 * size_of::<usize>() + timezone.len();
+        let mut timezone_nodes = Vec::with_capacity(2);
+        for _ in 0..2 {
+            timezone_nodes.push(add_interval_node(
+                &mut graph,
+                Arc::clone(&expr),
+                ScalarValue::TimestampNanosecond(Some(0), Some(Arc::clone(&timezone))),
+                ScalarValue::TimestampNanosecond(Some(1), Some(Arc::clone(&timezone))),
+            )?);
+        }
+        assert_eq!(
+            graph.size(),
+            expected_graph_backing_size(&graph) + string_bytes + timezone_bytes
+        );
+        graph.graph.remove_node(graph.root);
+        assert_eq!(
+            graph.size(),
+            expected_graph_backing_size(&graph) + timezone_bytes
+        );
+        graph.graph.remove_node(timezone_nodes[0]);
+        assert_eq!(
+            graph.size(),
+            expected_graph_backing_size(&graph) + timezone_bytes
+        );
+        graph.graph.remove_node(timezone_nodes[1]);
+        assert_eq!(graph.size(), expected_graph_backing_size(&graph));
+        Ok(())
+    }
 
     #[expect(clippy::too_many_arguments)]
     fn experiment(

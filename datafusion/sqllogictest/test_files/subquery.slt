@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # make sure to a batch size smaller than row number of the table.
 statement ok
@@ -2124,14 +2111,44 @@ WHERE t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id)
 ----
 11
 
-# correlated_not_in_groupless_count_agg_is_not_count_bug_compensated
-query I rowsort
+# correlated_in_groupless_max_agg_embedded_in_or_is_not_count_bug_compensated
+query I
 SELECT t1_id FROM t1
-WHERE t1_int NOT IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id)
+WHERE t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) OR t1_id = 33
+ORDER BY t1_id
 ----
-22
+11
 33
-44
+
+# correlated_in_groupless_count_agg_stays_correlated
+# Errors rather than returning wrong rows. Expected `33`.
+query error Physical plan does not support logical expression InSubquery
+SELECT t1_id FROM t1
+WHERE 0 IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id)
+
+# correlated_not_in_groupless_count_agg_stays_correlated
+# Errors rather than returning wrong rows. Expected `11, 22, 44`.
+query error Physical plan does not support logical expression InSubquery
+SELECT t1_id FROM t1
+WHERE 0 NOT IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id)
+
+# correlated_in_groupless_count_agg_in_projection_stays_correlated
+# Errors rather than returning wrong rows.
+# Expected `(11, false), (22, false), (33, true), (44, false)`.
+query error Physical plan does not support logical expression InSubquery
+SELECT t1_id, 0 IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id) FROM t1
+
+# correlated_not_in_groupless_max_agg_stays_correlated
+# Errors rather than returning wrong rows. Expected `22, 44`.
+query error Physical plan does not support logical expression InSubquery
+SELECT t1_id FROM t1
+WHERE t1_int + 2 NOT IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id)
+
+# correlated_in_groupless_max_agg_in_projection_stays_correlated
+# Errors rather than returning wrong rows.
+# Expected `(11, true), (22, false), (33, NULL), (44, false)`.
+query error Physical plan does not support logical expression InSubquery
+SELECT t1_id, t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) FROM t1
 
 statement ok
 DROP TABLE limit_zero_outer;
@@ -4076,3 +4093,142 @@ DROP TABLE nested_agg_outer;
 
 statement ok
 DROP TABLE nested_agg_inner;
+
+# Regression tests for #25258 - Unaliased set comparison subqueries return wrong results
+
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+statement ok
+CREATE TABLE emp (id INT, name TEXT, salary INT);
+
+statement ok
+INSERT INTO emp VALUES
+(1,'Alice',5000),
+(2,'Bob',6000),
+(3,'Carol',7000),
+(4,'Dave',8000),
+(5,'Eve',9000),
+(6,'Frank',10000);
+
+## Un-aliased
+
+query I
+SELECT id
+FROM emp
+WHERE salary > ANY (SELECT salary FROM emp WHERE id <= 3);
+----
+2
+3
+4
+5
+6
+
+query TT
+EXPLAIN SELECT id
+FROM emp
+WHERE salary > ANY (SELECT salary FROM emp WHERE id <= 3);
+----
+logical_plan
+01)Projection: emp.id
+02)--LeftMark Join:  Filter: emp.salary > __correlated_sq_2.salary IS NULL
+03)----Projection: emp.id, emp.salary
+04)------Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true)
+05)--------LeftMark Join:  Filter: emp.salary > __correlated_sq_1.salary IS TRUE
+06)----------TableScan: emp projection=[id, salary]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------Projection: emp.salary
+09)--------------Filter: emp.id <= Int32(3)
+10)----------------TableScan: emp projection=[id, salary]
+11)----SubqueryAlias: __correlated_sq_2
+12)------Projection: emp.salary
+13)--------Filter: emp.id <= Int32(3)
+14)----------TableScan: emp projection=[id, salary]
+
+query I
+SELECT id
+FROM emp
+WHERE salary > ALL (SELECT salary FROM emp WHERE id <= 2);
+----
+3
+4
+5
+6
+
+query TT
+EXPLAIN SELECT id
+FROM emp
+WHERE salary > ALL (SELECT salary FROM emp WHERE id <= 2);
+----
+logical_plan
+01)Projection: emp.id
+02)--Filter: __correlated_sq_2.mark IS DISTINCT FROM Boolean(true)
+03)----Projection: emp.id, __correlated_sq_2.mark
+04)------LeftMark Join:  Filter: emp.salary > __correlated_sq_2.salary IS NULL
+05)--------Projection: emp.id, emp.salary
+06)----------Filter: __correlated_sq_1.mark IS DISTINCT FROM Boolean(true)
+07)------------LeftMark Join:  Filter: emp.salary > __correlated_sq_1.salary IS FALSE
+08)--------------TableScan: emp projection=[id, salary]
+09)--------------SubqueryAlias: __correlated_sq_1
+10)----------------Projection: emp.salary
+11)------------------Filter: emp.id <= Int32(2)
+12)--------------------TableScan: emp projection=[id, salary]
+13)--------SubqueryAlias: __correlated_sq_2
+14)----------Projection: emp.salary
+15)------------Filter: emp.id <= Int32(2)
+16)--------------TableScan: emp projection=[id, salary]
+
+query I
+SELECT id
+FROM emp
+WHERE salary = ANY (SELECT salary FROM emp WHERE id <= 2);
+----
+1
+2
+
+query TT
+EXPLAIN SELECT id
+FROM emp
+WHERE salary = ANY (SELECT salary FROM emp WHERE id <= 2);
+----
+logical_plan
+01)Projection: emp.id
+02)--LeftMark Join:  Filter: emp.salary = __correlated_sq_2.salary IS NULL
+03)----Projection: emp.id, emp.salary
+04)------Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true)
+05)--------LeftMark Join:  Filter: emp.salary = __correlated_sq_1.salary IS TRUE
+06)----------TableScan: emp projection=[id, salary]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------Projection: emp.salary
+09)--------------Filter: emp.id <= Int32(2)
+10)----------------TableScan: emp projection=[id, salary]
+11)----SubqueryAlias: __correlated_sq_2
+12)------Projection: emp.salary
+13)--------Filter: emp.id <= Int32(2)
+14)----------TableScan: emp projection=[id, salary]
+
+statement ok
+DROP TABLE emp;
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+# Regression test for #26504: correlated subquery filtering an aliased derived
+# table on an outer column must preserve the derived table's correlated columns.
+query I
+SELECT * FROM (VALUES (1)) AS x(d)
+WHERE EXISTS (SELECT 1 FROM (SELECT * FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0);
+----
+1
+
+query I
+SELECT (SELECT n FROM (SELECT sum(y.c) AS n FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0) AS v
+FROM (VALUES (1)) AS x(d);
+----
+1
+
+query I
+SELECT * FROM (VALUES (1)) AS x(d)
+WHERE x.d IN (SELECT t.c FROM (SELECT * FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0);
+----
+1

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! `GroupValues` implementations for multi group by cases
 
@@ -45,9 +32,9 @@ use arrow::datatypes::{
     BinaryViewType, DataType, Field, Int8Type, Int16Type, Int32Type, Int64Type, Schema,
     SchemaRef, StringViewType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
+use datafusion_common::float_semantics::{has_float_leaf, normalize_floats};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::{has_float_leaf, normalize_float_zero};
 use datafusion_common::{Result, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::{EmitTo, GroupSelection};
@@ -1070,7 +1057,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         let normalized: Option<Vec<ArrayRef>> = cols
             .iter()
             .any(|col| col.data_type().is_nested() && has_float_leaf(col.data_type()))
-            .then(|| cols.iter().map(normalize_float_zero).collect());
+            .then(|| cols.iter().map(normalize_floats).collect());
         let cols = normalized.as_deref().unwrap_or(cols);
 
         // `try_new` and the reset points in `emit` / `clear_shrink` keep
@@ -1233,6 +1220,19 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
 
     fn supports_values_preserving(&self) -> bool {
         true
+    }
+
+    fn shrink_to_fit(&mut self) {
+        self.map.shrink_to_fit(|(hash, _)| *hash);
+        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
+        // Scratch for one `intern` call.
+        self.hashes_buffer.clear();
+        self.hashes_buffer.shrink_to_fit();
+        if !STREAMING {
+            self.emit_group_index_list_buffer.clear();
+            self.emit_group_index_list_buffer.shrink_to_fit();
+            self.vectorized_operation_buffers.clear_shrink(0);
+        }
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
