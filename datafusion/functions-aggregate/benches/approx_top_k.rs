@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -170,6 +157,27 @@ fn approx_top_k_benchmark(c: &mut Criterion) {
             BatchSize::SmallInput,
         );
     });
+    // Final stage after partial aggregation was skipped: one state per row.
+    for k in [10, 10_000] {
+        let states = prepare_groups_accumulator(DataType::Utf8, k)
+            .convert_to_state(std::slice::from_ref(&values), None)
+            .unwrap();
+        group.bench_function(
+            format!("merge converted utf8 {CHURN_GROUPS} groups k={k}"),
+            |b| {
+                b.iter_batched(
+                    || prepare_groups_accumulator(DataType::Utf8, k),
+                    |mut accumulator| {
+                        accumulator
+                            .merge_batch(&states, &groups, CHURN_GROUPS)
+                            .unwrap();
+                        black_box(accumulator.evaluate(EmitTo::All).unwrap());
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
     group.finish();
 
     let mut group = c.benchmark_group("approx_top_k_state");

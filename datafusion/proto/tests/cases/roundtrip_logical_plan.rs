@@ -1641,7 +1641,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         stddev_pop(lit(2.2)),
         approx_distinct(lit(2)),
         approx_median(lit(2)),
-        approx_top_k(vec![col("a"), lit(3)]),
+        approx_top_k(col("a"), lit(3)),
         approx_percentile_cont(lit(2).sort(true, false), lit(0.5), None),
         approx_percentile_cont(lit(2).sort(true, false), lit(0.5), Some(lit(50))),
         approx_percentile_cont_with_weight(

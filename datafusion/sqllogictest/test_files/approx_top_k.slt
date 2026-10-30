@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-
-#   http://www.apache.org/licenses/LICENSE-2.0
-
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ###########
 # approx_top_k tests
@@ -59,8 +46,22 @@ statement error DataFusion error: Error during planning: approx_top_k requires k
 SELECT approx_top_k(column1, 0) FROM (VALUES ('a')) AS t(column1);
 
 # approx_top_k error: negative k
-statement error DataFusion error: Error during planning: approx_top_k requires k to be a positive literal integer
+statement error DataFusion error: Error during planning: approx_top_k requires k to be between 1 and 10000, got -1
 SELECT approx_top_k(column1, -1) FROM (VALUES ('a')) AS t(column1);
+
+# approx_top_k error: k must be a constant
+statement error DataFusion error: Error during planning: approx_top_k requires k to be a literal integer
+SELECT approx_top_k(column1, column2) FROM (VALUES ('a', 2)) AS t(column1, column2);
+
+# approx_top_k error: k must not be NULL
+statement error DataFusion error: Error during planning: approx_top_k requires k to be a literal integer, got NULL
+SELECT approx_top_k(column1, NULL) FROM (VALUES ('a')) AS t(column1);
+
+# approx_top_k: k may be any constant integer expression
+query ?
+SELECT approx_top_k(column1, CAST('1' AS TINYINT UNSIGNED) + 1) FROM (VALUES ('a'), ('b'), ('a'), ('c')) AS t(column1);
+----
+[{value: a, count: 2}, {value: b, count: 1}]
 
 statement error .*approx_top_k does not support DISTINCT.*
 SELECT approx_top_k(DISTINCT column1, 2) FROM (VALUES ('a'), ('a')) AS t(column1);
@@ -76,7 +77,7 @@ SELECT approx_top_k(column1, 10001) FROM (VALUES ('a')) AS t(column1);
 
 # approx_top_k with WHERE clause
 # Surviving rows are a, c, a, b -> a=2 and then a tie between b and c at 1,
-# which is resolved on the value so the result is stable.
+# which is resolved on the value's bytes so the result is stable.
 query ?
 SELECT approx_top_k(column1, 2) FROM (VALUES ('a', 1), ('b', 2), ('a', 3), ('c', 4), ('a', 5), ('b', 6)) AS t(column1, column2) WHERE column2 > 2;
 ----
@@ -94,13 +95,39 @@ SELECT approx_top_k(column1, 2) FROM (VALUES (NULL), (NULL), (NULL)) AS t(column
 ----
 []
 
+# An empty window frame also returns an empty list
+query I?
+SELECT column2, approx_top_k(column1, 2) OVER (ORDER BY column2 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+FROM (VALUES ('a', 1), ('b', 2), ('a', 3)) AS t(column1, column2)
+ORDER BY column2;
+----
+1 []
+2 [{value: a, count: 1}]
+3 [{value: a, count: 1}, {value: b, count: 1}]
+
+# So does a correlated subquery without matching rows
+query I?
+SELECT o.column1, (SELECT approx_top_k(i.column1, 2) FROM (VALUES (1), (1), (2)) AS i(column1) WHERE i.column1 = o.column1)
+FROM (VALUES (1), (2), (3)) AS o(column1)
+ORDER BY o.column1;
+----
+1 [{value: 1, count: 2}]
+2 [{value: 2, count: 1}]
+3 []
+
+# Physical encodings the sketch cannot store are rejected during planning
+query error DataFusion error: Error during planning: approx_top_k does not support input type RunEndEncoded
+SELECT approx_top_k(arrow_cast(column1, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)'), 2)
+FROM (VALUES (1), (1), (2)) AS t(column1);
+
 # approx_top_k where k > number of distinct values (should return all distinct values)
 query ?
 SELECT approx_top_k(column1, 100) FROM (VALUES ('x'), ('y'), ('x')) AS t(column1);
 ----
 [{value: x, count: 2}, {value: y, count: 1}]
 
-# approx_top_k ties are broken deterministically (by value) so results are stable
+# approx_top_k ties are broken deterministically (by the value's bytes, which
+# for strings is lexicographic order) so results are stable
 query ?
 SELECT approx_top_k(column1, 4) FROM (VALUES ('delta'), ('alpha'), ('charlie'), ('bravo')) AS t(column1);
 ----
@@ -111,6 +138,75 @@ query ?
 SELECT approx_top_k(arrow_cast(column1, 'Utf8View'), 2) FROM (VALUES ('a'), ('b'), ('a'), ('a'), ('b')) AS t(column1);
 ----
 [{value: a, count: 3}, {value: b, count: 2}]
+
+# The returned values keep the input type; dictionaries are decoded to their value type
+query TTT
+SELECT
+  arrow_typeof(approx_top_k(arrow_cast(column1, 'LargeUtf8'), 1)),
+  arrow_typeof(approx_top_k(arrow_cast(column1, 'Dictionary(Int32, Utf8)'), 1)),
+  arrow_typeof(approx_top_k(arrow_cast(column1, 'Timestamp(Millisecond, Some("+05:00"))'), 1))
+FROM (VALUES (1)) AS t(column1);
+----
+List(Struct("value": LargeUtf8, "count": non-null UInt64)) List(Struct("value": Utf8, "count": non-null UInt64)) List(Struct("value": Timestamp(ms, "+05:00"), "count": non-null UInt64))
+
+query ?
+SELECT approx_top_k(arrow_cast(column1, 'Dictionary(Int32, Utf8)'), 2) FROM (VALUES ('a'), ('b'), ('a')) AS t(column1);
+----
+[{value: a, count: 2}, {value: b, count: 1}]
+
+query ??
+SELECT approx_top_k(column1, 1), approx_top_k(column2, 1)
+FROM (VALUES (true, 1.5), (false, 2.25), (true, 1.5)) AS t(column1, column2);
+----
+[{value: true, count: 2}] [{value: 1.5, count: 2}]
+
+query ??
+SELECT
+  approx_top_k(arrow_cast(column1, 'Decimal128(10, 2)'), 1),
+  approx_top_k(arrow_cast(column1, 'Decimal256(40, 3)'), 1)
+FROM (VALUES (1.25), (3.5), (1.25)) AS t(column1);
+----
+[{value: 1.25, count: 2}] [{value: 1.250, count: 2}]
+
+query ???
+SELECT
+  approx_top_k(arrow_cast(column1, 'Time32(Second)'), 1),
+  approx_top_k(arrow_cast(column1, 'Time64(Nanosecond)'), 1),
+  approx_top_k(arrow_cast(column2, 'Date32'), 1)
+FROM (VALUES ('10:00:00', '2024-01-01'), ('11:30:00', '2024-01-02'), ('10:00:00', '2024-01-01')) AS t(column1, column2);
+----
+[{value: 10:00:00, count: 2}] [{value: 10:00:00, count: 2}] [{value: 2024-01-01, count: 2}]
+
+# Fixed-size binary values, such as UUIDs, keep their type
+query T?
+SELECT arrow_typeof(approx_top_k(v, 1)), approx_top_k(v, 2)
+FROM (
+  SELECT arrow_cast(column1, 'FixedSizeBinary(16)') AS v
+  FROM (VALUES
+    (X'0123456789abcdef0123456789abcdef'),
+    (X'ffffffffffffffffffffffffffffffff'),
+    (X'0123456789abcdef0123456789abcdef')
+  ) AS t(column1)
+);
+----
+List(Struct("value": FixedSizeBinary(16), "count": non-null UInt64)) [{value: 0123456789abcdef0123456789abcdef, count: 2}, {value: ffffffffffffffffffffffffffffffff, count: 1}]
+
+# FILTER clauses are applied before values reach the sketch
+query T?
+SELECT column2, approx_top_k(column1, 2) FILTER (WHERE column3 > 0)
+FROM (VALUES ('a', 'x', 1), ('b', 'x', 0), ('a', 'x', 1), ('b', 'x', 0), ('c', 'y', 1)) AS t(column1, column2, column3)
+GROUP BY column2 ORDER BY column2;
+----
+x [{value: a, count: 2}]
+y [{value: c, count: 1}]
+
+# approx_top_k is order insensitive: an ORDER BY inside the call is accepted
+# and ignored
+query ?
+SELECT approx_top_k(column1, 2 ORDER BY column2)
+FROM (VALUES ('a', 2), ('b', 1), ('a', 3)) AS t(column1, column2);
+----
+[{value: a, count: 2}, {value: b, count: 1}]
 
 ###########
 # Multi-partition tests
@@ -161,16 +257,16 @@ warm [{value: warm, count: 300}]
 
 statement ok
 CREATE TABLE topk_high_cardinality AS
-SELECT CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
+SELECT v % 3 AS grp, CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
 FROM generate_series(1, 2500) AS t(v)
 UNION ALL
-SELECT CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
+SELECT v % 3 AS grp, CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
 FROM generate_series(2501, 5000) AS t(v)
 UNION ALL
-SELECT CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
+SELECT v % 3 AS grp, CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
 FROM generate_series(5001, 7500) AS t(v)
 UNION ALL
-SELECT CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
+SELECT v % 3 AS grp, CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
 FROM generate_series(7501, 10000) AS t(v);
 
 # Space-Saving guarantees any item above total/capacity (10000/3 ~ 3333) is
@@ -190,6 +286,19 @@ FROM (SELECT unnest(approx_top_k(item, 5)) AS s FROM topk_high_cardinality)
 LIMIT 1;
 ----
 dominant true
+
+# Same with a GROUP BY: every group evicts and its partial summaries are merged
+# across partitions. The reported count must be an upper bound of the exact one.
+query ITB
+SELECT a.grp, a.s['value'], a.s['count'] >= e.cnt
+FROM (SELECT grp, unnest(approx_top_k(item, 1)) AS s FROM topk_high_cardinality GROUP BY grp) a
+JOIN (SELECT grp, count(*) AS cnt FROM topk_high_cardinality WHERE item = 'dominant' GROUP BY grp) e
+  ON a.grp = e.grp
+ORDER BY a.grp;
+----
+0 dominant true
+1 dominant true
+2 dominant true
 
 statement ok
 DROP TABLE topk_low_cardinality;

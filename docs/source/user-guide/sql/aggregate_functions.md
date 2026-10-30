@@ -1248,9 +1248,11 @@ An alternative syntax is also supported:
 
 Returns the approximate most frequent (top-k) values with their estimated counts as a list of `{value, count}` structs. Values are ranked by estimated count, with lower-error estimates preferred when counts tie.
 
-Because the aggregate uses bounded memory, `count` is an upper-bound estimate. Within one summary it is exact for a value that was tracked for the whole scan; distributed merging may add an omission bound from partitions where that value was not tracked. Values whose frequency is far from the top-k boundary are the ones reported reliably; ties and near-ties may be resolved arbitrarily.
+Because the aggregate uses bounded memory, `count` is an upper-bound estimate. It is exact for values first seen while the summary still had room for them. A value first seen later starts from an estimate of how often it may already have occurred, and distributed merging may add an omission bound from partitions where that value was not tracked. Values whose frequency is far from the top-k boundary are the ones reported reliably; ties and near-ties may be resolved arbitrarily.
 
 NULL values are skipped; an empty or all-NULL input returns an empty list `[]`. For float columns, -0.0 and +0.0 are treated as the same value, while different NaN representations are tracked separately.
+
+Supported input types are strings, binary (including fixed-size binary), booleans, integers, 32- and 64-bit floats, decimals, dates, times, and timestamps. `value` has the same type as `expression`, except that dictionary-encoded inputs are returned as their value type.
 
 ```sql
 approx_top_k(expression, k)

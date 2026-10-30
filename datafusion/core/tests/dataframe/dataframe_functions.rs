@@ -401,8 +401,7 @@ async fn test_fn_approx_median() -> Result<()> {
 #[tokio::test]
 async fn test_fn_approx_top_k() -> Result<()> {
     // Column b has values [1, 10, 10, 100] -- 10 appears twice, others once.
-    // Use k=1 to avoid non-deterministic ordering among tied items.
-    let expr = approx_top_k(vec![col("b"), lit(1)]);
+    let expr = approx_top_k(col("b"), lit(1));
 
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
