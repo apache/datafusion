@@ -3,12 +3,19 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder, StringArray};
-use arrow::datatypes::{ArrowNativeTypeOp, Field, Schema};
+use arrow::datatypes::{ArrowNativeTypeOp, DataType, Field, Metadata, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use datafusion_common::ScalarValue;
-use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, case, col, lit};
+use datafusion_common::metadata::FieldMetadata;
+use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
+use datafusion_expr::{
+    ColumnarValue, Operator, col as logical_col, lit as logical_lit, lit_with_metadata,
+    when,
+};
+use datafusion_physical_expr::create_physical_expr;
+use datafusion_physical_expr::expressions::{BinaryExpr, CaseExpr, case, col, lit};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
 use rand::distr::Alphanumeric;
@@ -87,6 +94,248 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     benchmark_lookup_table_case_when(c, 8192);
     benchmark_divide_by_zero_protection(c, 8192);
+    benchmark_case_metadata(c);
+}
+
+fn assert_case_metadata(
+    expr: &dyn PhysicalExpr,
+    batch: &RecordBatch,
+    metadata: &Metadata,
+    expected: ColumnarValue,
+) {
+    assert!(expr.is::<CaseExpr>());
+    let field = expr.return_field(batch.schema_ref()).unwrap();
+    assert_eq!(field.data_type(), &DataType::Int32);
+    assert_eq!(field.metadata(), metadata);
+    match (expr.evaluate(batch).unwrap(), expected) {
+        (ColumnarValue::Scalar(actual), ColumnarValue::Scalar(expected)) => {
+            assert_eq!(actual, expected);
+        }
+        (ColumnarValue::Array(actual), ColumnarValue::Array(expected)) => {
+            assert_eq!(actual.as_ref(), expected.as_ref());
+        }
+        (actual, expected) => {
+            panic!("CASE output shape mismatch: {actual:?}, expected {expected:?}");
+        }
+    }
+}
+
+fn benchmark_case_metadata(c: &mut Criterion) {
+    let mut group = c.benchmark_group("case_metadata");
+    let execution_props = ExecutionProps::new();
+    let planning_ctx = PhysicalPlanningContext::default();
+
+    for key_count in [0, 4, 64] {
+        let metadata: Metadata = (0..key_count)
+            .map(|i| (format!("key_{i}"), format!("value_{i}")))
+            .collect();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("selector", DataType::Int32, false),
+            Field::new("left", DataType::Int32, false).with_metadata(metadata.clone()),
+            Field::new("right", DataType::Int32, false).with_metadata(metadata.clone()),
+        ]));
+        let df_schema = DFSchema::try_from(schema.as_ref().clone()).unwrap();
+        let input_schema = df_schema.as_arrow();
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..8192)),
+                Arc::new(Int32Array::from_iter_values((0..8192).map(|i| i + 10))),
+                Arc::new(Int32Array::from_iter_values((0..8192).map(|i| -i - 10))),
+            ],
+        )
+        .unwrap();
+        let expected_columns = |cutoff| {
+            ColumnarValue::Array(Arc::new(Int32Array::from_iter_values(
+                (0..8192).map(|i| if i < cutoff { i + 10 } else { -i - 10 }),
+            )))
+        };
+        let marked_literal = |value: i32| {
+            lit_with_metadata(value, Some(FieldMetadata::from(metadata.clone())))
+        };
+        // A non-NULL literal ELSE selects the array zip path, even with a scalar condition.
+        let scalar = when(logical_lit(true), marked_literal(7)).end().unwrap();
+        let scalar_or_null = when(logical_lit(true), marked_literal(7))
+            .otherwise(lit_with_metadata(
+                ScalarValue::Int32(None),
+                Some(FieldMetadata::from(metadata.clone())),
+            ))
+            .unwrap();
+        let column = when(
+            logical_col("selector").lt(logical_lit(4096_i32)),
+            logical_col("left"),
+        )
+        .otherwise(logical_col("right"))
+        .unwrap();
+
+        for (shape, logical, expected) in [
+            (
+                "scalar",
+                scalar,
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(7))),
+            ),
+            (
+                "scalar_marked_null",
+                scalar_or_null,
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(7))),
+            ),
+            ("column_8192", column, expected_columns(4096)),
+        ] {
+            let physical = create_physical_expr(
+                &logical,
+                &df_schema,
+                &execution_props,
+                &planning_ctx,
+            )
+            .unwrap();
+            assert_case_metadata(physical.as_ref(), &batch, &metadata, expected);
+            group.bench_function(
+                BenchmarkId::new(format!("return_field/{shape}"), key_count),
+                |b| {
+                    b.iter(|| {
+                        black_box(physical.return_field(black_box(input_schema)).unwrap())
+                    })
+                },
+            );
+            group.bench_function(
+                BenchmarkId::new(format!("field_and_evaluate/{shape}"), key_count),
+                |b| {
+                    b.iter(|| {
+                        black_box((
+                            physical.return_field(black_box(input_schema)).unwrap(),
+                            physical.evaluate(black_box(&batch)).unwrap(),
+                        ))
+                    })
+                },
+            );
+        }
+
+        let column_or_null = when(
+            logical_col("selector").lt(logical_lit(4096_i32)),
+            logical_col("left"),
+        )
+        .otherwise(lit_with_metadata(
+            ScalarValue::Int32(None),
+            Some(FieldMetadata::from(metadata.clone())),
+        ))
+        .unwrap();
+        let physical = create_physical_expr(
+            &column_or_null,
+            &df_schema,
+            &execution_props,
+            &planning_ctx,
+        )
+        .unwrap();
+        let expected = ColumnarValue::Array(Arc::new(Int32Array::from_iter(
+            (0..8192).map(|i| (i < 4096).then_some(i + 10)),
+        )));
+        assert_case_metadata(physical.as_ref(), &batch, &metadata, expected);
+        assert!(physical.return_field(input_schema).unwrap().is_nullable());
+        group.bench_function(
+            BenchmarkId::new("field_and_evaluate/column_marked_null_8192", key_count),
+            |b| {
+                b.iter(|| {
+                    black_box((
+                        physical.return_field(black_box(input_schema)).unwrap(),
+                        physical.evaluate(black_box(&batch)).unwrap(),
+                    ))
+                })
+            },
+        );
+
+        if key_count == 64 {
+            continue;
+        }
+        for width in [10_i32, 100] {
+            let mut builder = when(
+                logical_col("selector").eq(logical_lit(0_i32)),
+                logical_col("left"),
+            );
+            for branch in 1..width {
+                builder = builder.when(
+                    logical_col("selector").eq(logical_lit(branch)),
+                    logical_col("left"),
+                );
+            }
+            let logical = builder.otherwise(logical_col("right")).unwrap();
+            let physical = create_physical_expr(
+                &logical,
+                &df_schema,
+                &execution_props,
+                &planning_ctx,
+            )
+            .unwrap();
+            assert_case_metadata(
+                physical.as_ref(),
+                &batch,
+                &metadata,
+                expected_columns(width),
+            );
+            group.bench_function(
+                BenchmarkId::new(
+                    "plan_wide",
+                    format!("branches_{width}/keys_{key_count}"),
+                ),
+                |b| {
+                    b.iter(|| {
+                        black_box(
+                            create_physical_expr(
+                                black_box(&logical),
+                                &df_schema,
+                                &execution_props,
+                                &planning_ctx,
+                            )
+                            .unwrap(),
+                        )
+                    })
+                },
+            );
+        }
+        for depth in [4_i32, 16, 32] {
+            let mut logical = logical_col("right");
+            for level in 0..depth {
+                logical = when(
+                    logical_col("selector").lt(logical_lit(level)),
+                    logical_col("left"),
+                )
+                .otherwise(logical)
+                .unwrap();
+            }
+            let physical = create_physical_expr(
+                &logical,
+                &df_schema,
+                &execution_props,
+                &planning_ctx,
+            )
+            .unwrap();
+            assert_case_metadata(
+                physical.as_ref(),
+                &batch,
+                &metadata,
+                expected_columns(depth - 1),
+            );
+            group.bench_function(
+                BenchmarkId::new(
+                    "plan_nested",
+                    format!("depth_{depth}/keys_{key_count}"),
+                ),
+                |b| {
+                    b.iter(|| {
+                        black_box(
+                            create_physical_expr(
+                                black_box(&logical),
+                                &df_schema,
+                                &execution_props,
+                                &planning_ctx,
+                            )
+                            .unwrap(),
+                        )
+                    })
+                },
+            );
+        }
+    }
+    group.finish();
 }
 
 fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {

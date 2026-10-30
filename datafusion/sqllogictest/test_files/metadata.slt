@@ -10,6 +10,8 @@
 ## Note that table_with_metadata is defined using Rust code
 ## in the test harness as there is no way to define schema
 ## with metadata in SQL.
+## arrow_metadata() reads its argument's field at execution time, so these
+## tests check metadata in the physical plan, not only the logical schema.
 
 query ITTPT
 select * from table_with_metadata;
@@ -548,6 +550,216 @@ select arrow_metadata((select id from table_with_metadata where id = 1));
 ----
 {metadata_key: the id field}
 
+# CASE and its function rewrites merge value-branch metadata, earlier keys first.
+# Acceptance coverage for https://github.com/apache/datafusion/pull/26895
+query TT
+select coalesce(name, l_name), arrow_metadata(coalesce(name, l_name), 'metadata_key')
+from table_with_metadata;
+----
+NULL the name field
+bar the name field
+baz the name field
+
+# Untyped and typed NULL arguments do not block later metadata.
+query TT
+select
+  arrow_metadata(coalesce(NULL, name), 'metadata_key') as untyped_null_metadata,
+  arrow_metadata(coalesce(NULL::text, name), 'metadata_key') as typed_null_metadata
+from table_with_metadata limit 1;
+----
+the name field the name field
+
+# An unmarked first argument does not block a later marked argument.
+query TT
+select coalesce(upper(name), l_name), arrow_metadata(coalesce(upper(name), l_name), 'metadata_key')
+from table_with_metadata;
+----
+NULL the l_name field
+BAR the l_name field
+BAZ the l_name field
+
+# NVL and its IFNULL alias have the same precedence as COALESCE.
+query TTTT
+select
+  nvl(name, l_name) as nvl_value, arrow_metadata(nvl(name, l_name), 'metadata_key') as nvl_metadata,
+  ifnull(name, l_name) as ifnull_value, arrow_metadata(ifnull(name, l_name), 'metadata_key') as ifnull_metadata
+from table_with_metadata;
+----
+NULL the name field NULL the name field
+bar the name field bar the name field
+baz the name field baz the name field
+
+# NVL2 merges only its second and third arguments, not the selected row's field.
+query TT
+select nvl2(id, name, l_name), arrow_metadata(nvl2(id, name, l_name), 'metadata_key')
+from table_with_metadata;
+----
+NULL the name field
+l_bar the name field
+baz the name field
+
+# Searched CASE, including an implicit NULL ELSE.
+query TT
+select
+  case when name is not null then name else l_name end,
+  arrow_metadata(case when name is not null then name else l_name end, 'metadata_key')
+from table_with_metadata;
+----
+NULL the name field
+bar the name field
+baz the name field
+
+query TT
+select
+  case when name is not null then name end,
+  arrow_metadata(case when name is not null then name end, 'metadata_key')
+from table_with_metadata;
+----
+NULL the name field
+bar the name field
+baz the name field
+
+# Simple CASE has the same value-branch precedence.
+query TT
+select
+  case id when 1 then name else l_name end,
+  arrow_metadata(case id when 1 then name else l_name end, 'metadata_key')
+from table_with_metadata;
+----
+NULL the name field
+l_bar the name field
+l_baz the name field
+
+# All THEN branches precede ELSE, independently of which branch supplies a row.
+query TT
+select value, arrow_metadata(value, 'metadata_key') from (
+  select case when id = 1 then name when id is null then l_name else nonnull_name end as value
+  from table_with_metadata
+);
+----
+NULL the name field
+l_bar the name field
+no_baz the name field
+
+# A first THEN without metadata does not block the ELSE metadata.
+query TT
+select
+  case when id is null then upper(name) else l_name end,
+  arrow_metadata(case when id is null then upper(name) else l_name end, 'metadata_key')
+from table_with_metadata;
+----
+NULL the l_name field
+BAR the l_name field
+l_baz the l_name field
+
+# A LIMIT keeps an unmarked derived column at the physical operator boundary.
+query TT rowsort
+select value, arrow_metadata(value, 'metadata_key') from (
+  select case when id is null then plain_value else marked_value end as value
+  from (
+    select id, upper(name) as plain_value, l_name as marked_value
+    from table_with_metadata order by id nulls first limit 2
+  )
+);
+----
+BAR the l_name field
+NULL the l_name field
+
+# NULL branches do not block a later marked ELSE.
+query TT
+select value, arrow_metadata(value, 'metadata_key') from (
+  select case when id = 1 then NULL when id is null then NULL::text else name end as value
+  from table_with_metadata
+);
+----
+NULL the name field
+NULL the name field
+baz the name field
+
+# Every function and CASE must also preserve metadata through an outer projection.
+query TTTTT
+select
+  arrow_metadata(c, 'metadata_key'), arrow_metadata(n, 'metadata_key'),
+  arrow_metadata(i, 'metadata_key'), arrow_metadata(n2, 'metadata_key'),
+  arrow_metadata(k, 'metadata_key')
+from (
+  select coalesce(name, l_name) as c, nvl(name, l_name) as n,
+    ifnull(name, l_name) as i, nvl2(id, name, l_name) as n2,
+    case id when 1 then name else l_name end as k
+  from table_with_metadata
+) limit 1;
+----
+the name field the name field the name field the name field the name field
+
+# The aliases and NVL2 also accept an unmarked first value argument.
+query TTT
+select
+  arrow_metadata(n, 'metadata_key'), arrow_metadata(i, 'metadata_key'),
+  arrow_metadata(n2, 'metadata_key')
+from (
+  select nvl(upper(name), l_name) as n, ifnull(upper(name), l_name) as i,
+    nvl2(id, upper(name), l_name) as n2
+  from table_with_metadata
+) limit 1;
+----
+the l_name field the l_name field the l_name field
+
+# Agreeing extension names and parameters survive both COALESCE and CASE.
+query TTTT
+with inputs as (
+  select id,
+    with_metadata(name, 'ARROW:extension:name', 'ext.type',
+      'ARROW:extension:metadata', '{"unit":"m"}') as a,
+    with_metadata(l_name, 'ARROW:extension:name', 'ext.type',
+      'ARROW:extension:metadata', '{"unit":"m"}') as b
+  from table_with_metadata
+)
+select
+  arrow_metadata(coalesce(a, b), 'ARROW:extension:name'),
+  arrow_metadata(coalesce(a, b), 'ARROW:extension:metadata'),
+  arrow_metadata(case when id is null then a else b end, 'ARROW:extension:name'),
+  arrow_metadata(case when id is null then a else b end, 'ARROW:extension:metadata')
+from inputs limit 1;
+----
+ext.type {"unit":"m"} ext.type {"unit":"m"}
+
+# Same-name parameter differences are tolerated; the first named extension wins.
+query TTTT
+select
+  arrow_metadata(c, 'ARROW:extension:name'), arrow_metadata(c, 'ARROW:extension:metadata'),
+  arrow_metadata(k, 'ARROW:extension:name'), arrow_metadata(k, 'ARROW:extension:metadata')
+from (
+  select coalesce(a, b) as c, case when id is null then a else b end as k
+  from (
+    select id,
+      with_metadata(name, 'ARROW:extension:name', 'ext.type',
+        'ARROW:extension:metadata', '{"unit":"m"}') as a,
+      with_metadata(l_name, 'ARROW:extension:name', 'ext.type',
+        'ARROW:extension:metadata', '{"unit":"s"}') as b
+    from table_with_metadata
+  )
+) limit 1;
+----
+ext.type {"unit":"m"} ext.type {"unit":"m"}
+
+# NVL2's test and CASE's operand/WHEN metadata must neither leak nor conflict.
+query TTTTTT
+select
+  arrow_metadata(n, 'metadata_key'), arrow_metadata(n, 'ARROW:extension:name'),
+  arrow_metadata(s, 'metadata_key'), arrow_metadata(s, 'ARROW:extension:name'),
+  arrow_metadata(k, 'metadata_key'), arrow_metadata(k, 'ARROW:extension:name')
+from (
+  select
+    nvl2(with_metadata(id, 'ARROW:extension:name', 'test.type'), name, l_name) as n,
+    case with_metadata(id, 'ARROW:extension:name', 'test.type')
+      when with_metadata(1, 'ARROW:extension:name', 'when.type') then name else l_name end as s,
+    case when with_metadata(id is null, 'ARROW:extension:name', 'when.type')
+      then name else l_name end as k
+  from table_with_metadata
+) limit 1;
+----
+the name field NULL the name field NULL the name field NULL
+
 # coalesce, nvl, ifnull and nvl2: conflicting extension types are a planning error
 statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
 select coalesce(
@@ -561,10 +773,26 @@ select nvl2(id,
   with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
 from table_with_metadata;
 
-# These functions are rewritten to CASE before execution, so arrow_metadata()
-# does not observe the field they compute during planning. The tests below
-# observe it through the planning error instead: the outer coalesce only
-# reports 'a.type' if the inner expression carried it.
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select nvl(
+  with_metadata(name, 'ARROW:extension:name', 'a.type'),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select ifnull(
+  with_metadata(name, 'ARROW:extension:name', 'a.type'),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select case when name is not null
+  then with_metadata(name, 'ARROW:extension:name', 'a.type')
+  else with_metadata(l_name, 'ARROW:extension:name', 'b.type')
+end from table_with_metadata;
+
+# Nested planning errors also check propagation before execution: the outer
+# coalesce only reports 'a.type' if the inner expression carried it.
 
 # coalesce propagates an extension type its arguments agree on
 statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'

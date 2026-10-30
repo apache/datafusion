@@ -358,25 +358,6 @@ pub fn create_physical_expr(
                     .zip(then_expr.iter())
                     .map(|(w, t)| (Arc::clone(w), Arc::clone(t)))
                     .collect();
-            // Match the logical CASE fast path without inferring its field twice.
-            let common_unmarked_branch =
-                match (case.when_then_expr.first(), when_then_expr.first()) {
-                    (Some((_, logical_result)), Some((_, physical_result)))
-                        if matches!(
-                            logical_result.as_ref(),
-                            Expr::Column(_) | Expr::Literal(_, _)
-                        ) =>
-                    {
-                        let field = physical_result.return_field(input_schema)?;
-                        !field.data_type().is_null()
-                            && !matches!(
-                                logical_result.as_ref(),
-                                Expr::Literal(value, _) if value.is_null()
-                            )
-                            && field.metadata().is_empty()
-                    }
-                    _ => false,
-                };
             let else_expr: Option<Arc<dyn PhysicalExpr>> =
                 if let Some(e) = &case.else_expr {
                     Some(create_physical_expr(
@@ -390,8 +371,25 @@ pub fn create_physical_expr(
                 };
             let physical_case =
                 expressions::CaseExpr::try_new(expr, when_then_expr, else_expr)?;
-            if common_unmarked_branch {
-                Ok(Arc::new(physical_case))
+            if physical_case.has_unmarked_result_summaries(input_schema)?
+                && case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, result)| result.as_ref())
+                    .chain(case.else_expr.iter().map(AsRef::as_ref))
+                    .all(|result| {
+                        matches!(
+                            result,
+                            Expr::Column(_) | Expr::Literal(_, _) | Expr::Case(_)
+                        )
+                    })
+            {
+                // Pin even an empty summary: argument fields may be requested per batch.
+                // Reuse nested empty pins; aliases and other lowered wrappers still need
+                // their logical field because lowering can discard their metadata.
+                Ok(Arc::new(
+                    physical_case.with_empty_logical_result_metadata(input_schema)?,
+                ))
             } else {
                 Ok(Arc::new(
                     physical_case
@@ -782,6 +780,23 @@ mod tests {
     }
 
     #[test]
+    fn case_empty_typed_null_else_matches_implicit_else() -> Result<()> {
+        let schema = Schema::empty();
+        let then =
+            datafusion_expr::lit_with_metadata(7_i32, Some(FieldMetadata::default()));
+        let implicit = when(lit(true), then.clone()).end()?;
+        let explicit =
+            when(lit(true), then).otherwise(datafusion_expr::lit_with_metadata(
+                ScalarValue::Int32(None),
+                Some(FieldMetadata::default()),
+            ))?;
+        let implicit = logical2physical(&implicit, &schema);
+        let explicit = logical2physical(&explicit, &schema);
+        assert!(implicit.eq(&explicit));
+        Ok(())
+    }
+
+    #[test]
     fn case_metadata_matches_logical_field_after_alias_lowering() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let df_schema = DFSchema::try_from(schema.clone())?;
@@ -810,6 +825,47 @@ mod tests {
             physical.return_field(&schema)?.metadata(),
             logical_field.metadata()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn case_metadata_survives_an_unmarked_first_column() -> Result<()> {
+        let metadata = Metadata::new().with("source", "later_branch");
+        let schema = Schema::new(vec![
+            Field::new("flag", DataType::Boolean, false),
+            Field::new("plain", DataType::Int32, false),
+            Field::new("marked", DataType::Int32, false).with_metadata(metadata.clone()),
+        ]);
+        let logical = when(col("flag"), col("plain")).otherwise(col("marked"))?;
+        let physical = lower_cast_expr(&logical, &schema)?;
+        assert!(physical.is::<expressions::CaseExpr>());
+        let first_field = physical.return_field(&schema)?;
+        let second_field = physical.return_field(&schema)?;
+        assert_eq!(first_field.metadata(), &metadata);
+        assert!(Arc::ptr_eq(
+            first_field.metadata().as_arc().unwrap(),
+            second_field.metadata().as_arc().unwrap(),
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn case_metadata_survives_a_marked_typed_null_else() -> Result<()> {
+        let metadata = Metadata::new().with("source", "typed_null_else");
+        let schema = Schema::new(vec![
+            Field::new("flag", DataType::Boolean, false),
+            Field::new("plain", DataType::Int32, false),
+        ]);
+        let logical = when(col("flag"), col("plain")).otherwise(
+            datafusion_expr::lit_with_metadata(
+                ScalarValue::Int32(None),
+                Some(FieldMetadata::from(metadata.clone())),
+            ),
+        )?;
+        let logical_field = logical.to_field(&DFSchema::try_from(schema.clone())?)?.1;
+        assert_eq!(logical_field.metadata(), &metadata);
+        let physical = lower_cast_expr(&logical, &schema)?;
+        assert_eq!(physical.return_field(&schema)?.metadata(), &metadata);
         Ok(())
     }
 
@@ -881,13 +937,16 @@ mod tests {
             Box::new(lit(ScalarValue::Null)),
             DataType::Binary,
         ));
-        let marked_null = typed_null
-            .alias_with_metadata("marked_null", Some(FieldMetadata::from(metadata)));
+        let marked_null = typed_null.alias_with_metadata(
+            "marked_null",
+            Some(FieldMetadata::from(metadata.clone())),
+        );
         let nested = when(lit(true), marked_null).otherwise(lit(ScalarValue::Null))?;
         let cast_nested = Expr::Cast(Cast::new(Box::new(nested), DataType::LargeBinary));
+        assert!(cast_nested.to_field(&df_schema)?.1.metadata().is_empty());
         let outer = when(lit(true), cast_nested).otherwise(col("binary"))?;
         let logical_field = outer.to_field(&df_schema)?.1;
-        assert!(logical_field.metadata().is_empty());
+        assert_eq!(logical_field.metadata(), &metadata);
         let physical = create_physical_expr(
             &outer,
             &df_schema,
@@ -923,7 +982,7 @@ mod tests {
             "marked".to_string(),
         )]);
         let schema = Schema::new(vec![
-            Field::new("binary", DataType::Binary, false).with_metadata(metadata),
+            Field::new("binary", DataType::Binary, false).with_metadata(metadata.clone()),
         ]);
         let df_schema = DFSchema::try_from(schema.clone())?;
         let variable = Expr::ScalarVariable(
@@ -932,7 +991,7 @@ mod tests {
         );
         let logical = when(lit(true), variable).otherwise(col("binary"))?;
         let logical_field = logical.to_field(&df_schema)?.1;
-        assert!(logical_field.metadata().is_empty());
+        assert_eq!(logical_field.metadata(), &metadata);
         let mut props = ExecutionProps::new();
         props.add_var_provider(VarType::UserDefined, Arc::new(NullBinaryProvider));
         let physical = create_physical_expr(
