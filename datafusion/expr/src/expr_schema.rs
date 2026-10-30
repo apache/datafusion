@@ -23,14 +23,12 @@ use arrow::datatypes::{DataType, Field};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::coerced_fields_metadata;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Trait to allow expr to typable with respect to a schema
@@ -128,27 +126,10 @@ fn scalar_argument_for_field(expr: &Expr, arg_field: &FieldRef) -> Option<Scalar
     }
 }
 
-// Resolve metadata bottom-up for branches whose metadata can be preserved.
+// Resolve nested CASE value branches bottom-up, without repeatedly asking each
+// nested CASE to infer its type, nullability and metadata. Other expressions use
+// their normal field inference; an unmarked result cannot erase sibling metadata.
 fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef> {
-    // `to_field` can revisit nested aliases; delegate only shallow branches.
-    const MAX_EXACT_BRANCH_DEPTH: usize = 8;
-
-    fn can_infer_exact_branch(expr: &Expr, allow_nested_case: bool) -> Result<bool> {
-        let mut work = vec![(expr, 1)];
-        while let Some((node, depth)) = work.pop() {
-            if (!allow_nested_case && matches!(node, Expr::Case(_)))
-                || depth > MAX_EXACT_BRANCH_DEPTH
-            {
-                return Ok(false);
-            }
-            node.apply_children(|child| {
-                work.push((child, depth + 1));
-                Ok(TreeNodeRecursion::Continue)
-            })?;
-        }
-        Ok(true)
-    }
-
     enum Work<'a> {
         Visit(&'a Expr),
         FinishCase(&'a Case),
@@ -179,85 +160,33 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
         match item {
             Work::Visit(expr) => match expr {
                 Expr::Case(nested) => schedule_case(nested, &mut work),
-                Expr::Cast(cast)
-                    if !cast.field.metadata().is_empty()
-                        && can_infer_exact_branch(expr, false)? =>
-                {
-                    fields.push(BranchField {
-                        field: expr.to_field(schema)?.1,
-                        certainly_null: false,
-                    });
-                }
                 Expr::Cast(cast) => {
                     work.push(Work::FinishCast(&cast.field, false));
                     work.push(Work::Visit(&cast.expr));
                 }
-                Expr::TryCast(cast)
-                    if !cast.field.metadata().is_empty()
-                        && can_infer_exact_branch(expr, false)? =>
-                {
-                    fields.push(BranchField {
-                        field: expr.to_field(schema)?.1,
-                        certainly_null: false,
-                    });
-                }
                 Expr::TryCast(cast) => {
                     work.push(Work::FinishCast(&cast.field, true));
                     work.push(Work::Visit(&cast.expr));
-                }
-                Expr::Alias(alias)
-                    if alias.metadata.as_ref().is_some_and(|meta| !meta.is_empty())
-                        && can_infer_exact_branch(expr, false)? =>
-                {
-                    fields.push(BranchField {
-                        field: expr.to_field(schema)?.1,
-                        certainly_null: false,
-                    });
                 }
                 Expr::Alias(alias) => {
                     work.push(Work::FinishAlias(alias.metadata.as_ref()));
                     work.push(Work::Visit(&alias.expr));
                 }
                 Expr::Negative(inner) => work.push(Work::Visit(inner)),
-                Expr::ScalarFunction(_) | Expr::HigherOrderFunction(_)
-                    if can_infer_exact_branch(expr, true)? =>
-                {
-                    fields.push(BranchField {
-                        field: expr.to_field(schema)?.1,
-                        certainly_null: false,
-                    });
-                }
-                Expr::Column(_)
-                | Expr::Literal(_, _)
-                | Expr::OuterReferenceColumn(_, _)
-                | Expr::ScalarVariable(_, _)
-                | Expr::Placeholder(_)
-                | Expr::LambdaVariable(_) => fields.push(BranchField {
+                _ => fields.push(BranchField {
                     field: expr.to_field(schema)?.1,
                     certainly_null: matches!(
                         unwrap_certainly_null_expr(expr),
                         Expr::Literal(value, _) if value.is_null()
                     ),
                 }),
-                _ => return Ok(Arc::new(Field::new("", DataType::Null, true))),
             },
             Work::FinishCast(target, force_nullable) => {
                 let Some(source) = fields.pop() else {
                     return internal_err!("Missing CASE cast input field");
                 };
-                let untyped_null =
-                    source.certainly_null && source.field.data_type().is_null();
-                let mut field = cast_output_field(&source.field, target, force_nullable);
-                // A type-only coercion must not make an untyped NULL constrain CASE metadata.
-                if untyped_null
-                    && target.metadata().is_empty()
-                    && !field.metadata().is_empty()
-                {
-                    field =
-                        Arc::new(field.as_ref().clone().with_metadata(HashMap::new()));
-                }
                 fields.push(BranchField {
-                    field,
+                    field: cast_output_field(&source.field, target, force_nullable),
                     certainly_null: source.certainly_null,
                 });
             }
@@ -1546,7 +1475,9 @@ mod tests {
     }
 
     #[test]
-    fn test_case_field_metadata() -> Result<()> {
+    fn test_case_field_metadata_explicit_fields() -> Result<()> {
+        // SQL behavior is covered in metadata.slt; these fields are attached
+        // directly through the expression API, before analyzer coercion.
         #[derive(Debug, PartialEq, Eq, Hash)]
         struct MarkedIdentity {
             signature: crate::Signature,
@@ -1582,35 +1513,15 @@ mod tests {
         }
 
         let shared = HashMap::from([("type".to_string(), "structured".to_string())]);
-        let different = HashMap::from([("type".to_string(), "other".to_string())]);
         let schema = DFSchema::from_unqualified_fields(
             vec![
                 Field::new("a", DataType::Int32, false).with_metadata(shared.clone()),
                 Field::new("b", DataType::Int32, false).with_metadata(shared.clone()),
-                Field::new("c", DataType::Int32, false).with_metadata(different),
                 Field::new("d", DataType::Int32, false),
-                Field::new("e", DataType::Boolean, false).with_metadata(shared.clone()),
-                Field::new("f", DataType::Boolean, false).with_metadata(shared.clone()),
             ]
             .into(),
             HashMap::new(),
         )?;
-
-        let same = when(lit(true), col("a")).otherwise(col("b"))?;
-        assert_eq!(same.to_field(&schema)?.1.metadata(), &shared);
-
-        let no_else = when(lit(true), col("a")).end()?;
-        assert_eq!(no_else.to_field(&schema)?.1.metadata(), &shared);
-
-        let multiple_when = when(lit(false), col("a"))
-            .when(lit(true), col("b"))
-            .otherwise(lit(ScalarValue::Null))?;
-        assert_eq!(multiple_when.to_field(&schema)?.1.metadata(), &shared);
-
-        let conflicting_when = when(lit(false), col("a"))
-            .when(lit(true), col("c"))
-            .otherwise(col("b"))?;
-        assert_eq!(conflicting_when.to_field(&schema)?.1.metadata(), &shared);
 
         let marked_literal = Expr::Literal(
             ScalarValue::Int32(Some(1)),
@@ -1618,24 +1529,6 @@ mod tests {
         );
         let literal_case = when(lit(true), marked_literal).otherwise(col("b"))?;
         assert_eq!(literal_case.to_field(&schema)?.1.metadata(), &shared);
-
-        let unmarked_literal = when(lit(true), col("a")).otherwise(lit(1_i32))?;
-        assert_eq!(unmarked_literal.to_field(&schema)?.1.metadata(), &shared);
-
-        let negative_case = when(lit(true), Expr::Negative(Box::new(col("a"))))
-            .otherwise(Expr::Negative(Box::new(col("b"))))?;
-        assert_eq!(negative_case.to_field(&schema)?.1.metadata(), &shared);
-
-        let unsupported_case =
-            when(lit(true), Expr::Not(Box::new(col("e")))).otherwise(col("f"))?;
-        assert!(unsupported_case.to_field(&schema)?.1.metadata().is_empty());
-
-        let null_else = when(lit(true), col("a")).otherwise(lit(ScalarValue::Null))?;
-        assert_eq!(null_else.to_field(&schema)?.1.metadata(), &shared);
-
-        let coerced_null_else = when(lit(true), col("a"))
-            .otherwise(lit(ScalarValue::Null).cast_to(&DataType::Int32, &schema)?)?;
-        assert_eq!(coerced_null_else.to_field(&schema)?.1.metadata(), &shared);
 
         let Expr::Alias(empty_metadata_alias) = lit(ScalarValue::Null)
             .cast_to(&DataType::Int32, &schema)?
@@ -1698,48 +1591,6 @@ mod tests {
             );
         }
 
-        let mut nested = col("a");
-        for _ in 0..128 {
-            nested = when(lit(true), col("a")).otherwise(nested)?;
-        }
-        let nested = when(lit(true), nested).otherwise(col("b"))?;
-        assert_eq!(nested.to_field(&schema)?.1.metadata(), &shared);
-
-        let mut cast_nested = col("a");
-        for _ in 0..128 {
-            let inner = when(lit(true), col("a")).otherwise(cast_nested)?;
-            cast_nested = Expr::Cast(Cast::new(Box::new(inner), DataType::Int32));
-        }
-        let cast_nested = when(lit(true), cast_nested).otherwise(col("b"))?;
-        assert_eq!(cast_nested.to_field(&schema)?.1.metadata(), &shared);
-
-        let mut binary_nested = col("a");
-        for _ in 0..128 {
-            binary_nested = when(lit(true), binary_nested + lit(1)).otherwise(lit(0))?;
-        }
-        let binary_nested = when(lit(true), binary_nested).otherwise(col("b"))?;
-        let binary_field = binary_nested.to_field(&schema)?.1;
-        assert_eq!(binary_field.data_type(), &DataType::Int32);
-        assert!(binary_field.metadata().is_empty());
-
-        let identity = Arc::new(crate::expr_fn::create_udf(
-            "identity",
-            vec![DataType::Int32],
-            DataType::Int32,
-            crate::Volatility::Immutable,
-            Arc::new(|_| {
-                Ok(
-                    datafusion_expr_common::columnar_value::ColumnarValue::Scalar(
-                        ScalarValue::Int32(Some(0)),
-                    ),
-                )
-            }),
-        ));
-        let scalar_result =
-            Expr::ScalarFunction(ScalarFunction::new_udf(identity, vec![col("a")]));
-        let scalar_case = when(lit(true), scalar_result).otherwise(col("b"))?;
-        assert_eq!(scalar_case.to_field(&schema)?.1.metadata(), &shared);
-
         let marked = Arc::new(crate::ScalarUDF::from(MarkedIdentity {
             signature: crate::Signature::uniform(
                 1,
@@ -1750,26 +1601,12 @@ mod tests {
         let marked_call = |arg| {
             Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&marked), vec![arg]))
         };
-        let marked_case =
-            when(lit(true), marked_call(col("a"))).otherwise(marked_call(col("b")))?;
-        assert_eq!(marked_case.to_field(&schema)?.1.metadata(), &shared);
-
         let mut deep_function = col("a");
         for _ in 0..9 {
             deep_function = marked_call(deep_function);
         }
         let deep_function_case = when(lit(true), deep_function).otherwise(col("b"))?;
-        assert!(
-            deep_function_case
-                .to_field(&schema)?
-                .1
-                .metadata()
-                .is_empty()
-        );
-
-        let nested_arg = when(lit(true), col("a")).otherwise(col("b"))?;
-        let nested_call = when(lit(true), marked_call(nested_arg)).otherwise(col("b"))?;
-        assert_eq!(nested_call.to_field(&schema)?.1.metadata(), &shared);
+        assert_eq!(deep_function_case.to_field(&schema)?.1.metadata(), &shared);
 
         let mut deep_nested_arg = when(lit(true), col("a")).otherwise(col("b"))?;
         for _ in 0..8 {
@@ -1777,7 +1614,7 @@ mod tests {
         }
         let deep_nested_call =
             when(lit(true), marked_call(deep_nested_arg)).otherwise(col("b"))?;
-        assert!(deep_nested_call.to_field(&schema)?.1.metadata().is_empty());
+        assert_eq!(deep_nested_call.to_field(&schema)?.1.metadata(), &shared);
 
         let binary = col("d") + lit(1);
         let Expr::Alias(alias) = binary.clone().alias("marked") else {
@@ -1808,7 +1645,7 @@ mod tests {
         }
         let deep_udf_case =
             when(lit(true), marked_call(deep_alias.clone())).otherwise(col("b"))?;
-        assert!(deep_udf_case.to_field(&schema)?.1.metadata().is_empty());
+        assert_eq!(deep_udf_case.to_field(&schema)?.1.metadata(), &shared);
 
         let Expr::Alias(alias) = deep_alias.alias("marked") else {
             unreachable!();
@@ -1818,98 +1655,89 @@ mod tests {
         let deep_alias_case = when(lit(true), deep_marked_alias).otherwise(col("b"))?;
         assert_eq!(deep_alias_case.to_field(&schema)?.1.metadata(), &shared);
 
-        let mismatched = when(lit(true), col("a")).otherwise(col("c"))?;
-        assert_eq!(mismatched.to_field(&schema)?.1.metadata(), &shared);
-
-        let unmarked = when(lit(true), col("a")).otherwise(col("d"))?;
-        assert_eq!(unmarked.to_field(&schema)?.1.metadata(), &shared);
-
-        let first_unmarked = when(lit(true), col("d")).otherwise(col("a"))?;
-        assert_eq!(first_unmarked.to_field(&schema)?.1.metadata(), &shared);
-
         Ok(())
     }
 
     #[test]
-    fn test_case_extension_metadata_merge_policy() -> Result<()> {
-        let first = HashMap::from([
-            (
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                "geoarrow.wkb".to_owned(),
-            ),
-            (
-                EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                "{\"a\":1,\"b\":2}".to_owned(),
-            ),
-            ("shared".to_owned(), "first".to_owned()),
-            ("only_first".to_owned(), "left".to_owned()),
+    fn test_case_field_metadata_preserves_aliased_null_cast_metadata() -> Result<()> {
+        let schema = DFSchema::empty();
+        let inner =
+            FieldMetadata::from(HashMap::from([("inner".to_owned(), "x".to_owned())]));
+        let outer =
+            FieldMetadata::from(HashMap::from([("outer".to_owned(), "y".to_owned())]));
+        let expected = HashMap::from([
+            ("inner".to_owned(), "x".to_owned()),
+            ("outer".to_owned(), "y".to_owned()),
         ]);
-        let second = HashMap::from([
-            (
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                "geoarrow.wkb".to_owned(),
-            ),
-            (
-                EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                "{\"b\":2,\"a\":1}".to_owned(),
-            ),
-            ("shared".to_owned(), "second".to_owned()),
-            ("only_second".to_owned(), "right".to_owned()),
-        ]);
-        let schema = DFSchema::from_unqualified_fields(
-            vec![
-                Field::new("first", DataType::Binary, false).with_metadata(first.clone()),
-                Field::new("second", DataType::Binary, false).with_metadata(second),
-                Field::new("plain", DataType::Binary, false),
-                Field::new("bare", DataType::Binary, false).with_metadata(HashMap::from(
-                    [(
-                        EXTENSION_TYPE_NAME_KEY.to_owned(),
-                        "geoarrow.wkb".to_owned(),
-                    )],
-                )),
-                Field::new("other", DataType::Binary, false).with_metadata(
-                    HashMap::from([(
-                        EXTENSION_TYPE_NAME_KEY.to_owned(),
-                        "example.other".to_owned(),
-                    )]),
+        let null = Expr::Literal(ScalarValue::Null, Some(inner));
+        for cast in [
+            Expr::Cast(Cast::new(Box::new(null.clone()), DataType::Int32)),
+            Expr::TryCast(TryCast::new(Box::new(null), DataType::Int32)),
+        ] {
+            let Expr::Alias(alias) = cast.alias("null_value") else {
+                unreachable!();
+            };
+            let aliased = Expr::Alias(alias.with_metadata(Some(outer.clone())));
+            assert_eq!(aliased.to_field(&schema)?.1.metadata(), &expected);
+            let case = when(lit(true), aliased).otherwise(lit(0_i32))?;
+            assert_eq!(case.to_field(&schema)?.1.metadata(), &expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_case_field_inference_is_linear() -> Result<()> {
+        #[derive(Debug)]
+        struct CountingSchema {
+            field: FieldRef,
+            calls: std::cell::Cell<usize>,
+        }
+
+        impl CountingSchema {
+            fn visit(&self) -> Result<()> {
+                let calls = self.calls.get() + 1;
+                self.calls.set(calls);
+                assert_or_internal_err!(calls <= 4096, "Repeated CASE field inference");
+                Ok(())
+            }
+        }
+
+        impl ExprSchema for CountingSchema {
+            fn nullable(&self, _column: &Column) -> Result<bool> {
+                self.visit()?;
+                Ok(false)
+            }
+
+            fn field_from_column(&self, _column: &Column) -> Result<&FieldRef> {
+                self.visit()?;
+                Ok(&self.field)
+            }
+        }
+
+        let metadata = HashMap::from([("source".to_owned(), "marked".to_owned())]);
+        for depth in [8, 32, 128] {
+            let schema = CountingSchema {
+                field: Arc::new(
+                    Field::new("value", DataType::Int32, false)
+                        .with_metadata(metadata.clone()),
                 ),
-            ]
-            .into(),
-            HashMap::new(),
-        )?;
-
-        let combined = when(lit(true), col("first")).otherwise(col("second"))?;
-        let metadata = combined.to_field(&schema)?.1.metadata().clone();
-        assert_eq!(
-            metadata.get(EXTENSION_TYPE_NAME_KEY),
-            first.get(EXTENSION_TYPE_NAME_KEY)
-        );
-        assert_eq!(
-            metadata.get(EXTENSION_TYPE_METADATA_KEY),
-            first.get(EXTENSION_TYPE_METADATA_KEY)
-        );
-        assert_eq!(metadata.get("shared").map(String::as_str), Some("first"));
-        assert_eq!(metadata.get("only_first").map(String::as_str), Some("left"));
-        assert_eq!(
-            metadata.get("only_second").map(String::as_str),
-            Some("right")
-        );
-
-        let plain = when(lit(true), col("plain")).otherwise(col("first"))?;
-        assert_eq!(plain.to_field(&schema)?.1.metadata(), &first);
-
-        let bare = when(lit(true), col("bare")).otherwise(col("first"))?;
-        let metadata = bare.to_field(&schema)?.1.metadata().clone();
-        assert_eq!(
-            metadata.get(EXTENSION_TYPE_NAME_KEY).map(String::as_str),
-            Some("geoarrow.wkb")
-        );
-        assert!(!metadata.contains_key(EXTENSION_TYPE_METADATA_KEY));
-
-        let conflicting = when(lit(true), col("first")).otherwise(col("other"))?;
-        let error = conflicting.to_field(&schema).unwrap_err();
-        assert!(error.to_string().contains("geoarrow.wkb"), "{error}");
-        assert!(error.to_string().contains("example.other"), "{error}");
+                calls: std::cell::Cell::new(0),
+            };
+            let mut expression = col("value");
+            for _ in 0..depth {
+                let branch = Expr::Cast(Cast::new(
+                    Box::new(expression.alias("nested")),
+                    DataType::Int32,
+                ));
+                expression = when(lit(true), col("value")).otherwise(branch)?;
+            }
+            assert_eq!(expression.to_field(&schema)?.1.metadata(), &metadata);
+            assert!(
+                schema.calls.get() <= 6 * depth + 8,
+                "depth {depth}: {} schema lookups",
+                schema.calls.get()
+            );
+        }
         Ok(())
     }
 
@@ -2027,7 +1855,7 @@ mod tests {
     }
 
     #[test]
-    fn test_case_field_metadata_leaf_branches() -> Result<()> {
+    fn test_case_field_metadata_native_branch_fields() -> Result<()> {
         let metadata = HashMap::from([("type".to_string(), "structured".to_string())]);
         let field = Arc::new(
             Field::new("value", DataType::Int32, false).with_metadata(metadata.clone()),
@@ -2049,15 +1877,12 @@ mod tests {
                 Some(Arc::clone(&field)),
             )),
             Expr::LambdaVariable(LambdaVariable::new("arg".into(), Some(field))),
+            col("value") + lit(1),
         ];
         for branch in branches {
             let case = when(lit(true), col("value")).otherwise(branch)?;
             assert_eq!(case.to_field(&schema)?.1.metadata(), &metadata);
         }
-
-        let null_first =
-            when(lit(true), lit(ScalarValue::Null)).otherwise(col("value"))?;
-        assert_eq!(null_first.to_field(&schema)?.1.metadata(), &metadata);
 
         let wrong_type = when(lit(true), col("value")).otherwise(Expr::Literal(
             ScalarValue::Boolean(Some(false)),
@@ -2136,7 +1961,7 @@ mod tests {
             deep = call(deep);
         }
         let deep_case = when(lit(true), deep).otherwise(col("b"))?;
-        assert!(deep_case.to_field(&schema)?.1.metadata().is_empty());
+        assert_eq!(deep_case.to_field(&schema)?.1.metadata(), &metadata);
         Ok(())
     }
 
