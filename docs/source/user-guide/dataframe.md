@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
 Create DataFrame from file or in memory rows using standard API
 
 ```rust
-use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray};
+use datafusion::arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::expr_fn::min;
@@ -105,6 +105,12 @@ async fn main() -> Result<()> {
       ],
     )?;
     let df = ctx.read_batch(batch)?;
+    df.show().await?;
+
+    // Create a new dataframe from Arrow arrays in the same session
+    let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+    let df = ctx.read_columns([("id", id), ("name", name)])?;
     df.show().await?;
 
     Ok(())
