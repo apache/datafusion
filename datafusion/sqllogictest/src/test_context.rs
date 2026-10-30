@@ -62,6 +62,7 @@ use sqlparser::ast;
 use tempfile::TempDir;
 
 mod custom_sort_pushdown;
+mod evaluation_counter;
 mod range_partitioning;
 
 /// Context for running tests
@@ -188,6 +189,7 @@ impl TestContext {
         let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
+        evaluation_counter::register_evaluation_counter(test_ctx.session_ctx());
 
         match file_name {
             "sort_pushdown.slt" => {
