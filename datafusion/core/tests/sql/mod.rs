@@ -63,6 +63,7 @@ mod tpcds_planning;
 mod union_comparison;
 mod union_nullable;
 mod unparser;
+mod volatile_evaluations;
 
 async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     let testdata = test_util::arrow_test_data();

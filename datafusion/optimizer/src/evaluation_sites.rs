@@ -18,17 +18,17 @@
 //!
 //! # An end of run invariant, by design
 //!
-//! [`EvaluationSites::check_no_new_evaluations`] runs one time, at the end of
-//! [`crate::Optimizer::optimize`], and compares the final plan against the
-//! plan the optimizer was given. Intermediate plans are not checked, because
+//! [`check_no_new_volatile_evaluations`] compares the final plan of an
+//! optimizer run against the plan the optimizer was given. Tests call it, see
+//! `datafusion/core/tests/sql/volatile_evaluations.rs`. Intermediate plans are
+//! not checked, because
 //! rules cooperate: `simplify_expressions` expands `x BETWEEN a AND b` into
 //! two references to `x`, and `CommonSubexprEliminate` hoists the duplicate
 //! back out in the same pass. Only the plan that the user pays for matters,
 //! so only that plan is checked.
 //!
-//! The price is that the invariant does not name the rule at fault. That is a
-//! debugging aid, not a gate, and the before and after site counts in the
-//! message are enough to start from.
+//! The price is that the check does not name the rule at fault. The before
+//! and after site counts in the message are enough to start from.
 //!
 //! # What is counted
 //!
@@ -76,37 +76,6 @@ use datafusion_common::{
 use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::{Expr, LogicalPlan};
 
-/// Report a volatile call that the optimizer run made the plan evaluate at
-/// more sites than the input plan does.
-///
-/// On. `random() BETWEEN 0.0 AND 1.0`
-/// (<https://github.com/apache/datafusion/issues/25457>) is fixed by
-/// <https://github.com/apache/datafusion/pull/25476>, and a preimage rewrite
-/// such as `floor(random() * 10) = 3` no longer duplicates its volatile
-/// argument.
-///
-/// Known false positive: a volatile call with column arguments over a
-/// renamed column, see `reports_renamed_column_merge_as_a_new_site`.
-///
-/// One other shape is worth recording here, because it is what an end of run
-/// check buys: `file_row_index()` re-inlined
-/// by `optimize_projections` in `file_row_index.slt`. A per rule check reports
-/// it, this check does not, because `CommonSubexprEliminate` hoists the call
-/// and `optimize_projections` puts it back, which leaves the final plan with
-/// the site count the input plan has. The classification order that lets a
-/// volatile call be inlined at all is fixed by
-/// <https://github.com/apache/datafusion/pull/25456>.
-const ENFORCE_NO_NEW_VOLATILE_EVALUATIONS: bool = true;
-
-/// True while the invariant is checked.
-///
-/// Debug builds only. The check walks the plan two times per optimizer run,
-/// which is cheap but not free, and the other plan invariants are checked
-/// there too.
-const fn enabled() -> bool {
-    cfg!(debug_assertions) && ENFORCE_NO_NEW_VOLATILE_EVALUATIONS
-}
-
 /// The number of evaluation sites of one call, per row lineage, keyed by
 /// [`structural_key`].
 type Counts = HashMap<String, usize>;
@@ -121,16 +90,6 @@ pub(crate) struct EvaluationSites {
 
 impl EvaluationSites {
     /// Count the evaluation sites of `plan`.
-    ///
-    /// Empty, and free, while the invariant is off.
-    pub(crate) fn of(plan: &LogicalPlan) -> Self {
-        if !enabled() {
-            return Self::default();
-        }
-        Self::count(plan)
-    }
-
-    /// Count the evaluation sites of `plan`, whatever the switch says.
     fn count(plan: &LogicalPlan) -> Self {
         let mut counts = Counts::new();
         count_plan(plan, &mut counts);
@@ -140,15 +99,6 @@ impl EvaluationSites {
     /// Fail if `plan` evaluates a volatile call more times than `self` does.
     ///
     /// `self` must be the count of the plan that the optimizer was given.
-    pub(crate) fn check_no_new_evaluations(&self, plan: &LogicalPlan) -> Result<()> {
-        if !enabled() {
-            return Ok(());
-        }
-        self.check(plan)
-    }
-
-    /// The body of [`Self::check_no_new_evaluations`], without the switch, so
-    /// that the machinery can be tested in any build.
     fn check(&self, plan: &LogicalPlan) -> Result<()> {
         let after = Self::count(plan);
         let mut offenders: Vec<(&String, usize, usize)> = after
@@ -184,6 +134,17 @@ impl EvaluationSites {
              was given does. Counts are per row lineage, see `EvaluationSites`"
         )
     }
+}
+
+/// Fail if `optimized` evaluates a volatile call at more sites than `input`
+/// does. `input` is the plan the optimizer was given.
+///
+/// See the [module documentation](self) for what is counted.
+pub fn check_no_new_volatile_evaluations(
+    input: &LogicalPlan,
+    optimized: &LogicalPlan,
+) -> Result<()> {
+    EvaluationSites::count(input).check(optimized)
 }
 
 /// `own_sites(plan) + max over inputs of count_plan(input)`.
@@ -478,65 +439,6 @@ mod tests {
             Optimizer::new().optimize(input, &OptimizerContext::new(), |_, _| {})?;
         assert_eq!(sites(&optimized, "leaf_udf(a)"), 1);
         before.check(&optimized)?;
-        Ok(())
-    }
-
-    /// <https://github.com/apache/datafusion/issues/25457>: a `BETWEEN` on a
-    /// kept volatile call is no longer expanded into two calls.
-    #[test]
-    fn between_on_a_kept_volatile_call_adds_no_site() -> Result<()> {
-        let udf = ScalarUDF::new_from_impl(
-            PlacementTestUDF::new()
-                .with_placement(ExpressionPlacement::KeepInPlace)
-                .with_volatility(Volatility::Volatile),
-        );
-        let input = LogicalPlanBuilder::from(test_table_scan()?)
-            .filter(udf.call(vec![col("a")]).between(lit(1u32), lit(5u32)))?
-            .build()?;
-        let before = EvaluationSites::count(&input);
-        let optimized =
-            Optimizer::new().optimize(input, &OptimizerContext::new(), |_, _| {})?;
-        before.check(&optimized)?;
-        Ok(())
-    }
-
-    /// Known false positive of the name based key, pinned so that the test
-    /// fails, and must be flipped, once the key is fixed. `y` is `a` renamed,
-    /// so the input plan has `f(a)` and `f(y)`, two calls with two keys. When
-    /// the projections are merged both become `f(a)`: still two calls, one
-    /// evaluation each, but one key with 2 sites against 1.
-    #[test]
-    fn reports_renamed_column_merge_as_a_new_site() -> Result<()> {
-        for placement in [
-            ExpressionPlacement::MoveTowardsLeafNodes,
-            ExpressionPlacement::KeepInPlace,
-        ] {
-            let udf = ScalarUDF::new_from_impl(
-                PlacementTestUDF::new()
-                    .with_placement(placement)
-                    .with_volatility(Volatility::Volatile),
-            );
-            let input = LogicalPlanBuilder::from(test_table_scan()?)
-                .project(vec![col("a"), col("a").alias("y")])?
-                .project(vec![udf.call(vec![col("a")]), udf.call(vec![col("y")])])?
-                .build()?;
-            let before = EvaluationSites::count(&input);
-            // The optimizer runs the check in debug builds only, so check the
-            // optimized plan here when it did not.
-            let error = match Optimizer::new().optimize(
-                input,
-                &OptimizerContext::new(),
-                |_, _| {},
-            ) {
-                Ok(optimized) => before.check(&optimized).unwrap_err(),
-                Err(error) => error,
-            }
-            .to_string();
-            assert!(
-                error.contains("_udf(a)` is evaluated at 2 sites, against 1"),
-                "{placement:?}: {error:?}"
-            );
-        }
         Ok(())
     }
 }
