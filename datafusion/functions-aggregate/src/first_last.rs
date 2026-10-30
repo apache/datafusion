@@ -882,6 +882,18 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
             + self.extreme_of_each_group_buf.0.capacity() * size_of::<usize>()
             + self.extreme_of_each_group_buf.1.capacity() / 8
     }
+
+    fn shrink_to_fit(&mut self) {
+        // `take_state` truncates the per-batch scoreboard, which keeps its
+        // capacity for every group seen before the emit. Every user of the
+        // scoreboard accepts it all-false, so rebuild it at the current size.
+        let num_groups = self.extreme_of_each_group_buf.1.len();
+        let mut scoreboard = BooleanBufferBuilder::new(num_groups);
+        scoreboard.append_n(num_groups, false);
+        self.extreme_of_each_group_buf.1 = scoreboard;
+        self.extreme_buf_dirty = false;
+    }
+
     fn convert_to_state(
         &self,
         values: &[ArrayRef],
