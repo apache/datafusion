@@ -358,6 +358,40 @@ select count(*) > 0 from (
 ----
 false
 
+# the predicate is planned as a filter above the projection, where the alias
+# is a real column, instead of dereferencing the alias into a fresh random();
+# the deterministic rn >= 1 conjunct is still pushed below the projection
+query TT
+EXPLAIN SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn, random() AS r
+FROM users
+QUALIFY rn >= 1 AND r > 0.5;
+----
+logical_plan
+01)Filter: r > Float64(0.5)
+02)--Projection: users.id, row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, random() AS r
+03)----Filter: row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW >= UInt64(1)
+04)------WindowAggr: windowExpr=[[row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------TableScan: users projection=[id]
+physical_plan
+01)FilterExec: r@2 > 0.5
+02)--ProjectionExec: expr=[id@0 as id, row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn, random() as r]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------FilterExec: row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 >= 1
+05)--------BoundedWindowAggExec: wdw=[row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+06)----------SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# a window function that is not in the SELECT list cannot be combined with a
+# volatile alias reference
+query error DataFusion error: Error during planning: QUALIFY clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions\. Add the function to the SELECT list and reference it by alias, or use a subquery
+SELECT id, random() AS r
+FROM users
+QUALIFY ROW_NUMBER() OVER (ORDER BY id) >= 1 AND r > 0.5;
+
+# volatile alias in QUALIFY still requires a window function
+query error DataFusion error: Error during planning: QUALIFY clause requires window functions in the SELECT list or QUALIFY clause
+SELECT id, random() AS r FROM users QUALIFY r > 0.5;
+
 # Clean up
 statement ok
 DROP TABLE users;

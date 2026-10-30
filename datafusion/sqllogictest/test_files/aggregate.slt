@@ -9180,6 +9180,49 @@ select count(*) > 0 from (
 ----
 false
 
+# the predicate is planned as a filter above the projection, where the alias
+# is a real column, instead of dereferencing the alias into a fresh random()
+query TT
+EXPLAIN select v1, random() as r from having_test group by v1 having r > 0.5
+----
+logical_plan
+01)Filter: r > Float64(0.5)
+02)--Projection: having_test.v1, random() AS r
+03)----Aggregate: groupBy=[[having_test.v1]], aggr=[[]]
+04)------TableScan: having_test projection=[v1]
+physical_plan
+01)FilterExec: r@1 > 0.5
+02)--ProjectionExec: expr=[v1@0 as v1, random() as r]
+03)----AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1], aggr=[]
+04)------RepartitionExec: partitioning=Hash([v1@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[v1@0 as v1], aggr=[]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# a non-volatile alias next to a volatile alias is also kept as a column
+# reference and resolved against the projection
+query I
+select count(*) from (select v1, max(v2) as m, random() as r from having_test group by v1 having r >= 0 and m > 0)
+----
+3
+
+# an aggregate that is not in the SELECT list cannot be combined with a
+# volatile alias reference
+query error DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions\. Add the function to the SELECT list and reference it by alias, or use a subquery
+select v1, random() as r from having_test group by v1 having r > 0.5 and max(v2) > 0
+
+# a column that is not in the SELECT list cannot be combined with a volatile
+# alias reference
+query error DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression can only reference columns from the SELECT list, but having_test\.v2 is not in the SELECT list\. Use a subquery instead
+select v1, random() as r from having_test group by v1, v2 having r > 0.5 and v2 > 0
+
+# volatile alias in HAVING still requires aggregation
+query error DataFusion error: Error during planning: HAVING clause references: r > Float64\(0\.5\) must appear in the GROUP BY clause or be used in an aggregate function
+select random() as r from having_test having r > 0.5
+
+# volatile alias in HAVING is not supported with DISTINCT ON
+query error DataFusion error: Error during planning: HAVING and QUALIFY expressions that reference aliases of volatile expressions are not supported with DISTINCT ON\. Use a subquery instead
+select distinct on (v1) v1, random() as r from having_test group by v1 having r > 0.5
+
 statement ok
 drop table having_test
 
