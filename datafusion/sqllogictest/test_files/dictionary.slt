@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Tests for querying on dictionary encoded data
 
@@ -651,3 +638,79 @@ GROUP BY region;
 NULL 2
 east 4
 west 4
+
+# MIN/MAX unwrap a dictionary whose values are themselves encoded
+statement ok
+CREATE TABLE dict_encoded_values AS
+SELECT
+  arrow_cast(arrow_cast(arrow_cast(column1, 'UInt32'), 'Dictionary(Int32, UInt32)'),
+    'Dictionary(Int32, Dictionary(Int32, UInt32))') AS dict_of_dict,
+  arrow_cast(arrow_cast(arrow_cast(column1, 'UInt32'), 'Dictionary(Int32, UInt32)'),
+    'Dictionary(Int32, RunEndEncoded("run_ends": non-null Int32, "values": UInt32))') AS dict_of_ree
+FROM (VALUES (1), (1), (3)) AS t(column1);
+
+query IIT
+SELECT min(dict_of_dict), max(dict_of_dict), arrow_typeof(max(dict_of_dict)) FROM dict_encoded_values;
+----
+1 3 UInt32
+
+query IIT
+SELECT min(dict_of_ree), max(dict_of_ree), arrow_typeof(max(dict_of_ree)) FROM dict_encoded_values;
+----
+1 3 UInt32
+
+statement ok
+DROP TABLE dict_encoded_values;
+
+##########
+## Sorting tests: ORDER BY on dictionary columns with NULLS FIRST / NULLS LAST
+##########
+
+statement ok
+CREATE TABLE dict_nulls_order AS
+SELECT arrow_cast(v, 'Dictionary(Int32, Utf8)') AS d
+FROM (VALUES ('b'), (NULL), ('a'), ('c'), (NULL)) AS x(v);
+
+query T
+SELECT arrow_typeof(d) FROM dict_nulls_order LIMIT 1;
+----
+Dictionary(Int32, Utf8)
+
+query T
+SELECT d FROM dict_nulls_order ORDER BY d ASC NULLS FIRST;
+----
+NULL
+NULL
+a
+b
+c
+
+query T
+SELECT d FROM dict_nulls_order ORDER BY d ASC NULLS LAST;
+----
+a
+b
+c
+NULL
+NULL
+
+query T
+SELECT d FROM dict_nulls_order ORDER BY d DESC NULLS FIRST;
+----
+NULL
+NULL
+c
+b
+a
+
+query T
+SELECT d FROM dict_nulls_order ORDER BY d DESC NULLS LAST;
+----
+c
+b
+a
+NULL
+NULL
+
+statement ok
+DROP TABLE dict_nulls_order;

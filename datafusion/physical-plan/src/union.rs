@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 // Some of these functions reference the Postgres documentation
 // or implementation to ensure compatibility and are subject to
@@ -46,9 +33,10 @@ use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::ObservedStream;
 use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 
-use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata::merge_metadata_for_union;
 use datafusion_common::stats::NdvFallback;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
@@ -983,8 +971,8 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
     let first_schema = inputs[0].schema();
 
     // Fast path: when every input already shares the first input's schema, the
-    // field-by-field metadata/nullability merge below is redundant work that
-    // scales as O(n^2 * fields). This is common in practice: unions built from
+    // field-by-field metadata/nullability merge below is redundant work.
+    // This is common in practice: unions built from
     // repartitioned copies of the same plan (e.g. observed in InfluxDB) hand us
     // children that all carry the exact same schema. A pointer-equality check
     // catches the shared-`Arc` case for free, and a content `==` comparison
@@ -1010,49 +998,34 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
         }
     }
 
+    let schemas: Vec<SchemaRef> = inputs.iter().map(|input| input.schema()).collect();
     let fields = (0..first_field_count)
         .map(|i| {
             // We take the name from the left side of the union to match how names are coerced during logical planning,
             // which also uses the left side names.
             let base_field = first_schema.field(i).clone();
 
-            // Coerce metadata and nullability across all inputs
-
-            inputs
+            // Take the first nullable field, or the first field if none are
+            // nullable.
+            let field = schemas
                 .iter()
-                .enumerate()
-                .map(|(input_idx, input)| {
-                    let field = input.schema().field(i).clone();
-                    let mut metadata = field.metadata().clone();
-
-                    let other_metadatas = inputs
-                        .iter()
-                        .enumerate()
-                        .filter(|(other_idx, _)| *other_idx != input_idx)
-                        .flat_map(|(_, other_input)| {
-                            other_input.schema().field(i).metadata().clone().into_iter()
-                        });
-
-                    metadata.extend(other_metadatas);
-                    field.with_metadata(metadata)
-                })
-                .find_or_first(Field::is_nullable)
-                // We can unwrap this because if inputs was empty, this would've already panic'ed when we
-                // indexed into inputs[0].
+                .find_or_first(|schema| schema.field(i).is_nullable())
+                // Empty inputs are rejected above.
                 .unwrap()
-                .with_name(base_field.name())
+                .field(i)
+                .clone();
+
+            let metadata = merge_metadata_for_union(
+                schemas.iter().map(|schema| schema.field(i).metadata()),
+            );
+            field.with_metadata(metadata).with_name(base_field.name())
         })
         .collect::<Vec<_>>();
 
-    let all_metadata_merged: Metadata = inputs
-        .iter()
-        .flat_map(|i| i.schema().metadata().clone().into_iter())
-        .collect();
+    let metadata =
+        merge_metadata_for_union(schemas.iter().map(|schema| schema.metadata()));
 
-    Ok(Arc::new(Schema::new_with_metadata(
-        fields,
-        all_metadata_merged,
-    )))
+    Ok(Arc::new(Schema::new_with_metadata(fields, metadata)))
 }
 
 /// CombinedRecordBatchStream can be used to combine a Vec of SendableRecordBatchStreams into one
@@ -1132,7 +1105,7 @@ mod tests {
     use crate::test::{self, TestMemoryExec};
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field, Metadata};
     use datafusion_common::SplitPoint;
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue};
@@ -1735,6 +1708,82 @@ mod tests {
         // pointer equality (not just `==`): a slow-path merge would build a new,
         // merely-equal Schema, so only ptr-eq proves the merge was skipped.
         assert!(Arc::ptr_eq(&union_plan.schema(), &first_input_schema));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_union_schema_metadata_and_nullability() -> Result<()> {
+        use arrow::array::Int32Array;
+
+        // Field and schema metadata are merged in input order, so the last
+        // input wins regardless of which field supplies the nullability.
+        for nullability in [
+            [false, false, false],
+            [true, false, false],
+            [false, true, false],
+            [false, false, true],
+            [true, true, true],
+        ] {
+            let inputs = nullability
+                .iter()
+                .enumerate()
+                .map(|(i, &nullable)| {
+                    let metadata = Metadata::from([
+                        ("shared".to_owned(), format!("input{i}")),
+                        (format!("only{i}"), "kept".to_owned()),
+                    ]);
+                    let field =
+                        Field::new(format!("value{i}"), DataType::Int32, nullable)
+                            .with_metadata(metadata.clone());
+                    let schema =
+                        Arc::new(Schema::new_with_metadata(vec![field], metadata));
+                    let batch = RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(Int32Array::from(vec![i as i32]))],
+                    )?;
+                    let input: Arc<dyn ExecutionPlan> =
+                        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?;
+                    Ok(input)
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let expected_metadata = Metadata::from([
+                ("shared".to_owned(), "input2".to_owned()),
+                ("only0".to_owned(), "kept".to_owned()),
+                ("only1".to_owned(), "kept".to_owned()),
+                ("only2".to_owned(), "kept".to_owned()),
+            ]);
+            let expected_schema = Arc::new(Schema::new_with_metadata(
+                vec![
+                    Field::new("value0", DataType::Int32, nullability.contains(&true))
+                        .with_metadata(expected_metadata.clone()),
+                ],
+                expected_metadata,
+            ));
+
+            let union = UnionExec::try_new(inputs)?;
+            assert_eq!(union.schema(), expected_schema, "{nullability:?}");
+            let batches = collect(union, Arc::new(TaskContext::default())).await?;
+            datafusion_common::assert_batches_sorted_eq!(
+                [
+                    "+--------+",
+                    "| value0 |",
+                    "+--------+",
+                    "| 0      |",
+                    "| 1      |",
+                    "| 2      |",
+                    "+--------+"
+                ],
+                &batches
+            );
+            for batch in batches {
+                assert_eq!(
+                    batch.schema().fields(),
+                    expected_schema.fields(),
+                    "{nullability:?}"
+                );
+            }
+        }
         Ok(())
     }
 

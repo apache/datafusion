@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Functionality used both on logical and physical plans
 
@@ -89,6 +76,7 @@ use crate::cast::{
 };
 use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
+use crate::float_semantics::hash_input;
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::utils::offset_span;
 use std::cell::RefCell;
@@ -258,24 +246,20 @@ hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64, u128);
 hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 
 macro_rules! hash_float_value {
-    ($(($t:ty, $i:ty)),+) => {
+    ($($t:ty),+) => {
         $(impl HashValue for $t {
+            // Hash the normalized bits so values SQL considers equal
+            // (e.g. +0.0 and -0.0) hash the same.
             fn hash_one<S: BuildHasher>(&self, state: &S) -> u64 {
-                // +0.0 and -0.0 differ only in the sign bit but compare equal
-                // under IEEE 754; normalize -0.0 → +0.0 so Hash agrees with Eq.
-                let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
-                let bits = if bits << 1 == 0 { 0 } else { bits };
-                state.hash_one(bits)
+                state.hash_one(hash_input(*self).to_bits())
             }
             fn hash_write(&self, hasher: &mut impl Hasher) {
-                let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
-                let bits: $i = if bits << 1 == 0 { 0 } else { bits };
-                hasher.write(&bits.to_ne_bytes())
+                hasher.write(&hash_input(*self).to_bits().to_ne_bytes())
             }
         })+
     };
 }
-hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
+hash_float_value!(half::f16, f32, f64);
 
 #[cfg(not(feature = "force_hash_collisions"))]
 trait ChildHashing {
@@ -321,15 +305,9 @@ fn hash_array_primitive<T>(
 
     if array.null_count() == 0 {
         if rehash {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                let mut hasher = random_state.seeded_state(*hash).build_hasher();
-                value.hash_write(&mut hasher);
-                *hash = hasher.finish();
-            }
+            hash_prim_rehash_dense(array.values(), hashes_buffer, random_state);
         } else {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = value.hash_one(random_state);
-            }
+            hash_prim_fresh_dense(array.values(), hashes_buffer, random_state);
         }
     } else if rehash {
         for i in array.nulls().unwrap().valid_indices() {
@@ -343,6 +321,53 @@ fn hash_array_primitive<T>(
             let value = unsafe { array.value_unchecked(i) };
             hashes_buffer[i] = value.hash_one(random_state);
         }
+    }
+}
+
+/// Overwrite each slot with `value.hash_one(state)`, 16 rows per iteration.
+/// Gathering + hashing a whole lane batch before storing keeps the independent
+/// hashes in flight so the pipeline isn't serialized on store-to-load deps.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_prim_fresh_dense<N, S>(values: &[N], hashes: &mut [u64], state: &S)
+where
+    N: HashValue + Copy,
+    S: HashState,
+{
+    const LANES: usize = 16;
+    let (value_chunks, value_tail) = values.as_chunks::<LANES>();
+    let (hash_chunks, hash_tail) = hashes.as_chunks_mut::<LANES>();
+    for (h, v) in hash_chunks.iter_mut().zip(value_chunks) {
+        *h = v.map(|value| value.hash_one(state));
+    }
+    for (h, v) in hash_tail.iter_mut().zip(value_tail) {
+        *h = v.hash_one(state);
+    }
+}
+
+/// Fold `prev_hash` + `value` into a new hash, 8 rows per iteration. 8 is
+/// narrower than `hash_prim_fresh_dense` because each lane holds both `prev` and
+/// `value` live; widening past 8 spilled registers in the multi-column case.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_prim_rehash_dense<N, S>(values: &[N], hashes: &mut [u64], state: &S)
+where
+    N: HashValue + Copy,
+    S: HashState,
+{
+    const LANES: usize = 8;
+    let rehash_one = |prev_hash: u64, value: N| {
+        let mut hasher = state.seeded_state(prev_hash).build_hasher();
+        value.hash_write(&mut hasher);
+        hasher.finish()
+    };
+    let (value_chunks, value_tail) = values.as_chunks::<LANES>();
+    let (hash_chunks, hash_tail) = hashes.as_chunks_mut::<LANES>();
+    for (h, v) in hash_chunks.iter_mut().zip(value_chunks) {
+        *h = std::array::from_fn(|lane| rehash_one(h[lane], v[lane]));
+    }
+    for (h, &v) in hash_tail.iter_mut().zip(value_tail) {
+        *h = rehash_one(*h, v);
     }
 }
 
