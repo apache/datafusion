@@ -31,7 +31,7 @@ use arrow::datatypes::{
     SchemaRef, StringViewType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::float_semantics::{has_float_leaf, normalize_floats};
-use datafusion_common::hash_utils::CachingArrayHasher;
+use datafusion_common::hash_utils::{CachingArrayHasher, create_hashes};
 use datafusion_common::{Result, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::{EmitTo, GroupSelection};
@@ -232,6 +232,9 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// Caches dictionary value hashes by group column.
     hasher: CachingArrayHasher,
 
+    /// Group columns whose dictionary hashes need to be shared with storage.
+    dictionary_indices: Vec<usize>,
+
     /// Whether the non-streaming single dictionary-key fast path applies.
     map_dictionary_groups: bool,
 }
@@ -304,6 +307,19 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         let map = HashTable::with_capacity(0);
         let group_values = Self::build_group_columns(&schema)?;
+        let dictionary_indices = if STREAMING {
+            vec![]
+        } else {
+            schema
+                .fields()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, field)| {
+                    matches!(field.data_type(), DataType::Dictionary(_, _))
+                        .then_some(index)
+                })
+                .collect()
+        };
         let hasher = CachingArrayHasher::new(
             schema.as_ref(),
             crate::aggregates::AGGREGATION_HASH_SEED,
@@ -321,6 +337,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             group_values,
             hashes_buffer: Default::default(),
             hasher,
+            dictionary_indices,
             map_dictionary_groups,
         })
     }
@@ -328,11 +345,18 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     fn create_hashes_with_cache(
         hasher: &mut CachingArrayHasher,
         group_values: &mut [Box<dyn GroupColumn>],
+        dictionary_indices: &[usize],
         cols: &[ArrayRef],
         hashes: &mut [u64],
     ) -> Result<()> {
+        if dictionary_indices.is_empty() {
+            create_hashes(cols, &crate::aggregates::AGGREGATION_HASH_SEED, hashes)?;
+            return Ok(());
+        }
+
         hasher.create_hashes(cols, hashes)?;
-        for (index, group_value) in group_values.iter_mut().enumerate() {
+        for &index in dictionary_indices {
+            let group_value = &mut group_values[index];
             if let Some((values, value_hashes)) = hasher.dictionary_hashes(index) {
                 group_value.set_dictionary_hashes(&values, value_hashes);
             }
@@ -418,6 +442,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         Self::create_hashes_with_cache(
             &mut self.hasher,
             &mut self.group_values,
+            &self.dictionary_indices,
             cols,
             batch_hashes,
         )?;
@@ -524,6 +549,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         Self::create_hashes_with_cache(
             &mut self.hasher,
             &mut self.group_values,
+            &self.dictionary_indices,
             cols,
             &mut batch_hashes,
         )?;
@@ -1147,6 +1173,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             + self.emit_group_index_list_buffer.allocated_size()
             + self.vectorized_operation_buffers.size()
             + self.hashes_buffer.allocated_size()
+            + self.dictionary_indices.allocated_size()
             + self.hasher.size()
     }
 
