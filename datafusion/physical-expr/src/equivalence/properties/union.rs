@@ -5,7 +5,7 @@
 use std::iter::Peekable;
 use std::sync::Arc;
 
-use super::EquivalenceProperties;
+use super::{ColumnRanges, EquivalenceProperties};
 use crate::equivalence::class::AcrossPartitions;
 use crate::{ConstExpr, PhysicalSortExpr};
 
@@ -61,7 +61,25 @@ fn calculate_union_binary(
     orderings.add_satisfied_orderings(&rhs, &lhs)?;
     let orderings = orderings.build();
 
+    // A union's bounds must cover every branch, including branches with no bounds.
+    let column_ranges = lhs
+        .column_ranges
+        .as_ref()
+        .zip(rhs.column_ranges.as_ref())
+        .map(|(left, right)| {
+            left.iter()
+                .filter_map(|(index, left)| {
+                    right
+                        .get(index)
+                        .and_then(|right| left.union(right).ok())
+                        .map(|range| (*index, range))
+                })
+                .collect::<ColumnRanges>()
+        })
+        .filter(|ranges| !ranges.is_empty())
+        .map(Arc::new);
     let mut eq_properties = EquivalenceProperties::new(lhs.schema);
+    eq_properties.column_ranges = column_ranges;
     eq_properties.add_constants(constants)?;
     eq_properties.add_orderings(orderings);
     Ok(eq_properties)
