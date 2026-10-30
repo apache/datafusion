@@ -2132,12 +2132,6 @@ fn get_preimage(
     if func.signature().volatility != Volatility::Immutable {
         return Ok(PreimageResult::None);
     }
-    // The rewrite can reference the argument more than one time, for example
-    // `floor(x) = 3` becomes `x >= 3 AND x < 4`. A volatile argument such as
-    // `random() * 10` must not be evaluated twice.
-    if args.iter().any(Expr::is_volatile) {
-        return Ok(PreimageResult::None);
-    }
     func.preimage(args, right_expr, info)
 }
 
