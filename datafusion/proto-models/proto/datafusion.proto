@@ -1117,20 +1117,12 @@ message PhysicalExprNode {
     PhysicalRangeExprNode range_expr = 27;
     PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
     PhysicalLiteralNode literal_with_metadata = 29;
-    PhysicalBetweenNode between = 31;
   }
 }
 
 message PhysicalLiteralNode {
   datafusion_common.ScalarValue value = 1;
   map<string, string> metadata = 2;
-}
-
-message PhysicalBetweenNode {
-  PhysicalExprNode expr = 1;
-  bool negated = 2;
-  PhysicalExprNode low = 3;
-  PhysicalExprNode high = 4;
 }
 
 message PhysicalDynamicFilterNode {

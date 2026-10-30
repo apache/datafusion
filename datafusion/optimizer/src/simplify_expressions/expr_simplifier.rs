@@ -1649,15 +1649,6 @@ impl TreeNodeRewriter for Simplifier<'_> {
 
             // a between 3 and 5  -->  a >= 3 AND a <=5
             // a not between 3 and 5  -->  a < 3 OR a > 5
-            //
-            // The rewrite names `a` two times, so it also evaluates `a` two
-            // times. A volatile `a` gives a different value each time, so keep
-            // `BETWEEN` together and let the physical planner evaluate the
-            // value one time. See
-            // https://github.com/apache/datafusion/issues/25457
-            Expr::Between(between) if between.expr.is_volatile() => {
-                Transformed::no(Expr::Between(between))
-            }
             Expr::Between(between) => Transformed::yes(if between.negated {
                 let l = *between.expr.clone();
                 let r = *between.expr;
@@ -5306,19 +5297,6 @@ mod tests {
             simplify(expr),
             or(col("c2").lt(lit(3)), col("c2").gt(lit(4)))
         );
-    }
-
-    #[test]
-    fn simplify_expr_between_keeps_a_volatile_value_together() {
-        // Expanding would evaluate the volatile value two times
-        let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
-        let volatile = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
-        for expr in [
-            volatile.clone().between(lit(1i16), lit(2i16)),
-            volatile.not_between(lit(1i16), lit(2i16)),
-        ] {
-            assert_eq!(simplify(expr.clone()), expr);
-        }
     }
 
     #[test]
