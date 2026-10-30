@@ -31,7 +31,7 @@ use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::catalog::TableProvider;
 use datafusion::common::datatype::FieldExt;
 use datafusion::common::{
-    DFSchema, ScalarValue, TableReference, internal_err, not_impl_err, substrait_err,
+    DFSchema, ScalarValue, TableReference, not_impl_err, substrait_err,
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::LambdaVariable;
@@ -700,11 +700,6 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
             .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
         let input_rels = rel.inputs.iter().collect::<Vec<_>>();
         let inputs = self.consume_rel_inputs(&input_rels).await?;
-        if inputs.len() != input_rels.len() {
-            return internal_err!(
-                "ExtensionMultiRel consumer returned the wrong number of inputs"
-            );
-        }
         let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
         Ok(LogicalPlan::Extension(Extension { node: plan }))
     }

@@ -17,9 +17,7 @@
 
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::Field;
-use datafusion::common::{
-    JoinType, NullEquality, internal_err, not_impl_err, substrait_err,
-};
+use datafusion::common::{JoinType, NullEquality, not_impl_err, substrait_err};
 use datafusion::logical_expr::{
     Cast, Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
 };
@@ -32,58 +30,53 @@ pub async fn from_set_rel(
     set: &SetRel,
 ) -> datafusion::common::Result<LogicalPlan> {
     if set.inputs.len() < 2 {
-        return substrait_err!("Set operation requires at least two inputs");
-    }
-    let op = set.op();
-    if let SetOp::Unspecified | SetOp::MinusMultiset = op {
-        return not_impl_err!("Unsupported set operator: {op:?}");
-    }
-    let inputs = set.inputs.iter().collect::<Vec<_>>();
-    let plans = consumer.consume_rel_inputs(&inputs).await?;
-    if plans.len() != inputs.len() {
-        return internal_err!("SetRel consumer returned the wrong number of inputs");
-    }
-    let mut plans = plans.into_iter();
-    let first = plans.next().expect("validated at least two inputs");
-    match op {
-        SetOp::UnionAll => union_rels(first, plans, true),
-        SetOp::UnionDistinct => union_rels(first, plans, false),
-        SetOp::IntersectionPrimary => {
-            let second = plans.next().expect("validated at least two inputs");
-            intersect_rel(first, union_rels(second, plans, true)?, false)
+        substrait_err!("Set operation requires at least two inputs")
+    } else {
+        if let SetOp::Unspecified | SetOp::MinusMultiset = set.op() {
+            return not_impl_err!("Unsupported set operator: {:?}", set.op());
         }
-        SetOp::IntersectionMultiset => intersect_rels(first, plans, false),
-        SetOp::IntersectionMultisetAll => intersect_rels(first, plans, true),
-        SetOp::MinusPrimary => except_rels(first, plans, false),
-        SetOp::MinusPrimaryAll => except_rels(first, plans, true),
-        set_op => not_impl_err!("Unsupported set operator: {set_op:?}"),
+        let inputs = set.inputs.iter().collect::<Vec<_>>();
+        let mut rels = consumer.consume_rel_inputs(&inputs).await?.into_iter();
+        match set.op() {
+            SetOp::UnionAll => union_rels(rels, true),
+            SetOp::UnionDistinct => union_rels(rels, false),
+            SetOp::IntersectionPrimary => {
+                intersect_rel(rels.next().unwrap(), union_rels(rels, true)?, false)
+            }
+            SetOp::IntersectionMultiset => intersect_rels(rels, false),
+            SetOp::IntersectionMultisetAll => intersect_rels(rels, true),
+            SetOp::MinusPrimary => except_rels(rels, false),
+            SetOp::MinusPrimaryAll => except_rels(rels, true),
+            set_op => not_impl_err!("Unsupported set operator: {set_op:?}"),
+        }
     }
 }
 
 fn union_rels(
-    first: LogicalPlan,
-    plans: impl Iterator<Item = LogicalPlan>,
+    mut rels: impl Iterator<Item = LogicalPlan>,
     is_all: bool,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let mut builder = LogicalPlanBuilder::from(first);
-    for plan in plans {
-        builder = if is_all {
-            builder.union(plan)?
+    let mut union_builder = Ok(LogicalPlanBuilder::from(rels.next().unwrap()));
+    for rel_plan in rels {
+        union_builder = if is_all {
+            union_builder?.union(rel_plan)
         } else {
-            builder.union_distinct(plan)?
+            union_builder?.union_distinct(rel_plan)
         };
     }
-    builder.build()
+    union_builder?.build()
 }
 
 fn intersect_rels(
-    mut rel: LogicalPlan,
-    inputs: impl Iterator<Item = LogicalPlan>,
+    mut rels: impl Iterator<Item = LogicalPlan>,
     is_all: bool,
 ) -> datafusion::common::Result<LogicalPlan> {
-    for input in inputs {
+    let mut rel = rels.next().unwrap();
+
+    for input in rels {
         rel = intersect_rel(rel, input, is_all)?;
     }
+
     Ok(rel)
 }
 
@@ -213,12 +206,14 @@ fn intersect_rel(
 }
 
 fn except_rels(
-    mut rel: LogicalPlan,
-    inputs: impl Iterator<Item = LogicalPlan>,
+    mut rels: impl Iterator<Item = LogicalPlan>,
     is_all: bool,
 ) -> datafusion::common::Result<LogicalPlan> {
-    for input in inputs {
+    let mut rel = rels.next().unwrap();
+
+    for input in rels {
         rel = LogicalPlanBuilder::except(rel, input, is_all)?;
     }
+
     Ok(rel)
 }
