@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! CI steps that can be inspected or run through `cargo xtask`.
 
@@ -53,7 +40,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         runner: StepContext::run_test,
@@ -249,28 +236,33 @@ impl StepContext {
             .failure_message("CI test step failed");
 
         match variant.as_str() {
-            "workspace" => {
+            "workspace" | "slt-coverage" => {
+                cmd_builder.program("cargo").args([
+                    "llvm-cov",
+                    "--profile",
+                    "ci",
+                    "--exclude",
+                    "datafusion-examples",
+                    "--exclude",
+                    "ffi_example_table_provider",
+                    "--exclude",
+                    "datafusion-cli",
+                    "--workspace",
+                ]);
+                let output_path = if variant == "slt-coverage" {
+                    cmd_builder.args(["--test", "sqllogictests"]);
+                    "target/codecov-slt.json"
+                } else {
+                    cmd_builder.args(["--lib", "--tests", "--bins"]);
+                    "target/codecov.json"
+                };
                 cmd_builder
-                    .program("cargo")
                     .args([
-                        "llvm-cov",
-                        "--profile",
-                        "ci",
-                        "--exclude",
-                        "datafusion-examples",
-                        "--exclude",
-                        "ffi_example_table_provider",
-                        "--exclude",
-                        "datafusion-cli",
-                        "--workspace",
-                        "--lib",
-                        "--tests",
-                        "--bins",
                         "--features",
                         "serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait",
                         "--codecov",
                         "--output-path",
-                        "target/codecov.json",
+                        output_path,
                     ])
                     .env("RUST_BACKTRACE", "1")
                     .requires_executable(
@@ -565,7 +557,7 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -755,6 +747,26 @@ cargo llvm-cov \
 --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
 --codecov \
 --output-path target/codecov.json
+")
+                },
+            },
+            Cmd {
+                command: &["test", "slt-coverage"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo llvm-cov \
+--profile ci \
+--exclude datafusion-examples \
+--exclude ffi_example_table_provider \
+--exclude datafusion-cli \
+--workspace \
+--test sqllogictests \
+--features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
+--codecov \
+--output-path target/codecov-slt.json
 ")
                 },
             },
