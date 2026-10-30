@@ -230,13 +230,15 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
     }
 
-    /// Build: LocalLimitExec or GlobalLimitExec → BoundedWindowAggExec(row_number) → SortExec
-    fn build_window_plan(
-        use_local_limit: bool,
+    /// Wrap `input` in `SortExec -> BoundedWindowAggExec(udwf)`, both ordered by `a`.
+    /// The frame ends at the current row, so the window adds no lookahead of its own
+    /// and the fetch a test asserts on comes only from what the rule carried down.
+    fn sort_then_window(
+        udwf: &Arc<WindowUDF>,
+        name: &str,
+        input: Arc<dyn ExecutionPlan>,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        let s = schema();
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+        let s = input.schema();
 
         let ordering =
             LexOrdering::new(vec![PhysicalSortExpr::new_default(col("a", &s)?).asc()])
@@ -247,13 +249,7 @@ mod tests {
         );
 
         let window_expr = Arc::new(StandardWindowExpr::new(
-            create_udwf_window_expr(
-                &row_number_udwf(),
-                &[],
-                &s,
-                "row_number".to_string(),
-                false,
-            )?,
+            create_udwf_window_expr(udwf, &[], &s, name.to_string(), false)?,
             &[],
             ordering.as_ref(),
             Arc::new(WindowFrame::new_bounds(
@@ -263,20 +259,26 @@ mod tests {
             )),
         ));
 
-        let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
+        Ok(Arc::new(BoundedWindowAggExec::try_new(
             vec![window_expr],
             sort,
             InputOrderMode::Sorted,
             true,
-        )?);
+        )?))
+    }
 
-        let limit: Arc<dyn ExecutionPlan> = if use_local_limit {
+    /// Build: LocalLimitExec or GlobalLimitExec → BoundedWindowAggExec(row_number) → SortExec
+    fn build_window_plan(
+        use_local_limit: bool,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
+        let window = sort_then_window(&row_number_udwf(), "row_number", input)?;
+
+        Ok(if use_local_limit {
             Arc::new(LocalLimitExec::new(window, 100))
         } else {
             Arc::new(GlobalLimitExec::new(window, 0, Some(100)))
-        };
-
-        Ok(limit)
+        })
     }
 
     fn optimize(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
@@ -348,36 +350,9 @@ mod tests {
     fn build_absolute_plan(
         with_limit: bool,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        let s = schema();
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
-
-        let ordering =
-            LexOrdering::new(vec![PhysicalSortExpr::new_default(col("a", &s)?).asc()])
-                .unwrap();
-
-        let sort: Arc<dyn ExecutionPlan> = Arc::new(
-            SortExec::new(ordering.clone(), input).with_preserve_partitioning(true),
-        );
-
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
         let udwf = Arc::new(WindowUDF::from(AtLeast200(RowNumber::new())));
-        let window_expr = Arc::new(StandardWindowExpr::new(
-            create_udwf_window_expr(&udwf, &[], &s, "at_least_200".to_string(), false)?,
-            &[],
-            ordering.as_ref(),
-            Arc::new(WindowFrame::new_bounds(
-                WindowFrameUnits::Rows,
-                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
-                WindowFrameBound::CurrentRow,
-            )),
-        ));
-
-        let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
-            vec![window_expr],
-            sort,
-            InputOrderMode::Sorted,
-            true,
-        )?);
+        let window = sort_then_window(&udwf, "at_least_200", input)?;
 
         Ok(if with_limit {
             Arc::new(GlobalLimitExec::new(window, 0, Some(100)))
