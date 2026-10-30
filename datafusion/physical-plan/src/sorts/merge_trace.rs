@@ -394,7 +394,7 @@ async fn test_distinct_keys_are_unaffected_by_the_tie_breaker() {
 ///
 /// This is a known limitation, recorded here so that widening the tie breaker
 /// to inner nodes shows up as a deliberate snapshot change. Note also that the
-/// initial polls are not in partition order — initialization uses
+/// initial polls are not in partition order — `initialize_all_partitions` uses
 /// `swap_remove`, which reorders the pending list.
 #[tokio::test]
 async fn test_tie_breaker_only_balances_the_root_comparison() {

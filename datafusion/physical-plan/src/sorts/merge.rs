@@ -215,7 +215,16 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
         async_try_stream(|mut emitter| async move {
             // 1. Make sure we have data from each stream so we can initialize the loser tree
-            self.initialize_partitions().await?;
+            {
+                // This vector contains the indices of the partitions that have not started emitting yet.
+                let mut uninitiated_partitions =
+                    (0..self.streams.partitions()).collect::<Vec<_>>();
+
+                self.initialize_all_partitions(&mut uninitiated_partitions)
+                    .await?;
+
+                assert_eq!(uninitiated_partitions.len(), 0);
+            }
 
             let elapsed_compute = self.metrics.elapsed_compute().clone();
             let mut timer = elapsed_compute.timer();
@@ -290,14 +299,15 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         self.cursors[winner].is_none()
     }
 
-    async fn initialize_partitions(&mut self) -> Result<()> {
+    async fn initialize_all_partitions(
+        &mut self,
+        uninitiated_partitions: &mut Vec<usize>,
+    ) -> Result<()> {
         assert_eq!(
             self.loser_tree.len(),
             0,
             "loser tree must be empty when initializing"
         );
-        let mut uninitiated_partitions =
-            (0..self.streams.partitions()).collect::<Vec<_>>();
         let mut next_partition = 0;
         // Initializing many ready inputs can monopolize a worker. Use the batch
         // target as a simple work budget for both row and field cursors.
@@ -305,7 +315,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         while !uninitiated_partitions.is_empty() {
             let rows = poll_fn(|cx| {
                 self.initialize_next_partition(
-                    &mut uninitiated_partitions,
+                    uninitiated_partitions,
                     &mut next_partition,
                     cx,
                 )
