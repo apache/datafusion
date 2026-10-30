@@ -294,8 +294,9 @@ impl ScalarUDFImpl for DateBinFunc {
         argument_types: &[DataType],
         literal_arguments: &[Option<&ScalarValue>],
     ) -> bool {
-        // With the epoch origin, a positive nanosecond stride rounds down
-        // monotonically. Timestamp binning preserves NULLs or returns an error.
+        // With the epoch origin, a positive fixed-duration stride rounds down
+        // monotonically. As in date_bin_impl, each day is 24 hours.
+        // Timestamp binning preserves NULLs or returns an error.
         match (argument_types, literal_arguments) {
             (
                 [
@@ -303,7 +304,15 @@ impl ScalarUDFImpl for DateBinFunc {
                     Timestamp(Nanosecond, None),
                 ],
                 [Some(ScalarValue::IntervalMonthDayNano(Some(stride))), None],
-            ) => stride.months == 0 && stride.days == 0 && stride.nanoseconds > 0,
+            ) => {
+                stride.months == 0
+                    && TimeDelta::try_days(i64::from(stride.days))
+                        .and_then(|days| {
+                            days.checked_add(&Duration::nanoseconds(stride.nanoseconds))
+                        })
+                        .and_then(|stride| stride.num_nanoseconds())
+                        .is_some_and(|stride| stride > 0)
+            }
             _ => false,
         }
     }
@@ -1011,7 +1020,7 @@ mod tests {
     }
 
     #[test]
-    fn range_key_locality_requires_positive_nanosecond_only_stride() {
+    fn range_key_locality_requires_positive_fixed_duration_stride() {
         use arrow::datatypes::DataType::Timestamp;
         use arrow::datatypes::TimeUnit::Nanosecond;
 
@@ -1049,10 +1058,35 @@ mod tests {
                 ScalarValue::new_interval_mdn(1, 0, 0),
                 false,
             ),
-            ("day stride", ScalarValue::new_interval_mdn(0, 1, 0), false),
+            ("day stride", ScalarValue::new_interval_mdn(0, 1, 0), true),
             (
-                "mixed stride",
+                "mixed day and nanosecond stride",
                 ScalarValue::new_interval_mdn(0, 1, 1),
+                true,
+            ),
+            (
+                "day minus one nanosecond",
+                ScalarValue::new_interval_mdn(0, 1, -1),
+                true,
+            ),
+            (
+                "negative day plus one nanosecond",
+                ScalarValue::new_interval_mdn(0, -1, 1),
+                false,
+            ),
+            (
+                "combined zero stride",
+                ScalarValue::new_interval_mdn(0, 1, -86_400_000_000_000),
+                false,
+            ),
+            (
+                "mixed month and day stride",
+                ScalarValue::new_interval_mdn(1, 1, 0),
+                false,
+            ),
+            (
+                "combined stride overflows nanoseconds",
+                ScalarValue::new_interval_mdn(0, 1, i64::MAX),
                 false,
             ),
             (

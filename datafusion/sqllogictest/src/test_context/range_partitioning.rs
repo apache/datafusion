@@ -423,9 +423,8 @@ type TimeBinRow = (
 /// - partition 1: `[2024-01-01 01:00, 02:00)`
 ///
 /// Files are range-partitioned on `timestamp` and sorted on `(key, timestamp)`.
-/// The hour split permits partition-local `date_trunc('hour')` aggregation,
-/// but `date_trunc('day')` straddles it. Aligned `date_bin` remains a negative
-/// control because the function is not admitted to range analysis.
+/// The hour split permits partition-local `date_trunc('hour')` and aligned
+/// `date_bin` aggregation, but daily bins straddle it.
 pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("key", DataType::Utf8, false),
@@ -489,6 +488,61 @@ pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
             col("key").sort(true, true),
             col("timestamp").sort(true, true),
         ]]),
+    );
+}
+
+/// Registers `range_sorted_day_bin` with two timestamp ranges split at midnight.
+pub(super) fn register_range_sorted_day_bin_table(ctx: &SessionContext) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        ),
+        Field::new("value", DataType::Int64, false),
+    ]));
+    let partitions = [
+        (
+            vec![time_bin_ts(23 * 60, 0), time_bin_ts(23 * 60 + 30, 0)],
+            vec![1, 2],
+        ),
+        (
+            vec![time_bin_ts(24 * 60, 0), time_bin_ts(24 * 60 + 30, 0)],
+            vec![10, 20],
+        ),
+    ];
+    let batches = partitions
+        .into_iter()
+        .map(|(timestamps, values)| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(TimestampNanosecondArray::from(timestamps)) as ArrayRef,
+                    Arc::new(Int64Array::from(values)) as ArrayRef,
+                ],
+            )
+            .expect("daily time-bin batch should be valid")
+        })
+        .collect();
+    let output_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![col("timestamp").sort(true, true)],
+            vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                Some(time_bin_ts(24 * 60, 0)),
+                None,
+            )])],
+        )
+        .expect("daily time-bin range partitioning should be valid"),
+    );
+    register_parquet_listing_table(
+        ctx,
+        "range_sorted_day_bin",
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files/scratch_range_partitioning/range_sorted_day_bin"),
+        schema,
+        batches,
+        output_partitioning,
+        Some(vec![vec![col("timestamp").sort(true, true)]]),
     );
 }
 

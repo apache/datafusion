@@ -32,7 +32,8 @@
 # Both date_bin(60s) and date_trunc('hour') keep groups local at the hour
 # split, so aggregation uses SinglePartitioned without a hash shuffle.
 # date_bin admission is limited to timezone-less nanosecond timestamps,
-# a positive nanosecond-only literal stride, and the default epoch origin.
+# a positive fixed-duration IntervalMonthDayNano literal stride with no months,
+# and the default epoch origin.
 # Crossing bins and expressions outside that scope retain the hash shuffle.
 
 statement ok
@@ -164,6 +165,55 @@ ORDER BY key, time_bin;
 k1 2024-01-01T00:00:00 33
 k2 2024-01-01T00:00:00 7
 k2 2024-01-01T01:30:00 35
+
+##########
+# INTERVAL '1 day' uses a day component rather than nanoseconds. Daily bins
+# stay local across the 2024-01-02 midnight split, so no hash shuffle is needed.
+##########
+
+query TT
+EXPLAIN SELECT date_bin(INTERVAL '1 day', timestamp) AS day_bin, sum(value)
+FROM range_sorted_day_bin
+GROUP BY day_bin;
+----
+physical_plan
+01)ProjectionExec: expr=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 1, nanoseconds: 0 }"),range_sorted_day_bin.timestamp)@0 as day_bin, sum(range_sorted_day_bin.value)@1 as sum(range_sorted_day_bin.value)]
+02)--AggregateExec: mode=SinglePartitioned, gby=[date_bin(IntervalMonthDayNano { months: 0, days: 1, nanoseconds: 0 }, timestamp@0) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 1, nanoseconds: 0 }"),range_sorted_day_bin.timestamp)], aggr=[sum(range_sorted_day_bin.value)], group_clustering_mode=Full
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_day_bin/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_day_bin/part-1.parquet]]}, projection=[timestamp, value], output_ordering=[timestamp@0 ASC], output_partitioning=Range([timestamp@0 ASC], [(1704153600000000000)], 2), file_type=parquet
+
+query PI
+SELECT date_bin(INTERVAL '1 day', timestamp) AS day_bin, sum(value)
+FROM range_sorted_day_bin
+GROUP BY day_bin
+ORDER BY day_bin;
+----
+2024-01-01T00:00:00 3
+2024-01-02T00:00:00 30
+
+##########
+# The same daily bin crosses the original table's 01:00 split. The hash
+# shuffle must remain so values from both partitions are combined.
+##########
+
+query TT
+EXPLAIN SELECT date_bin(INTERVAL '1 day', timestamp) AS day_bin, sum(value)
+FROM range_sorted_time_bin
+GROUP BY day_bin;
+----
+physical_plan
+01)ProjectionExec: expr=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 1, nanoseconds: 0 }"),range_sorted_time_bin.timestamp)@0 as day_bin, sum(range_sorted_time_bin.value)@1 as sum(range_sorted_time_bin.value)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 1, nanoseconds: 0 }"),range_sorted_time_bin.timestamp)@0 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 1, nanoseconds: 0 }"),range_sorted_time_bin.timestamp)], aggr=[sum(range_sorted_time_bin.value)]
+03)----RepartitionExec: partitioning=Hash([date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 1, nanoseconds: 0 }"),range_sorted_time_bin.timestamp)@0], 2), input_partitions=2
+04)------AggregateExec: mode=Partial, gby=[date_bin(IntervalMonthDayNano { months: 0, days: 1, nanoseconds: 0 }, timestamp@0) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 1, nanoseconds: 0 }"),range_sorted_time_bin.timestamp)], aggr=[sum(range_sorted_time_bin.value)]
+05)--------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-1.parquet]]}, projection=[timestamp, value], output_partitioning=Range([timestamp@0 ASC], [(1704070800000000000)], 2), file_type=parquet
+
+query PI
+SELECT date_bin(INTERVAL '1 day', timestamp) AS day_bin, sum(value)
+FROM range_sorted_time_bin
+GROUP BY day_bin
+ORDER BY day_bin;
+----
+2024-01-01T00:00:00 174
 
 ##########
 # An explicit origin remains outside the audited slice, even when it is
