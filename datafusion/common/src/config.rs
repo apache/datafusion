@@ -1898,18 +1898,19 @@ config_namespace! {
         /// When the build side of a hash join has more distinct keys than
         /// `hash_join_inlist_pushdown_max_distinct_values` (over all partitions),
         /// the dynamic filter tests probe rows against one bloom filter of all
-        /// build side keys. The filter is sized for the number of distinct build
-        /// keys at this probability. Each build partition hashes and sorts its keys,
-        /// then one task writes the filter in order and folds it.
+        /// build side keys. Each build partition fills a filter of its keys, sized
+        /// for the estimated number of distinct keys of all partitions at this
+        /// probability. Then one task ORs the partition filters and folds the
+        /// result to this probability.
         pub hash_join_bloom_filter_fpp: f64, default = 0.01
 
-        /// Maximum size, in bytes, of the bloom filter (per join key column) in
-        /// the dynamic filter of a hash join. A build side that needs a larger
+        /// Maximum size, in bytes, of the bloom filter in the dynamic filter of a
+        /// hash join (and of the filter of each build partition). A build side that needs a larger
         /// filter at `hash_join_bloom_filter_fpp` gets no bloom filter: such a
         /// large build side is rarely selective, so the filter is too big to be
         /// useful. The dynamic filter then tests only the min/max bounds (and
         /// keeps key range pruning).
-        pub hash_join_bloom_filter_max_bytes: usize, default = 128 * 1024 * 1024
+        pub hash_join_bloom_filter_max_bytes: usize, default = 8 * 1024 * 1024
 
         /// The bloom filter of a hash join dynamic filter is not used when its
         /// estimated false positive probability is above this value (the filter

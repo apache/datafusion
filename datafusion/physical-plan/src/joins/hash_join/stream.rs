@@ -668,7 +668,7 @@ impl HashJoinStream {
 
         let build_keys = BuildKeys {
             keys: left_data.values().to_vec(),
-            hashes: left_data.key_hashes().cloned(),
+            bloom_filter: left_data.bloom_filter().cloned(),
             num_distinct: left_data.map().num_of_distinct_key(),
         };
 

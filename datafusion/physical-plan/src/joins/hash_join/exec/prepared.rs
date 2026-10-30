@@ -198,6 +198,7 @@ impl HashJoinExec {
             None,
             count,
             BuildMode::Prepared,
+            1,
         )
         .await?;
         Ok(Arc::new(PreparedHashJoinBuild {

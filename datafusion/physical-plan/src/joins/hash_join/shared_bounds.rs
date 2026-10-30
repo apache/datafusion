@@ -26,9 +26,7 @@ use crate::ExecutionPlanProperties;
 use crate::Partitioning;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::bloom_filter::{
-    self, BloomFilterExpr, BloomFilterOptions, SortedKeyHashes,
-};
+use crate::joins::hash_join::bloom_filter::{BloomFilterExpr, BloomFilterOptions};
 use crate::joins::hash_join::exec::{HASH_JOIN_SEED, NullAwareMode};
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
@@ -52,6 +50,7 @@ use datafusion_physical_expr::expressions::{
 use datafusion_physical_expr::{
     PhysicalExpr, PhysicalExprRef, RangePartitioning, ScalarFunctionExpr,
 };
+use parquet::bloom_filter::Sbbf;
 
 use parking_lot::Mutex;
 use tokio::sync::Notify;
@@ -131,9 +130,9 @@ impl PartitionBounds {
 pub(crate) struct BuildKeys {
     /// One array per join key
     pub(crate) keys: Vec<ArrayRef>,
-    /// Sorted bloom filter hashes of the keys. `None` when this partition has
-    /// no hashes, then the global filter has no bloom filter.
-    pub(crate) hashes: Option<Arc<SortedKeyHashes>>,
+    /// Bloom filter of the keys. `None` when this partition has no filter,
+    /// then the global filter has no bloom filter.
+    pub(crate) bloom_filter: Option<Arc<Sbbf>>,
     /// Number of distinct key tuples
     pub(crate) num_distinct: usize,
 }
@@ -327,7 +326,7 @@ fn combine_membership_and_bounds(
 ///
 /// - **Global filter (default)**: merges the bounds and keys of all partitions
 ///   into one unrouted filter: global min/max bounds AND an InList (few keys) or
-///   a bloom filter of all build keys. See `try_build_global_filter`.
+///   a bloom filter of all build keys. See `build_global_filter`.
 /// - **Routed filter (fallback)**: when a partition was canceled or the key type
 ///   has no bloom filter support, a `CASE` on the repartition hash (or range)
 ///   routes each probe row to its partition's bounds and InList / hash table.
@@ -737,9 +736,10 @@ impl SharedBuildAccumulator {
         // An empty build side keeps the filter unchanged, as before.
         if let PartitionStatus::Reported(data) = &partition
             && !matches!(data.pushdown, PushdownStrategy::Empty)
-            && let Some(filter_expr) = self.try_build_global_filter(&[data])?
         {
-            return self.dynamic_filter.update(filter_expr);
+            return self
+                .dynamic_filter
+                .update(self.build_global_filter(&[data])?);
         }
         match partition {
             PartitionStatus::Reported(PartitionData {
@@ -788,10 +788,10 @@ impl SharedBuildAccumulator {
                 _ => None,
             })
             .collect::<Option<Vec<_>>>();
-        if let Some(reported) = reported
-            && let Some(filter_expr) = self.try_build_global_filter(&reported)?
-        {
-            return self.dynamic_filter.update(filter_expr);
+        if let Some(reported) = reported {
+            return self
+                .dynamic_filter
+                .update(self.build_global_filter(&reported)?);
         }
 
         let mut partition_filters = Vec::with_capacity(partitions.len());
@@ -948,14 +948,10 @@ impl SharedBuildAccumulator {
     /// and a [`BloomFilterExpr`] otherwise. The filter is true for every build
     /// key, whatever the partitioning of the build and probe sides, so it is
     /// correct for hash, range and collect-left joins.
-    ///
-    /// Returns `None` when no global membership test is possible (a key type that
-    /// the bloom filter does not support). Then the caller builds the
-    /// per-partition filter.
-    fn try_build_global_filter(
+    fn build_global_filter(
         &self,
         partitions: &[&PartitionData],
-    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         let non_empty: Vec<&PartitionData> = partitions
             .iter()
             .copied()
@@ -963,7 +959,7 @@ impl SharedBuildAccumulator {
             .collect();
         if non_empty.is_empty() {
             // No build row exists, so no probe row can match.
-            return Ok(Some(lit(false)));
+            return Ok(lit(false));
         }
         let keys_have_null = non_empty.iter().any(|p| p.keys_have_null);
         let bounds = PartitionBounds::merge(non_empty.iter().map(|p| &p.bounds));
@@ -995,24 +991,14 @@ impl SharedBuildAccumulator {
                 )?
             }
             _ => {
-                let supported = self.on_right.iter().try_fold(true, |acc, expr| {
-                    Ok::<_, DataFusionError>(
-                        acc && bloom_filter::supports_data_type(
-                            &expr.data_type(&self.probe_schema)?,
-                        ),
-                    )
-                })?;
-                if !supported {
-                    return Ok(None);
-                }
                 let pruning_bitmap =
                     self.merge_pruning_bitmaps(&non_empty, bounds.as_ref());
-                // Every partition must have its hashes. A partition has none
-                // when it alone was too big for a bloom filter, or its memory
-                // reservation failed.
-                let hashes = non_empty
+                // Every partition must have its filter. A partition has none
+                // when the build side is too big for a bloom filter, or its
+                // memory reservation failed.
+                let filters = non_empty
                     .iter()
-                    .map(|p| p.build_keys.hashes.as_deref())
+                    .map(|p| p.build_keys.bloom_filter.as_deref())
                     .collect::<Option<Vec<_>>>();
                 let pool = self
                     .global_filter_options
@@ -1021,8 +1007,7 @@ impl SharedBuildAccumulator {
                     .unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
                 let bloom = BloomFilterExpr::try_new(
                     self.on_right.clone(),
-                    hashes.as_deref(),
-                    num_distinct,
+                    filters.as_deref(),
                     self.global_filter_options.bloom_filter,
                     &pool,
                     pruning_bitmap,
@@ -1038,9 +1023,7 @@ impl SharedBuildAccumulator {
             .and_then(|b| create_bounds_predicate(&self.on_right, b));
         let filter_expr = combine_membership_and_bounds(membership_expr, bounds_expr)
             .unwrap_or_else(|| lit(true));
-        Ok(Some(
-            self.preserve_probe_nulls(filter_expr, keys_have_null)?,
-        ))
+        self.preserve_probe_nulls(filter_expr, keys_have_null)
     }
 
     /// One [`KeyRangeBitmap`] for the keys of all partitions, so that scans can
@@ -1189,9 +1172,18 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 mod tests {
     use super::*;
 
-    /// Adds the sorted hashes of `build_keys.keys`.
+    /// Adds the bloom filter of `build_keys.keys`, sized for 4 times its
+    /// keys (the keys of a few partitions).
     fn test_build_keys(mut build_keys: BuildKeys) -> BuildKeys {
-        build_keys.hashes = SortedKeyHashes::try_new(&build_keys.keys)
+        let reservation = datafusion_execution::memory_pool::MemoryConsumer::new("test")
+            .register(&(Arc::new(UnboundedMemoryPool::default()) as Arc<dyn MemoryPool>));
+        build_keys.bloom_filter =
+            crate::joins::hash_join::bloom_filter::partition_filter(
+                &build_keys.keys,
+                build_keys.num_distinct * 4,
+                GlobalFilterOptions::default().bloom_filter,
+                &reservation,
+            )
             .unwrap()
             .map(Arc::new);
         build_keys
@@ -1381,7 +1373,7 @@ mod tests {
             bounds: bounds(min, max),
             keys_have_null: false,
             build_keys: test_build_keys(BuildKeys {
-                hashes: None,
+                bloom_filter: None,
                 keys: vec![Arc::new(Int32Array::from(keys))],
                 num_distinct,
             }),
@@ -1449,7 +1441,7 @@ mod tests {
                 bounds: bounds(*keys.iter().min().unwrap(), *keys.iter().max().unwrap()),
                 keys_have_null: false,
                 build_keys: test_build_keys(BuildKeys {
-                    hashes: None,
+                    bloom_filter: None,
                     num_distinct: keys.len(),
                     keys: vec![Arc::new(Int32Array::from(keys))],
                 }),
@@ -1553,10 +1545,9 @@ mod tests {
         assert!(!format!("{expr}").contains("bloom_filter"));
     }
 
-    /// Key types that the bloom filter does not support (floats) keep the routed
-    /// per-partition filter.
+    /// Float keys get the global bloom filter too.
     #[test]
-    fn unsupported_key_type_falls_back_to_routed_filter() {
+    fn float_keys_use_global_bloom_filter() {
         let mut acc = make_partitioned_expr_accumulator_for_test(2);
         acc.probe_schema = Arc::new(Schema::new(vec![Field::new(
             "probe_key",
@@ -1574,7 +1565,7 @@ mod tests {
                 bounds: no_bounds(),
                 keys_have_null: false,
                 build_keys: test_build_keys(BuildKeys {
-                    hashes: None,
+                    bloom_filter: None,
                     num_distinct: keys.len(),
                     keys: vec![Arc::new(Float64Array::from(keys))],
                 }),
@@ -1586,7 +1577,7 @@ mod tests {
         ]))
         .unwrap();
         let expr = current_expr(&acc);
-        case_expr(&expr);
+        assert_eq!(format!("{expr}"), "bloom_filter");
     }
 
     /// With a memory pool too small for the bloom filter, the global filter
@@ -1620,7 +1611,7 @@ mod tests {
         let acc = make_partitioned_expr_accumulator_for_test(2);
         let mut no_hashes = reported_map((1_000_000..1_000_100).collect());
         if let PartitionStatus::Reported(data) = &mut no_hashes {
-            data.build_keys.hashes = None;
+            data.build_keys.bloom_filter = None;
         }
         acc.build_filter(FinalizeInput::Partitioned(vec![
             reported_map((0..100).collect()),

@@ -31,7 +31,7 @@ use crate::filter_pushdown::{
 };
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
-use crate::joins::hash_join::bloom_filter::SortedKeyHashes;
+use crate::joins::hash_join::bloom_filter;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
@@ -71,6 +71,7 @@ use crate::{
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
+use parquet::bloom_filter::Sbbf;
 
 use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt64Array};
 use arrow::buffer::NullBuffer;
@@ -366,9 +367,9 @@ struct JoinBuildData {
     bounds: Option<PartitionBounds>,
     /// IN-list values or a hash-table reference used for filter pushdown.
     membership: PushdownStrategy,
-    /// Sorted bloom filter hashes of the keys, for the global dynamic filter.
-    /// `None` when no bloom filter is possible for this build.
-    key_hashes: Option<Arc<SortedKeyHashes>>,
+    /// Bloom filter of the build keys, for the global dynamic filter. `None`
+    /// when no bloom filter is possible for this build.
+    bloom_filter: Option<Arc<Sbbf>>,
     // Keep the reservation after the allocations it accounts for.
     reservation: MemoryReservation,
 }
@@ -459,9 +460,9 @@ impl JoinLeftData {
         &self.build.membership
     }
 
-    /// Sorted bloom filter hashes of the build keys, for the dynamic filter.
-    pub(super) fn key_hashes(&self) -> Option<&Arc<SortedKeyHashes>> {
-        self.build.key_hashes.as_ref()
+    /// Bloom filter of the build keys, for the dynamic filter.
+    pub(super) fn bloom_filter(&self) -> Option<&Arc<Sbbf>> {
+        self.build.bloom_filter.as_ref()
     }
 
     /// Borrow bounds without sharing a consuming join's dynamic-filter state.
@@ -1912,6 +1913,7 @@ impl ExecutionPlan for HashJoinExec {
                     null_aware,
                     array_map_created_count,
                     BuildMode::Ordinary,
+                    1,
                 ))
             })?,
             (None, PartitionMode::Partitioned) => {
@@ -1934,6 +1936,7 @@ impl ExecutionPlan for HashJoinExec {
                     null_aware,
                     array_map_created_count,
                     BuildMode::Ordinary,
+                    self.left.output_partitioning().partition_count(),
                 ))
             }
             (None, PartitionMode::Auto) => {
@@ -3230,6 +3233,7 @@ async fn collect_left_input(
     null_aware: Option<NullAwareMode>,
     array_map_created_count: Count,
     mode: BuildMode,
+    num_build_partitions: usize,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
     let prepared = mode == BuildMode::Prepared;
@@ -3573,28 +3577,27 @@ async fn collect_left_input(
         bounds = None;
     }
 
-    // Hash and sort the keys here, in the build task of this partition, so the
-    // finalizing task only writes the bloom filter bits in order. Skip it when
-    // this partition alone is too big for a bloom filter, or the memory pool
-    // cannot hold the hashes.
-    let bloom_options = GlobalFilterOptions::new(&config).bloom_filter;
-    let key_hashes = if !should_compute_dynamic_filters
+    // Fill the bloom filter of this partition's keys here, in its build task,
+    // so the finalizing task only ORs the partition filters. Partitions hold
+    // disjoint keys of similar counts, so the filter is sized for the keys of
+    // all partitions estimated from this one.
+    let bloom_filter = if !should_compute_dynamic_filters
         || matches!(membership, PushdownStrategy::Empty)
         || left_values.is_empty()
-        || !bloom_options.fits(map.num_of_distinct_key())
     {
         None
     } else {
-        let estimated = SortedKeyHashes::estimated_size(&left_values);
-        if reservation.try_grow(estimated).is_ok() {
-            let hashes = SortedKeyHashes::try_new(&left_values)?;
-            let size = hashes.as_ref().map_or(0, SortedKeyHashes::size);
-            reservation.shrink(estimated.saturating_sub(size));
-            metrics.build_mem_used.add(size);
-            hashes.map(Arc::new)
-        } else {
-            None
+        let filter = bloom_filter::partition_filter(
+            &left_values,
+            map.num_of_distinct_key()
+                .saturating_mul(num_build_partitions),
+            GlobalFilterOptions::new(&config).bloom_filter,
+            &reservation,
+        )?;
+        if let Some(filter) = &filter {
+            metrics.build_mem_used.add(filter.num_blocks() * 32);
         }
+        filter.map(Arc::new)
     };
 
     let build_has_null = null_aware == Some(NullAwareMode::RightAnti)
@@ -3649,7 +3652,7 @@ async fn collect_left_input(
             left_mark_build_key_nulls,
             bounds,
             membership,
-            key_hashes,
+            bloom_filter,
             reservation,
         }),
         null_aware_scope_map,
@@ -4535,6 +4538,7 @@ mod tests {
             None,
             Count::new(),
             BuildMode::Ordinary,
+            1,
         )
         .await?;
         Ok((left_data, metrics))
