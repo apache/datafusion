@@ -29,6 +29,7 @@ use datafusion_datasource::{
 use datafusion_execution::cache::cache_manager::{
     CachedFileMetadata, FileStatisticsCache, SchemaFingerprint, TableScopedPath,
 };
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
@@ -858,13 +859,16 @@ impl ListingTable {
                 lfc.drop_table_entries(table_ref)?;
             } else {
                 let table_prefix = table_path.prefix();
+                let object_store_url = table_path.object_store();
                 let keys: Vec<_> = lfc
                     .list_entries()
                     .into_keys()
                     .filter(|key| {
                         key.table.is_none()
-                            && (key.path.prefix_matches(table_prefix)
-                                || table_prefix.prefix_matches(&key.path))
+                            && key.store_path.object_store_url.as_ref()
+                                == &object_store_url
+                            && (key.store_path.path.prefix_matches(table_prefix)
+                                || table_prefix.prefix_matches(&key.store_path.path))
                     })
                     .collect();
                 for key in keys {
@@ -928,6 +932,7 @@ impl ListingTable {
         &'a self,
         ctx: &'a dyn Session,
         store: &'a Arc<dyn ObjectStore>,
+        object_store_url: &'a Arc<ObjectStoreUrl>,
         listing_time_filters: &'a [Expr],
         file_limit: Option<usize>,
     ) -> datafusion_common::Result<(FileGroup, bool)> {
@@ -959,8 +964,13 @@ impl ListingTable {
             .map(|part_file| async {
                 let part_file = part_file?;
                 let (statistics, ordering) = if ctx.config().collect_statistics() {
-                    self.do_collect_statistics_and_ordering(ctx, store, &part_file)
-                        .await?
+                    self.do_collect_statistics_and_ordering(
+                        ctx,
+                        store,
+                        object_store_url,
+                        &part_file,
+                    )
+                    .await?
                 } else {
                     (Arc::new(Statistics::new_unknown(&self.file_schema)), None)
                 };
@@ -989,8 +999,11 @@ impl ListingTable {
             );
         }
 
-        let store = if let Some(url) = self.table_paths.first() {
-            ctx.runtime_env().object_store(url)?
+        let (store, object_store_url) = if let Some(url) = self.table_paths.first() {
+            (
+                ctx.runtime_env().object_store(url)?,
+                Arc::new(url.object_store()),
+            )
         } else {
             return Ok(ListFilesResult {
                 file_groups: vec![],
@@ -1000,7 +1013,7 @@ impl ListingTable {
             });
         };
         let (file_group, inexact_stats) = self
-            .collect_files_for_scan(ctx, &store, filters, limit)
+            .collect_files_for_scan(ctx, &store, &object_store_url, filters, limit)
             .await?;
 
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
@@ -1055,8 +1068,11 @@ impl ListingTable {
             );
         }
 
-        let store = if let Some(url) = self.table_paths.first() {
-            ctx.runtime_env().object_store(url)?
+        let (store, object_store_url) = if let Some(url) = self.table_paths.first() {
+            (
+                ctx.runtime_env().object_store(url)?,
+                Arc::new(url.object_store()),
+            )
         } else {
             return Ok(ListFilesResult {
                 file_groups: vec![],
@@ -1065,8 +1081,9 @@ impl ListingTable {
                 partition_split_points: vec![],
             });
         };
-        let (file_group, inexact_stats) =
-            self.collect_files_for_scan(ctx, &store, &[], None).await?;
+        let (file_group, inexact_stats) = self
+            .collect_files_for_scan(ctx, &store, &object_store_url, &[], None)
+            .await?;
         let mut file_groups = file_group.split_files(file_group_count);
         if !file_groups.is_empty() {
             file_groups.resize_with(file_group_count, || FileGroup::new(vec![]));
@@ -1139,15 +1156,17 @@ impl ListingTable {
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &Arc<ObjectStoreUrl>,
         part_file: &PartitionedFile,
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
-        let path = TableScopedPath {
-            table: part_file.table_reference.clone(),
-            path: part_file.object_meta.location.clone(),
-        };
+        let path = TableScopedPath::new(
+            part_file.table_reference.clone(),
+            Arc::clone(object_store_url),
+            part_file.object_meta.location.clone(),
+        );
         let meta = &part_file.object_meta;
 
-        // Check cache first. The key stays `{table, path}` for cheap lookups;
+        // Check cache first. The key identifies the store, table and path;
         // the cached value carries the schema fingerprint to prevent reusing
         // stats computed under a different file schema.
         if let Some(cache) = &self.collected_statistics
@@ -1159,9 +1178,15 @@ impl ListingTable {
         }
 
         // Cache miss or invalid: fetch both statistics and ordering in a single metadata read
-        let file_meta = self
+        let format = self
             .options
             .format
+            .with_file_metadata_cache(Some((
+                ctx.runtime_env().cache_manager.get_file_metadata_cache(),
+                Arc::clone(object_store_url),
+            )))
+            .unwrap_or_else(|| Arc::clone(&self.options.format));
+        let file_meta = format
             .infer_stats_and_ordering(ctx, store, Arc::clone(&self.file_schema), meta)
             .await?;
 

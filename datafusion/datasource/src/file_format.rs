@@ -20,6 +20,8 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     GetExt, Result, SchemaError, Statistics, internal_err, not_impl_err, schema_err,
 };
+use datafusion_execution::cache::cache_manager::FileMetadataCache;
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
@@ -99,6 +101,18 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
 
     /// Returns whether this instance uses compression if applicable
     fn compression_type(&self) -> Option<FileCompressionType>;
+
+    /// Return a format configured with a store-scoped metadata cache.
+    ///
+    /// The default returns `None`, so formats that do not use this cache keep
+    /// their existing inference implementation. Callers then use the original
+    /// format. Keeping the cache and its URL together prevents unscoped reuse.
+    fn with_file_metadata_cache(
+        &self,
+        _cache: Option<(Arc<FileMetadataCache>, Arc<ObjectStoreUrl>)>,
+    ) -> Option<Arc<dyn FileFormat>> {
+        None
+    }
 
     /// Infer the common schema of the provided objects. The objects will usually
     /// be analysed up to a given number of records or files (as specified in the

@@ -195,13 +195,16 @@ impl RuntimeEnv {
         url: &Url,
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
+        self.cache_manager.invalidate_object_store(url);
         self.object_store_registry.register_store(url, object_store)
     }
 
     /// Deregisters a custom `ObjectStore` previously registered for a specific url.
     /// See [`ObjectStoreRegistry::deregister_store`] for more details.
     pub fn deregister_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        self.object_store_registry.deregister_store(url)
+        let store = self.object_store_registry.deregister_store(url)?;
+        self.cache_manager.invalidate_object_store(url);
+        Ok(store)
     }
 
     /// Retrieves a `ObjectStore` instance for a url by consulting the
