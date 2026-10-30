@@ -32,6 +32,7 @@ members = [
     "datafusion/expr-common",
     "datafusion/execution",
     "datafusion/ffi",
+    "datafusion/ffi/integration-tests",
     "datafusion/functions",
     "datafusion/functions-aggregate",
     "datafusion/functions-aggregate-common",
@@ -68,7 +69,6 @@ members = [
     "datafusion/doc",
     "xtask",
 ]
-exclude = ["dev/depcheck"]
 resolver = "2"
 
 [workspace.package]
@@ -180,7 +180,7 @@ loom = "0.7"
 memchr = "2.8.1"
 num-traits = { version = "0.2" }
 object_store = { version = "0.14.2", default-features = false }
-parking_lot = "0.12"
+parking_lot = "0.13"
 parquet = { version = "60.0.0", default-features = false, features = [
     "arrow",
     "async",
@@ -196,7 +196,7 @@ prost = "0.14.1"
 rand = "0.9"
 recursive = "0.1.1"
 regex = "1.12"
-rstest = "0.27.0"
+rstest = "0.28.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "^0.11.0"
@@ -408,3 +408,8 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# Execute benchmark tests with debug checks, without release-mode build costs.
+[profile.ci-bench]
+inherits = "ci"
+opt-level = 1

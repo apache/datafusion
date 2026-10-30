@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! # These are core DataFrame API usage
 //!
@@ -21,11 +8,14 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example dataframe -- [all|dataframe|deserialize_to_struct|cache_factory]
+//! cargo run --example dataframe -- [all|aggregate|dataframe|deserialize_to_struct|cache_factory]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
+//!
+//! - `aggregate`
+//!   (file: aggregate.rs, desc: Global and grouped aggregation with `select` and `aggregate`)
 //!
 //! - `cache_factory`
 //!   (file: cache_factory.rs, desc: Custom lazy caching for DataFrames using `CacheFactory`)
@@ -36,6 +26,7 @@
 //! - `deserialize_to_struct`
 //!   (file: deserialize_to_struct.rs, desc: Convert Arrow arrays into Rust structs)
 
+mod aggregate;
 mod cache_factory;
 mod dataframe;
 mod deserialize_to_struct;
@@ -48,6 +39,7 @@ use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 #[strum(serialize_all = "snake_case")]
 enum ExampleKind {
     All,
+    Aggregate,
     Dataframe,
     DeserializeToStruct,
     CacheFactory,
@@ -67,6 +59,9 @@ impl ExampleKind {
                     println!("Running example: {example}");
                     Box::pin(example.run()).await?;
                 }
+            }
+            ExampleKind::Aggregate => {
+                aggregate::aggregate_example().await?;
             }
             ExampleKind::Dataframe => {
                 dataframe::dataframe_example().await?;

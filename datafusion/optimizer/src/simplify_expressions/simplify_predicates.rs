@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Simplifies predicates by reducing redundant or overlapping conditions.
 //!
@@ -28,7 +15,7 @@
 //! `false` so that later rules can prune the plan they filter.
 
 use super::utils::{is_false, is_null};
-use datafusion_common::utils::normalize_float_zero_scalar;
+use datafusion_common::float_semantics::normalize_float_scalar;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_expr::utils::{
     conjunction, disjunction, split_binary_owned, split_conjunction_owned,
@@ -422,7 +409,7 @@ fn op_and_literal(predicate: &Expr) -> Result<(Operator, &ScalarValue)> {
 fn normalize_literal(expr: &mut Expr) {
     if let Expr::Literal(value, _) = expr {
         let original = std::mem::replace(value, ScalarValue::Null);
-        *value = normalize_float_zero_scalar(original);
+        *value = normalize_float_scalar(original);
     }
 }
 

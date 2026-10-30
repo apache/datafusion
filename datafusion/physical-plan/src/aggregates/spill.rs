@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Spill and replay support shared by the grouped aggregation streams.
 
@@ -247,6 +234,27 @@ impl AggregateSpill {
         self.min_spill_batch_rows = self.min_spill_batch_rows.min(max_batch_rows);
 
         Ok(())
+    }
+
+    /// Writes already evaluated output batches to one spill file and returns a
+    /// stream that reads them back.
+    pub(super) fn spill_output(
+        &self,
+        schema: SchemaRef,
+        batches: impl Iterator<Item = Result<RecordBatch>>,
+    ) -> Result<SendableRecordBatchStream> {
+        let spill_manager = SpillManager::new(
+            self.context.runtime_env(),
+            self.spill_manager.metrics.clone(),
+            schema,
+        )
+        .with_compression_type(self.spill_manager.compression);
+        let spill_file = spill_manager
+            .spill_record_batch_iter_and_return_max_batch_memory(batches, self.label)?;
+        let Some((file, max_record_batch_memory)) = spill_file else {
+            return internal_err!("{}: produced an empty output spill", self.label);
+        };
+        spill_manager.read_spill_as_stream(file, Some(max_record_batch_memory))
     }
 
     /// Merges every sorted run, and does the aggregate evaluation with

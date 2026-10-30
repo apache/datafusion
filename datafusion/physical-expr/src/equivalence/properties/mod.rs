@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod dependency; // Submodule containing DependencyMap and Dependencies
 mod joins; // Submodule containing join_equivalence_properties
@@ -39,6 +26,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
@@ -142,7 +130,10 @@ pub struct EquivalenceProperties {
     /// constants/duplicates and in standard form) and a map associating leading
     /// terms with full sort expressions.
     oeq_cache: OrderingEquivalenceCache,
-    /// Table constraints that factor in equivalence calculations.
+    /// Table constraints that factor in equivalence calculations. Unlike
+    /// constants, constraints have no per-partition form: each one must hold
+    /// across all output partitions, since operators that merge partitions
+    /// keep them.
     constraints: Constraints,
     /// Schema associated with this object.
     schema: SchemaRef,
@@ -1406,6 +1397,29 @@ impl EquivalenceProperties {
             .data()
             .map(|node| node.data)
             .unwrap_or_else(|_| ExprProperties::new_unknown())
+    }
+
+    /// Returns whether `transformed_expr` reports the same ordering direction
+    /// when `source_expr` is ordered and all other inputs are singleton.
+    pub(crate) fn is_same_direction_ordered_transform(
+        &self,
+        transformed_expr: &Arc<dyn PhysicalExpr>,
+        source_expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        if transformed_expr.eq(source_expr) {
+            return false;
+        }
+
+        let options = SortOptions::default();
+        let dependencies = Dependencies::new(std::iter::once(PhysicalSortExpr::new(
+            Arc::clone(source_expr),
+            options,
+        )));
+        matches!(
+            get_expr_properties(transformed_expr, &dependencies, &self.schema)
+                .map(|properties| properties.sort_properties),
+            Ok(SortProperties::Ordered(actual)) if actual == options
+        )
     }
 
     /// Transforms this `EquivalenceProperties` by mapping columns in the
