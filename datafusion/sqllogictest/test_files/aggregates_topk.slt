@@ -886,3 +886,65 @@ GROUP BY k ORDER BY MAX(v) DESC NULLS LAST LIMIT 1;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# Regression for #26691: a projection that computes a new value under the
+# aggregate's output name must not keep TopK aggregation on the aggregate.
+# Ordering by -max(v) DESC must keep the groups with the smallest maxima.
+statement ok
+CREATE TABLE topk_negated_max AS SELECT column1 AS g, column2 AS v
+FROM (VALUES ('a', 2), ('b', 10), ('c', 9), ('d', 3), ('e', 7));
+
+statement ok
+set datafusion.optimizer.enable_topk_aggregation = true;
+
+query TI
+SELECT g, -"max(topk_negated_max.v)" AS "max(topk_negated_max.v)"
+FROM (SELECT g, max(v) FROM topk_negated_max GROUP BY g)
+ORDER BY 2 DESC LIMIT 2;
+----
+a -2
+d -3
+
+# TopK aggregation must not apply: lim would keep the largest maxima first.
+query TT
+EXPLAIN SELECT g, -"max(topk_negated_max.v)" AS "max(topk_negated_max.v)"
+FROM (SELECT g, max(v) FROM topk_negated_max GROUP BY g)
+ORDER BY 2 DESC LIMIT 2;
+----
+logical_plan
+01)Sort: max(topk_negated_max.v) DESC NULLS FIRST, fetch=2
+02)--Projection: topk_negated_max.g, (- max(topk_negated_max.v)) AS max(topk_negated_max.v)
+03)----Aggregate: groupBy=[[topk_negated_max.g]], aggr=[[max(topk_negated_max.v)]]
+04)------TableScan: topk_negated_max projection=[g, v]
+physical_plan
+01)SortPreservingMergeExec: [max(topk_negated_max.v)@1 DESC], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[max(topk_negated_max.v)@1 DESC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[g@0 as g, (- max(topk_negated_max.v)@1) as max(topk_negated_max.v)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[max(topk_negated_max.v)]
+05)--------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[max(topk_negated_max.v)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Sibling computed column: sorting by the plain aggregate still allows TopK.
+query TT
+EXPLAIN SELECT g, max(v), -max(v) AS neg
+FROM topk_negated_max
+GROUP BY g
+ORDER BY max(v) DESC LIMIT 2;
+----
+logical_plan
+01)Sort: max(topk_negated_max.v) DESC NULLS FIRST, fetch=2
+02)--Projection: topk_negated_max.g, max(topk_negated_max.v), (- max(topk_negated_max.v)) AS neg
+03)----Aggregate: groupBy=[[topk_negated_max.g]], aggr=[[max(topk_negated_max.v)]]
+04)------TableScan: topk_negated_max projection=[g, v]
+physical_plan
+01)SortPreservingMergeExec: [max(topk_negated_max.v)@1 DESC], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[max(topk_negated_max.v)@1 DESC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[g@0 as g, max(topk_negated_max.v)@1 as max(topk_negated_max.v), (- max(topk_negated_max.v)@1) as neg]
+04)------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[max(topk_negated_max.v)], lim=[2]
+05)--------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[max(topk_negated_max.v)], lim=[2]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE topk_negated_max;

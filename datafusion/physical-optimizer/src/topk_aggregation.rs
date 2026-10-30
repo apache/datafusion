@@ -68,14 +68,23 @@ impl TopKAggregation {
                     Some(aggr) => return Ok(Transformed::yes(Arc::new(aggr.data))),
                 }
             } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
-                // track renames due to successive projections
+                // Follow the sort column through renames. If that output is a
+                // computed expression (for example `-max(v) AS "max(v)"`), the
+                // aggregate below no longer produces the values we sort by, so
+                // skip TopK aggregation for this sort.
                 for proj_expr in proj.expr() {
-                    let Some(src_col) = proj_expr.expr.downcast_ref::<Column>() else {
+                    if proj_expr.alias != sort_col_name {
                         continue;
-                    };
-                    if proj_expr.alias == sort_col_name {
-                        sort_col_name = src_col.name().to_string();
                     }
+                    match proj_expr.expr.downcast_ref::<Column>() {
+                        Some(src_col) => {
+                            sort_col_name = src_col.name().to_string();
+                        }
+                        None => {
+                            cardinality_preserved = false;
+                        }
+                    }
+                    break;
                 }
             } else {
                 // or we continue down through types that don't reduce cardinality
