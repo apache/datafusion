@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Runtime configuration, via [`ConfigOptions`]
 
@@ -242,11 +229,10 @@ config_namespace! {
         /// virtual tables for displaying schema information
         pub information_schema: bool, default = false
 
-        /// The system catalog name - when set together with `information_schema`, the
-        /// `information_schema` for each catalog will only describe objects contained in the
-        /// catalog itself. The global, cross-catalog `information_schema` is available under
-        /// the virtual catalog named by this option.
-        pub system_catalog: Option<String>, default = None
+        /// When set together with `information_schema`, the `information_schema`
+        /// of each catalog only describes the objects in that catalog. When not
+        /// set, the `information_schema` of each catalog describes all catalogs.
+        pub partition_information_schema: bool, default = false
 
         /// Location scanned to load tables for `default` schema
         pub location: Option<String>, default = None
@@ -2146,6 +2132,62 @@ config_namespace! {
 impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
     fn try_from(options: &'a FormatOptions) -> Result<Self> {
+        for (name, format) in [
+            ("date_format", options.date_format.as_deref()),
+            ("datetime_format", options.datetime_format.as_deref()),
+            ("timestamp_format", options.timestamp_format.as_deref()),
+            (
+                "timestamp_tz_format",
+                options.timestamp_tz_format.as_deref(),
+            ),
+            ("time_format", options.time_format.as_deref()),
+        ] {
+            if let Some(format) = format {
+                let items = chrono::format::StrftimeItems::new(format).parse().map_err(
+                    |error| {
+                        DataFusionError::Configuration(format!(
+                            "Invalid datafusion.format.{name}: {error}"
+                        ))
+                    },
+                )?;
+
+                // Parsing validates directives, but some directives require fields
+                // that are absent from a particular temporal type (for example,
+                // `%H` for a date). Chrono reports those errors while formatting.
+                let mut rendered = String::new();
+                let result = match name {
+                    "date_format" => chrono::NaiveDate::from_ymd_opt(2001, 2, 3)
+                        .expect("valid sample date")
+                        .format_with_items(items.iter())
+                        .write_to(&mut rendered),
+                    "datetime_format" | "timestamp_format" => {
+                        chrono::NaiveDate::from_ymd_opt(2001, 2, 3)
+                            .expect("valid sample date")
+                            .and_hms_opt(4, 5, 6)
+                            .expect("valid sample time")
+                            .format_with_items(items.iter())
+                            .write_to(&mut rendered)
+                    }
+                    "timestamp_tz_format" => {
+                        chrono::DateTime::from_timestamp(981_173_106, 0)
+                            .expect("valid sample timestamp")
+                            .format_with_items(items.iter())
+                            .write_to(&mut rendered)
+                    }
+                    "time_format" => chrono::NaiveTime::from_hms_opt(4, 5, 6)
+                        .expect("valid sample time")
+                        .format_with_items(items.iter())
+                        .write_to(&mut rendered),
+                    _ => unreachable!("all temporal format names are handled above"),
+                };
+                if result.is_err() {
+                    return Err(DataFusionError::Configuration(format!(
+                        "Invalid datafusion.format.{name}: format is incompatible with its temporal type"
+                    )));
+                }
+            }
+        }
+
         Ok(Self::new()
             .with_display_error(options.safe)
             .with_null(&options.null)
@@ -4255,6 +4297,132 @@ mod tests {
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
         Extensions, TableOptions,
     };
+
+    #[test]
+    fn invalid_temporal_format_is_rejected_before_rendering() {
+        use crate::config::FormatOptions;
+
+        let invalid_options = [
+            (
+                "date_format",
+                FormatOptions {
+                    date_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "datetime_format",
+                FormatOptions {
+                    datetime_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_format",
+                FormatOptions {
+                    timestamp_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_tz_format",
+                FormatOptions {
+                    timestamp_tz_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "time_format",
+                FormatOptions {
+                    time_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (name, options) in invalid_options {
+            let error = arrow::util::display::FormatOptions::try_from(&options)
+                .expect_err("invalid format strings must be rejected before rendering");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("datafusion.format.{name}")),
+                "unexpected validation error: {error}"
+            );
+        }
+
+        let incompatible_options = [
+            (
+                "time_format",
+                FormatOptions {
+                    time_format: Some("%Y".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "date_format",
+                FormatOptions {
+                    date_format: Some("%H".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_format",
+                FormatOptions {
+                    timestamp_format: Some("%+".to_owned()),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (name, options) in incompatible_options {
+            let error = arrow::util::display::FormatOptions::try_from(&options)
+                .expect_err(
+                    "type-incompatible formats must be rejected before rendering",
+                );
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("datafusion.format.{name}")),
+                "unexpected validation error: {error}"
+            );
+        }
+
+        arrow::util::display::FormatOptions::try_from(&FormatOptions::default())
+            .expect("the default temporal formats must remain valid");
+
+        let options = FormatOptions {
+            timestamp_tz_format: Some("%+".to_owned()),
+            ..Default::default()
+        };
+        let options: arrow::util::display::FormatOptions = (&options)
+            .try_into()
+            .expect("the timezone-aware ISO 8601 format must be valid");
+        let schema = arrow::datatypes::Schema::new(vec![arrow::datatypes::Field::new(
+            "timestamp",
+            arrow::datatypes::DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Nanosecond,
+                Some("UTC".into()),
+            ),
+            false,
+        )]);
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            std::sync::Arc::new(schema),
+            vec![std::sync::Arc::new(
+                arrow::array::TimestampNanosecondArray::from(vec![0])
+                    .with_timezone("UTC"),
+            )],
+        )
+        .expect("valid timestamp batch");
+        let formatted =
+            arrow::util::pretty::pretty_format_batches_with_options(&[batch], &options)
+                .expect("valid timezone-aware format must render")
+                .to_string();
+        assert!(
+            formatted.contains("1970-01-01T00:00:00+00:00"),
+            "unexpected formatted output: {formatted}"
+        );
+    }
     use std::any::Any;
     use std::collections::HashMap;
 

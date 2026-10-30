@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Test helpers for the clustered aggregate streams under memory pressure.
 
@@ -46,6 +33,17 @@ use crate::test::TestMemoryExec;
 /// groups complete within each batch under full group clustering.
 pub(super) fn full_batches() -> Vec<Vec<Vec<i64>>> {
     vec![vec![(0..=256).collect()], vec![(256..=512).collect()]]
+}
+
+/// Key columns of three batches of 8192 distinct keys sorted on `k`, where each
+/// batch shares its first key with the previous one. Aggregating a batch grows
+/// the table for about 8192 groups, while the active group needs a few KB.
+pub(super) fn distinct_key_batches() -> Vec<Vec<Vec<i64>>> {
+    vec![
+        vec![(0..8193).collect()],
+        vec![(8192..16385).collect()],
+        vec![(16384..24576).collect()],
+    ]
 }
 
 /// Key column of two batches that hold the same single key, so no group
@@ -177,6 +175,20 @@ pub(super) async fn assert_completed_groups_emitted_under_limit(
         collect_with_held_memory(plan, Arc::new(UnboundedMemoryPool::default())).await?;
     let (actual, _) =
         collect_with_held_memory(plan, Arc::new(GreedyMemoryPool::new(held))).await?;
+    assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
+    Ok(())
+}
+
+/// Runs `plan` without a memory limit, then under `limit`. The result must not
+/// change.
+pub(super) async fn assert_output_unchanged_under_limit(
+    plan: &AggregateExec,
+    limit: usize,
+) -> Result<()> {
+    let (expected, _) =
+        collect_with_held_memory(plan, Arc::new(UnboundedMemoryPool::default())).await?;
+    let (actual, _) =
+        collect_with_held_memory(plan, Arc::new(GreedyMemoryPool::new(limit))).await?;
     assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
     Ok(())
 }

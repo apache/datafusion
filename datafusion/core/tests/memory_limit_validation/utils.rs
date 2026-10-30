@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion_common_runtime::SpawnedTask;
 use std::process::Command;
@@ -43,22 +30,27 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = T>,
 {
-    // Initialize system information
-    let mut system = System::new_all();
-    system.refresh_all();
-
     // Get the current process ID
     let pid = sysinfo::get_current_pid().expect("Failed to get current PID");
-
-    // Shared atomic variable to store max RSS
-    let max_rss = Arc::new(AtomicUsize::new(0));
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().with_memory().without_tasks(),
+    );
+    let initial_rss = system
+        .process(pid)
+        .expect("Current process is missing")
+        .memory();
+    // Capture a baseline before execution; monitor startup may outlast a short query.
+    let max_rss = Arc::new(AtomicUsize::new(initial_rss as usize));
 
     // Clone for the monitoring task
     let max_rss_clone = Arc::clone(&max_rss);
 
     // Spawn a monitoring task
     let monitor_handle = SpawnedTask::spawn(async move {
-        let mut sys = System::new_all();
+        let mut sys = system;
         let mut interval = interval(Duration::from_millis(7));
 
         loop {
@@ -66,7 +58,7 @@ where
             sys.refresh_processes_specifics(
                 ProcessesToUpdate::Some(&[pid]),
                 true,
-                ProcessRefreshKind::nothing().with_memory(),
+                ProcessRefreshKind::nothing().with_memory().without_tasks(),
             );
             if let Some(process) = sys.process(pid) {
                 let rss_bytes = process.memory();
