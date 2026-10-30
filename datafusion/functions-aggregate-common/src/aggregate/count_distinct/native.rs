@@ -162,7 +162,7 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for FloatDistinctCountAccumulato
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + self.values.size()
+        size_of_val(self) - size_of_val(&self.values) + self.values.size()
     }
 }
 
