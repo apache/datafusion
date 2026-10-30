@@ -178,15 +178,18 @@ build_version() {
     "${worktree}/docs/scripts/generate_dependency_graph.sh"
   fi
 
+  # Sphinx's incremental build state (doctrees, .buildinfo) is not part of the
+  # published site: keep the doctrees in the worktree, which is removed below.
   rm -rf "${output}"
   (
     cd "${DOCS_DIR}"
     DATAFUSION_DOCS_SOURCE="${worktree}/docs/source" \
     DATAFUSION_DOCS_VERSION="${version}" \
       uv run --package datafusion-docs \
-        sphinx-build -b html -W -c "${OVERLAY_DIR}" "${worktree}/docs/source" "${output}"
+        sphinx-build -b html -W -c "${OVERLAY_DIR}" \
+          -d "${worktree}/docs/build/doctrees" \
+          "${worktree}/docs/source" "${output}"
   )
-  # Sphinx's incremental build state is not part of the published site.
   rm -f "${output}/.buildinfo"
 
   git -C "${REPO_DIR}" worktree remove --force "${worktree}"
