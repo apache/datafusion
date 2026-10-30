@@ -9,7 +9,9 @@ mod min_max_bytes;
 mod min_max_struct;
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, downcast_primitive};
-use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
+use arrow::datatypes::{
+    DataType, Field, FieldRef, Float16Type, Float32Type, Float64Type,
+};
 use datafusion_common::float_semantics::{float_gt, float_lt};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, exec_err, internal_err};
@@ -17,6 +19,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_o
 use datafusion_physical_expr::expressions;
 use std::cmp::Ordering;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
@@ -218,6 +221,13 @@ impl AggregateUDFImpl for Max {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].to_owned())
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        Ok(Arc::new(
+            Field::new(self.name(), arg_fields[0].data_type().clone(), true)
+                .with_metadata(arg_fields[0].metadata().clone()),
+        ))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -446,6 +456,13 @@ impl AggregateUDFImpl for Min {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].to_owned())
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        Ok(Arc::new(
+            Field::new(self.name(), arg_fields[0].data_type().clone(), true)
+                .with_metadata(arg_fields[0].metadata().clone()),
+        ))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -1720,6 +1737,33 @@ mod tests {
             max_result,
             dict_scalar(DataType::Int32, ScalarValue::Float32(Some(f32::NAN)))
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_min_max_preserve_metadata() -> Result<()> {
+        use std::collections::HashMap;
+
+        let mut metadata = HashMap::new();
+        metadata.insert("key".to_string(), "value".to_string());
+        let field = Arc::new(
+            Field::new("col", DataType::Int32, true).with_metadata(metadata.clone()),
+        );
+
+        let max_udf = max_udaf();
+        let max_field = max_udf.return_field(&[Arc::clone(&field)])?;
+        assert_eq!(max_field.name(), "max");
+        assert_eq!(max_field.data_type(), &DataType::Int32);
+        assert!(max_field.is_nullable());
+        assert_eq!(max_field.metadata(), &metadata);
+
+        let min_udf = min_udaf();
+        let min_field = min_udf.return_field(&[Arc::clone(&field)])?;
+        assert_eq!(min_field.name(), "min");
+        assert_eq!(min_field.data_type(), &DataType::Int32);
+        assert!(min_field.is_nullable());
+        assert_eq!(min_field.metadata(), &metadata);
 
         Ok(())
     }
