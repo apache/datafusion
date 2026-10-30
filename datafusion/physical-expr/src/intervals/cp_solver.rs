@@ -837,12 +837,29 @@ mod tests {
             + edges * size_of::<petgraph::graph::Edge<Option<usize>>>()
     }
 
+    fn graph_with_capacity(nodes: usize, edges: usize) -> ExprIntervalGraph {
+        ExprIntervalGraph {
+            graph: StableGraph::with_capacity(nodes, edges),
+            root: NodeIndex::new(0),
+        }
+    }
+
+    fn add_interval_node(
+        graph: &mut ExprIntervalGraph,
+        expr: Arc<dyn PhysicalExpr>,
+        lower: ScalarValue,
+        upper: ScalarValue,
+    ) -> Result<NodeIndex> {
+        let node = ExprIntervalGraphNode::new_with_interval(
+            expr,
+            Interval::try_new(lower, upper)?,
+        );
+        Ok(graph.graph.add_node(node))
+    }
+
     #[test]
     fn graph_size_counts_retained_capacity() -> Result<()> {
-        let mut graph = ExprIntervalGraph {
-            graph: StableGraph::with_capacity(0, 0),
-            root: NodeIndex::new(0),
-        };
+        let mut graph = graph_with_capacity(0, 0);
         assert_eq!(graph.size(), size_of_val(&graph));
 
         let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
@@ -873,19 +890,13 @@ mod tests {
         // A large expression allocation is shared, not owned by the graph.
         let expr: Arc<dyn PhysicalExpr> =
             Arc::new(Literal::new(ScalarValue::Utf8(Some("x".repeat(4096)))));
-        let mut graph = ExprIntervalGraph {
-            graph: StableGraph::with_capacity(8, 8),
-            root: NodeIndex::new(0),
-        };
-        graph
-            .graph
-            .add_node(ExprIntervalGraphNode::new_with_interval(
-                Arc::clone(&expr),
-                Interval::try_new(
-                    ScalarValue::Utf8(Some(lower)),
-                    ScalarValue::Utf8(Some(upper)),
-                )?,
-            ));
+        let mut graph = graph_with_capacity(8, 8);
+        add_interval_node(
+            &mut graph,
+            Arc::clone(&expr),
+            ScalarValue::Utf8(Some(lower)),
+            ScalarValue::Utf8(Some(upper)),
+        )?;
         assert_eq!(
             graph.size(),
             expected_graph_backing_size(&graph) + string_bytes
@@ -897,21 +908,12 @@ mod tests {
         let timezone_bytes = 2 * size_of::<usize>() + timezone.len();
         let mut timezone_nodes = Vec::with_capacity(2);
         for _ in 0..2 {
-            timezone_nodes.push(graph.graph.add_node(
-                ExprIntervalGraphNode::new_with_interval(
-                    Arc::clone(&expr),
-                    Interval::try_new(
-                        ScalarValue::TimestampNanosecond(
-                            Some(0),
-                            Some(Arc::clone(&timezone)),
-                        ),
-                        ScalarValue::TimestampNanosecond(
-                            Some(1),
-                            Some(Arc::clone(&timezone)),
-                        ),
-                    )?,
-                ),
-            ));
+            timezone_nodes.push(add_interval_node(
+                &mut graph,
+                Arc::clone(&expr),
+                ScalarValue::TimestampNanosecond(Some(0), Some(Arc::clone(&timezone))),
+                ScalarValue::TimestampNanosecond(Some(1), Some(Arc::clone(&timezone))),
+            )?);
         }
         assert_eq!(
             graph.size(),
