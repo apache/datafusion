@@ -216,8 +216,10 @@ ORDER BY day_bin;
 2024-01-01T00:00:00 174
 
 ##########
-# An explicit origin remains outside the audited slice, even when it is
-# the epoch and produces the same bins as the two-argument expression.
+# This PR enables shuffle removal only for two-argument date_bin calls.
+# A three-argument call therefore retains the shuffle, even when its
+# explicit epoch origin produces identical bins and would be safe.
+# See #26913 for explicit-origin support.
 ##########
 
 query TT
