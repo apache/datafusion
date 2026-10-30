@@ -7410,7 +7410,7 @@ mod tests {
     fn hash_lookup(
         column: &Arc<dyn PhysicalExpr>,
         keys: &[i64],
-    ) -> Arc<dyn PhysicalExpr> {
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         let array: ArrayRef = Arc::new(Int64Array::from(keys.to_vec()));
         let bitmap = KeyRangeBitmap::try_new(
             &array,
@@ -7418,26 +7418,28 @@ mod tests {
             &ScalarValue::Int64(Some(*keys.iter().max().unwrap())),
             keys.len(),
         );
-        Arc::new(HashTableLookupExpr::new(
+        Ok(Arc::new(HashTableLookupExpr::new(
             vec![Arc::clone(column)],
             SeededRandomState::with_seed(1),
-            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(1)))),
+            None,
+            vec![Some(Arc::new(Map::HashMap(Box::new(
+                JoinHashMapU32::with_capacity(1),
+            ))))],
             "hash_lookup".to_string(),
             bitmap.map(Arc::new),
-        ))
+        )?))
     }
 
     #[test]
-    fn test_hash_lookup_pruning_via_min_max() {
+    fn test_hash_lookup_pruning_via_min_max() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
         let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
         // Gapped keys: 10,20,30 then a far-away 100000, so the bitmap is sparse.
-        let lookup = hash_lookup(&column, &[10, 20, 30, 100_000]);
+        let lookup = hash_lookup(&column, &[10, 20, 30, 100_000])?;
 
         let predicate = PruningPredicateBuilder::new()
             .with_file_schema(Arc::clone(&schema))
-            .try_build(lookup)
-            .unwrap();
+            .try_build(lookup)?;
 
         // An opaque lookup yields no literal guarantees, so `contained()` is never
         // consulted and every exclusion below comes from the min/max rewrite.
@@ -7451,10 +7453,11 @@ mod tests {
             ),
         );
 
-        let result = predicate.prune(&statistics).unwrap();
+        let result = predicate.prune(&statistics)?;
         // Containers 0 and 2 sit in the gap between 30 and 100000; container 1
         // holds 20. The bitmap excludes the first and third.
         assert_eq!(result, vec![false, true, false]);
+        Ok(())
     }
 
     #[rstest]
@@ -7468,18 +7471,17 @@ mod tests {
         #[case] file_type: DataType,
         #[case] cast_type: DataType,
         #[case] pruned: bool,
-    ) {
+    ) -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("b", file_type.clone(), true)]));
         let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
         let cast_column: Arc<dyn PhysicalExpr> =
             Arc::new(phys_expr::CastExpr::new(column, cast_type, None));
-        let lookup = hash_lookup(&cast_column, &[10, 20, 30, 100_000]);
+        let lookup = hash_lookup(&cast_column, &[10, 20, 30, 100_000])?;
 
         let predicate = PruningPredicateBuilder::new()
             .with_file_schema(Arc::clone(&schema))
-            .try_build(lookup)
-            .unwrap();
+            .try_build(lookup)?;
 
         let to_file_type = |values: Vec<Option<i64>>| -> ArrayRef {
             let values: ArrayRef = Arc::new(values.into_iter().collect::<Int64Array>());
@@ -7492,7 +7494,7 @@ mod tests {
                 .with_max(to_file_type(vec![Some(8000), Some(25), Some(60000)])),
         );
 
-        let result = predicate.prune(&statistics).unwrap();
+        let result = predicate.prune(&statistics)?;
         // Containers 0 and 2 sit in the gap between 30 and 100000; container 1
         // holds 20. A working cast excludes the first and third; a declined one
         // falls back to keeping every container.
@@ -7502,10 +7504,11 @@ mod tests {
             vec![true, true, true]
         };
         assert_eq!(result, expected);
+        Ok(())
     }
 
     #[test]
-    fn test_partition_routed_hash_lookup_pruning() {
+    fn test_partition_routed_hash_lookup_pruning() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
         let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
         let literal = |value: ScalarValue| -> Arc<dyn PhysicalExpr> {
@@ -7513,29 +7516,25 @@ mod tests {
         };
         // One branch per build partition, each holding its own slice of the build
         // side, as `build_partitioned_filter` produces them.
-        let case: Arc<dyn PhysicalExpr> = Arc::new(
-            phys_expr::CaseExpr::try_new(
-                Some(literal(ScalarValue::UInt64(Some(0)))),
-                vec![
-                    (
-                        literal(ScalarValue::UInt64(Some(0))),
-                        hash_lookup(&column, &[10, 20, 30]),
-                    ),
-                    (
-                        literal(ScalarValue::UInt64(Some(1))),
-                        hash_lookup(&column, &[40, 50, 60]),
-                    ),
-                ],
-                // Partitions with no build rows reject everything routed to them.
-                Some(literal(ScalarValue::Boolean(Some(false)))),
-            )
-            .unwrap(),
-        );
+        let case: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::CaseExpr::try_new(
+            Some(literal(ScalarValue::UInt64(Some(0)))),
+            vec![
+                (
+                    literal(ScalarValue::UInt64(Some(0))),
+                    hash_lookup(&column, &[10, 20, 30])?,
+                ),
+                (
+                    literal(ScalarValue::UInt64(Some(1))),
+                    hash_lookup(&column, &[40, 50, 60])?,
+                ),
+            ],
+            // Partitions with no build rows reject everything routed to them.
+            Some(literal(ScalarValue::Boolean(Some(false)))),
+        )?);
 
         let predicate = PruningPredicateBuilder::new()
             .with_file_schema(Arc::clone(&schema))
-            .try_build(case)
-            .unwrap();
+            .try_build(case)?;
 
         let statistics = TestStatistics::new().with(
             "b",
@@ -7545,10 +7544,11 @@ mod tests {
             ),
         );
 
-        let result = predicate.prune(&statistics).unwrap();
+        let result = predicate.prune(&statistics)?;
         // Container 1 ([15,25]) holds 20 from the first branch and container 2
         // ([45,55]) holds 50 from the second, so a branch may match in each. The
         // other two intersect neither branch, nor the `ELSE`.
         assert_eq!(result, vec![false, true, true, false]);
+        Ok(())
     }
 }

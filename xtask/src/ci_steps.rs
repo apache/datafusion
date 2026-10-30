@@ -17,8 +17,12 @@ type StepRunner = fn(&StepContext, &[String]) -> StepResult<CiCommand>;
 const CI_COMMAND: &str = "cargo xtask ci step";
 const CI_SHORTCUT: &str = "cargo ci-step";
 const TPCH_DATA_DIR: &str = "datafusion/sqllogictest/test_files/tpch/data";
-/// The `datafusion-physical-plan` unit test that the `spill-pool-fuzz` step runs.
-const SPILL_POOL_FUZZ_TEST: &str = "spill::spill_pool::tests::spill_pool_scenario_fuzz";
+/// The `datafusion-physical-plan` unit tests that the `fuzz` step runs.
+const FUZZ_TESTS: &[&str] = &[
+    "spill::spill_pool::tests::spill_pool_scenario_fuzz",
+    "joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz",
+    "joins::key_range_bitmap::tests::union_fuzz",
+];
 
 /// Metadata and implementation for one CI step.
 ///
@@ -44,7 +48,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         error_message: "Cargo test step failed",
@@ -408,9 +412,10 @@ impl StepContext {
                     ])
                     .env("RUST_BACKTRACE", "1");
             }
-            "spill-pool-fuzz" => {
-                // Run more random scenarios of the spill pool fuzzer than the
-                // `workspace` step does (about a minute).
+            "fuzz" => {
+                // Run more random scenarios of the fuzzers than the `workspace`
+                // step does (about a minute for the spill pool, seconds for the
+                // others).
                 command
                     .args([
                         "test",
@@ -421,10 +426,12 @@ impl StepContext {
                         "--lib",
                         "--",
                         "--exact",
-                        SPILL_POOL_FUZZ_TEST,
                     ])
+                    .args(FUZZ_TESTS)
                     .env("RUST_BACKTRACE", "1")
-                    .env("DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS", "1000");
+                    .env("DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS", "1000")
+                    .env("DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS", "10000")
+                    .env("DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS", "10000");
             }
             "hash-collisions" => {
                 // Check answers are correct when hash values collide. The CI job
@@ -654,7 +661,7 @@ fn required_env(name: &str) -> Result<String> {
 mod tests {
     use super::*;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|hash-collisions|sqlite> [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -704,22 +711,24 @@ mod tests {
     }
 
     /// A filter that matches no test passes without running anything, so a
-    /// renamed or moved spill pool fuzzer would silently stop running in CI.
+    /// renamed or moved fuzzer would silently stop running in CI.
     #[test]
-    fn spill_pool_fuzz_test_exists() {
-        let (module, test) = SPILL_POOL_FUZZ_TEST
-            .rsplit_once("::tests::")
-            .expect("test path has a `tests` module");
-        let file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../datafusion/physical-plan/src")
-            .join(format!("{}.rs", module.replace("::", "/")));
-        let source = std::fs::read_to_string(&file)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
-        assert!(
-            source.contains("mod tests {") && source.contains(&format!("fn {test}(")),
-            "{} has no test `{test}` in `mod tests`; update SPILL_POOL_FUZZ_TEST",
-            file.display()
-        );
+    fn fuzz_tests_exist() {
+        for path in FUZZ_TESTS {
+            let (module, test) = path
+                .rsplit_once("::tests::")
+                .expect("test path has a `tests` module");
+            let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../datafusion/physical-plan/src")
+                .join(format!("{}.rs", module.replace("::", "/")));
+            let source = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+            assert!(
+                source.contains("mod tests {") && source.contains(&format!("fn {test}(")),
+                "{} has no test `{test}` in `mod tests`; update FUZZ_TESTS",
+                file.display()
+            );
+        }
     }
 
     /// The `extended` step runs only the `extended_tests` test target, which
@@ -1011,17 +1020,19 @@ cargo test \
                 },
             },
             Cmd {
-                command: &["test", "spill-pool-fuzz"],
+                command: &["test", "fuzz"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
 cd /workspace && \
+DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS=10000 \
+DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS=10000 \
 DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS=1000 \
 RUST_BACKTRACE=1 \
 cargo test \
 --profile ci \
 -p datafusion-physical-plan \
 --lib \
--- --exact spill::spill_pool::tests::spill_pool_scenario_fuzz
+-- --exact spill::spill_pool::tests::spill_pool_scenario_fuzz joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz joins::key_range_bitmap::tests::union_fuzz
 ")
                 },
             },
