@@ -657,6 +657,11 @@ impl InValue {
 /// aside. Any other conjunct is assumed to let a NULL through, which keeps
 /// the join null-aware.
 ///
+/// A volatile key, such as one built on `random()`, is evaluated once in the
+/// subquery filter and once more as the join key. The two calls can disagree,
+/// so a conjunct on one tells nothing about the other, and such a key keeps
+/// the join null-aware.
+///
 /// `key_is_outer` tells on which side of the join the key is. The scope
 /// filters keep their outer references, and a side of a conjunct matches an
 /// outer key only if it names outer columns alone. A subquery column can have
@@ -670,6 +675,9 @@ fn key_may_be_null_in_scope(
 ) -> bool {
     if !nullable {
         return false;
+    }
+    if key.is_volatile() {
+        return true;
     }
     let key = strip_casts(key);
     !scope_filters
@@ -1366,8 +1374,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
     use datafusion_expr::{
-        TableScanBuilder, and, binary_expr, col, cube, grouping_set, out_ref_col, rollup,
-        table_scan,
+        ScalarUDF, TableScanBuilder, Volatility, and, binary_expr, col, cube,
+        grouping_set, out_ref_col, rollup, table_scan,
     };
     use datafusion_functions_aggregate::count::count_udaf;
 
@@ -2502,6 +2510,39 @@ mod tests {
         let optimized = optimize_with_decorrelate(plan)?;
         assert!(
             has_non_null_aware_left_mark_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
+    /// A volatile key is evaluated again for the join, so a correlation on the
+    /// same expression says nothing about the join key, and the mark join
+    /// stays null-aware.
+    #[test]
+    fn mark_join_for_volatile_in_predicate_correlation_is_null_aware() -> Result<()> {
+        let volatile_key = |arg: Expr| {
+            ScalarUDF::from(
+                udfs::PlacementTestUDF::new().with_volatility(Volatility::Volatile),
+            )
+            .call(vec![arg])
+        };
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(
+                    col("sq.c").eq(volatile_key(out_ref_col(DataType::UInt32, "test.c"))),
+                )?
+                .project(vec![col("sq.c")])?
+                .build()?,
+        );
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(not_in_subquery(volatile_key(col("test.c")), subquery).is_null())?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_null_aware_left_mark_join(&optimized),
             "{}",
             optimized.display_indent_schema()
         );
