@@ -62,7 +62,7 @@ use datafusion_session::Session;
 
 use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
 use crate::reader::CachedParquetFileReaderFactory;
-use crate::source::{ParquetSource, parse_coerce_int96_tz_string};
+use crate::source::ParquetSource;
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
@@ -366,8 +366,7 @@ impl FileFormat for ParquetFormat {
             .global
             .coerce_int96_tz
             .as_ref()
-            .map(|tz| parse_coerce_int96_tz_string(tz))
-            .transpose()?;
+            .map(|tz| Arc::<str>::from(tz.as_str()));
 
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
@@ -762,7 +761,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
                 parquet_options::CoerceInt96Opt::CoerceInt96(time_unit.to_string())
             }),
             coerce_int96_tz_opt: global_options.global.coerce_int96_tz.map(|tz| {
-                parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz)
+                parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz.to_string())
             }),
             max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)

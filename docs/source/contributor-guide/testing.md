@@ -163,6 +163,22 @@ For local SQLite test instructions, see the [instructions in the documentation].
 [instructions in the documentation]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite
 [extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
 
+## CI Workflow Tests
+
+The Rust workflow validator and fork status bridge have regression tests.
+These tests cover skip conditions, fork run recovery, polling frequency, and
+concurrency groups for fork pushes and merge queue runs.
+They run in the `asf-yaml-check` CI job and in `./dev/rust_lint.sh`.
+Run them locally with Python, PyYAML, and Node.js 24:
+
+```shell
+python3 ci/scripts/test_rust_workflow_skips.py
+node --test ci/scripts/test_fork_ci_status.cjs
+```
+
+The validator tests remove guards and add an invalid job dependency in memory.
+The bridge tests use stubbed GitHub API responses and make no network requests.
+
 ## Rust Integration Tests
 
 There are several public interface tests for the DataFusion library in the [tests](https://github.com/apache/datafusion/tree/main/datafusion/core/tests) directory.
@@ -261,18 +277,21 @@ bash ci/scripts/rust_docs.sh
 ## ASF Status Check Validation
 
 `ci/scripts/check_asf_yaml_status_checks.py` checks that every required status
-check in `.asf.yaml` matches a job in `.github/workflows`, and that `rust.yml`
-skips only its listed jobs on pushes to `main`. `./dev/rust_lint.sh` runs it
-and needs `python3` with [PyYAML]. The [uv] workspace provides both:
+check in `.asf.yaml` matches a job in `.github/workflows`.
+`ci/scripts/check_rust_workflow_skips.py` checks that `rust.yml` skips only its
+listed jobs on pushes to `main` and on pull requests from forks.
+`./dev/rust_lint.sh` runs both and needs `python3` with [PyYAML]. The [uv]
+workspace provides both:
 
 ```shell
 uv run ./dev/rust_lint.sh
 ```
 
-To run the check on its own:
+To run the checks on their own:
 
 ```shell
 uv run python3 ci/scripts/check_asf_yaml_status_checks.py
+uv run python3 ci/scripts/check_rust_workflow_skips.py
 ```
 
 [pyyaml]: https://pypi.org/project/PyYAML/

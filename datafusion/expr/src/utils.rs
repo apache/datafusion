@@ -919,6 +919,28 @@ where
     err
 }
 
+/// Returns the element field at the given list unnesting depth.
+pub(crate) fn get_unnested_list_field(
+    data_type: &DataType,
+    depth: usize,
+) -> Result<&Field> {
+    match data_type {
+        DataType::List(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => {
+            if depth == 1 {
+                return Ok(field.as_ref());
+            }
+            return get_unnested_list_field(field.data_type(), depth - 1);
+        }
+        _ => {}
+    }
+
+    internal_err!("trying to unnest on invalid data type {data_type}")
+}
+
 /// Create schema fields from an expression list, for use in result set schema construction
 ///
 /// This function converts a list of expressions into a list of complete schema fields,

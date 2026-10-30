@@ -565,7 +565,14 @@ fn deserialize_cast_options(
 
 impl fmt::Display for CastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "CAST({} AS {})", self.expr, self.cast_type())
+        write!(f, "CAST({} AS {}", self.expr, self.cast_type())?;
+        // A cast to an explicit field can change only the nullability (for
+        // example when a union aligns its inputs), so show it the way schemas
+        // do: `;N` marks a nullable field.
+        if self.explicit_target && self.target_field.is_nullable() {
+            write!(f, ";N")?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -1836,6 +1843,33 @@ mod tests {
         assert_eq!(display_string, "CAST(b@0 AS Int32)");
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         assert_eq!(sql_string, "CAST(b AS Int32)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_display_explicit_target_nullability() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+
+        // A same-type cast to a nullable field only relabels the nullability
+        let expr = CastExpr::new_with_target_field(
+            col("a", &schema)?,
+            Arc::new(Field::new("a", Int32, true)),
+            None,
+        );
+        assert_eq!(expr.to_string(), "CAST(a@0 AS Int32;N)");
+        assert_eq!(fmt_sql(&expr).to_string(), "CAST(a AS Int32)");
+
+        let expr = CastExpr::new_with_target_field(
+            col("a", &schema)?,
+            Arc::new(Field::new("a", Int32, false)),
+            None,
+        );
+        assert_eq!(expr.to_string(), "CAST(a@0 AS Int32)");
+
+        // A cast to a bare type is unchanged
+        let expr = CastExpr::new(col("a", &schema)?, Int64, None);
+        assert_eq!(expr.to_string(), "CAST(a@0 AS Int64)");
 
         Ok(())
     }

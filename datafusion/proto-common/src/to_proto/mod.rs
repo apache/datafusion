@@ -968,7 +968,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             skip_arrow_metadata: value.skip_arrow_metadata,
             write_row_group_number_distinct_values: value.write_row_group_number_distinct_values,
             coerce_int96_opt: value.coerce_int96.map(|v| protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v.to_string())),
-            coerce_int96_tz_opt: value.coerce_int96_tz.clone().map(protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz),
+            coerce_int96_tz_opt: value.coerce_int96_tz.as_ref().map(|v| protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v.to_string())),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
             max_row_group_bytes_opt: value.max_row_group_bytes.map(|v| protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v.get() as u64)),
             content_defined_chunking: Some((&value.content_defined_chunking).into()),
