@@ -852,7 +852,7 @@ mod tests {
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::TestMemoryExec;
     use crate::test::exec::{
-        BlockingExec, StatisticsExec, assert_strong_count_converges_to_zero,
+        BlockingExec, StatisticsExec, TestStream, assert_strong_count_converges_to_zero,
     };
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
@@ -875,7 +875,7 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
-    use futures::{FutureExt, Stream, StreamExt};
+    use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
     use insta::assert_snapshot;
     use tokio::time::timeout;
 
@@ -903,119 +903,80 @@ mod tests {
             .build()
     }
 
-    // Outside Tokio, yield_now wakes immediately instead of deferring the wake.
-    #[test]
-    fn merge_initialization_yields_after_batch_size_rows() -> Result<()> {
-        // Poll outside Tokio so the voluntary yield wakes our counting waker directly.
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        struct WakeCount(AtomicUsize);
-        impl std::task::Wake for WakeCount {
-            fn wake(self: Arc<Self>) {
-                self.0.fetch_add(1, Ordering::SeqCst);
-            }
+    #[tokio::test]
+    async fn merge_initialization_yields_only_for_row_cursors() -> Result<()> {
+        let batch = arrow::array::record_batch!(
+            ("a", Int32, [0, 1, 2, 3, 4, 5]),
+            ("b", Int32, [0, 0, 0, 0, 0, 0])
+        )?;
+        for row_conversion in [true, false] {
+            let inputs = (0..3)
+                .map(|i| TestStream::new(vec![batch.slice(i * 2, 2)]))
+                .collect::<Vec<_>>();
+            let indexes = inputs.iter().map(TestStream::index).collect::<Vec<_>>();
+            let streams = inputs
+                .into_iter()
+                .map(|input| Box::pin(input) as SendableRecordBatchStream)
+                .collect();
+            let mut merge =
+                initialization_test_merge(streams, batch.schema(), row_conversion)?;
+            let mut first_poll = true;
+            let checked = futures::stream::poll_fn(move |cx| {
+                let next = merge.poll_next_unpin(cx);
+                if first_poll {
+                    first_poll = false;
+                    assert_eq!(next.is_pending(), row_conversion);
+                    // Row cursors yield after four rows; field cursors read all six.
+                    assert_eq!(
+                        indexes.iter().map(|index| index.value()).sum::<usize>(),
+                        if row_conversion { 2 } else { 3 }
+                    );
+                }
+                next
+            });
+            // The timeout must not repoll the merge and rescue a missing wakeup.
+            let task = SpawnedTask::spawn(checked.try_collect::<Vec<_>>());
+            let output = timeout(Duration::from_secs(3), task)
+                .await
+                .expect("initialization did not wake")
+                .expect("merge task panicked")?;
+            assert_eq!(
+                arrow::compute::concat_batches(&batch.schema(), &output)?,
+                batch
+            );
         }
-        let batch = arrow::array::record_batch!(
-            ("a", Int32, [0, 1, 2, 3, 4, 5]),
-            ("b", Int32, [0, 0, 0, 0, 0, 0])
-        )?;
-        let polled = Arc::new(AtomicUsize::new(0));
-        let streams = (0..3)
-            .map(|i| {
-                let polled = Arc::clone(&polled);
-                let input = futures::stream::iter([Ok(batch.slice(i * 2, 2))]).inspect(
-                    move |_| {
-                        polled.fetch_add(1, Ordering::SeqCst);
-                    },
-                );
-                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
-                    batch.schema(),
-                    input,
-                )) as SendableRecordBatchStream
-            })
-            .collect();
-        let mut merge = initialization_test_merge(streams, batch.schema(), true)?;
-        let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
-        let waker = Waker::from(Arc::clone(&wakes));
-        let mut cx = Context::from_waker(&waker);
-        let mut next = merge.next();
-        // Two two-row inputs exhaust the four-row budget before the third is read.
-        assert!(next.poll_unpin(&mut cx).is_pending());
-        assert_eq!(polled.load(Ordering::SeqCst), 2);
-        assert!(wakes.0.load(Ordering::SeqCst) > 0);
-        drop(next);
-        let output = futures::executor::block_on(common::collect(merge))?;
-        assert_eq!(
-            arrow::compute::concat_batches(&batch.schema(), &output)?,
-            batch
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn field_cursor_initialization_keeps_ready_inputs_inline() -> Result<()> {
-        let batch = arrow::array::record_batch!(
-            ("a", Int32, [0, 1, 2, 3, 4, 5]),
-            ("b", Int32, [0, 0, 0, 0, 0, 0])
-        )?;
-        let streams = (0..3)
-            .map(|i| {
-                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
-                    batch.schema(),
-                    futures::stream::iter([Ok(batch.slice(i * 2, 2))]),
-                )) as SendableRecordBatchStream
-            })
-            .collect();
-        let mut merge = initialization_test_merge(streams, batch.schema(), false)?;
-        // Opening six rows exceeds the four-row target, but field cursors stay inline.
-        let first = merge.next().now_or_never().expect("field cursors yielded");
-        let mut output = vec![first.expect("merge returned no rows")?];
-        output.extend(futures::executor::block_on(common::collect(merge))?);
-        assert_eq!(
-            arrow::compute::concat_batches(&batch.schema(), &output)?,
-            batch
-        );
         Ok(())
     }
 
     #[tokio::test]
     async fn merge_initialization_repolls_pending_inputs_after_yield() -> Result<()> {
-        use std::sync::atomic::{AtomicBool, Ordering};
         let batch = arrow::array::record_batch!(
-            ("a", Int32, (0..12).collect::<Vec<i32>>()),
-            ("b", Int32, vec![0; 12])
+            ("a", Int32, [0, 1, 2, 3, 4, 5, 6, 7]),
+            ("b", Int32, [0, 0, 0, 0, 0, 0, 0, 0])
         )?;
-        let released = Arc::new(AtomicBool::new(false));
-        let waiting = Arc::new(Mutex::new(None::<Waker>));
-        let streams = (0..3)
-            .map(|i| {
-                let released = Arc::clone(&released);
-                let waiting = Arc::clone(&waiting);
-                let mut input = Some(batch.slice(i * 4, 4));
-                let stream = futures::stream::poll_fn(move |cx| {
-                    if i == 0 && !released.load(Ordering::SeqCst) {
-                        *waiting.lock().unwrap() = Some(cx.waker().clone());
-                        return Poll::Pending;
-                    }
-                    if i == 2 {
-                        released.store(true, Ordering::SeqCst);
-                        if let Some(waker) = waiting.lock().unwrap().take() {
-                            waker.wake();
-                        }
-                    }
-                    Poll::Ready(input.take().map(Ok))
-                });
-                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
-                    batch.schema(),
-                    stream,
-                )) as SendableRecordBatchStream
-            })
-            .collect();
-        let merge = initialization_test_merge(streams, batch.schema(), true)?;
-        // Input 1 triggers a yield. Input 2 then wakes input 0 before the next yield.
-        // Completion must rely on those wakeups, without manually repolling the merge.
-        let output = timeout(Duration::from_secs(3), common::collect(merge))
+        let delayed = RecordBatchReceiverStream::builder(batch.schema(), 1);
+        let sender = delayed.tx();
+        let ready = TestStream::new(vec![batch.slice(4, 4)]);
+        let ready_index = ready.index();
+        let merge = initialization_test_merge(
+            vec![delayed.build(), Box::pin(ready)],
+            batch.schema(),
+            true,
+        )?;
+        let first = batch.slice(0, 4);
+        let task = SpawnedTask::spawn(async move {
+            let (output, ()) = tokio::join!(biased; common::collect(merge), async move {
+                // Let the merge yield, then park on input zero before waking it.
+                tokio::task::yield_now().await;
+                assert_eq!(ready_index.value(), 1);
+                sender.send(Ok(first)).await.unwrap();
+            });
+            output
+        });
+        let output = timeout(Duration::from_secs(3), task)
             .await
-            .expect("initialization lost a pending input's wakeup")?;
+            .expect("initialization lost a pending input's wakeup")
+            .expect("merge task panicked")?;
         assert_eq!(
             arrow::compute::concat_batches(&batch.schema(), &output)?,
             batch
