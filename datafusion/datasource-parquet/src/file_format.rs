@@ -557,42 +557,33 @@ impl FileFormat for ParquetFormat {
         // it in its own task to spread that work over the runtime's threads
         // instead of decoding every file on the thread polling the planner.
         // As in `spawn_buffered`, only spawn from a multi-thread tokio runtime.
+        let store = Arc::clone(store);
+        let object = object.clone();
+        let fetch = async move {
+            fetch_stats_and_ordering(
+                store.as_ref(),
+                &object,
+                metadata_size_hint,
+                file_decryption_properties,
+                file_metadata_cache,
+                &table_schema,
+            )
+            .await
+        };
         match tokio::runtime::Handle::try_current() {
             Ok(handle)
                 if handle.runtime_flavor()
                     == tokio::runtime::RuntimeFlavor::MultiThread =>
             {
-                let store = Arc::clone(store);
-                let object = object.clone();
-                SpawnedTask::spawn(async move {
-                    fetch_stats_and_ordering(
-                        store.as_ref(),
-                        &object,
-                        metadata_size_hint,
-                        file_decryption_properties,
-                        file_metadata_cache,
-                        &table_schema,
-                    )
+                SpawnedTask::spawn(fetch)
+                    .join_unwind()
                     .await
-                })
-                .join_unwind()
-                .await
-                .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
+                    .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
             }
             // Otherwise do the work on this task, where the caller polls it
             // together with the other files (for example in `ListingTable`'s
             // `buffer_unordered`).
-            _ => {
-                fetch_stats_and_ordering(
-                    store.as_ref(),
-                    object,
-                    metadata_size_hint,
-                    file_decryption_properties,
-                    file_metadata_cache,
-                    &table_schema,
-                )
-                .await
-            }
+            _ => fetch.await,
         }
     }
 
