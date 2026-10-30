@@ -652,9 +652,10 @@ t
 u
 v
 
-# A RunEndEncoded element is not hashable, so it stays in the join filter. That
-# is rejected for an element that can be NULL (see above), but an element that
-# cannot is read like any correlation.
+# A RunEndEncoded element is not hashable. A run of NULLs has no null bit, so
+# a field declared NOT NULL does not rule out a NULL element, and the element
+# is treated like one that can be NULL: it is rejected (see above) rather than
+# read as a correlation in the join filter.
 statement ok
 CREATE TABLE mc_nn_ree_outer AS
 SELECT k, a, arrow_cast(b, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS b, value
@@ -665,13 +666,9 @@ CREATE TABLE mc_nn_ree_inner AS
 SELECT k, x, arrow_cast(y, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS y
 FROM mc_nn_inner;
 
-query T rowsort
+statement error Multi-column NOT IN subquery is not supported when a tuple element is not a hashable equi-join key
 SELECT value FROM mc_nn_ree_outer
 WHERE (b, a) NOT IN (SELECT y, x FROM mc_nn_ree_inner);
-----
-r
-s
-u
 
 # As a nullable value.
 query TB rowsort

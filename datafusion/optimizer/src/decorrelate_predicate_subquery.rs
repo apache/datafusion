@@ -47,6 +47,7 @@ use datafusion_expr::{
     exists, in_subquery, lit, not, not_exists, not_in_subquery, when,
 };
 
+use arrow::datatypes::DataType;
 use log::debug;
 
 /// Optimizer rule for rewriting predicate(IN/EXISTS) subquery to left semi/anti joins
@@ -631,6 +632,34 @@ impl InValue {
             scope_filters,
         ))
     }
+
+    /// Can either side hold a NULL that its schema does not show? See
+    /// [`type_may_hide_null`].
+    fn may_hide_null(
+        &self,
+        left_schema: &DFSchema,
+        right_schema: &DFSchema,
+    ) -> Result<bool> {
+        Ok(type_may_hide_null(&self.value.get_type(left_schema)?)
+            || type_may_hide_null(&self.subquery_column.get_type(right_schema)?))
+    }
+}
+
+/// Can an array of this type hold a NULL in a field declared non-nullable?
+///
+/// An array of these types can be logically NULL at a slot without a null
+/// bit: a dictionary key that points to a NULL value, a run of NULLs, or a
+/// NULL in the selected union child. The null count covers only the null
+/// bits, so a field inferred from such an array, as
+/// `RecordBatch::try_from_iter` does, is non-nullable although the array
+/// holds NULLs.
+fn type_may_hide_null(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Dictionary(_, _)
+            | DataType::RunEndEncoded(_, _)
+            | DataType::Union(_, _)
+    )
 }
 
 /// Can this join key be NULL for a row inside the scope of an outer row?
@@ -1066,11 +1095,24 @@ fn build_join(
     // A null-aware tuple has at least one element that can be NULL, so `V` is
     // at least one. With exactly one, the join is a scalar `NOT IN` on that
     // element, correlated by the other elements.
+    //
+    // An element whose type can hide a NULL from its schema (see
+    // `type_may_hide_null`) stays a value key too. As a scope key, such a NULL
+    // would put its row outside every scope, which makes the comparison FALSE
+    // instead of UNKNOWN; a value key still sees it.
     let null_aware_value_keys = if null_aware && in_values.len() > 1 {
+        let keeps_value_key = in_values
+            .iter()
+            .zip(elements_may_be_null)
+            .map(|(in_value, may_be_null)| {
+                Ok(may_be_null
+                    || in_value.may_hide_null(left.schema(), sub_query_alias.schema())?)
+            })
+            .collect::<Result<Vec<_>>>()?;
         let (nullable, non_nullable): (Vec<_>, Vec<_>) = in_values
             .into_iter()
-            .zip(elements_may_be_null)
-            .partition(|(_, may_be_null)| *may_be_null);
+            .zip(keeps_value_key)
+            .partition(|(_, keeps_value_key)| *keeps_value_key);
         let null_aware_value_keys = nullable.len();
         in_values = nullable
             .into_iter()

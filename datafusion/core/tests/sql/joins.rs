@@ -701,3 +701,61 @@ async fn asof_join_unparser_preserves_right_preselection() -> Result<()> {
     }
     Ok(())
 }
+
+/// A dictionary key can point to a NULL value without a null bit, so the
+/// field inferred for `b` is non-nullable although `b` holds a NULL. The
+/// multi-column `NOT IN` must still see that NULL: `(1, NULL) NOT IN ((1, 2))`
+/// is NULL, so a `WHERE` drops the row.
+#[tokio::test]
+async fn multi_column_not_in_sees_null_dictionary_values() -> Result<()> {
+    let dictionary = |keys: Vec<i32>, values: Vec<Option<i32>>| -> Result<ArrayRef> {
+        Ok(Arc::new(DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(keys),
+            Arc::new(Int32Array::from(values)),
+        )?))
+    };
+    let outer = RecordBatch::try_from_iter(vec![
+        (
+            "a",
+            Arc::new(Int32Array::from(vec![Some(1), None])) as ArrayRef,
+        ),
+        ("b", dictionary(vec![0, 1], vec![None, Some(3)])?),
+    ])?;
+    let inner = RecordBatch::try_from_iter(vec![
+        ("x", Arc::new(Int32Array::from(vec![1])) as ArrayRef),
+        ("y", dictionary(vec![0], vec![Some(2)])?),
+    ])?;
+    assert!(!outer.schema().field_with_name("b")?.is_nullable());
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("o", outer)?;
+    ctx.register_batch("i", inner)?;
+
+    let projected = ctx
+        .sql(
+            "SELECT a, (a, b) NOT IN (SELECT x, y FROM i) AS r \
+             FROM o ORDER BY a NULLS LAST",
+        )
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(
+        [
+            "+---+------+",
+            "| a | r    |",
+            "+---+------+",
+            "| 1 |      |",
+            "|   | true |",
+            "+---+------+",
+        ],
+        &projected
+    );
+
+    let filtered = ctx
+        .sql("SELECT a FROM o WHERE (a, b) NOT IN (SELECT x, y FROM i)")
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(["+---+", "| a |", "+---+", "|   |", "+---+"], &filtered);
+    Ok(())
+}
