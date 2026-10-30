@@ -156,7 +156,11 @@ impl ScalarUDFImpl for FloorFunc {
         let is_scalar = matches!(arg, ColumnarValue::Scalar(_));
 
         // Array path (also handles decimal scalars converted to size-1 arrays)
-        let value = arg.to_array(args.number_rows)?;
+        let value = if is_scalar {
+            arg.to_array(1)?
+        } else {
+            arg.to_array(args.number_rows)?
+        };
 
         let result: ArrayRef = match value.data_type() {
             DataType::Float64 => Arc::new(
@@ -447,6 +451,39 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_floor_decimal_scalar_zero_rows() {
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::ReturnFieldArgs;
+
+        let udf = FloorFunc::new();
+        let arg = ScalarValue::Decimal32(Some(150), 9, 2);
+        let arg_fields = vec![Arc::new(Field::new("a", arg.data_type(), true))];
+        let return_field = udf
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &[Some(&arg)],
+            })
+            .unwrap();
+        let result = udf
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(arg)],
+                arg_fields,
+                number_rows: 0,
+                return_field,
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Decimal32(v, precision, scale)) => {
+                assert_eq!(v, Some(1));
+                assert_eq!(precision, 8);
+                assert_eq!(scale, 0);
+            }
+            other => panic!("Expected Decimal32 scalar, got {other:?}"),
+        }
+    }
     use super::*;
     use arrow::datatypes::{Field, Schema};
     use arrow_buffer::i256;
