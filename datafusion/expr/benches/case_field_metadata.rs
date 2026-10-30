@@ -105,6 +105,16 @@ fn alternating_case(depth: usize, identity: &ScalarUDF) -> Expr {
     expression
 }
 
+fn nested_binary_case(depth: usize) -> Expr {
+    let mut expression = col("a");
+    for _ in 0..depth {
+        expression = when(lit(true), expression + col("b"))
+            .otherwise(lit(0_i32))
+            .unwrap();
+    }
+    expression
+}
+
 fn case_field_metadata(c: &mut Criterion) {
     let mut group = c.benchmark_group("case_field_metadata");
     for width in [10, 100, 1000] {
@@ -140,6 +150,7 @@ fn case_field_metadata(c: &mut Criterion) {
     for depth in [8, 32, 128] {
         for (name, expression) in [
             ("nested_columns", nested_column_case(depth, |expr| expr)),
+            ("nested_binary", nested_binary_case(depth)),
             (
                 "nested_aliases",
                 nested_column_case(depth, |expr| expr.alias("nested")),

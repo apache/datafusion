@@ -126,15 +126,37 @@ fn scalar_argument_for_field(expr: &Expr, arg_field: &FieldRef) -> Option<Scalar
     }
 }
 
-// Resolve nested CASE value branches bottom-up, without repeatedly asking each
-// nested CASE to infer its type, nullability and metadata. Other expressions use
-// their normal field inference; an unmarked result cannot erase sibling metadata.
+fn binary_output_field(
+    binary: &BinaryExpr,
+    left: &Field,
+    right: &Field,
+    name: &str,
+) -> Result<FieldRef> {
+    let mut coercer =
+        BinaryTypeCoercer::new(left.data_type(), &binary.op, right.data_type());
+    coercer.set_lhs_spans(binary.left.spans().cloned().unwrap_or_default());
+    coercer.set_rhs_spans(binary.right.spans().cloned().unwrap_or_default());
+    let nullable = match binary.op {
+        Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => false,
+        _ => left.is_nullable() || right.is_nullable(),
+    };
+    Ok(Arc::new(Field::new(
+        name,
+        coercer.get_result_type()?,
+        nullable,
+    )))
+}
+
+// Resolve nested CASE, binary expressions and forwarding wrappers bottom-up,
+// without repeatedly inferring every CASE suffix. Other expressions use native
+// field inference; an unmarked result cannot erase sibling metadata.
 fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef> {
     enum Work<'a> {
         Visit(&'a Expr),
         FinishCase(&'a Case),
         FinishCast(&'a FieldRef, bool),
         FinishAlias(Option<&'a FieldMetadata>),
+        FinishBinary(&'a BinaryExpr),
     }
 
     struct BranchField {
@@ -173,10 +195,15 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                     work.push(Work::Visit(&alias.expr));
                 }
                 Expr::Negative(inner) => work.push(Work::Visit(inner)),
+                Expr::BinaryExpr(binary) => {
+                    work.push(Work::FinishBinary(binary));
+                    work.push(Work::Visit(&binary.right));
+                    work.push(Work::Visit(&binary.left));
+                }
                 _ => fields.push(BranchField {
                     field: expr.to_field(schema)?.1,
                     certainly_null: matches!(
-                        unwrap_certainly_null_expr(expr),
+                        expr,
                         Expr::Literal(value, _) if value.is_null()
                     ),
                 }),
@@ -203,6 +230,18 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                         source.field.as_ref().clone().with_metadata(combined),
                     ),
                     certainly_null: source.certainly_null,
+                });
+            }
+            Work::FinishBinary(binary) => {
+                let Some(right) = fields.pop() else {
+                    return internal_err!("Missing CASE binary right field");
+                };
+                let Some(left) = fields.pop() else {
+                    return internal_err!("Missing CASE binary left field");
+                };
+                fields.push(BranchField {
+                    field: binary_output_field(binary, &left.field, &right.field, "")?,
+                    certainly_null: false,
                 });
             }
             Work::FinishCase(case) => {
@@ -716,26 +755,12 @@ impl ExprSchemable for Expr {
                         .with_nullable(scalar_subquery_nullable(subquery)),
                 ))
             }
-            Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
-                let (left_field, right_field) =
-                    (left.to_field(schema)?.1, right.to_field(schema)?.1);
-
-                let (lhs_type, lhs_nullable) =
-                    (left_field.data_type(), left_field.is_nullable());
-                let (rhs_type, rhs_nullable) =
-                    (right_field.data_type(), right_field.is_nullable());
-                let mut coercer = BinaryTypeCoercer::new(lhs_type, op, rhs_type);
-                coercer.set_lhs_spans(left.spans().cloned().unwrap_or_default());
-                coercer.set_rhs_spans(right.spans().cloned().unwrap_or_default());
-                let nullable = match op {
-                    Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => false,
-                    _ => lhs_nullable || rhs_nullable,
-                };
-                Ok(Arc::new(Field::new(
-                    &schema_name,
-                    coercer.get_result_type()?,
-                    nullable,
-                )))
+            Expr::BinaryExpr(binary) => {
+                let (left_field, right_field) = (
+                    binary.left.to_field(schema)?.1,
+                    binary.right.to_field(schema)?.1,
+                );
+                binary_output_field(binary, &left_field, &right_field, &schema_name)
             }
             Expr::WindowFunction(window_function) => {
                 let WindowFunction {
@@ -1715,28 +1740,42 @@ mod tests {
         }
 
         let metadata = HashMap::from([("source".to_owned(), "marked".to_owned())]);
-        for depth in [8, 32, 128] {
-            let schema = CountingSchema {
-                field: Arc::new(
-                    Field::new("value", DataType::Int32, false)
-                        .with_metadata(metadata.clone()),
-                ),
-                calls: std::cell::Cell::new(0),
-            };
-            let mut expression = col("value");
-            for _ in 0..depth {
-                let branch = Expr::Cast(Cast::new(
-                    Box::new(expression.alias("nested")),
-                    DataType::Int32,
-                ));
-                expression = when(lit(true), col("value")).otherwise(branch)?;
+        let empty = HashMap::new();
+        for binary_branch in [false, true] {
+            for depth in [8, 32, 128] {
+                let schema = CountingSchema {
+                    field: Arc::new(
+                        Field::new("value", DataType::Int32, false)
+                            .with_metadata(metadata.clone()),
+                    ),
+                    calls: std::cell::Cell::new(0),
+                };
+                let mut expression = col("value");
+                for _ in 0..depth {
+                    expression = if binary_branch {
+                        when(lit(true), expression + col("value"))
+                            .otherwise(lit(0_i32))?
+                    } else {
+                        let branch = Expr::Cast(Cast::new(
+                            Box::new(expression.alias("nested")),
+                            DataType::Int32,
+                        ));
+                        when(lit(true), col("value")).otherwise(branch)?
+                    };
+                }
+                let field = expression.to_field(&schema)?.1;
+                assert_eq!(field.data_type(), &DataType::Int32);
+                assert_eq!(
+                    field.metadata(),
+                    if binary_branch { &empty } else { &metadata }
+                );
+                assert!(!field.is_nullable());
+                assert!(
+                    schema.calls.get() <= 6 * depth + 8,
+                    "binary {binary_branch}, depth {depth}: {} schema lookups",
+                    schema.calls.get()
+                );
             }
-            assert_eq!(expression.to_field(&schema)?.1.metadata(), &metadata);
-            assert!(
-                schema.calls.get() <= 6 * depth + 8,
-                "depth {depth}: {} schema lookups",
-                schema.calls.get()
-            );
         }
         Ok(())
     }
@@ -1889,6 +1928,11 @@ mod tests {
             Some(FieldMetadata::from(metadata)),
         ))?;
         assert!(wrong_type.to_field(&schema)?.1.metadata().is_empty());
+        let wrong_null_type =
+            when(lit(true), col("value")).otherwise(Expr::Not(Box::new(Expr::Cast(
+                Cast::new(Box::new(lit(ScalarValue::Null)), DataType::Boolean),
+            ))))?;
+        assert!(wrong_null_type.to_field(&schema)?.1.metadata().is_empty());
         Ok(())
     }
 
