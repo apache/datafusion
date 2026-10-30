@@ -921,15 +921,19 @@ async fn test_external_sort_zero_merge_reservation() {
 
     let ctx = SessionContext::new_with_config_rt(config, runtime);
 
-    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1 desc;";
+    // The input and its sorted copy exceed the 10 MiB pool.
+    let query = "select * from generate_series(1,1048576) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let physical_plan = df.create_physical_plan().await.unwrap();
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
     let stream = physical_plan.execute(0, task_ctx).unwrap();
 
-    // Ensures execution succeed
-    let _result = collect(stream).await;
+    let result = collect(stream).await.unwrap();
+    assert_eq!(
+        result.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        1_048_576
+    );
 
     // Ensures the query spilled during execution
     let spill_count = plan_spill_count(physical_plan.as_ref());
