@@ -9,8 +9,8 @@ use crate::metrics::ExecutionPlanMetricsSet;
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::spill_manager::GetSlicedSize;
 use arrow::array::{
-    ArrayRef, Decimal128Array, DictionaryArray, Int8Array, Int64Array, StringArray,
-    StringViewArray,
+    ArrayRef, Decimal128Array, DictionaryArray, Int8Array, Int32Array, Int64Array,
+    StringArray, StringViewArray,
 };
 use arrow::compute::{SortOptions, concat_batches};
 use arrow::datatypes::{DataType, Field, Int8Type, Schema};
@@ -677,6 +677,67 @@ async fn test_sort_preparation_keeps_output_reserved() -> Result<()> {
     drop(other);
     assert_eq!(runtime.memory_pool.reserved(), 0);
     Ok(())
+}
+
+/// Two `Int32` keys encode to 18 bytes per row for the merge, more than twice
+/// the 8 bytes per row of the batches. Merging full-size runs would need more
+/// memory than the sort reserves while buffering them.
+async fn check_merge_keys_larger_than_batches() -> Result<()> {
+    let rows = 8192;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let batches = (0..64)
+        .map(|batch| {
+            let a =
+                Int32Array::from_iter_values((0..rows).map(|i| (i * 31 + batch) % 1000));
+            let b = Int32Array::from_iter_values((0..rows).rev());
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(a), Arc::new(b)])
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let ordering: LexOrdering = [
+        PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0))),
+        PhysicalSortExpr::new_default(Arc::new(Column::new("b", 1))),
+    ]
+    .into();
+    // Spill every 16 batches.
+    let capacity = MERGE_BYTES + 16 * get_reserved_bytes_for_record_batch(&batches[0])?;
+    let pool = AdjustablePool::new(capacity);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+        .build_arc()?;
+    let mut sorter = ExternalSorter::new(
+        0,
+        Arc::clone(&schema),
+        ordering.clone(),
+        rows as usize,
+        MERGE_BYTES,
+        0,
+        SpillCompression::Uncompressed,
+        &ExecutionPlanMetricsSet::new(),
+        Arc::clone(&runtime),
+    )?;
+    for batch in &batches {
+        sorter.insert_batch(batch.clone()).await?;
+    }
+    assert!(sorter.spilled_before());
+    let output: Vec<RecordBatch> = sorter.sort().await?.try_collect().await?;
+    let expected = sort_batch(&concat_batches(&schema, &batches)?, &ordering, None)?;
+    assert_eq!(concat_batches(&schema, &output)?, expected);
+    drop(sorter);
+    assert_released(&pool, &runtime).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_merge_keys_larger_than_batches() -> Result<()> {
+    check_merge_keys_larger_than_batches().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_merge_keys_larger_than_batches_multithreaded() -> Result<()> {
+    check_merge_keys_larger_than_batches().await
 }
 
 #[tokio::test]

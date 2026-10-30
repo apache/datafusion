@@ -60,7 +60,7 @@ use datafusion_common::{
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{
-    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool,
+    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation, MergeMemoryPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
@@ -708,7 +708,8 @@ impl ExternalSorter {
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation, None)?;
+            let sorted_stream =
+                self.sort_batch_stream(batch, reservation, None, self.batch_size)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -725,7 +726,8 @@ impl ExternalSorter {
                 .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation, None)?;
+            let sorted_stream =
+                self.sort_batch_stream(batch, reservation, None, self.batch_size)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -781,13 +783,19 @@ impl ExternalSorter {
         let (sizes, shared_input_size) = self.sort_run_sizes(&runs)?;
         let shared_input =
             shared_input_size.map(|size| Arc::new(self.reservation.split(size)));
+        let batch_size = self.merge_run_batch_size();
         let jobs =
             runs.into_iter()
                 .zip(sizes)
                 .enumerate()
                 .map(move |(index, (batch, size))| {
                     let reservation = self.reservation.split(size);
-                    let sort = self.sort_run(batch, reservation, shared_input.clone())?;
+                    let sort = self.sort_run(
+                        batch,
+                        reservation,
+                        shared_input.clone(),
+                        batch_size,
+                    )?;
                     let permits = Arc::clone(&concurrency.permits);
                     Ok::<_, DataFusionError>(async move {
                         let stream = Self::prepare_sort_run(sort, permits).await?;
@@ -969,11 +977,12 @@ impl ExternalSorter {
         let (sizes, shared_input_size) = self.sort_run_sizes(&runs)?;
         let shared_input =
             shared_input_size.map(|size| Arc::new(self.reservation.split(size)));
+        let batch_size = self.merge_run_batch_size();
         runs.into_iter()
             .zip(sizes)
             .map(|(run, size)| {
                 let reservation = self.reservation.split(size);
-                self.sort_batch_stream(run, reservation, shared_input.clone())
+                self.sort_batch_stream(run, reservation, shared_input.clone(), batch_size)
             })
             .collect()
     }
@@ -996,11 +1005,11 @@ impl ExternalSorter {
         batch: RecordBatch,
         reservation: MemoryReservation,
         shared_input: Option<Arc<MemoryReservation>>,
+        batch_size: usize,
     ) -> Result<SendableRecordBatchStream> {
         let schema = batch.schema();
-        let stream =
-            futures::stream::once(self.sort_run(batch, reservation, shared_input)?)
-                .try_flatten();
+        let sort = self.sort_run(batch, reservation, shared_input, batch_size)?;
+        let stream = futures::stream::once(sort).try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
@@ -1013,6 +1022,7 @@ impl ExternalSorter {
         batch: RecordBatch,
         reservation: MemoryReservation,
         shared_input: Option<Arc<MemoryReservation>>,
+        batch_size: usize,
     ) -> Result<impl Future<Output = Result<SendableRecordBatchStream>> + Send + use<>>
     {
         let reserved_bytes = get_reserved_bytes_for_record_batch(&batch)?;
@@ -1023,7 +1033,6 @@ impl ExternalSorter {
         }
 
         let expressions = self.expr.clone();
-        let batch_size = self.batch_size;
         let merge_pool = Arc::clone(&self.merge_pool);
         let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
 
@@ -1076,6 +1085,23 @@ impl ExternalSorter {
                 futures::stream::iter(batches),
             )) as SendableRecordBatchStream)
         })
+    }
+
+    /// Batch size of the sorted runs that feed a merge. A multi-column merge holds
+    /// the row-format keys of every run's current batch at once, and these keys can
+    /// be larger than the batches. With a memory limit, runs therefore use an eighth
+    /// of `batch_size`, but at least 1024 rows to keep the per-batch merge cost
+    /// small. The merge output still uses `batch_size`.
+    fn merge_run_batch_size(&self) -> usize {
+        let limited = !matches!(
+            self.runtime.memory_pool.memory_limit(),
+            MemoryLimit::Infinite
+        );
+        if limited && self.expr.len() > 1 {
+            (self.batch_size / 8).max(1024).min(self.batch_size)
+        } else {
+            self.batch_size
+        }
     }
 
     /// If this sort may spill, pre-allocates
@@ -2552,7 +2578,8 @@ mod tests {
             let reservation = sorter.reservation.new_empty();
             reservation.try_grow(get_reserved_bytes_for_record_batch(&batch)?)?;
             let before = elapsed_compute.value();
-            let sort = sorter.sort_run(batch.clone(), reservation, None)?;
+            let sort =
+                sorter.sort_run(batch.clone(), reservation, None, sorter.batch_size)?;
             assert_eq!(elapsed_compute.value(), before);
 
             let stream = if spawned {
