@@ -382,9 +382,12 @@ impl StepContext {
                         "avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption",
                     ])
                     .env("RUST_BACKTRACE", "1")
-                    // Run more random scenarios of the spill pool fuzzer than the
-                    // default suite does (about a minute).
-                    .env("DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS", "1000");
+                    // Run more random scenarios of the fuzzers than the default
+                    // suite does (about a minute for the spill pool, seconds for
+                    // the others).
+                    .env("DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS", "1000")
+                    .env("DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS", "10000")
+                    .env("DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS", "10000");
             }
             "hash-collisions" => {
                 // Check answers are correct when hash values collide. The CI job
@@ -873,6 +876,8 @@ cargo test \
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
 cd /workspace && \
+DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS=10000 \
+DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS=10000 \
 DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS=1000 \
 RUST_BACKTRACE=1 \
 cargo test \

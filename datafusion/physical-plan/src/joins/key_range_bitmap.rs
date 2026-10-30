@@ -362,4 +362,146 @@ mod tests {
         assert!(may(&s, -1, 1));
         assert!(!may(&s, 1 << 50, 1 << 51));
     }
+
+    /// `(offset, span, shift, bits)`, to compare bitmaps by value.
+    fn parts_of(b: &KeyRangeBitmap) -> (u64, u64, u32, &BooleanBuffer) {
+        (b.offset, b.span, b.shift, &b.bits)
+    }
+
+    /// One randomly generated scenario, see [`union_fuzz`].
+    fn run_union_scenario(seed: u64) {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        // Domain widths from one key per bucket to many keys per bucket, so
+        // the union's buckets are sometimes exact and sometimes coarse.
+        let width = [64i64, 1 << 12, 1 << 24, 1 << 40][rng.random_range(0..4)];
+        let start = rng.random_range(-(1i64 << 50)..(1i64 << 50));
+        let key = |rng: &mut StdRng| start + rng.random_range(0..width);
+        let keys_array =
+            |keys: &[i64]| -> ArrayRef { Arc::new(Int64Array::from(keys.to_vec())) };
+        let scalar = |key: i64| ScalarValue::Int64(Some(key));
+
+        enum Part {
+            Keys(ArrayRef),
+            Range(ScalarValue, ScalarValue),
+            Bitmap(KeyRangeBitmap),
+        }
+        // Each part, and every key any part may hold.
+        let mut parts = vec![];
+        let mut all_keys = vec![];
+        let mut has_bitmap = false;
+        for _ in 0..rng.random_range(1..5) {
+            if rng.random_bool(1.0 / 3.0) {
+                // Narrow, so every key it may hold can be listed.
+                let lo = key(&mut rng);
+                let hi = lo + rng.random_range(0..64);
+                parts.push(Part::Range(scalar(lo), scalar(hi)));
+                all_keys.extend(lo..=hi);
+                continue;
+            }
+            let keys: Vec<i64> = (0..rng.random_range(1..50))
+                .map(|_| key(&mut rng))
+                .collect();
+            let (lo, hi) = (*keys.iter().min().unwrap(), *keys.iter().max().unwrap());
+            let bitmap = rng
+                .random_bool(0.5)
+                .then(|| {
+                    KeyRangeBitmap::try_new(
+                        &keys_array(&keys),
+                        &scalar(lo),
+                        &scalar(hi),
+                        0,
+                    )
+                })
+                .flatten();
+            parts.push(match bitmap {
+                Some(bitmap) => {
+                    has_bitmap = true;
+                    Part::Bitmap(bitmap)
+                }
+                None => Part::Keys(keys_array(&keys)),
+            });
+            all_keys.extend(keys);
+        }
+        let min = ScalarValue::Int64(all_keys.iter().min().copied());
+        let max = ScalarValue::Int64(all_keys.iter().max().copied());
+        let context = format!(
+            "seed {seed}: width {width}, {} parts, {} keys",
+            parts.len(),
+            all_keys.len()
+        );
+
+        let union = KeyRangeBitmap::union(
+            &min,
+            &max,
+            &parts
+                .iter()
+                .map(|part| match part {
+                    Part::Keys(keys) => KeyRangePart::Keys(keys.as_ref()),
+                    Part::Range(min, max) => KeyRangePart::Range { min, max },
+                    Part::Bitmap(bitmap) => KeyRangePart::Bitmap(bitmap),
+                })
+                .collect::<Vec<_>>(),
+        );
+        // Reference: one bitmap built straight from every key any part may hold.
+        let exact = KeyRangeBitmap::try_new(&keys_array(&all_keys), &min, &max, 0);
+
+        // Never excludes a key any part may hold.
+        if let Some(union) = &union {
+            for key in &all_keys {
+                assert!(may(union, *key, *key), "{context}: dropped key {key}");
+            }
+        }
+        if has_bitmap {
+            // A part's bitmap can only widen buckets: every bucket the exact
+            // bitmap sets, the union sets too.
+            match (&union, &exact) {
+                (_, None) => assert!(union.is_none(), "{context}"),
+                (None, Some(_)) => {}
+                (Some(union), Some(exact)) => {
+                    assert_eq!(
+                        (union.offset, union.span, union.shift),
+                        (exact.offset, exact.span, exact.shift),
+                        "{context}"
+                    );
+                    for bucket in exact.bits.set_indices() {
+                        assert!(union.bits.value(bucket), "{context}: bucket {bucket}");
+                    }
+                }
+            }
+        } else {
+            // Keys and ranges mark exactly the buckets their keys fall in.
+            assert_eq!(
+                union.as_ref().map(parts_of),
+                exact.as_ref().map(parts_of),
+                "{context}"
+            );
+        }
+    }
+
+    /// Randomized partitions against [`KeyRangeBitmap::union`]'s contract: it
+    /// never excludes a key any part may hold, equals the bitmap built from all
+    /// parts' keys when no part brings its own bitmap, and only widens that
+    /// bitmap's buckets when one does.
+    ///
+    /// `DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS` and
+    /// `DATAFUSION_KEY_RANGE_UNION_FUZZ_SEED` select how many scenarios run and
+    /// from which seed; a failure names its seed so it can be replayed.
+    #[test]
+    fn union_fuzz() {
+        let env_u64 = |name: &str, default: u64| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
+        };
+        let first_seed = env_u64("DATAFUSION_KEY_RANGE_UNION_FUZZ_SEED", 0);
+        let iterations = env_u64("DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS", 256);
+        // `saturating_add` so a replay seed near `u64::MAX` cannot overflow.
+        for seed in first_seed..first_seed.saturating_add(iterations) {
+            run_union_scenario(seed);
+        }
+    }
 }

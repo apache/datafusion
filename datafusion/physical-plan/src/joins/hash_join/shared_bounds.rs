@@ -61,7 +61,7 @@ use tokio::sync::Notify;
 pub(crate) struct ColumnBounds {
     /// The minimum value observed for this column
     pub(crate) min: ScalarValue,
-    /// The maximum value observed for this column  
+    /// The maximum value observed for this column
     pub(crate) max: ScalarValue,
 }
 
@@ -89,13 +89,16 @@ impl PartitionBounds {
         self.column_bounds.get(index)
     }
 
-    /// Bounds covering both `self` and `other`, or `None` if they do not
-    /// describe the same columns. A NULL bound means the partition holds no
-    /// non-null key in that column, so it never widens the other side's bound.
-    fn union(self, other: &PartitionBounds) -> Option<PartitionBounds> {
-        if self.column_bounds.len() != other.column_bounds.len() {
-            return None;
-        }
+    /// Bounds covering both `self` and `other`, which must describe the same
+    /// columns. A NULL bound means the partition holds no non-null key in that
+    /// column, so it never widens the other side's bound.
+    fn union(self, other: &PartitionBounds) -> PartitionBounds {
+        // Every non-empty partition of a join reports one bound per join key.
+        debug_assert_eq!(
+            self.column_bounds.len(),
+            other.column_bounds.len(),
+            "partitions report bounds for different numbers of columns"
+        );
         let column_bounds = self
             .column_bounds
             .into_iter()
@@ -114,7 +117,7 @@ impl PartitionBounds {
                 ColumnBounds::new(min, max)
             })
             .collect();
-        Some(PartitionBounds::new(column_bounds))
+        PartitionBounds::new(column_bounds)
     }
 }
 
@@ -172,10 +175,11 @@ fn create_membership_predicate(
             Ok(Some(Arc::new(HashTableLookupExpr::new(
                 on_right.to_vec(),
                 random_state.clone(),
-                hash_map,
+                None,
+                vec![Some(hash_map)],
                 "hash_lookup".to_string(),
                 pruning_bitmap,
-            )) as Arc<dyn PhysicalExpr>))
+            )?) as Arc<dyn PhysicalExpr>))
         }
         // Empty partition - should not create a filter for this
         PushdownStrategy::Empty => Ok(None),
@@ -740,11 +744,10 @@ impl SharedBuildAccumulator {
                         members.push((partition_id, pushdown.clone(), bounds.clone()));
                         members
                     });
-                    merged_bounds = match (merged_bounds, real_partition_ids.len()) {
-                        (None, 1) => Some(bounds.clone()),
-                        (Some(merged), _) => merged.union(&bounds),
-                        (None, _) => None,
-                    };
+                    merged_bounds = Some(match merged_bounds {
+                        None => bounds.clone(),
+                        Some(merged) => merged.union(&bounds),
+                    });
 
                     let membership_expr = create_membership_predicate(
                         &self.on_right,
@@ -872,9 +875,6 @@ impl SharedBuildAccumulator {
             .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)
     }
 
-    /// One membership filter over every partition's build keys, replacing the
-    /// `CASE` over per-partition filters.
-    ///
     /// `members` holds each non-empty partition's id, strategy (an IN list or a
     /// hash table) and bounds, out of `num_partitions` partitions.
     fn merged_membership_filter(
@@ -926,10 +926,10 @@ impl SharedBuildAccumulator {
                     }
                 });
             }
-            Arc::new(HashTableLookupExpr::new_routed(
+            Arc::new(HashTableLookupExpr::new(
                 self.on_right.clone(),
                 HASH_JOIN_SEED,
-                self.partition_router(num_partitions)?,
+                Some(self.partition_router(num_partitions)?),
                 maps,
                 String::from("hash_lookup"),
                 self.merged_pruning_bitmap(members, merged_bounds.as_ref()),
