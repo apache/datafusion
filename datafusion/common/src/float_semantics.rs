@@ -159,7 +159,13 @@ where
     T::Native: FloatSemantics,
 {
     let arr = array.as_primitive::<T>();
-    if !arr.values().iter().any(|v| v.needs_normalization()) {
+    // Not `any()`: its early exit checks one value at a time, while a fold
+    // over every value vectorizes.
+    let needs_normalization = arr
+        .values()
+        .iter()
+        .fold(false, |acc, v| acc | v.needs_normalization());
+    if !needs_normalization {
         return Arc::clone(array);
     }
     Arc::new(arr.unary::<_, T>(normalize_float))
