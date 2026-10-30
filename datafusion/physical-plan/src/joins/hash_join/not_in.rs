@@ -45,7 +45,9 @@ use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{filter, filter_record_batch, take};
 use arrow::util::bit_util;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
-use datafusion_common::{JoinSide, JoinType, NullEquality, Result, plan_err};
+use datafusion_common::{
+    DataFusionError, JoinSide, JoinType, NullEquality, Result, plan_err,
+};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
@@ -629,24 +631,31 @@ fn correlated_row_state(
     reservation.try_grow(retained_size)?;
     metrics.build_mem_used.add(retained_size);
 
-    let null_scope_map = if scope_keys.is_empty() {
-        None
+    let scope = if scope_keys.is_empty() {
+        NullValueScope::Unscoped
     } else {
-        let scope_values = normalized[value_keys..]
-            .iter()
-            .map(|values| Ok(filter(values.as_ref(), &null_mask)?))
-            .collect::<Result<Vec<_>>>()?;
         let null_rows = build_indices.len();
-        let mut map = new_join_hashmap(null_rows, reservation, metrics)?;
-        let mut hashes_buffer = vec![0; null_rows];
-        create_hashes(&scope_values, random_state, &mut hashes_buffer)?;
-        map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
-        Some(map)
+        match new_join_hashmap(null_rows, reservation, metrics) {
+            Ok(mut map) => {
+                let scope_values = normalized[value_keys..]
+                    .iter()
+                    .map(|values| Ok(filter(values.as_ref(), &null_mask)?))
+                    .collect::<Result<Vec<_>>>()?;
+                let mut hashes_buffer = vec![0; null_rows];
+                create_hashes(&scope_values, random_state, &mut hashes_buffer)?;
+                map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
+                NullValueScope::Map(map)
+            }
+            // The map only speeds up the pairing, so the join goes on without
+            // it rather than fail.
+            Err(DataFusionError::ResourcesExhausted(_)) => NullValueScope::Unindexed,
+            Err(e) => return Err(e),
+        }
     };
     Ok((
         scope_map,
         Some(NullValueBuildRows {
-            scope_map: null_scope_map,
+            scope,
             build_indices,
         }),
     ))
@@ -658,8 +667,15 @@ fn correlated_row_state(
 /// Only the probe rows with a NULL value key look it up, so it is built on
 /// the first such probe row rather than with the build side: a probe side
 /// without NULLs never pays for a second hash table over the build side.
+///
+/// The map only speeds up the pairing of those probe rows with the build
+/// rows in their scope. So when the memory pool cannot hold it, the join
+/// pairs them with every build row instead, and compares their scope keys.
+/// That is the pairing of a join whose tuple elements are all value keys,
+/// which needs no map either.
 pub(super) struct BuildScopeMap {
-    map: OnceLock<Box<dyn JoinHashMapType>>,
+    /// `None` when the memory pool could not hold the map.
+    map: OnceLock<Option<Box<dyn JoinHashMapType>>>,
     /// Charged for the map once it is built. Its lock also makes the probe
     /// partitions build the map only once.
     reservation: Mutex<MemoryReservation>,
@@ -669,23 +685,30 @@ pub(super) struct BuildScopeMap {
 impl BuildScopeMap {
     /// Returns the map, building it on first use from `scope_values`, the
     /// build side's scope keys (`JoinLeftData::values()[value_keys..]`).
+    /// Returns `None` when the memory pool cannot hold it.
     fn get_or_try_init(
         &self,
         scope_values: &[ArrayRef],
         random_state: &RandomState,
-    ) -> Result<&dyn JoinHashMapType> {
+    ) -> Result<Option<&dyn JoinHashMapType>> {
         if let Some(map) = self.map.get() {
-            return Ok(map.as_ref());
+            return Ok(map.as_deref());
         }
         let mut reservation = self.reservation.lock();
         if let Some(map) = self.map.get() {
-            return Ok(map.as_ref());
+            return Ok(map.as_deref());
         }
         // Scope-only NULL marking uses a HashMap (the primary join map may
         // use ArrayMap for full-key matches, but scope keys have arbitrary
         // shape).
         let num_rows = scope_values[0].len();
-        let mut map = new_join_hashmap(num_rows, &mut reservation, &self.metrics)?;
+        let mut map = match new_join_hashmap(num_rows, &mut reservation, &self.metrics) {
+            Ok(map) => map,
+            Err(DataFusionError::ResourcesExhausted(_)) => {
+                return Ok(self.map.get_or_init(|| None).as_deref());
+            }
+            Err(e) => return Err(e),
+        };
         let mut hashes_buffer = vec![0; num_rows];
         create_hashes(scope_values, random_state, &mut hashes_buffer)?;
         map.extend_zero(num_rows);
@@ -696,7 +719,7 @@ impl BuildScopeMap {
             .enumerate()
             .filter(|(i, _)| valid.as_ref().is_none_or(|valid| valid.is_valid(*i)));
         map.update_from_iter(Box::new(hashes.rev()), 0);
-        Ok(self.map.get_or_init(|| map).as_ref())
+        Ok(self.map.get_or_init(|| Some(map)).as_deref())
     }
 }
 
@@ -710,14 +733,24 @@ impl BuildScopeMap {
 /// proportional to the number of NULLs instead of enumerating every scope
 /// match of every probe row.
 pub(super) struct NullValueBuildRows {
-    /// Hash table keyed by the correlation scope values of the NULL-valued
-    /// build rows. Stored positions index into `build_indices`, not the full
-    /// build batch. `None` when the join has no correlation scope keys, so
-    /// every probe row is in scope.
-    scope_map: Option<Box<dyn JoinHashMapType>>,
-    /// Maps positions in `scope_map` back to row indices in the full build
-    /// batch.
+    scope: NullValueScope,
+    /// The NULL-valued build rows. The positions stored in a
+    /// [`NullValueScope::Map`] index into it.
     build_indices: UInt64Array,
+}
+
+/// How the NULL-valued build rows find the probe rows in their correlation
+/// scope.
+enum NullValueScope {
+    /// The join has no correlation scope keys, so every probe row is in scope.
+    Unscoped,
+    /// Hash table keyed by the correlation scope values of the NULL-valued
+    /// build rows. Stored positions index into
+    /// [`NullValueBuildRows::build_indices`], not the full build batch.
+    Map(Box<dyn JoinHashMapType>),
+    /// The memory pool could not hold the map. Every probe row is paired, and
+    /// the scope keys of each pair are compared (see [`BuildScopeMap`]).
+    Unindexed,
 }
 
 /// Returns the rows where at least one of `value_keys` is NULL, or `None` when
@@ -892,8 +925,8 @@ fn mark_null_candidates_for_probe_batch(
     // correlation scope.
     if let Some(null_rows) = null_value_build_rows {
         let probe_rows = (0..probe_batch.num_rows() as u32).filter(in_scope);
-        match &null_rows.scope_map {
-            Some(scope_map) => {
+        match &null_rows.scope {
+            NullValueScope::Map(scope_map) => {
                 let mut pairs =
                     UnmarkedPairs::new(marks, batch_size, &mut mark_scope_matches);
                 // The map indexes only the NULL-valued build rows; translate
@@ -907,8 +940,17 @@ fn mark_null_candidates_for_probe_batch(
                 )?;
                 pairs.finish()?;
             }
-            None => {
+            NullValueScope::Unscoped => {
                 let mut pairs = UnmarkedPairs::new(marks, batch_size, &mark);
+                pairs.cross_product(
+                    null_rows.build_indices.values().iter().copied(),
+                    probe_rows,
+                )?;
+                pairs.finish()?;
+            }
+            NullValueScope::Unindexed => {
+                let mut pairs =
+                    UnmarkedPairs::new(marks, batch_size, &mut mark_scope_matches);
                 pairs.cross_product(
                     null_rows.build_indices.values().iter().copied(),
                     probe_rows,
@@ -933,17 +975,23 @@ fn mark_null_candidates_for_probe_batch(
             // so the scope map need not be built.
             Some(_) if null_probe_rows.peek().is_none() => {}
             Some(scope_map) => {
-                let scope_map =
-                    scope_map.get_or_try_init(build_scope_values, random_state)?;
                 let mut pairs =
                     UnmarkedPairs::new(marks, batch_size, &mut mark_scope_matches);
-                pairs.scope_matches(
-                    scope_map,
-                    |build_row| build_row,
-                    null_probe_rows,
-                    hashes_buffer,
-                    lookup,
-                )?;
+                match scope_map.get_or_try_init(build_scope_values, random_state)? {
+                    Some(scope_map) => pairs.scope_matches(
+                        scope_map,
+                        |build_row| build_row,
+                        null_probe_rows,
+                        hashes_buffer,
+                        lookup,
+                    )?,
+                    // Without the map, every build row is paired, and the
+                    // scope keys of each pair are compared.
+                    None => pairs.cross_product(
+                        0..left_data.batch().num_rows() as u64,
+                        null_probe_rows,
+                    )?,
+                }
                 pairs.finish()?;
             }
             None => {
