@@ -97,13 +97,12 @@ pub struct PullUpCorrelatedExpr {
     /// grouping set that omits a correlated column can tell whether
     /// something above it reads the column the pull up would fill in.
     column_refs_above: Vec<BTreeSet<Column>>,
-    /// Whether, for each node on that same path, the emptiness of its output
-    /// follows from the emptiness of its input alone. One entry per node,
-    /// pushed and popped with [`Self::column_refs_above`]. `f_down`'s `Limit`
-    /// arm reads it: a `Limit` may only be dropped from an `EXISTS` subquery
-    /// when this holds of every node above it, because only then can none of
-    /// them tell apart the limited rows and the full input.
-    emptiness_follows_input_above: Vec<bool>,
+    /// For each node on that same path, whether it returns rows based only on
+    /// whether its input has rows (see [`depends_only_on_input_having_rows`]). One
+    /// entry per node, pushed and popped with [`Self::column_refs_above`].
+    /// `f_down`'s `Limit` arm reads it: a `Limit` is only dropped from an
+    /// `EXISTS` subquery when this holds for every node above it.
+    depends_only_on_input_having_rows_above: Vec<bool>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -128,7 +127,7 @@ impl PullUpCorrelatedExpr {
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
             column_refs_above: Vec::new(),
-            emptiness_follows_input_above: Vec::new(),
+            depends_only_on_input_having_rows_above: Vec::new(),
         }
     }
 
@@ -191,8 +190,8 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             column_refs.extend(expr.column_refs().into_iter().cloned());
         }
         self.column_refs_above.push(column_refs);
-        self.emptiness_follows_input_above
-            .push(emptiness_follows_input(&plan));
+        self.depends_only_on_input_having_rows_above
+            .push(depends_only_on_input_having_rows(&plan));
 
         // This match is exhaustive on purpose. A correlated filter moves above
         // a node only when the node is known to keep the result the same. Add
@@ -289,15 +288,14 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         },
                     )));
                 }
-                // Dropping the `Limit` keeps its own input's emptiness, but
-                // what `EXISTS` reads is whether the whole subquery is empty.
-                // A node above the `Limit` whose output can be empty for a
-                // reason of its own - a `Filter`, which the rows the `Limit`
-                // kept decide - returns something else once the rows the
-                // `Limit` held back reach it, so that `Limit` has to stay.
-                // See https://github.com/apache/datafusion/issues/26629.
+                // `EXISTS` asks whether the whole subquery returns a row, not
+                // whether this `Limit` does. If a node above the `Limit` looks
+                // at which rows it gets, such as a `Filter` or the `HAVING` in
+                // https://github.com/apache/datafusion/issues/26629, removing
+                // the `Limit` hands it different rows and can change the
+                // answer, so the `Limit` has to stay.
                 let (_, above) = self
-                    .emptiness_follows_input_above
+                    .depends_only_on_input_having_rows_above
                     .split_last()
                     .expect("f_down pushed this Limit's own entry");
                 if !above.iter().all(|follows| *follows) {
@@ -313,7 +311,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         // `f_up` call reaches this tree position once `Limit`
                         // is gone, so only one entry must remain pushed.
                         self.column_refs_above.pop();
-                        self.emptiness_follows_input_above.pop();
+                        self.depends_only_on_input_having_rows_above.pop();
                         let mut t = self.f_down((*limit.input).clone())?;
                         t.transformed = true;
                         Ok(t)
@@ -389,7 +387,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
         // Pop this node's own entry, pushed by the matching `f_down` call, so
         // `column_refs_above` holds only the nodes strictly above `plan`.
         self.column_refs_above.pop();
-        self.emptiness_follows_input_above.pop();
+        self.depends_only_on_input_having_rows_above.pop();
 
         // A node that null-extends or regroups rows can put a NULL back into
         // a column that a correlated filter below it rejected, so the filters
@@ -923,24 +921,30 @@ impl PullUpCorrelatedExpr {
     }
 }
 
-/// Whether the emptiness of `plan`'s output follows from the emptiness of its
-/// input alone, so that `plan` cannot tell apart two non-empty inputs. Removing
-/// a `Limit` below such a node changes which rows it is given, never whether it
-/// is given any, and so never whether the subquery is empty.
+/// Whether `plan` returns rows based only on whether its input has rows, and
+/// not on which rows those are.
 ///
-/// A `Projection`, a `SubqueryAlias`, a `Sort`, a `Window` and a `Repartition`
-/// each output one row per input row. A `DISTINCT` and a grouped `Aggregate` output rows
-/// exactly when their input has rows, and an `Aggregate` without a grouping
-/// always outputs its one row, so no `Aggregate` can be emptied by the rows a
-/// `Limit` held back.
-/// A materialized CTE outputs exactly its continuation's rows, and only the
-/// continuation is rewritten, so its emptiness follows that input.
+/// This is what lets `EXISTS` drop a `Limit` with no skip and a non-zero
+/// fetch. Such a `Limit` returns rows exactly when its input has rows. If
+/// every node above it also only depends on whether it gets rows, the whole
+/// subquery returns rows exactly when the `Limit`'s input has rows, with or
+/// without the `Limit`, so removing it cannot change the `EXISTS` result.
 ///
-/// A `Filter` is what this leaves out: it reads values, so the rows the `Limit`
-/// kept decide whether anything survives it. A `Join` and an `Unnest` can empty
-/// a non-empty input too. Every other variant is treated the same way, so that
-/// a new one does not silently become droppable.
-fn emptiness_follows_input(plan: &LogicalPlan) -> bool {
+/// It holds for:
+/// - `Projection`, `SubqueryAlias`, `Sort`, `Window` and `Repartition`, which
+///   return rows whenever their input has rows (a `Sort` with a fetch of 0
+///   returns none either way)
+/// - `DISTINCT` and a grouped `Aggregate`, which return at least one row for a
+///   non-empty input and none for an empty one
+/// - an `Aggregate` without grouping, which always returns one row
+/// - a materialized CTE, which returns its continuation's rows
+///
+/// It does not hold for a `Filter`, which keeps or removes rows by their
+/// values, so the rows the `Limit` kept decide whether any survive. A `Join`
+/// and an `Unnest` can also turn rows into none. Every other plan, including a
+/// user-defined `Extension`, is treated as not holding: the `Limit` stays and
+/// the subquery is not decorrelated.
+fn depends_only_on_input_having_rows(plan: &LogicalPlan) -> bool {
     matches!(
         plan,
         LogicalPlan::Projection(_)

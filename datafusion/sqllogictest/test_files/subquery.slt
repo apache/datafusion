@@ -805,6 +805,10 @@ logical_plan
 query error Physical plan does not support logical expression Exists
 SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT t2_id FROM t2 WHERE t2_int = t1_int LIMIT 1) s HAVING count(*) > 1)
 
+# same for NOT EXISTS, which returned 11, 22, 44 instead of every row
+query error Physical plan does not support logical expression Exists
+SELECT t1_id FROM t1 WHERE NOT EXISTS (SELECT 1 FROM (SELECT t2_id FROM t2 WHERE t2_int = t1_int LIMIT 1) s HAVING count(*) > 1)
+
 #exists_subquery_with_limit_below_filter
 #not de-correlated, the rows the limit keeps decide the filter above it
 query error Physical plan does not support logical expression Exists
