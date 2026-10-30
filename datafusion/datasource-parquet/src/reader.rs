@@ -77,6 +77,32 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>>;
+
+    /// Like [`Self::create_reader`], but the reader should record into
+    /// `file_metrics`, the [`ParquetFileMetrics`] the caller has already
+    /// registered for this file, rather than registering another set in
+    /// `metrics`.
+    ///
+    /// The parquet opener calls this so that each file it opens registers one
+    /// set of file metrics. The default implementation ignores `file_metrics`
+    /// and calls [`Self::create_reader`], so existing implementations keep
+    /// their behavior.
+    fn create_reader_with_file_metrics(
+        &self,
+        partition_index: usize,
+        partitioned_file: PartitionedFile,
+        metadata_size_hint: Option<usize>,
+        metrics: &ExecutionPlanMetricsSet,
+        file_metrics: ParquetFileMetrics,
+    ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+        let _ = file_metrics;
+        self.create_reader(
+            partition_index,
+            partitioned_file,
+            metadata_size_hint,
+            metrics,
+        )
+    }
 }
 
 /// Default implementation of [`ParquetFileReaderFactory`]
@@ -110,7 +136,23 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
             partitioned_file.object_meta.location.as_ref(),
             metrics,
         );
+        self.create_reader_with_file_metrics(
+            partition_index,
+            partitioned_file,
+            metadata_size_hint,
+            metrics,
+            file_metrics,
+        )
+    }
 
+    fn create_reader_with_file_metrics(
+        &self,
+        _partition_index: usize,
+        partitioned_file: PartitionedFile,
+        metadata_size_hint: Option<usize>,
+        _metrics: &ExecutionPlanMetricsSet,
+        file_metrics: ParquetFileMetrics,
+    ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
         let reader = ParquetFileReader::new(
             file_metrics,
             Arc::clone(&self.store),
@@ -158,7 +200,23 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             partitioned_file.object_meta.location.as_ref(),
             metrics,
         );
+        self.create_reader_with_file_metrics(
+            partition_index,
+            partitioned_file,
+            metadata_size_hint,
+            metrics,
+            file_metrics,
+        )
+    }
 
+    fn create_reader_with_file_metrics(
+        &self,
+        _partition_index: usize,
+        partitioned_file: PartitionedFile,
+        metadata_size_hint: Option<usize>,
+        _metrics: &ExecutionPlanMetricsSet,
+        file_metrics: ParquetFileMetrics,
+    ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
         let reader = ParquetFileReader::new(
             file_metrics,
             Arc::clone(&self.store),
