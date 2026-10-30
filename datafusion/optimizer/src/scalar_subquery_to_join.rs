@@ -345,6 +345,24 @@ fn build_join(
         .collected_count_expr_map
         .get(&decorrelated_subquery)
         .cloned();
+
+    // A pulled up `HAVING` is only applied through the count bug compensation
+    // below, which skips the expressions that are NULL on empty input. Keep
+    // the subquery correlated rather than drop the `HAVING` for its output.
+    // <https://github.com/apache/datafusion/issues/26505>
+    if pull_up.pull_up_having_expr.is_some() {
+        let output_name = subquery_plan.schema().field(0).name();
+        let Some(result) = collected_count_expr_map
+            .as_ref()
+            .and_then(|expr_map| expr_map.get(output_name))
+        else {
+            return Ok(None);
+        };
+        if evaluates_to_null(result.clone(), result.column_refs())? {
+            return Ok(None);
+        }
+    }
+
     let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
         .alias(subquery_alias.to_string())?
         .build()?;
