@@ -834,9 +834,9 @@ async fn test_stringview_external_sort() {
     for _ in 0..num_batches {
         let strings: Vec<String> = (0..array_length)
             .map(|_| {
-                (0..100)
-                    .map(|_| rng.random_range(0..=u8::MAX) as char)
-                    .collect()
+                let mut bytes = [0_u8; 100];
+                rng.fill(&mut bytes);
+                bytes.into_iter().map(char::from).collect()
             })
             .collect();
 
