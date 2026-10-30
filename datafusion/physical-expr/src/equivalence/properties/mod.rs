@@ -130,7 +130,10 @@ pub struct EquivalenceProperties {
     /// constants/duplicates and in standard form) and a map associating leading
     /// terms with full sort expressions.
     oeq_cache: OrderingEquivalenceCache,
-    /// Table constraints that factor in equivalence calculations.
+    /// Table constraints that factor in equivalence calculations. Unlike
+    /// constants, constraints have no per-partition form: each one must hold
+    /// across all output partitions, since operators that merge partitions
+    /// keep them.
     constraints: Constraints,
     /// Schema associated with this object.
     schema: SchemaRef,

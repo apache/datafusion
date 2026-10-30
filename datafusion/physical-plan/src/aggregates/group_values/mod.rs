@@ -120,6 +120,16 @@ pub trait GroupValues: Send {
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, num_rows: usize);
+
+    /// Keeps the stored groups but releases capacity they do not need, such as
+    /// hash table slots and per-batch scratch buffers, so that [`Self::size`]
+    /// reflects the stored groups. For example, after [`EmitTo::First`] removes
+    /// most groups, the hash table may keep the slots it grew for them.
+    ///
+    /// The default does nothing.
+    ///
+    /// [`EmitTo::First`]: datafusion_expr::EmitTo::First
+    fn shrink_to_fit(&mut self) {}
 }
 
 /// Return a specialized implementation of [`GroupValues`] for the given schema.

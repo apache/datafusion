@@ -364,6 +364,11 @@ impl Aggregating {
                     None => continue,
                 }
             };
+            if oom.is_some() {
+                // Release the capacity the table grew for this batch so that
+                // reserving the remaining groups can succeed.
+                self.table.shrink_to_fit();
+            }
             timer.done();
             return Ok(Some(ExecutionStage::Outputting(Outputting {
                 batch,
@@ -459,9 +464,9 @@ mod tests {
     use crate::aggregates::GroupClusteringMode;
     use crate::aggregates::PhysicalGroupBy;
     use crate::aggregates::clustered_test_util::{
-        assert_completed_groups_emitted_under_limit,
-        assert_resources_exhausted_under_limit, full_batches, held_memory,
-        single_key_batches, sum_over_sorted_input,
+        assert_completed_groups_emitted_under_limit, assert_output_unchanged_under_limit,
+        assert_resources_exhausted_under_limit, distinct_key_batches, full_batches,
+        held_memory, single_key_batches, sum_over_sorted_input,
     };
     use crate::common::collect;
     use crate::test::TestMemoryExec;
@@ -741,6 +746,17 @@ mod tests {
         let plan = sum_over_sorted_input(AggregateMode::Final, &["k"], full_batches())?;
         assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
         assert_completed_groups_emitted_under_limit(&plan).await
+    }
+
+    /// The limit fits the active group, but not the capacity the table grows
+    /// for one batch, so the table must release it after the completed groups
+    /// are emitted.
+    #[tokio::test]
+    async fn completed_groups_release_batch_capacity() -> Result<()> {
+        let plan =
+            sum_over_sorted_input(AggregateMode::Final, &["k"], distinct_key_batches())?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_output_unchanged_under_limit(&plan, 100 * 1024).await
     }
 
     /// A single key never completes a group before the input ends. The limit
