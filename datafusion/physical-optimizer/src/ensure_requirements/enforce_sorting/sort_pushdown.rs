@@ -89,7 +89,7 @@ pub type SortPushDown = PlanContext<ParentRequirements>;
 /// bound than the real one, so the pushed-down fetch stays correct.
 ///
 /// [`combine_limit`]: datafusion_common::utils::combine_limit
-fn input_fetch(
+pub(super) fn input_fetch(
     plan: &Arc<dyn ExecutionPlan>,
     parent_fetch: Option<usize>,
 ) -> Option<usize> {
@@ -128,7 +128,7 @@ pub fn pushdown_sorts(sort_push_down: SortPushDown) -> Result<SortPushDown> {
         .map(|transformed| transformed.data)
 }
 
-fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
+pub(super) fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
     match (f1, f2) {
         (Some(f1), Some(f2)) => Some(f1.min(f2)),
         (Some(_), _) => f1,

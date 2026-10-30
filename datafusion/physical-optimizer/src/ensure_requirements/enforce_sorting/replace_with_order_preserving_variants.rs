@@ -12,6 +12,8 @@ use crate::utils::{
     is_coalesce_partitions, is_repartition, is_sort, is_sort_preserving_merge,
 };
 
+use super::sort_pushdown::input_fetch;
+
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
@@ -97,6 +99,10 @@ pub fn plan_with_order_preserving_variants(
         sort_input.data = false;
         return Ok(sort_input);
     }
+    // When descending through GlobalLimitExec, add skip to the fetch so a
+    // SortPreservingMergeExec below still keeps enough rows for the limit
+    // after it discards skipped ones (same rule as sort_pushdown::input_fetch).
+    let child_fetch = input_fetch(&sort_input.plan, fetch);
     sort_input.children = sort_input
         .children
         .into_iter()
@@ -107,7 +113,7 @@ pub fn plan_with_order_preserving_variants(
                     node,
                     is_spr_better,
                     is_spm_better,
-                    fetch,
+                    child_fetch,
                 )
             } else {
                 Ok(node)
