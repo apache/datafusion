@@ -27,12 +27,15 @@ impl<'a> ShortenInListSimplifier<'a> {
     /// faster when every row matches the first value, allowing the remaining
     /// comparisons to short circuit.
     ///
+    /// Dictionary strings retain the membership expression so the result is
+    /// expanded through the dictionary keys only once.
+    ///
     /// See [PR #25187](https://github.com/apache/datafusion/pull/25187) for measurements.
     fn should_retain_short_inlist(&self, expr: &Expr, list: &[Expr]) -> bool {
         let Ok(data_type) = expr.get_type(self.schema) else {
             return false;
         };
-        matches!(
+        let retain = matches!(
             data_type,
             DataType::Int32
                 | DataType::Int64
@@ -40,7 +43,12 @@ impl<'a> ShortenInListSimplifier<'a> {
                 | DataType::Float32
                 | DataType::Float64
                 | DataType::FixedSizeBinary(1 | 2 | 4 | 8 | 16)
-        ) && list.iter().all(|expr| expr.as_literal().is_some())
+        ) || matches!(
+            data_type,
+            DataType::Dictionary(_, value_type)
+                if matches!(value_type.as_ref(), DataType::Utf8 | DataType::Utf8View)
+        );
+        retain && list.iter().all(|expr| expr.as_literal().is_some())
     }
 }
 

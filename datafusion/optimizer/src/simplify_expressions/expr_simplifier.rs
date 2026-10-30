@@ -5068,6 +5068,10 @@ mod tests {
             (DataType::FixedSizeBinary(3), false),
             (DataType::Utf8View, false),
             (
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+            (
                 DataType::Dictionary(
                     Box::new(DataType::Int8),
                     Box::new(DataType::Float64),
@@ -5084,6 +5088,11 @@ mod tests {
                         ),
                         DataType::Utf8View => {
                             ScalarValue::Utf8View(Some(value.to_string()))
+                        }
+                        DataType::Dictionary(_, value_type)
+                            if matches!(value_type.as_ref(), DataType::Utf8) =>
+                        {
+                            ScalarValue::Utf8(Some(value.to_string()))
                         }
                         _ => ScalarValue::Int32(Some(i32::from(value)))
                             .cast_to(&data_type)
