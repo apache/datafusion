@@ -686,14 +686,41 @@ impl IPCStreamEncoder {
     fn encode(&mut self, batch: &RecordBatch) -> Result<(usize, usize, Vec<Buffer>)> {
         let buffers = self.encoder.as_mut().unwrap().encode(batch)?;
         let bytes = buffers.iter().map(Buffer::len).sum();
-        Ok((batch.num_rows(), bytes, buffers))
+        Ok((batch.num_rows(), bytes, coalesce_buffers(buffers)))
     }
 
     fn finish(&mut self) -> Result<(usize, Vec<Buffer>)> {
         let buffers = self.encoder.take().unwrap().finish()?;
         let bytes = buffers.iter().map(Buffer::len).sum();
-        Ok((bytes, buffers))
+        Ok((bytes, coalesce_buffers(buffers)))
     }
+}
+
+/// Buffers at least this large are written on their own, see [`coalesce_buffers`]
+const COALESCE_BUFFERS_BELOW: usize = 64 * 1024;
+
+/// Copies runs of small buffers into one, so that writing the IPC encoding of
+/// a batch takes a few writes instead of one per buffer and padding.
+///
+/// [`StreamEncoder`] returns every buffer of a batch and its padding separately,
+/// and file backed spills would write each with its own system call.
+fn coalesce_buffers(buffers: Vec<Buffer>) -> Vec<Buffer> {
+    let mut coalesced = Vec::new();
+    let mut small: Vec<u8> = Vec::new();
+    for buffer in buffers {
+        if buffer.len() < COALESCE_BUFFERS_BELOW {
+            small.extend_from_slice(buffer.as_slice());
+            continue;
+        }
+        if !small.is_empty() {
+            coalesced.push(Buffer::from_vec(std::mem::take(&mut small)));
+        }
+        coalesced.push(buffer);
+    }
+    if !small.is_empty() {
+        coalesced.push(Buffer::from_vec(small));
+    }
+    coalesced
 }
 
 struct ArrowBufferOwner(Buffer);
@@ -1132,7 +1159,8 @@ mod tests {
         let trailing_bytes = writer.finish().await?;
 
         assert!(finished.load(Ordering::Relaxed));
-        assert!(writes.load(Ordering::Relaxed) > 2);
+        // One write per batch and one for the end of the stream
+        assert_eq!(writes.load(Ordering::Relaxed), 3);
         drop(writer);
         assert!(!aborted.load(Ordering::Relaxed));
 
