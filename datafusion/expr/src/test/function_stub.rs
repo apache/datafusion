@@ -257,6 +257,11 @@ impl AggregateUDFImpl for Count {
         Ok(Arc::new(Field::new(self.name(), DataType::Int64, false)))
     }
 
+    // Keep the deprecated method consistent with `return_field` until it is removed
+    fn is_nullable(&self) -> bool {
+        false
+    }
+
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         not_impl_err!("no impl for stub")
     }

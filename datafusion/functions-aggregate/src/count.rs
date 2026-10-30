@@ -297,6 +297,11 @@ impl AggregateUDFImpl for Count {
         Ok(Arc::new(Field::new(self.name(), DataType::Int64, false)))
     }
 
+    // Keep the deprecated method consistent with `return_field` until it is removed
+    fn is_nullable(&self) -> bool {
+        false
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
             let dtype: DataType = match &args.input_fields[0].data_type() {

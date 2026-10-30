@@ -746,6 +746,11 @@ impl AggregateUDFImpl for ApproxDistinct {
         Ok(Arc::new(Field::new(self.name(), DataType::UInt64, false)))
     }
 
+    // Keep the deprecated method consistent with `return_field` until it is removed
+    fn is_nullable(&self) -> bool {
+        false
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let data_type = args.input_fields[0].data_type();
         match data_type {

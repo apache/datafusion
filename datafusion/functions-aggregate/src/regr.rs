@@ -475,6 +475,11 @@ impl AggregateUDFImpl for Regr {
         )))
     }
 
+    // Keep the deprecated method consistent with `return_field` until it is removed
+    fn is_nullable(&self) -> bool {
+        self.regr_type != RegrType::Count
+    }
+
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
             return not_impl_err!(
