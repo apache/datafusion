@@ -2042,7 +2042,7 @@ mod tests {
     /// `rare` probe rows of their own scope each, `hot` probe rows of the hot
     /// scope, and `rare` more of their own scope, in that order. Each rare
     /// scope holds one build row, and the hot scope `hot_build`. Every pair
-    /// passes.
+    /// passes, and every scope is on both sides, so every row is marked.
     fn hot_scope_among_rare_ones(
         mark_build_rows: bool,
         rare: usize,
@@ -2078,7 +2078,7 @@ mod tests {
             foreign_marks: false,
         };
         let (marks, stats) = case.run()?;
-        assert_eq!(marks, case.expected_marks());
+        assert!(marks.iter().all(|marked| *marked));
         Ok(stats)
     }
 
