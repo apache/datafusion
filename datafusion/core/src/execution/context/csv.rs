@@ -45,8 +45,35 @@ impl SessionContext {
         self._read_type(table_paths, options).await
     }
 
-    /// Registers a CSV file as a table which can referenced from SQL
+    /// Registers a CSV file as a table which can be referenced from SQL
     /// statements executed against this context.
+    ///
+    /// Table names passed as strings (e.g. `"Example"`) are parsed as
+    /// unquoted SQL identifiers and normalized to lowercase. To preserve
+    /// exact casing and match case-sensitive quoted queries like
+    /// `SELECT * FROM "Example"`, use [`TableReference::bare`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// use datafusion::common::TableReference;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    ///
+    /// ctx.register_csv(
+    ///     TableReference::bare("Example"),
+    ///     "tests/data/example.csv",
+    ///     CsvReadOptions::new(),
+    /// )
+    /// .await?;
+    ///
+    /// let df = ctx.sql(r#"SELECT * FROM "Example""#).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn register_csv(
         &self,
         table_ref: impl Into<TableReference>,
@@ -117,6 +144,29 @@ mod tests {
         | 10           | 110          | 20       |
         +--------------+--------------+----------+
         ");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_register_csv_identifier_normalization() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        // 1. String literal normalizes to lowercase: "Example" -> "example"
+        ctx.register_csv("Example", "tests/data/example.csv", CsvReadOptions::new())
+            .await?;
+        assert!(ctx.sql("SELECT * FROM Example").await.is_ok());
+        assert!(ctx.sql("SELECT * FROM example").await.is_ok());
+        assert!(ctx.sql(r#"SELECT * FROM "Example""#).await.is_err());
+
+        // 2. TableReference::bare preserves exact case
+        ctx.register_csv(
+            TableReference::bare("QuotedExample"),
+            "tests/data/example.csv",
+            CsvReadOptions::new(),
+        )
+        .await?;
+        assert!(ctx.sql(r#"SELECT * FROM "QuotedExample""#).await.is_ok());
 
         Ok(())
     }
