@@ -44,7 +44,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         error_message: "Cargo test step failed",
@@ -218,7 +218,7 @@ impl StepContext {
 
         let mut command = self.cargo();
         match variant.as_str() {
-            "workspace" => {
+            "workspace" | "slt-coverage" => {
                 command.args([
                     "llvm-cov",
                     "--profile",
@@ -230,14 +230,20 @@ impl StepContext {
                     "--exclude",
                     "datafusion-cli",
                     "--workspace",
-                    "--lib",
-                    "--tests",
-                    "--bins",
+                ]);
+                let output_path = if variant == "slt-coverage" {
+                    command.args(["--test", "sqllogictests"]);
+                    "target/codecov-slt.json"
+                } else {
+                    command.args(["--lib", "--tests", "--bins"]);
+                    "target/codecov.json"
+                };
+                command.args([
                     "--features",
                     "serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait",
                     "--codecov",
                     "--output-path",
-                    "target/codecov.json",
+                    output_path,
                 ]);
             }
             "cli" => {
@@ -648,7 +654,7 @@ fn required_env(name: &str) -> Result<String> {
 mod tests {
     use super::*;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -836,6 +842,24 @@ cargo llvm-cov \
 --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
 --codecov \
 --output-path target/codecov.json
+")
+                },
+            },
+            Cmd {
+                command: &["test", "slt-coverage"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo llvm-cov \
+--profile ci \
+--exclude datafusion-examples \
+--exclude ffi_example_table_provider \
+--exclude datafusion-cli \
+--workspace \
+--test sqllogictests \
+--features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
+--codecov \
+--output-path target/codecov-slt.json
 ")
                 },
             },

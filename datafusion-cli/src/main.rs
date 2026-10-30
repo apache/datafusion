@@ -856,7 +856,11 @@ mod tests {
             .build_arc()
             .unwrap();
 
-        let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), rt);
+        // Pin `created_by` so the size of the written parquet files (checked
+        // below) does not depend on the DataFusion version string
+        let config = SessionConfig::default()
+            .set_str("datafusion.execution.parquet.created_by", "datafusion");
+        let ctx = SessionContext::new_with_config_rt(config, rt);
 
         ctx.register_object_store(
             &Url::parse("mem://test_table").unwrap(),
@@ -929,8 +933,8 @@ mod tests {
         +---------------------+-----------+-----------------+------+------+
         | metadata_size_bytes | filename  | file_size_bytes | etag | hits |
         +---------------------+-----------+-----------------+------+------+
-        | 216                 | 0.parquet | 3620            | "0"  | 2    |
-        | 216                 | 1.parquet | 3620            | "1"  | 2    |
+        | 216                 | 0.parquet | 3605            | "0"  | 2    |
+        | 216                 | 1.parquet | 3605            | "1"  | 2    |
         +---------------------+-----------+-----------------+------+------+
         "#);
 

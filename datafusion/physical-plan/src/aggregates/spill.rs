@@ -236,6 +236,27 @@ impl AggregateSpill {
         Ok(())
     }
 
+    /// Writes already evaluated output batches to one spill file and returns a
+    /// stream that reads them back.
+    pub(super) fn spill_output(
+        &self,
+        schema: SchemaRef,
+        batches: impl Iterator<Item = Result<RecordBatch>>,
+    ) -> Result<SendableRecordBatchStream> {
+        let spill_manager = SpillManager::new(
+            self.context.runtime_env(),
+            self.spill_manager.metrics.clone(),
+            schema,
+        )
+        .with_compression_type(self.spill_manager.compression);
+        let spill_file = spill_manager
+            .spill_record_batch_iter_and_return_max_batch_memory(batches, self.label)?;
+        let Some((file, max_record_batch_memory)) = spill_file else {
+            return internal_err!("{}: produced an empty output spill", self.label);
+        };
+        spill_manager.read_spill_as_stream(file, Some(max_record_batch_memory))
+    }
+
     /// Merges every sorted run, and does the aggregate evaluation with
     /// [`ClusteredFinalAggregateStream`].
     pub(super) fn into_replay_stream(
