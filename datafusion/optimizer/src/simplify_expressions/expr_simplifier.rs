@@ -1482,7 +1482,23 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 .iter()
                 .any(|(when, _)| is_true(when.as_ref()) || is_false(when.as_ref())) =>
             {
-                let out_type = info.get_data_type(&when_then_expr[0].1)?;
+                // CASE WHEN false THEN A END --> NULL
+                // The NULL keeps the CASE's field metadata, such as an extension type
+                if else_expr.is_none()
+                    && when_then_expr
+                        .iter()
+                        .all(|(when, _)| is_false(when.as_ref()))
+                {
+                    let (_, field) = Expr::Case(Case::new(None, when_then_expr, None))
+                        .to_field(info.schema().as_ref())?;
+                    let metadata = FieldMetadata::new_from_field(&field);
+                    let null = Expr::Literal(
+                        ScalarValue::try_new_null(field.data_type())?,
+                        (!metadata.is_empty()).then_some(metadata),
+                    );
+                    return Ok(Transformed::yes(null));
+                }
+
                 let mut new_when_then_expr = Vec::with_capacity(when_then_expr.len());
 
                 for (when, then) in when_then_expr.into_iter() {
@@ -1498,16 +1514,11 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 }
 
                 // Exclude CASE statement altogether if there are no when-then expressions left
-                if new_when_then_expr.is_empty() {
-                    // CASE WHEN false THEN A ELSE B END --> B
-                    if let Some(else_expr) = else_expr {
-                        return Ok(Transformed::yes(*else_expr));
-                    // CASE WHEN false THEN A END --> NULL
-                    } else {
-                        let null =
-                            Expr::Literal(ScalarValue::try_new_null(&out_type)?, None);
-                        return Ok(Transformed::yes(null));
-                    }
+                // CASE WHEN false THEN A ELSE B END --> B
+                if new_when_then_expr.is_empty()
+                    && let Some(else_expr) = else_expr
+                {
+                    return Ok(Transformed::yes(*else_expr));
                 }
 
                 Transformed::yes(Expr::Case(Case {
@@ -4582,6 +4593,32 @@ mod tests {
             Some(Box::new(lit(2))),
         ));
         assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_expr_case_when_false_keeps_field_metadata() -> Result<()> {
+        let metadata = FieldMetadata::from(HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "a.type".to_string(),
+        )]));
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
+            vec![metadata.add_to_field(Field::new("ext", DataType::Utf8, true))].into(),
+            HashMap::new(),
+        )?);
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build());
+
+        // CASE WHEN false THEN ext END --> NULL with ext's extension type
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(lit(false)), Box::new(col("ext")))],
+            None,
+        ));
+        assert_eq!(
+            simplifier.simplify(expr)?,
+            Expr::Literal(ScalarValue::Utf8(None), Some(metadata))
+        );
+        Ok(())
     }
 
     #[test]
