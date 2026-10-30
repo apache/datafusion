@@ -1012,6 +1012,32 @@ physical_plan
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val, id) as rn FROM window_topn_rank_eq_t
+) WHERE rn = 1;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST, window_topn_rank_eq_t.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--PartitionedTopKExec: fn=row_number, fetch=1, partition=[pk@1], order=[val@2 ASC NULLS LAST, id@0 ASC NULLS LAST], emit=[row_number() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST, window_topn_rank_eq_t.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as rk FROM window_topn_rank_eq_t
+) WHERE rk = 1;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, dense_rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rk]
+02)--PartitionedTopKExec: fn=dense_rank, fetch=1, partition=[pk@1], order=[val@2 ASC NULLS LAST], emit=[dense_rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+statement ok
 DROP TABLE window_topn_rank_eq_t;
 
 ###############################################################################
