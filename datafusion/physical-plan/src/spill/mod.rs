@@ -5,6 +5,7 @@
 //! Defines the spilling functions
 
 pub(crate) mod in_progress_spill_file;
+mod lengths;
 pub(crate) mod replayable_spill_input;
 pub(crate) mod spill_manager;
 pub mod spill_pool;
@@ -75,6 +76,9 @@ struct SpillReaderStream {
     _spill_file: Arc<dyn SpillFile>,
 
     schema_validated: bool,
+
+    /// Whether the file stores byte arrays as lengths, see [`lengths`]
+    decode_lengths: bool,
 }
 
 // Small margin allowed to accommodate slight memory accounting variation
@@ -335,6 +339,7 @@ impl SpillReaderStream {
             pending: VecDeque::new(),
             _spill_file: spill_file,
             schema_validated: false,
+            decode_lengths: false,
         })
     }
 }
@@ -366,7 +371,11 @@ impl Stream for SpillReaderStream {
                         if !this.schema_validated {
                             this.schema_validated = true;
                             let actual = batch.schema();
-                            if actual != this.schema {
+                            // Compressed spill files store byte arrays as lengths
+                            this.decode_lengths = actual != this.schema
+                                && lengths::encode_schema(&this.schema)
+                                    .is_some_and(|encoded| encoded == actual);
+                            if actual != this.schema && !this.decode_lengths {
                                 this.is_done = true;
                                 return Poll::Ready(Some(Err(
                                     datafusion_common::exec_datafusion_err!(
@@ -379,6 +388,17 @@ impl Stream for SpillReaderStream {
                                 )));
                             }
                         }
+                        let batch = if this.decode_lengths {
+                            match lengths::decode(&batch, &this.schema) {
+                                Ok(batch) => batch,
+                                Err(e) => {
+                                    this.is_done = true;
+                                    return Poll::Ready(Some(Err(e)));
+                                }
+                            }
+                        } else {
+                            batch
+                        };
                         if let Some(max_record_batch_memory) =
                             this.max_record_batch_memory
                         {
@@ -648,6 +668,8 @@ impl Drop for AsyncIPCStreamWriter {
 /// Encodes Arrow IPC streams without performing I/O.
 struct IPCStreamEncoder {
     encoder: Option<StreamEncoder>,
+    /// Whether byte arrays are written as lengths, see [`lengths`]
+    encode_lengths: bool,
 }
 
 impl IPCStreamEncoder {
@@ -677,14 +699,26 @@ impl IPCStreamEncoder {
         let compression_type = Option::<CompressionType>::from(spill_compression);
         write_options = write_options.try_with_compression(compression_type)?;
 
-        let encoder = StreamEncoder::try_new_with_options(schema, write_options)?;
+        // Lengths take as much space as offsets when uncompressed
+        let encoded_schema =
+            compression_type.and_then(|_| lengths::encode_schema(schema));
+        let encoder = StreamEncoder::try_new_with_options(
+            encoded_schema.as_deref().unwrap_or(schema),
+            write_options,
+        )?;
         Ok(Self {
             encoder: Some(encoder),
+            encode_lengths: encoded_schema.is_some(),
         })
     }
 
     fn encode(&mut self, batch: &RecordBatch) -> Result<(usize, usize, Vec<Buffer>)> {
-        let buffers = self.encoder.as_mut().unwrap().encode(batch)?;
+        let encoder = self.encoder.as_mut().unwrap();
+        let buffers = if self.encode_lengths {
+            encoder.encode(&lengths::encode(batch)?)?
+        } else {
+            encoder.encode(batch)?
+        };
         let bytes = buffers.iter().map(Buffer::len).sum();
         Ok((batch.num_rows(), bytes, coalesce_buffers(buffers)))
     }
