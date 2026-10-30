@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Serialization hooks for [`ExecutionPlan`], mirroring the
 //! `try_to_proto`/`try_from_proto` pattern used for `PhysicalExpr`.
@@ -79,12 +66,14 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::physical_expr::proto_decode::{
-    PhysicalExprDecode, PhysicalExprDecodeCtx,
+pub use datafusion_physical_expr::proto::{
+    ExtensionExprFromProto, decode_physical_expr, extension_expr_node,
+    physical_expr_names,
 };
-use datafusion_physical_expr_common::physical_expr::proto_encode::{
-    PhysicalExprEncode, PhysicalExprEncodeCtx,
-};
+use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
+pub use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode;
+pub use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_proto_models::protobuf::physical_plan_node::PhysicalPlanType;
 use datafusion_proto_models::protobuf::{
     PhysicalExprNode, PhysicalExtensionNode, PhysicalPlanNode,
@@ -96,9 +85,7 @@ pub use datafusion_proto_models::ProtoDecoderRegistry;
 // Not public API: see `decode_execution_plan`.
 #[doc(hidden)]
 pub use registry::decode_execution_plan;
-pub use registry::{
-    ExtensionPlanFromProto, execution_plan_names, register_execution_plan,
-};
+pub use registry::{ExtensionPlanFromProto, execution_plan_names};
 
 /// Internal dispatch trait backing [`ExecutionPlanEncodeCtx`].
 ///
@@ -434,6 +421,10 @@ impl PhysicalExprDecode for ExecutionPlanDecodeCtx<'_> {
         schema: &Schema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         self.decode_expr(node, schema)
+    }
+
+    fn session(&self) -> Option<&dyn std::any::Any> {
+        Some(self.task_ctx())
     }
 }
 

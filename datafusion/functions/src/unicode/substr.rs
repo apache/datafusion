@@ -1,38 +1,27 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
 use crate::strings::sub_view;
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
-    StringArrayType, StringViewArray,
+    Array, ArrayRef, AsArray, DictionaryArray, GenericStringArray, Int64Array,
+    OffsetSizeTrait, PrimitiveArray, StringArrayType, StringViewArray,
 };
 use arrow::buffer::{NullBuffer, ScalarBuffer};
-use arrow::datatypes::DataType;
+use arrow::compute::take;
+use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType};
+use arrow::downcast_dictionary_array;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{
     NativeType, logical_int32, logical_int64, logical_string,
 };
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -65,6 +54,14 @@ pub struct SubstrFunc {
     aliases: Vec<String>,
 }
 
+/// Whether `key_type` can index one dictionary value per row of any batch.
+fn is_wide_key(key_type: &DataType) -> bool {
+    matches!(
+        key_type,
+        DataType::Int32 | DataType::UInt32 | DataType::Int64 | DataType::UInt64
+    )
+}
+
 impl Default for SubstrFunc {
     fn default() -> Self {
         Self::new()
@@ -73,7 +70,8 @@ impl Default for SubstrFunc {
 
 impl SubstrFunc {
     pub fn new() -> Self {
-        let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+        let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+            .with_encoding_preservation(EncodingPreservation::dictionary());
         let int64 = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_int64()),
             vec![TypeSignatureClass::Native(logical_int32())],
@@ -112,10 +110,46 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        Ok(match &arg_types[0] {
+            DataType::Dictionary(key_type, value_type) if !is_wide_key(key_type) => {
+                value_type.as_ref().clone()
+            }
+            other => other.clone(),
+        })
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if let DataType::Dictionary(key_type, value_type) = args.args[0].data_type()
+            && !is_wide_key(&key_type)
+        {
+            // Per-row start/length can produce more distinct values than a
+            // narrow key type can index, so decode instead.
+            let mut args = args.args;
+            args[0] = args[0].cast_to(&value_type, None)?;
+            return make_scalar_function(substr, vec![])(&args);
+        }
+
+        if let ColumnarValue::Array(array) = &args.args[0]
+            && matches!(array.data_type(), DataType::Dictionary(_, _))
+            && array.as_any_dictionary().values().len() <= array.len()
+            && args.args[1..]
+                .iter()
+                .all(|v| matches!(v, ColumnarValue::Scalar(_)))
+        {
+            // Fast path: substr the N_distinct values, reuse the keys.
+            let dict = array.as_any_dictionary();
+            let values = Arc::clone(dict.values());
+            let mut inner = Vec::with_capacity(args.args.len());
+            inner.push(ColumnarValue::Array(values));
+            inner.extend_from_slice(&args.args[1..]);
+            // Values that no valid row references can still fail (e.g. a
+            // negative length), so fall back to the row-wise path on error.
+            if let Ok(new_values) = make_scalar_function(substr, vec![])(&inner) {
+                let new_values = new_values.into_array(dict.values().len())?;
+                return Ok(ColumnarValue::Array(dict.with_values(new_values)));
+            }
+        }
+
         make_scalar_function(substr, vec![])(&args.args)
     }
 
@@ -143,11 +177,34 @@ fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string_view();
             string_view_substr(string_array, &args[1..])
         }
+        DataType::Dictionary(_, _) => {
+            let array = &args[0];
+            downcast_dictionary_array! {
+                array => dictionary_substr(array, &args[1..]),
+                _ => unreachable!("substr matched a dictionary array"),
+            }
+        }
         other => exec_err!(
             "Unsupported data type {other:?} for function substr,\
             expected Utf8View, Utf8 or LargeUtf8."
         ),
     }
+}
+
+fn dictionary_substr<K: ArrowDictionaryKeyType>(
+    dictionary: &DictionaryArray<K>,
+    args: &[ArrayRef],
+) -> Result<ArrayRef> {
+    // Only wide key types reach here, so one key per row always fits.
+    let decoded = take(dictionary.values().as_ref(), dictionary.keys(), None)?;
+    let mut row_args = vec![decoded];
+    row_args.extend(args.iter().cloned());
+    let values = substr(&row_args)?;
+    let keys = (0..values.len())
+        .map(|i| K::Native::from_usize(i).unwrap())
+        .collect::<Vec<_>>();
+    let keys = PrimitiveArray::<K>::new(keys.into(), values.nulls().cloned());
+    Ok(Arc::new(DictionaryArray::<K>::try_new(keys, values)?))
 }
 
 /// Convert the given `start` and `count` to valid byte indices within `input` string.
@@ -354,13 +411,15 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, ArrayRef, AsArray, Int64Array, LargeStringArray, StringArray,
-        StringViewArray,
+        Array, ArrayRef, AsArray, DictionaryArray, Int64Array, LargeStringArray,
+        StringArray, StringViewArray,
     };
     use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
+    use arrow::datatypes::{DataType, Field, Int32Type};
 
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue, exec_err};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use crate::unicode::substr::SubstrFunc;
     use crate::utils::test::test_function;
@@ -763,6 +822,42 @@ mod tests {
 
         assert_eq!(result.value(0), "phabet_long_str");
         assert_eq!(result.value(1), "ésojanother_lo");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_substr_dict_fast_path_preserves_encoding() -> Result<()> {
+        let dict_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(Utf8));
+        let keys = arrow::array::Int32Array::from(vec![0, 1, 0, 2, 1]);
+        let values = StringArray::from(vec!["silver", "copper", "golden"]);
+        let dict: ArrayRef = Arc::new(
+            DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap(),
+        );
+
+        let result = SubstrFunc::new()
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Array(dict),
+                    ColumnarValue::Scalar(ScalarValue::from(1i64)),
+                    ColumnarValue::Scalar(ScalarValue::from(3i64)),
+                ],
+                arg_fields: vec![
+                    Arc::new(Field::new("s", dict_type.clone(), true)),
+                    Arc::new(Field::new("start", DataType::Int64, false)),
+                    Arc::new(Field::new("len", DataType::Int64, false)),
+                ],
+                number_rows: 5,
+                return_field: Arc::new(Field::new("r", dict_type, true)),
+                config_options: Arc::new(ConfigOptions::default()),
+            })?
+            .into_array(5)?;
+
+        assert!(matches!(result.data_type(), DataType::Dictionary(_, v) if **v == Utf8));
+        let out = result.as_dictionary::<Int32Type>();
+        let v = out.values().as_string::<i32>();
+        assert_eq!(v.len(), 3);
+        assert_eq!((v.value(0), v.value(1), v.value(2)), ("sil", "cop", "gol"));
 
         Ok(())
     }

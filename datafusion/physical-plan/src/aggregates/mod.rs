@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Aggregate functionality
 //!
@@ -186,7 +173,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     ColumnStatistics, Constraint, Constraints, Result, ScalarValue,
     assert_eq_or_internal_err, internal_err, not_impl_err,
@@ -207,9 +194,8 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+pub use optimizations::topk_types_supported;
 pub use order::GroupClusteringMode;
-use topk::hash_table::is_supported_hash_key_type;
-use topk::heap::is_supported_heap_type;
 
 mod aggregate_argument;
 mod aggregate_hash_table;
@@ -217,27 +203,19 @@ mod aggregate_stream;
 mod clustered_final_stream;
 mod clustered_partial_stream;
 mod clustered_single_stream;
+#[cfg(test)]
+mod clustered_test_util;
 pub mod group_values;
 mod grouped_hash_stream;
 mod grouped_topk_stream;
 mod hash_stream;
+mod optimizations;
 pub mod order;
 mod partial_reduce_stream;
 mod single_stream;
 mod skip_partial;
 mod spill;
 mod topk;
-
-/// Returns true if TopK aggregation data structures support the provided key and value types.
-///
-/// This function checks whether both the key type (used for grouping) and value type
-/// (used in min/max aggregation) can be handled by the TopK aggregation heap and hash table.
-/// Supported types include Arrow primitives (integers, floats, decimals, intervals) and
-/// UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`).
-/// ```text
-pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
-    is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
-}
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
@@ -850,13 +828,8 @@ impl LimitOptions {
 }
 
 /// Mutually exclusive aggregation implementations and their configuration.
-///
-/// # Public Only for Internal Use:
-/// `datafusion-physical-optimizer` inspects and combines aggregate kinds.
-/// This enum is not part of the supported public API.
-#[doc(hidden)]
 #[derive(Debug, Clone)]
-pub enum AggregateKind {
+enum AggregateKind {
     /// Ordinary aggregation, with no limit on the groups retained.
     General {
         group_by: Arc<PhysicalGroupBy>,
@@ -891,13 +864,7 @@ pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
     /// Aggregation implementation and its configuration.
-    ///
-    /// # Public Only for Internal Use:
-    /// `datafusion-physical-optimizer` updates this when combining aggregates.
-    /// Changes must preserve the expressions, schema, and plan properties.
-    /// This field is not part of the supported public API.
-    #[doc(hidden)]
-    pub kind: AggregateKind,
+    kind: AggregateKind,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied. Contains the group by columns followed by the
@@ -929,292 +896,6 @@ pub struct AggregateExec {
 }
 
 impl AggregateExec {
-    /// Try to use TopK (min/max heap) optimization in AggregateExec.
-    ///
-    /// The optimizer must keep the limit operator above because the aggregate may
-    /// still produce more than K rows.
-    /// Returns `None` if not applicable.
-    ///
-    /// # Public Only for Internal Use:
-    ///
-    /// This is not a public API and is for internal use only; see [API policy] for details.
-    ///
-    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
-    ///
-    /// # TopK Optimization Overview
-    ///
-    /// Retain candidate groups for a parent ORDER BY / LIMIT. There are two applicable
-    /// cases:
-    ///
-    /// ## TopK MIN/MAX
-    ///
-    /// ```txt
-    /// SELECT k, MAX(v) AS score FROM t GROUP BY k
-    /// ORDER BY score DESC NULLS LAST LIMIT 10;
-    ///
-    /// Before:
-    /// Sort: score DESC, fetch=10
-    ///   Aggregate: k, MAX(v)
-    ///     input
-    ///
-    /// After (Added info in `AggregateExec` to trigger heap optimization):
-    /// Sort: score DESC, fetch=10
-    ///   Aggregate: k, MAX(v), TopKMinMax(10)
-    ///     input
-    /// ```
-    ///
-    /// For an aggregate output named `score`, the example uses:
-    /// ```txt
-    /// try_optimize_topk(10, "score", SortOptions {
-    ///     descending: true,   // DESC
-    ///     nulls_first: false, // NULLS LAST
-    /// })
-    /// ```
-    ///
-    /// A min-heap keeps the 10 largest non-NULL scores.
-    /// MIN with ASC uses a max-heap.
-    ///
-    /// ## TopK DISTINCT
-    ///
-    /// ```txt
-    /// SELECT DISTINCT k FROM t ORDER BY k ASC NULLS LAST LIMIT 10;
-    ///
-    /// Before:
-    /// Sort: k ASC, fetch=10
-    ///   Aggregate: k, no aggregates
-    ///     input
-    ///
-    /// After (Added info in `AggregateExec` to trigger heap optimization):
-    /// Sort: k ASC, fetch=10
-    ///   Aggregate: k, TopKDistinct(10)
-    ///     input
-    /// ```
-    ///
-    /// Here the grouping key is the output used for ordering:
-    /// ```txt
-    /// try_optimize_topk(10, "k", SortOptions {
-    ///     descending: false,  // ASC
-    ///     nulls_first: false, // NULLS LAST
-    /// })
-    /// ```
-    ///
-    /// A max-heap keeps the 10 smallest non-NULL keys.
-    /// DESC uses a min-heap.
-    #[doc(hidden)]
-    pub fn try_optimize_topk(
-        mut self,
-        limit: usize,
-        order_by: &str,
-        options: SortOptions,
-    ) -> Option<Transformed<Self>> {
-        if limit == 0
-            || matches!(self.kind, AggregateKind::DistinctLimit { .. })
-            || self.group_by().has_grouping_set()
-            || self.filter_expr().iter().any(Option::is_some)
-        {
-            return None;
-        }
-        // The priority map needs one supported key and value type.
-        let (group_key, group_key_alias) =
-            self.group_expr().expr().iter().exactly_one().ok()?;
-        let input_schema = self.input.schema();
-        let key_type = group_key.data_type(&input_schema).ok()?;
-        let minmax = self.get_minmax_desc();
-        let value_type = minmax
-            .as_ref()
-            .map_or(&key_type, |(field, _)| field.data_type());
-        if !topk_types_supported(&key_type, value_type)
-            || self.schema.fields().len() != 1 + self.aggr_expr().len()
-        {
-            return None;
-        }
-
-        let kind = if let Some((field, descending)) = minmax {
-            let aggregate = self.aggr_expr().iter().exactly_one().ok()?;
-            if field.name() != order_by
-                || descending != options.descending
-                || !aggregate.order_bys().is_empty()
-            {
-                return None;
-            }
-            let argument = aggregate.expressions().into_iter().exactly_one().ok()?;
-            // NULLS FIRST can worsen a group's rank when its first value arrives.
-            if options.nulls_first && argument.nullable(&self.input_schema).ok()? {
-                return None;
-            }
-
-            // Raw input, partial state, and output must fit the same heap value.
-            let state_field = aggregate
-                .state_fields()
-                .ok()?
-                .into_iter()
-                .exactly_one()
-                .ok()?;
-            let input_argument = aggregate_expressions(self.aggr_expr(), &self.mode, 1)
-                .ok()?
-                .into_iter()
-                .flatten()
-                .exactly_one()
-                .ok()?;
-            let value_type = field.data_type();
-            if state_field.data_type() != value_type
-                || argument.data_type(&self.input_schema).ok()? != *value_type
-                || input_argument.data_type(&input_schema).ok()? != *value_type
-            {
-                return None;
-            }
-            AggregateKind::TopKMinMax {
-                group_by: Arc::clone(self.group_by()),
-                aggr_expr: Arc::clone(aggregate),
-                limit,
-                descending,
-                nulls_first: options.nulls_first,
-            }
-        } else if self.aggr_expr().is_empty() && group_key_alias == order_by {
-            AggregateKind::TopKDistinct {
-                group_by: Arc::clone(self.group_by()),
-                limit,
-                descending: options.descending,
-            }
-        } else {
-            return None;
-        };
-
-        // Preserve compatible tighter bounds; never switch an existing order.
-        match &self.kind {
-            AggregateKind::TopKMinMax { nulls_first, .. }
-                if *nulls_first != options.nulls_first =>
-            {
-                return None;
-            }
-            AggregateKind::TopKMinMax {
-                limit: existing,
-                descending,
-                ..
-            }
-            | AggregateKind::TopKDistinct {
-                limit: existing,
-                descending,
-                ..
-            } => {
-                if *descending != options.descending {
-                    return None;
-                }
-                if *existing <= limit {
-                    return Some(Transformed::no(self));
-                }
-            }
-            _ => {}
-        }
-
-        // Commit the kind and properties together: heap output is unordered and final.
-        self.kind = kind;
-        self.group_clustering_mode = GroupClusteringMode::None;
-        self.required_input_ordering = None;
-        // Keep unchanged properties so parent aggregates do not need rebuilding.
-        if !self.cache.eq_properties.oeq_class().is_empty()
-            || self.cache.emission_type != EmissionType::Final
-        {
-            let mut equivalence = self.cache.eq_properties.clone();
-            equivalence.clear_orderings();
-            let cache = Arc::make_mut(&mut self.cache);
-            cache.set_eq_properties(equivalence);
-            cache.emission_type = EmissionType::Final;
-        }
-        self.metrics = ExecutionPlanMetricsSet::new();
-        Some(Transformed::yes(self))
-    }
-
-    /// Try to stop after enough distinct grouping keys have been accumulated.
-    ///
-    /// The caller must establish that discarding other groups is legal, for
-    /// example beneath `SELECT DISTINCT k FROM t LIMIT 10`. The parent limit
-    /// remains responsible for enforcing the exact number of rows.
-    ///
-    /// # Trigger conditions
-    ///
-    /// - Grouping with no aggregate expressions or aggregate filters.
-    /// - Ordering eligible under [`Self::is_unordered_unfiltered_group_by_distinct`],
-    ///   including no existing Top-K direction.
-    /// - A positive limit that is tighter than any existing limit.
-    ///
-    /// # Consistency
-    ///
-    /// This is a safe, atomic optimization: it preserves the grouping keys and
-    /// leaves the aggregate in a consistent state. Ineligible aggregates return
-    /// `None`. Eligible aggregates are returned unchanged when the limit is zero
-    /// or no tighter than the existing limit.
-    ///
-    /// # Public Only for Internal Use:
-    ///
-    /// This is not a public API and is for internal use only; see [API policy] for details.
-    ///
-    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
-    #[doc(hidden)]
-    pub fn try_optimize_distinct_soft_limit(
-        mut self,
-        limit: usize,
-    ) -> Option<Transformed<Self>> {
-        if !self.is_unordered_unfiltered_group_by_distinct() {
-            return None;
-        }
-        if limit == 0
-            || self
-                .limit_options()
-                .is_some_and(|existing| existing.limit <= limit)
-        {
-            return Some(Transformed::no(self));
-        }
-        self.kind = AggregateKind::DistinctLimit {
-            group_by: Arc::clone(self.group_by()),
-            limit,
-        };
-        Some(Transformed::yes(self))
-    }
-
-    /// Clone with replacement aggregate expressions.
-    ///
-    /// The caller must preserve the schema, filters, and ordering requirements.
-    /// Changing expressions in a TopK aggregate drops its specialization.
-    ///
-    /// # Public Only for Internal Use:
-    ///
-    /// This is not a public API and is for internal use only; see [API policy] for details.
-    ///
-    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
-    #[doc(hidden)]
-    pub fn with_new_aggr_exprs(
-        &self,
-        aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,
-    ) -> Self {
-        let aggr_expr = aggr_expr.into();
-        let mut new = self.clone();
-        match &mut new.kind {
-            AggregateKind::General { aggr_expr: old, .. } => *old = aggr_expr,
-            AggregateKind::DistinctLimit { .. } | AggregateKind::TopKDistinct { .. }
-                if aggr_expr.is_empty() => {}
-            // Ordering optimization can revisit an existing TopK with the
-            // same expressions. Preserve its specialization in that case.
-            AggregateKind::TopKMinMax {
-                aggr_expr: existing,
-                ..
-            } if matches!(aggr_expr.as_ref(), [new] if Arc::ptr_eq(existing, new)) => {}
-            AggregateKind::DistinctLimit { group_by, .. }
-            | AggregateKind::TopKMinMax { group_by, .. }
-            | AggregateKind::TopKDistinct { group_by, .. } => {
-                // A replacement expression cannot inherit a specialization
-                // validated for the previous aggregate.
-                new.kind = AggregateKind::General {
-                    group_by: Arc::clone(group_by),
-                    filter_expr: vec![None; aggr_expr.len()].into(),
-                    aggr_expr,
-                };
-            }
-        }
-        new.metrics = ExecutionPlanMetricsSet::new();
-        new
-    }
-
     /// Clone with a validated legacy limit hint, falling back to ordinary
     /// aggregation when the request is unsupported.
     #[deprecated(
@@ -1408,23 +1089,6 @@ impl AggregateExec {
     /// Aggregation mode (full, partial)
     pub fn mode(&self) -> &AggregateMode {
         &self.mode
-    }
-
-    /// Returns whether this is a compatible partial/final aggregation pair.
-    ///
-    /// # Public Only for Internal Use:
-    ///
-    /// This is made public for the physical optimizer to use, this is not part of
-    /// the public API.
-    #[doc(hidden)]
-    pub fn matches_partial(&self, partial: &Self) -> bool {
-        matches!(
-            (self.mode, partial.mode),
-            (
-                AggregateMode::Final | AggregateMode::FinalPartitioned,
-                AggregateMode::Partial,
-            )
-        ) && self.group_expr() == &partial.group_expr().as_final()
     }
 
     /// Set a legacy limit hint. Unsupported requests leave ordinary aggregation.
@@ -1766,52 +1430,6 @@ impl AggregateExec {
         Ok(stream)
     }
 
-    /// Finds the DataType and SortDirection for this Aggregate, if there is one
-    pub fn get_minmax_desc(&self) -> Option<(FieldRef, bool)> {
-        let agg_expr = self.aggr_expr().iter().exactly_one().ok()?;
-        agg_expr.get_minmax_desc()
-    }
-
-    /// true, if this Aggregate has a group-by with no required or explicit ordering,
-    /// no filtering and no aggregate expressions
-    /// This method qualifies the use of the LimitedDistinctAggregation rewrite rule
-    /// on an AggregateExec.
-    pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
-        if self
-            .limit_options()
-            .and_then(|config| config.descending)
-            .is_some()
-        {
-            return false;
-        }
-        // ensure there is a group by
-        if self.group_expr().is_empty() && !self.group_expr().has_grouping_set() {
-            return false;
-        }
-        // ensure there are no aggregate expressions
-        if !self.aggr_expr().is_empty() {
-            return false;
-        }
-        // ensure there are no filters on aggregate expressions; the above check
-        // may preclude this case
-        if self.filter_expr().iter().any(|e| e.is_some()) {
-            return false;
-        }
-        // ensure there are no order by expressions
-        if !self.aggr_expr().iter().all(|e| e.order_bys().is_empty()) {
-            return false;
-        }
-        // ensure there is no output ordering; can this rule be relaxed?
-        if self.properties().output_ordering().is_some() {
-            return false;
-        }
-        // ensure no ordering is required on the input
-        if let Some(requirement) = self.required_input_ordering().swap_remove(0) {
-            return matches!(requirement, OrderingRequirements::Hard(_));
-        }
-        true
-    }
-
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     pub fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
@@ -1848,22 +1466,25 @@ impl AggregateExec {
             eq_properties.add_constants(new_constants)?;
         }
 
-        // Group by expression will be a distinct value after the aggregation.
-        // Add it into the constraint set.
-        let mut constraints = eq_properties.constraints().to_vec();
-        let new_constraint = Constraint::Unique(
-            group_expr_mapping
-                .iter()
-                .flat_map(|(_, target_cols)| {
-                    target_cols.iter().filter_map(|(expr, _)| {
-                        expr.downcast_ref::<Column>().map(|c| c.index())
+        // Only final output is unique on the group keys. Partial output can repeat a
+        // group within a partition (early emission, skipped partial aggregation) and
+        // across partitions once they are merged.
+        if mode.output_mode() == AggregateOutputMode::Final {
+            let mut constraints = eq_properties.constraints().to_vec();
+            let new_constraint = Constraint::Unique(
+                group_expr_mapping
+                    .iter()
+                    .flat_map(|(_, target_cols)| {
+                        target_cols.iter().filter_map(|(expr, _)| {
+                            expr.downcast_ref::<Column>().map(|c| c.index())
+                        })
                     })
-                })
-                .collect(),
-        );
-        constraints.push(new_constraint);
-        eq_properties =
-            eq_properties.with_constraints(Constraints::new_unverified(constraints));
+                    .collect(),
+            );
+            constraints.push(new_constraint);
+            eq_properties =
+                eq_properties.with_constraints(Constraints::new_unverified(constraints));
+        }
 
         // Get output partitioning:
         let input_partitioning = input.output_partitioning().clone();
@@ -2656,6 +2277,19 @@ impl ExecutionPlan for AggregateExec {
             children,
             ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
         )
+    }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        if let Some(dynamic_filter) = &self.dynamic_filter {
+            dynamic_filter.filter.reset();
+            for accumulator_filter in &dynamic_filter.accumulator_dyn_filter_info {
+                *accumulator_filter.shared_bound.lock() = ScalarValue::Null;
+            }
+        }
+
+        let mut aggregate = (*self).clone();
+        aggregate.metrics = ExecutionPlanMetricsSet::new();
+        Ok(Arc::new(aggregate))
     }
 
     fn execute(
@@ -5759,6 +5393,19 @@ mod tests {
         assert_eq!(
             aggregate.required_input_ordering(),
             vec![Some(OrderingRequirements::new_soft(input_ordering.into()))]
+        );
+        let expected_constraints = match mode.output_mode() {
+            AggregateOutputMode::Final => {
+                Constraints::new_unverified(vec![Constraint::Unique(vec![0, 1])])
+            }
+            AggregateOutputMode::Partial => Constraints::default(),
+        };
+        assert_eq!(
+            aggregate
+                .properties()
+                .equivalence_properties()
+                .constraints(),
+            &expected_constraints
         );
         Ok(())
     }
@@ -10003,6 +9650,60 @@ mod tests {
             lit(true),
         ));
         assert!(agg.set_dynamic_filter(df).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_exec_reset_state() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("min_a")
+                    .build()?,
+            )],
+            vec![None],
+            child,
+            Arc::clone(&schema),
+        )?;
+
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![col("a", &schema)?],
+            lit(false),
+        ));
+        let agg = Arc::new(agg.set_dynamic_filter(Arc::clone(&df))?);
+
+        // Simulate an iteration setting a shared bound and completing the filter
+        if let Some(dyn_filter) = &agg.dynamic_filter {
+            for info in &dyn_filter.accumulator_dyn_filter_info {
+                *info.shared_bound.lock() = ScalarValue::Int64(Some(42));
+            }
+            dyn_filter.filter.mark_complete();
+        }
+
+        // Call reset_state
+        let reset_plan = agg.reset_state()?;
+        let reset_agg = reset_plan
+            .downcast_ref::<AggregateExec>()
+            .expect("should downcast back to AggregateExec");
+
+        let dyn_filter = reset_agg
+            .dynamic_filter
+            .as_ref()
+            .expect("dynamic filter should be retained");
+
+        for info in &dyn_filter.accumulator_dyn_filter_info {
+            assert_eq!(*info.shared_bound.lock(), ScalarValue::Null);
+        }
+
+        let current_expr = dyn_filter.filter.current()?;
+        assert_eq!(format!("{current_expr}"), format!("{}", lit(true)));
+
         Ok(())
     }
 }

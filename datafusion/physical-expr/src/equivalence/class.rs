@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::fmt::Display;
@@ -245,7 +232,8 @@ impl EquivalenceClass {
     }
 
     /// Adds the given offset to all columns in the expressions inside this
-    /// class. This is used when schemas are appended, e.g. in joins.
+    /// class, keeping its constant value. This is used when schemas are
+    /// appended, e.g. in joins.
     pub fn try_with_offset(&self, offset: isize) -> Result<Self> {
         let mut cls = Self::default();
         for expr_result in self
@@ -256,6 +244,7 @@ impl EquivalenceClass {
         {
             cls.push(expr_result?);
         }
+        cls.constant.clone_from(&self.constant);
         Ok(cls)
     }
 }
@@ -681,7 +670,17 @@ impl EquivalenceGroup {
         mapping
             .iter()
             .map(|(k, v)| {
-                let eq_class = self.get_equivalence_class(k);
+                // A source expression may only be in a class in its normalized
+                // form. For example, if `a == b`, `a + c` is in a class, and
+                // the mapping has `b + c`, then the class of `b + c` is found
+                // only through `a + c`. A leaf that is in no class normalizes
+                // to itself, so only expressions with children are normalized.
+                let eq_class = self.get_equivalence_class(k).or_else(|| {
+                    if k.children().is_empty() {
+                        return None;
+                    }
+                    self.get_equivalence_class(&self.normalize_expr(Arc::clone(k)))
+                });
                 (k, (v, eq_class))
             })
             .collect()
@@ -823,7 +822,16 @@ impl EquivalenceGroup {
                     self.iter().cloned().chain(
                         right_equivalences
                             .iter()
-                            .map(|cls| cls.try_with_offset(left_size as _))
+                            .map(|cls| {
+                                let mut cls = cls.try_with_offset(left_size as _)?;
+                                // Rows without a match on the right side are
+                                // padded with NULLs, so its constants no
+                                // longer hold.
+                                if matches!(join_type, JoinType::Left | JoinType::Full) {
+                                    cls.constant = None;
+                                }
+                                Ok(cls)
+                            })
                             .collect::<Result<Vec<_>>>()?,
                     ),
                 );
@@ -1278,6 +1286,106 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_project_constant_of_equivalent_source() -> Result<()> {
+        // - columns: [a, b, c].
+        // - "a" and "b" in the same equivalence class, and a + c = 7.
+        // - then after a b + c projection, col(0) must be the constant 7.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(col("a", &schema)?, col("b", &schema)?);
+        group.add_equal_conditions(
+            binary(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+            lit(7),
+        );
+
+        let projected_schema =
+            Arc::new(Schema::new(vec![Field::new("b+c", DataType::Int32, false)]));
+        let mapping = std::iter::once((
+            binary(
+                col("b", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+            vec![(col("b+c", &projected_schema)?, 0)].into(),
+        ))
+        .collect::<ProjectionMapping>();
+
+        let projected = group.project(&mapping);
+
+        assert_eq!(
+            projected.is_expr_constant(&col("b+c", &projected_schema)?),
+            Some(AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(7)))))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_class_of_equivalent_source() -> Result<()> {
+        // - columns: [a, b, c, d].
+        // - "a" and "b" in the same equivalence class, and a + c = d * 2.
+        // - then after a b + c, d projection, col(0) and col(1) * 2 must be
+        // in the same class.
+        let schema = abc_schema();
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(col("a", &schema)?, col("b", &schema)?);
+        group.add_equal_conditions(
+            binary(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+            binary(col("d", &schema)?, Operator::Multiply, lit(2), &schema)?,
+        );
+
+        let projected_schema = Arc::new(Schema::new(vec![
+            Field::new("b+c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]));
+        let mapping = [
+            (
+                binary(
+                    col("b", &schema)?,
+                    Operator::Plus,
+                    col("c", &schema)?,
+                    &schema,
+                )?,
+                vec![(col("b+c", &projected_schema)?, 0)].into(),
+            ),
+            (
+                col("d", &schema)?,
+                vec![(col("d", &projected_schema)?, 1)].into(),
+            ),
+        ]
+        .into_iter()
+        .collect::<ProjectionMapping>();
+
+        let projected = group.project(&mapping);
+
+        let first_normalized = projected.normalize_expr(col("b+c", &projected_schema)?);
+        let second_normalized = projected.normalize_expr(binary(
+            col("d", &projected_schema)?,
+            Operator::Multiply,
+            lit(2),
+            &projected_schema,
+        )?);
+        assert!(first_normalized.eq(&second_normalized));
+
+        Ok(())
+    }
+
     /// Builds a group from a list of equated column pairs.
     fn group_of(schema: &SchemaRef, pairs: &[(&str, &str)]) -> Result<EquivalenceGroup> {
         let mut group = EquivalenceGroup::default();
@@ -1347,6 +1455,34 @@ mod tests {
             !group_of(&schema, &[("a", "b")])?
                 .has_same_classes(&group_of(&schema, &[("a", "b"), ("b", "c")])?)
         );
+
+        Ok(())
+    }
+
+    /// A constant on the right side of a join stays constant in the join
+    /// output, unless unmatched rows pad the right side with NULLs.
+    /// <https://github.com/apache/datafusion/issues/26283>
+    #[test]
+    fn test_join_keeps_right_constants() -> Result<()> {
+        let schema = abc_schema();
+        let mut right = EquivalenceGroup::default();
+        right.add_constant(ConstExpr::from(col("a", &schema)?));
+        // `a` of the right side is column 4 of the join output
+        let right_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 4));
+
+        for (join_type, expected) in [
+            (JoinType::Inner, true),
+            (JoinType::Right, true),
+            (JoinType::Left, false),
+            (JoinType::Full, false),
+        ] {
+            let joined = EquivalenceGroup::default().join(&right, &join_type, 4, &[])?;
+            assert_eq!(
+                joined.is_expr_constant(&right_a).is_some(),
+                expected,
+                "{join_type}"
+            );
+        }
 
         Ok(())
     }

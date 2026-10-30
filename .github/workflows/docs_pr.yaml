@@ -45,14 +45,16 @@ jobs:
   # Test doc build
   linux-test-doc-build:
     name: Test doc build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rustup
       - name: Setup uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
       - name: Install doc dependencies
         run: uv sync --package datafusion-docs
       - name: Install Graphviz
@@ -61,7 +63,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y graphviz
       - name: Install cargo-depgraph
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe  # v2.87.27
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91  # v2.87.31
         with:
           tool: cargo-depgraph@1.6
       - name: Build docs html and check for warnings

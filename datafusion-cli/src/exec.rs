@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Execution functions
 
@@ -36,7 +23,7 @@ use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
-use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::parser::{DFParserBuilder, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use futures::StreamExt;
@@ -133,6 +120,12 @@ pub async fn exec_from_repl(
     rl.load_history(".history").ok();
 
     loop {
+        // Parser options can change through any input, including `\i` files,
+        // so sync the validator before every read.
+        rl.helper_mut()
+            .unwrap()
+            .set_parser_options(&ctx.task_ctx().session_config().options().sql_parser);
+
         match rl.readline("> ") {
             Ok(line) if line.starts_with('\\') => {
                 rl.add_history_entry(line.trim_end())?;
@@ -180,13 +173,8 @@ pub async fn exec_from_repl(
                         },
                         _ = signal::ctrl_c() => {
                             println!("^C");
-                            continue
                         },
                     }
-                    // dialect might have changed
-                    rl.helper_mut().unwrap().set_dialect(
-                        &ctx.task_ctx().session_config().options().sql_parser.dialect,
-                    );
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -222,7 +210,11 @@ pub(super) async fn exec_and_print(
         )
     })?;
 
-    let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
+    let statements = DFParserBuilder::new(sql.as_str())
+        .with_dialect(dialect.as_ref())
+        .with_recursion_limit(options.sql_parser.recursion_limit.get())
+        .build()?
+        .parse_statements()?;
     for statement in statements {
         StatementExecutor::new(statement)
             .execute(ctx, print_options)
@@ -373,9 +365,7 @@ impl AdjustedPrintOptions {
         // all rows
         if matches!(
             plan,
-            LogicalPlan::Explain(_)
-                | LogicalPlan::DescribeTable(_)
-                | LogicalPlan::Analyze(_)
+            LogicalPlan::Explain(_) | LogicalPlan::Show(_) | LogicalPlan::Analyze(_)
         ) {
             self.inner.maxrows = MaxRows::Unlimited;
         }
@@ -519,6 +509,7 @@ mod tests {
     use super::*;
 
     use datafusion::common::plan_err;
+    use datafusion::sql::parser::DFParser;
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::assert_contains;

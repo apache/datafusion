@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Optimizer rule for type validation and coercion
 
@@ -28,6 +15,7 @@ use crate::utils::{NamePreserver, merge_into_schema};
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata::merge_metadata_for_union;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -43,9 +31,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::{cast_subquery, cast_subquery_columns};
-use datafusion_expr::logical_plan::{
-    Extension, MaterializedCte, MaterializedCteId, MaterializedCteScan, Subquery,
-};
+use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
     type_union_coercion,
@@ -60,7 +46,8 @@ use datafusion_expr::type_coercion::{
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     AsOfJoin, AsOfMatch, Cast, DmlStatement, Expr, ExprSchemable, Join, Limit,
-    LogicalPlan, Operator, Projection, Union, ValueOrLambda, WindowFrame,
+    LogicalPlan, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
+    MaterializedCteScan, Operator, Projection, Union, ValueOrLambda, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WriteOp, is_false, is_not_false, is_not_true,
     is_not_unknown, is_true, is_unknown, lit, not,
 };
@@ -135,38 +122,32 @@ fn coerce_plan_and_subqueries(
     static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
 
     plan.transform_down_up_with_subqueries(
-        |plan| {
-            let cte = match &plan {
-                LogicalPlan::Extension(Extension { node }) => {
-                    node.as_any().downcast_ref::<MaterializedCte>().cloned()
-                }
-                _ => None,
-            };
-            let Some(cte) = cte else {
-                return Ok(Transformed::no(plan));
-            };
+        |plan| match plan {
             // Coercion can change the types of the body, for example the type
             // of a `NULL` column of a `UNION`. Coerce the body first, and give
             // its new schema to the scans before the continuation is coerced.
-            let body = coerce_plan_and_subqueries(cte.cte, config)?;
-            let continuation = with_materialized_cte_scan_schema(
-                cte.continuation,
-                cte.id,
-                body.schema(),
-            )?;
-            let continuation = coerce_plan_and_subqueries(continuation, config)?;
-            Ok(Transformed::new(
-                LogicalPlan::Extension(Extension {
-                    node: Arc::new(MaterializedCte {
-                        id: cte.id,
-                        name: cte.name,
-                        cte: body,
-                        continuation,
-                    }),
-                }),
-                true,
-                TreeNodeRecursion::Jump,
-            ))
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                let body =
+                    coerce_plan_and_subqueries(Arc::unwrap_or_clone(cte.cte), config)?;
+                let continuation = with_materialized_cte_scan_schema(
+                    Arc::unwrap_or_clone(cte.continuation),
+                    cte.id,
+                    body.schema(),
+                )?;
+                let continuation = coerce_plan_and_subqueries(continuation, config)?;
+                Ok(Transformed::new(
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                        MaterializedCte {
+                            cte: Arc::new(body),
+                            continuation: Arc::new(continuation),
+                            ..cte
+                        },
+                    )),
+                    true,
+                    TreeNodeRecursion::Jump,
+                ))
+            }
+            _ => Ok(Transformed::no(plan)),
         },
         |plan| {
             analyze_internal(
@@ -188,42 +169,32 @@ fn with_materialized_cte_scan_schema(
     body_schema: &DFSchemaRef,
 ) -> Result<LogicalPlan> {
     continuation
-        .transform_down_with_subqueries(|plan| {
-            let LogicalPlan::Extension(Extension { node }) = &plan else {
-                return Ok(Transformed::no(plan));
-            };
+        .transform_down_with_subqueries(|node| match node {
             // A nested occurrence of the same CTE owns the scans below it.
-            if node
-                .as_any()
-                .downcast_ref::<MaterializedCte>()
-                .is_some_and(|nested| nested.id == id)
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
+                if nested.id == id =>
             {
-                return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump));
+                Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
             }
-            let Some(scan) =
-                node.as_any()
-                    .downcast_ref::<MaterializedCteScan>()
-                    .filter(|scan| {
-                        scan.id == id && scan.schema.inner() != body_schema.inner()
-                    })
-            else {
-                return Ok(Transformed::no(plan));
-            };
-            let qualifiers = scan.schema.iter().map(|(q, _)| q.cloned()).collect();
-            let schema = DFSchema::from_field_specific_qualified_schema(
-                qualifiers,
-                body_schema.inner(),
-            )?
-            .with_functional_dependencies(
-                body_schema.functional_dependencies().clone(),
-            )?;
-            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                node: Arc::new(MaterializedCteScan {
-                    id: scan.id,
-                    name: scan.name.clone(),
-                    schema: Arc::new(schema),
-                }),
-            })))
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+                if scan.id == id && scan.schema.inner() != body_schema.inner() =>
+            {
+                let qualifiers = scan.schema.iter().map(|(q, _)| q.cloned()).collect();
+                let schema = DFSchema::from_field_specific_qualified_schema(
+                    qualifiers,
+                    body_schema.inner(),
+                )?
+                .with_functional_dependencies(
+                    body_schema.functional_dependencies().clone(),
+                )?;
+                Ok(Transformed::yes(LogicalPlan::MaterializedCte(
+                    MaterializedCtePlan::Scan(MaterializedCteScan {
+                        schema: Arc::new(schema),
+                        ..scan
+                    }),
+                )))
+            }
+            _ => Ok(Transformed::no(node)),
         })
         .map(|t| t.data)
 }
@@ -1325,11 +1296,9 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
 /// run over an ORDER BY column of `col_type` even though the type has no
 /// arithmetic for finite offsets.
 ///
-/// Such a frame only compares rows to find peers, so the type must compare
-/// the same way in the RANGE peer check (`ScalarValue::partial_cmp`) as in
-/// the sort that produced the input order. That holds for durations and
-/// intervals; it does not for structs and maps, whose `ScalarValue`
-/// comparison differs from the sorter's, so they stay unsupported.
+/// This fallback admits durations and intervals, including encoded values.
+/// Admission remains conservative: Arrow peer comparison also supports nested
+/// types, but admitting structs and maps requires separate validation.
 fn supports_free_range_frame(col_type: &DataType) -> bool {
     match col_type {
         DataType::Duration(_) | DataType::Interval(_) => true,
@@ -1342,16 +1311,8 @@ fn supports_free_range_frame(col_type: &DataType) -> bool {
 }
 
 /// Whether `col_type` is a list, possibly behind dictionary or run-end
-/// encoding.
-///
-/// Lists are kept out of the free-range fallback because their peer
-/// comparison and the sort do not agree on element NULLs: `compare_rows`
-/// applies the NULLS FIRST / NULLS LAST option to the top-level value only and
-/// then calls `ScalarValue::partial_cmp`, whose `partial_cmp_list` always
-/// orders a NULL element after a non-NULL one (Postgres semantics), while the
-/// sorter's `make_comparator` applies the option to the elements as well. Under
-/// `ORDER BY d, l NULLS FIRST` with tied `d`, the sort puts `[NULL]` before
-/// `[1]` and the peer check orders them the other way round.
+/// encoding. Free-range fallback still excludes lists conservatively, although
+/// Arrow can now find peers for supported list keys.
 fn is_list_type(col_type: &DataType) -> bool {
     match col_type {
         DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
@@ -1364,8 +1325,9 @@ fn is_list_type(col_type: &DataType) -> bool {
 }
 
 /// Errors if any ORDER BY expression has a type not supported in a free RANGE
-/// frame: a type with neither an offset target nor a sound peer comparison, or
-/// a list (see `is_list_type`).
+/// frame: a type with neither an offset target nor support in the free-range
+/// fallback, or a list (see `is_list_type`). These conservative admission rules
+/// can be relaxed separately from the nested peer-comparison fix.
 fn check_free_range_order_by_types(
     expressions: &[Sort],
     schema: &DFSchema,
@@ -1407,9 +1369,8 @@ fn coerce_window_frame(
                         }
                         target_type
                     }
-                    // A free range frame has no offsets to coerce, so ORDER BY
-                    // types without arithmetic are fine as long as their peer
-                    // comparison is sound (see `supports_free_range_frame`).
+                    // A free range frame has no offsets to coerce. Check whether
+                    // its ORDER BY types are supported by the free-range fallback.
                     None if window_frame.free_range() => {
                         check_free_range_order_by_types(expressions, schema)?;
                         return Ok(window_frame);
@@ -1730,17 +1691,9 @@ fn coerce_union_schema_with_schema(
         .iter()
         .map(|f| f.is_nullable())
         .collect::<Vec<_>>();
-    let mut union_field_meta = base_schema
-        .fields()
-        .iter()
-        .map(|f| f.metadata().clone())
-        .collect::<Vec<_>>();
-
-    let mut metadata = base_schema.metadata().clone();
 
     for (i, plan) in inputs.iter().enumerate() {
         let plan_schema = plan.schema();
-        metadata.extend(plan_schema.metadata().clone());
 
         if plan_schema.fields().len() != base_schema.fields().len() {
             return plan_err!(
@@ -1753,10 +1706,9 @@ fn coerce_union_schema_with_schema(
         }
 
         // coerce data type and nullability for each field
-        for (union_datatype, union_nullable, union_field_map, plan_field) in izip!(
+        for (union_datatype, union_nullable, plan_field) in izip!(
             union_datatypes.iter_mut(),
             union_nullabilities.iter_mut(),
-            union_field_meta.iter_mut(),
             plan_schema.fields().iter()
         ) {
             let coerced_type =
@@ -1774,22 +1726,29 @@ fn coerce_union_schema_with_schema(
 
             *union_datatype = coerced_type;
             *union_nullable = *union_nullable || plan_field.is_nullable();
-            union_field_map.extend(plan_field.metadata().clone());
         }
     }
+
+    let all_schemas = std::iter::once(base_schema)
+        .chain(inputs.iter().map(|p| p.schema()))
+        .collect::<Vec<_>>();
+
     let union_qualified_fields = izip!(
-        base_schema.fields(),
+        base_schema.fields().iter().enumerate(),
         union_datatypes.into_iter(),
-        union_nullabilities,
-        union_field_meta.into_iter()
+        union_nullabilities
     )
-    .map(|(field, datatype, nullable, metadata)| {
+    .map(|((i, field), datatype, nullable)| {
         let mut field = Field::new(field.name().clone(), datatype, nullable);
-        field.set_metadata(metadata);
+        field.set_metadata(merge_metadata_for_union(
+            all_schemas.iter().map(|schema| schema.field(i).metadata()),
+        ));
         (None, field.into())
     })
     .collect::<Vec<_>>();
 
+    let metadata =
+        merge_metadata_for_union(all_schemas.iter().map(|schema| schema.metadata()));
     DFSchema::new_with_metadata(union_qualified_fields, metadata)
 }
 

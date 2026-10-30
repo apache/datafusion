@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -955,7 +942,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
             statistics_truncate_length_opt: value.statistics_truncate_length.map(|v| protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v as u64)),
             data_page_row_count_limit: value.data_page_row_count_limit as u64,
-            encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
+            encoding_opt: value.encoding.map(|encoding| protobuf::parquet_options::EncodingOpt::Encoding(encoding.to_string())),
             bloom_filter_on_read: value.bloom_filter_on_read,
             bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp_opt: value.bloom_filter_fpp.map(protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp),
@@ -968,7 +955,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             skip_arrow_metadata: value.skip_arrow_metadata,
             write_row_group_number_distinct_values: value.write_row_group_number_distinct_values,
             coerce_int96_opt: value.coerce_int96.map(|v| protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v.to_string())),
-            coerce_int96_tz_opt: value.coerce_int96_tz.clone().map(protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz),
+            coerce_int96_tz_opt: value.coerce_int96_tz.as_ref().map(|v| protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v.to_string())),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
             max_row_group_bytes_opt: value.max_row_group_bytes.map(|v| protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v.get() as u64)),
             content_defined_chunking: Some((&value.content_defined_chunking).into()),

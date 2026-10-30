@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::{Between, Expr, Like, predicate_bounds};
 use crate::ValueOrLambda;
@@ -517,6 +504,7 @@ impl ExprSchemable for Expr {
     /// - **Column references**: Preserve original field metadata from input schema
     /// - **Literals**: Use explicitly provided metadata, otherwise empty
     /// - **Aliases**: Merge underlying expr metadata with alias-specific metadata, preferring the alias metadata
+    /// - **List unnesting**: Preserve the element field metadata
     /// - **Binary expressions**: field metadata is empty
     /// - **Boolean expressions**: field metadata is empty
     /// - **Cast expressions**: Type-only casts pass through source metadata (stripping extension
@@ -549,15 +537,13 @@ impl ExprSchemable for Expr {
                 metadata,
                 ..
             }) => {
-                let mut combined_metadata = expr.metadata(schema)?;
+                let field = expr.to_field(schema)?.1;
+                let mut combined_metadata = FieldMetadata::from(field.metadata());
                 if let Some(metadata) = metadata {
                     combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(expr
-                    .to_field(schema)
-                    .map(|(_, f)| f)?
-                    .with_field_metadata(&combined_metadata))
+                Ok(field.with_field_metadata(&combined_metadata))
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(Arc::clone),
@@ -678,6 +664,27 @@ impl ExprSchemable for Expr {
             Expr::LambdaVariable(LambdaVariable {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
+            Expr::Unnest(Unnest { expr, .. }) => {
+                let nullable = self.nullable(schema)?;
+                match expr.get_type(schema)? {
+                    DataType::List(field)
+                    | DataType::LargeList(field)
+                    | DataType::FixedSizeList(field, _)
+                    | DataType::ListView(field)
+                    | DataType::LargeListView(field) => Ok(Arc::new(
+                        field
+                            .as_ref()
+                            .clone()
+                            .with_name(&schema_name)
+                            .with_nullable(nullable),
+                    )),
+                    _ => Ok(Arc::new(Field::new(
+                        &schema_name,
+                        self.get_type(schema)?,
+                        nullable,
+                    ))),
+                }
+            }
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -689,7 +696,6 @@ impl ExprSchemable for Expr {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::Unnest(_)
             | Expr::Lambda(_)
             | Expr::LambdaVariable(_) => Ok(Arc::new(Field::new(
                 &schema_name,
@@ -1276,6 +1282,62 @@ mod tests {
             Some(&"some_value".to_string())
         );
         assert_eq!(expr.metadata(&schema).unwrap(), alias_metadata);
+    }
+
+    #[test]
+    fn test_nested_alias_resolves_child_field_once() -> Result<()> {
+        #[derive(Debug)]
+        struct CountingSchema {
+            field: FieldRef,
+            lookups: std::cell::Cell<usize>,
+        }
+
+        impl ExprSchema for CountingSchema {
+            fn nullable(&self, _col: &Column) -> Result<bool> {
+                Ok(self.field.is_nullable())
+            }
+
+            fn field_from_column(&self, _col: &Column) -> Result<&FieldRef> {
+                self.lookups.set(self.lookups.get() + 1);
+                Ok(&self.field)
+            }
+        }
+
+        let schema = CountingSchema {
+            field: Arc::new(Field::new("value", DataType::Int32, false).with_metadata(
+                HashMap::from([
+                    ("override".to_string(), "base".to_string()),
+                    ("keep".to_string(), "base".to_string()),
+                ]),
+            )),
+            lookups: std::cell::Cell::new(0),
+        };
+        let mut expr = col("value");
+        for index in 0..12 {
+            let metadata = Some(FieldMetadata::from(HashMap::from([(
+                "override".to_string(),
+                index.to_string(),
+            )])));
+            expr = if index == 11 {
+                expr.alias_qualified_with_metadata(
+                    Some("outer"),
+                    format!("alias_{index}"),
+                    metadata,
+                )
+            } else {
+                expr.alias_with_metadata(format!("alias_{index}"), metadata)
+            };
+        }
+
+        let (relation, field) = expr.to_field(&schema)?;
+        assert_eq!(schema.lookups.get(), 1);
+        assert_eq!(relation, Some(TableReference::bare("outer")));
+        assert_eq!(field.name(), "alias_11");
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(!field.is_nullable());
+        assert_eq!(field.metadata().get("override"), Some(&"11".to_string()));
+        assert_eq!(field.metadata().get("keep"), Some(&"base".to_string()));
+        Ok(())
     }
 
     #[test]
