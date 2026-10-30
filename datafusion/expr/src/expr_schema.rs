@@ -22,6 +22,7 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
@@ -282,11 +283,12 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                     return internal_err!("Missing CASE result fields");
                 }
                 let start = fields.len() - count;
+                let metadata = coerced_fields_metadata(
+                    fields[start..].iter().map(|branch| branch.field.as_ref()),
+                )?;
                 let mut then_type = DataType::Null;
                 let mut else_type = DataType::Null;
                 let mut branch_type = None;
-                let mut metadata: Option<HashMap<String, String>> = None;
-                let mut extension: Option<(String, Option<String>)> = None;
                 let mut type_conflict = false;
                 let mut certainly_null = true;
                 for (index, branch) in fields.drain(start..).enumerate() {
@@ -308,60 +310,22 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                         type_conflict = true;
                     }
                     branch_type.get_or_insert_with(|| data_type.clone());
-                    let branch_metadata = branch.field.metadata();
-                    if let Some(name) = branch_metadata.get(EXTENSION_TYPE_NAME_KEY) {
-                        match &extension {
-                            Some((first_name, _)) if first_name != name => {
-                                return plan_err!(
-                                    "Cannot merge field metadata with differing values of \
-                                     '{EXTENSION_TYPE_NAME_KEY}': '{first_name}' and '{name}'"
-                                );
-                            }
-                            Some(_) => {}
-                            None => {
-                                extension = Some((
-                                    name.clone(),
-                                    branch_metadata
-                                        .get(EXTENSION_TYPE_METADATA_KEY)
-                                        .cloned(),
-                                ));
-                            }
-                        }
-                    }
-                    for (key, value) in branch_metadata {
-                        if key != EXTENSION_TYPE_NAME_KEY
-                            && key != EXTENSION_TYPE_METADATA_KEY
-                        {
-                            metadata
-                                .get_or_insert_with(HashMap::new)
-                                .entry(key.clone())
-                                .or_insert_with(|| value.clone());
-                        }
-                    }
                 }
                 let data_type = if then_type.is_null() {
                     else_type
                 } else {
                     then_type
                 };
-                if type_conflict || branch_type.as_ref() != Some(&data_type) {
-                    metadata = None;
-                    extension = None;
-                }
-                let mut metadata = metadata.unwrap_or_default();
-                if let Some((name, extension_metadata)) = extension {
-                    metadata.insert(EXTENSION_TYPE_NAME_KEY.to_owned(), name);
-                    if let Some(extension_metadata) = extension_metadata {
-                        metadata.insert(
-                            EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                            extension_metadata,
-                        );
-                    }
-                }
+                let field = Field::new("", data_type, true);
+                let field = if !type_conflict
+                    && branch_type.as_ref() == Some(field.data_type())
+                {
+                    metadata.add_to_field(field)
+                } else {
+                    field
+                };
                 fields.push(BranchField {
-                    field: Arc::new(
-                        Field::new("", data_type, true).with_metadata(metadata),
-                    ),
+                    field: Arc::new(field),
                     certainly_null,
                 });
             }
@@ -1978,6 +1942,45 @@ mod tests {
         let guarded_optional = when(col("optional").is_not_null(), col("optional"))
             .otherwise(col("required"))?;
         assert!(!guarded_optional.to_field(&schema)?.1.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_plain_case_preserves_custom_nullability() -> Result<()> {
+        #[derive(Debug)]
+        struct CustomNullableSchema {
+            field: FieldRef,
+            nullable: bool,
+        }
+
+        impl ExprSchema for CustomNullableSchema {
+            fn nullable(&self, _column: &Column) -> Result<bool> {
+                Ok(self.nullable)
+            }
+
+            fn field_from_column(&self, _column: &Column) -> Result<&FieldRef> {
+                Ok(&self.field)
+            }
+        }
+
+        for nullable in [false, true] {
+            let schema = CustomNullableSchema {
+                field: Arc::new(Field::new("x", DataType::Int32, !nullable)),
+                nullable,
+            };
+            let (field, column_nullable) =
+                schema.field_and_nullable(&Column::from_name("x"))?;
+            assert_eq!(field.is_nullable(), !nullable);
+            assert_eq!(column_nullable, nullable);
+
+            for expression in [
+                when(lit(true), col("x")).otherwise(lit(0_i32))?,
+                when(lit(true), lit(0_i32)).otherwise(col("x"))?,
+            ] {
+                assert_eq!(expression.nullable(&schema)?, nullable);
+                assert_eq!(expression.to_field(&schema)?.1.is_nullable(), nullable);
+            }
+        }
         Ok(())
     }
 
