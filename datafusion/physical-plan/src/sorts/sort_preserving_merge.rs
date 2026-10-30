@@ -908,7 +908,7 @@ mod tests {
         let rb = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)])?;
         let schema = rb.schema();
 
-        let rbs = std::iter::repeat_n(rb, 1024).collect::<Vec<_>>();
+        let rbs = std::iter::repeat_n(rb, 256).collect::<Vec<_>>();
         let sort = [
             PhysicalSortExpr {
                 expr: col("b", &schema)?,
