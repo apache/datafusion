@@ -130,7 +130,7 @@ Here are some active projects using DataFusion:
 - [OpenObserve] Distributed cloud native observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
 - [Parseable] Open columnar observability data lake platform for logs, metrics, and traces.
-- [Massive.com](https://massive.com/) Stock Market API ([DataFusion use](https://massive.com/careers/position/software-engineer-streaming-sql))
+- [Massive.com](https://github.com/massive-com) Stock Market API
 - [Mycorr](https://mycorr.app) Shared, versioned tables with units, links and SQL for humans and agents ([DataFusion use](https://docs.mycorr.app/developers/mcp-server.html#querying-with-sql))
 - [qv] Quickly view your data
 - [R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/) Cloudflare's distributed engine for querying data in Iceberg Catalogs
