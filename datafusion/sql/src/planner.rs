@@ -10,12 +10,11 @@ use std::vec;
 
 use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
-use arrow_schema::extension::{ExtensionType, Json, Uuid};
+use arrow_schema::extension::{Json, Uuid};
 use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
-use datafusion_common::types::{DFExtensionType, DFJson, DFUuid};
 use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion_common::{
     DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
@@ -668,27 +667,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match sql_type {
             // Canonical Arrow extension types
             SQLDataType::Uuid => {
-                let data_type = DataType::FixedSizeBinary(16);
-                let df_uuid = DFUuid::try_new(&data_type, Default::default())?;
-
-                // Re-construct the Arrow Uuid using the validated data from df_uuid
-                let arrow_uuid = Uuid::try_new(&df_uuid.storage_type().clone(), ())
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
                 Ok(Arc::new(
-                    Field::new("", data_type, true).with_extension_type(arrow_uuid),
+                    Field::new("", DataType::FixedSizeBinary(16), true)
+                        .with_extension_type(Uuid),
                 ))
             }
             SQLDataType::JSON => {
-                let data_type = DataType::Utf8;
-                let df_json = DFJson::try_new(&data_type, Default::default())?;
-
-                let arrow_json =
-                    Json::try_new(&df_json.storage_type().clone(), Default::default())
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
                 Ok(Arc::new(
-                    Field::new("", data_type, true).with_extension_type(arrow_json),
+                    Field::new("", DataType::Utf8, true)
+                        .with_extension_type(Json::default()),
                 ))
             }
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
