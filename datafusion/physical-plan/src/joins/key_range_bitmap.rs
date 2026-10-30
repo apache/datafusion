@@ -117,48 +117,85 @@ impl KeyRangeBitmap {
         let buckets = span.saturating_add(1).min(MAX_BUCKETS).next_power_of_two();
         let shift = (0u32..63).find(|s| (span >> s) < buckets).unwrap_or(63);
 
-        let mut words = MutableBuffer::new_null(buckets as usize);
-        let bytes = words.as_slice_mut();
-        // Sets the buckets covering keys `lo..=hi`, given as offsets from `offset`.
-        let set_range = |bytes: &mut [u8], lo: u64, hi: u64| {
-            for bucket in (lo >> shift)..=(hi.min(span) >> shift) {
-                bit_util::set_bit(bytes, bucket as usize);
-            }
-        };
+        // One bit per bucket, in words, so a part's bitmap ORs in a word at a time.
+        let mut words =
+            MutableBuffer::from_len_zeroed((buckets as usize).div_ceil(64) * 8);
+        let reachable = ((span >> shift) + 1) as usize;
         for part in parts {
             match part {
                 KeyRangePart::Bitmap(part) => {
+                    let words = words.typed_data_mut::<u64>();
                     // Every key below `part.offset` is outside `[min, max]`, so
                     // this wrapping distance is the part's true position.
                     let base = part.offset.wrapping_sub(offset);
-                    let width = (1u64 << part.shift) - 1;
-                    for bucket in part.bits.set_indices() {
-                        let lo = (bucket as u64) << part.shift;
-                        let hi = lo.saturating_add(width).min(part.span);
-                        set_range(bytes, base + lo, base + hi);
+                    let last = (part.span >> part.shift) as usize;
+                    if part.shift == shift {
+                        // Same bucket width: part bucket `b` covers union bucket
+                        // `b + q`, and `b + q + 1` too when the part's buckets
+                        // start `r` keys into a union bucket. Only the last part
+                        // bucket, which may be narrower, can stop short of it.
+                        let q = (base >> shift) as usize;
+                        let r = base & ((1u64 << shift) - 1);
+                        or_shifted(words, &part.bits, last + 1, q);
+                        if r != 0 {
+                            or_shifted(words, &part.bits, last, q + 1);
+                            if part.bits.value(last) {
+                                let lo = base + ((last as u64) << shift);
+                                let hi = (base + part.span).min(span);
+                                set_bit_range(
+                                    words,
+                                    (lo >> shift) as usize,
+                                    (hi >> shift) as usize,
+                                );
+                            }
+                        }
+                    } else {
+                        let width = (1u64 << part.shift) - 1;
+                        for bucket in part.bits.slice(0, last + 1).set_indices() {
+                            let lo = base + ((bucket as u64) << part.shift);
+                            let hi = (base
+                                + ((bucket as u64) << part.shift)
+                                    .saturating_add(width)
+                                    .min(part.span))
+                            .min(span);
+                            set_bit_range(
+                                words,
+                                (lo >> shift) as usize,
+                                (hi >> shift) as usize,
+                            );
+                        }
                     }
                 }
                 KeyRangePart::Keys(keys) => {
                     if !ArrayMap::is_supported_type(keys.data_type()) {
                         return None;
                     }
-                    set_bucket_bits(*keys, offset, shift, buckets, bytes);
+                    set_bucket_bits(*keys, offset, shift, buckets, words.as_slice_mut());
                 }
                 KeyRangePart::Range { min, max } => {
                     let lo = ArrayMap::key_to_u64(min)?.wrapping_sub(offset);
-                    let hi = ArrayMap::key_to_u64(max)?.wrapping_sub(offset);
-                    set_range(bytes, lo, hi);
+                    let hi = ArrayMap::key_to_u64(max)?.wrapping_sub(offset).min(span);
+                    if lo <= hi {
+                        set_bit_range(
+                            words.typed_data_mut::<u64>(),
+                            (lo >> shift) as usize,
+                            (hi >> shift) as usize,
+                        );
+                    }
                 }
+            }
+            // Bits are only ever added, so once every reachable bucket is set
+            // the remaining parts cannot make the bitmap exclude anything.
+            if all_set(words.typed_data::<u64>(), reachable) {
+                return None;
             }
         }
 
-        let bits = BooleanBuffer::new(words.into(), 0, buckets as usize);
-        let reachable = ((span >> shift) + 1) as usize;
-        bits.slice(0, reachable).has_false().then_some(Self {
+        Some(Self {
             offset,
             span,
             shift,
-            bits,
+            bits: BooleanBuffer::new(words.into(), 0, buckets as usize),
         })
     }
 
@@ -244,6 +281,45 @@ fn set_bucket_bits(
         }
         _ => unreachable!("guarded by ArrayMap::is_supported_type"),
     );
+}
+
+/// ORs bits `0..len` of `src` into `words`, moved `by` bits further along.
+fn or_shifted(words: &mut [u64], src: &BooleanBuffer, len: usize, by: usize) {
+    let (skip, bit) = (by / 64, by % 64);
+    let chunks = src.inner().bit_chunks(src.offset(), len);
+    for (i, chunk) in chunks.iter_padded().enumerate() {
+        if chunk == 0 {
+            continue;
+        }
+        words[skip + i] |= chunk << bit;
+        if bit != 0 {
+            // A set bit always lands on a bucket, so it never spills past the end.
+            if let Some(next) = words.get_mut(skip + i + 1) {
+                *next |= chunk >> (64 - bit);
+            }
+        }
+    }
+}
+
+/// Sets bits `from..=to` of `words`.
+fn set_bit_range(words: &mut [u64], from: usize, to: usize) {
+    let (first, last) = (from / 64, to / 64);
+    let head = u64::MAX << (from % 64);
+    let tail = u64::MAX >> (63 - to % 64);
+    if first == last {
+        words[first] |= head & tail;
+    } else {
+        words[first] |= head;
+        words[first + 1..last].fill(u64::MAX);
+        words[last] |= tail;
+    }
+}
+
+/// Whether bits `0..len` of `words` are all set.
+fn all_set(words: &[u64], len: usize) -> bool {
+    let (full, rest) = (len / 64, len % 64);
+    words[..full].iter().all(|word| *word == u64::MAX)
+        && (rest == 0 || words[full] | (u64::MAX << rest) == u64::MAX)
 }
 
 #[cfg(test)]
@@ -458,6 +534,49 @@ mod tests {
                     }
                 }
             }
+            // Each set bucket of a part's bitmap stands for its whole key range,
+            // so the union equals the one over those ranges given as `Range`s.
+            let ranges: Vec<(ScalarValue, ScalarValue)> = parts
+                .iter()
+                .flat_map(|part| match part {
+                    Part::Bitmap(bitmap) => bitmap
+                        .bits
+                        .set_indices()
+                        .map(|bucket| {
+                            let lo = (bucket as u64) << bitmap.shift;
+                            let hi = lo
+                                .saturating_add((1u64 << bitmap.shift) - 1)
+                                .min(bitmap.span);
+                            let key =
+                                |at: u64| scalar(bitmap.offset.wrapping_add(at) as i64);
+                            (key(lo), key(hi))
+                        })
+                        .collect(),
+                    _ => vec![],
+                })
+                .collect();
+            let expanded = KeyRangeBitmap::union(
+                &min,
+                &max,
+                &parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        Part::Keys(keys) => Some(KeyRangePart::Keys(keys.as_ref())),
+                        Part::Range(min, max) => Some(KeyRangePart::Range { min, max }),
+                        Part::Bitmap(_) => None,
+                    })
+                    .chain(
+                        ranges
+                            .iter()
+                            .map(|(min, max)| KeyRangePart::Range { min, max }),
+                    )
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(
+                union.as_ref().map(parts_of),
+                expanded.as_ref().map(parts_of),
+                "{context}: bitmap parts differ from their bucket ranges"
+            );
         } else {
             // Keys and ranges mark exactly the buckets their keys fall in.
             assert_eq!(
