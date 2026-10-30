@@ -20,8 +20,8 @@ use crate::expr_rewriter::{
 use crate::logical_plan::{
     Aggregate, Analyze, AsOfJoin, AsOfMatch, Distinct, DistinctOn, EmptyRelation,
     Explain, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning,
-    PlanType, Prepare, Projection, Repartition, Sort, SubqueryAlias, TableScanBuilder,
-    Union, Unnest, Values, Window,
+    PlanType, Prepare, Projection, Repartition, Show, ShowKind, Sort, SubqueryAlias,
+    TableScanBuilder, Union, Unnest, Values, Window,
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
@@ -37,6 +37,7 @@ use crate::{
 };
 
 use super::dml::InsertOp;
+use crate::logical_plan::information_schema::ColumnsDetail;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -249,6 +250,63 @@ impl LogicalPlanBuilder {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
         }))
+    }
+
+    /// Create a `DESCRIBE <query>` plan, where `schema` is the output schema of the query.
+    pub fn describe(schema: Arc<Schema>) -> Result<Self> {
+        Self::show(
+            ShowKind::Describe { schema },
+            crate::information_schema::columns_schema(ColumnsDetail::Describe),
+        )
+    }
+
+    /// Create a `SHOW TABLES` plan.
+    pub fn show_tables() -> Result<Self> {
+        Self::show(ShowKind::Tables, crate::information_schema::tables_schema())
+    }
+
+    /// Create a `DESCRIBE <table>` or `SHOW [FULL|EXTENDED] COLUMNS FROM <table>` plan.
+    pub fn show_columns(
+        table_ref: TableReference,
+        detail: ColumnsDetail,
+    ) -> Result<Self> {
+        Self::show(
+            ShowKind::Columns { table_ref, detail },
+            crate::information_schema::columns_schema(detail),
+        )
+    }
+
+    /// Create a `SHOW CREATE TABLE <table>` plan.
+    pub fn show_create_table(table_ref: TableReference) -> Result<Self> {
+        Self::show(
+            ShowKind::CreateTable { table_ref },
+            crate::information_schema::views_schema(),
+        )
+    }
+
+    /// Create a `SHOW <variable>` / `SHOW ALL` plan. `name` is `None` for
+    /// `SHOW ALL`.
+    pub fn show_variables(name: Option<String>, verbose: bool) -> Result<Self> {
+        Self::show(
+            ShowKind::Variables { name, verbose },
+            crate::information_schema::df_settings_schema(verbose),
+        )
+    }
+
+    /// Create a `SHOW FUNCTIONS [LIKE <pattern>]` plan.
+    pub fn show_functions(filter: Option<String>) -> Result<Self> {
+        Self::show(
+            ShowKind::Functions { filter },
+            crate::information_schema::show_functions_schema(),
+        )
+    }
+
+    /// Shared helper for the `SHOW`-class factory methods above.
+    fn show(kind: ShowKind, output_schema: Schema) -> Result<Self> {
+        Ok(Self::new(LogicalPlan::Show(Show {
+            kind,
+            output_schema: Arc::new(DFSchema::try_from(output_schema)?),
+        })))
     }
 
     /// Convert a regular plan into a recursive query.
