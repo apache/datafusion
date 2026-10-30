@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::datatypes::Field;
 use arrow::{
@@ -53,11 +40,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new("a", array_a.data_type(), true).into(),
                         Field::new("b", array_b.data_type(), true).into(),
                     ],
-                    number_rows: 0,
+                    number_rows: n_rows,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
                 })
-                .expect("date_bin should work on valid values"),
+                .expect("gcd should work on valid values"),
             )
         })
     });
@@ -74,11 +61,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new("a", array_a.data_type(), true).into(),
                         Field::new("b", scalar_b.data_type(), true).into(),
                     ],
-                    number_rows: 0,
+                    number_rows: n_rows,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
                 })
-                .expect("date_bin should work on valid values"),
+                .expect("gcd should work on valid values"),
             )
         })
     });
@@ -95,11 +82,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         Field::new("a", scalar_a.data_type(), true).into(),
                         Field::new("b", scalar_b.data_type(), true).into(),
                     ],
-                    number_rows: 0,
+                    number_rows: 1,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
                 })
-                .expect("date_bin should work on valid values"),
+                .expect("gcd should work on valid values"),
             )
         })
     });

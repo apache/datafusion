@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Physical optimizer interfaces.
 
@@ -120,10 +107,14 @@ where
 /// `PhysicalOptimizerRule` transforms one [`ExecutionPlan`] into another which
 /// computes the same results, but in a potentially more efficient way.
 ///
-/// Use [`SessionState::add_physical_optimizer_rule`] to register additional
+/// The returned plan must be valid and produce the same results as the input
+/// plan. See [`PhysicalOptimizer`] for more details.
+///
+/// Use [`SessionStateBuilder::with_physical_optimizer_rule`] to register additional
 /// `PhysicalOptimizerRule`s.
 ///
-/// [`SessionState::add_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_physical_optimizer_rule
+/// [`PhysicalOptimizer`]: https://docs.rs/datafusion-physical-optimizer/latest/datafusion_physical_optimizer/optimizer/struct.PhysicalOptimizer.html
+/// [`SessionStateBuilder::with_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionStateBuilder.html#method.with_physical_optimizer_rule
 pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     /// Rewrite `plan` to an optimized form.
     ///

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 // This lint violation is acceptable for tests, so suppress for now
 // Issue: <https://github.com/apache/datafusion/issues/18503>
@@ -46,6 +33,7 @@ use datafusion_sql::{
 
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
+use datafusion_functions::datetime::{self, planner::DatetimeFunctionPlanner};
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf,
     average::avg_udaf,
@@ -3997,6 +3985,40 @@ fn plan_merge_into_preserves_target_qualifier_and_quoted_columns() {
     };
     assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
     assert_eq!(values[0].to_string(), "s.j2_id");
+
+    let display = plan.display_indent().to_string();
+    assert_contains!(
+        &display,
+        r#"Dml: op=[MergeInto] table=[person_quoted_cols] on=[t.id = s.j2_id] clauses=[WHEN MATCHED THEN UPDATE SET "First Name" = s.j2_string, WHEN NOT MATCHED THEN INSERT (id, "Age") VALUES (s.j2_id, Int64(42))]"#
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.display_pg_json().to_string()).unwrap();
+    let root = &json[0]["Plan"];
+    assert_eq!(root["Node Type"], "Dml");
+    assert_eq!(root["Operation"], "MergeInto");
+    assert_eq!(root["Table Name"], "person_quoted_cols");
+    assert_eq!(root["On"], "t.id = s.j2_id");
+    assert_eq!(
+        root["Clauses"],
+        serde_json::json!([
+            r#"WHEN MATCHED THEN UPDATE SET "First Name" = s.j2_string"#,
+            r#"WHEN NOT MATCHED THEN INSERT (id, "Age") VALUES (s.j2_id, Int64(42))"#,
+        ])
+    );
+}
+
+#[test]
+fn plan_update_json_has_dml_node_without_merge_fields() {
+    let plan = logical_plan("UPDATE person SET age = 42").unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.display_pg_json().to_string()).unwrap();
+    let root = json[0]["Plan"].as_object().unwrap();
+    assert_eq!(root["Node Type"], "Dml");
+    assert_eq!(root["Operation"], "Update");
+    assert_eq!(root["Table Name"], "person");
+    assert!(!root.contains_key("On"));
+    assert!(!root.contains_key("Clauses"));
 }
 
 #[rstest]
@@ -4059,6 +4081,44 @@ fn plan_merge_into_rejects_invalid_actions_and_structure(
     let err = logical_plan(sql).unwrap_err();
     assert!(
         err.strip_backtrace().contains(expected),
+        "unexpected error: {err}"
+    );
+}
+
+/// With the `DatetimeFunctionPlanner`, `AT TIME ZONE` plans as the `timezone`
+/// function for every input type. The function picks the result type after
+/// type coercion, so the SQL planner does not need the input type.
+#[test]
+fn plan_at_time_zone_with_datetime_planner() {
+    let state = MockSessionState::default()
+        .with_expr_planner(Arc::new(DatetimeFunctionPlanner))
+        .with_scalar_function(datetime::timezone());
+    let plan = logical_plan_from_state(
+        "SELECT birth_date AT TIME ZONE 'America/Denver' FROM person",
+        &GenericDialect {},
+        ParserOptions::default(),
+        state,
+    )
+    .unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: timezone(Utf8("America/Denver"), person.birth_date)
+      TableScan: person
+    "#
+    );
+}
+
+/// Without an `ExprPlanner` for `AT TIME ZONE`, planning fails for every input,
+/// as for `EXTRACT`. The SQL planner does not know the input type after type
+/// coercion, so it cannot choose a lowering on its own.
+#[test]
+fn plan_at_time_zone_without_planner() {
+    let err = logical_plan("SELECT birth_date AT TIME ZONE 'America/Denver' FROM person")
+        .unwrap_err();
+    assert!(
+        err.strip_backtrace()
+            .contains("AT TIME ZONE needs an ExprPlanner"),
         "unexpected error: {err}"
     );
 }

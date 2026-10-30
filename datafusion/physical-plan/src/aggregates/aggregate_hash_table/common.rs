@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -398,11 +385,14 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         debug_assert!(batch.num_rows() > 0);
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
-        // key/index buffers too so the memory reservation can be released
-        // before the batch is sorted for spilling.
+        // key/index buffers and accumulator scratch too so the memory
+        // reservation can be released before the batch is sorted for spilling.
         state.group_values.clear_shrink(0);
         state.batch_group_indices.clear();
         state.batch_group_indices.shrink_to_fit();
+        for acc in &mut state.accumulators {
+            acc.shrink_to_fit();
+        }
 
         Ok(Some(batch))
     }
@@ -827,6 +817,11 @@ impl HashAggregateAccumulator {
 
     pub(super) fn size(&self) -> usize {
         self.accumulator.size()
+    }
+
+    /// See [`GroupsAccumulator::shrink_to_fit`].
+    pub(super) fn shrink_to_fit(&mut self) {
+        self.accumulator.shrink_to_fit();
     }
 
     pub(super) fn update_batch(

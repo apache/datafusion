@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Partial aggregate stream for input with group-clustering guarantees.
 
@@ -85,8 +72,11 @@ use crate::{SendableRecordBatchStream, metrics};
 /// only the current group remains active after completed groups are emitted, and
 /// memory usage does not grow with the total number of groups.
 ///
-/// If a memory reservation nevertheless fails, the stream returns the error
-/// directly, indicating an unexpected behavior.
+/// If the reservation after an input batch fails, `ClusteredPartialAggregateStream`
+/// still emits the completed groups, and returns the error only when no group is
+/// complete. After the emit it releases the capacity the table grew for the batch,
+/// such as hash table slots and per-batch scratch buffers, so only the active
+/// group stays reserved.
 ///
 /// ## Partial group clustering
 ///
@@ -261,6 +251,8 @@ impl ClusteredPartialAggregateStream {
     /// 3. Prepare output:
     ///    - A prefix of groups is complete: materialize the entire prefix once,
     ///      retaining the input and active groups to resume aggregation.
+    ///    - On memory pressure with full group clustering, materialize the
+    ///      completed prefix and release the capacity the table grew for it.
     ///    - On memory pressure with partial group clustering, materialize all
     ///      current states, including incomplete groups, and reset the table.
     ///    - At EOF, materialize all remaining states and prepare to output.
@@ -318,15 +310,19 @@ impl Aggregating {
             let output = match reservation.try_resize(self.table.memory_size()) {
                 Ok(()) => self.table.take_completed_state_batch()?,
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
-                    // Partial group clustering may have an unbounded active key range.
-                    // The final stage can merge incomplete states emitted here.
                     if matches!(self.table.group_clustering(), GroupClustering::Full(_)) {
-                        return Err(oom);
+                        // Only the active group remains after the emit. Release the
+                        // capacity the table grew for this batch so that reserving
+                        // the table can succeed.
+                        let batch =
+                            self.table.take_completed_state_batch()?.ok_or(oom)?;
+                        self.table.shrink_to_fit();
+                        Some(batch)
+                    } else {
+                        // Partial group clustering may have an unbounded active key range.
+                        // The final stage can merge incomplete states emitted here.
+                        Some(self.table.take_state_batch()?.ok_or(oom)?)
                     }
-                    let Some(batch) = self.table.take_state_batch()? else {
-                        return Err(oom);
-                    };
-                    Some(batch)
                 }
                 Err(e) => return Err(e),
             };
@@ -417,5 +413,240 @@ impl Outputting {
         timer.done();
         emitter.emit(batch).await;
         Ok(next_stage)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ops::Range;
+
+    use super::*;
+    use crate::aggregates::GroupClusteringMode;
+    use crate::aggregates::PhysicalGroupBy;
+    use crate::aggregates::clustered_test_util::{
+        aggregate_expr_over_sorted_input, aggregate_over_sorted_input,
+        assert_completed_groups_emitted_under_limit, assert_output_unchanged_under_limit,
+        collect_under_limit, distinct_key_batches, full_batches, sum_over_sorted_input,
+    };
+    use crate::test::TestMemoryExec;
+    use arrow::array::{ArrayRef, Float64Array, Int64Array, ListArray};
+    use arrow::datatypes::{DataType, Field, Int64Type, Schema};
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
+    };
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_functions_aggregate::any_value::any_value_udaf;
+    use datafusion_functions_aggregate::approx_distinct::approx_distinct_udaf;
+    use datafusion_functions_aggregate::first_last::first_value_udaf;
+    use datafusion_functions_aggregate::sum::sum_udaf;
+    use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
+
+    /// One batch per range. Every key column and the value column `v` hold the
+    /// range values, as the given key types.
+    fn batches(
+        key_types: &[DataType],
+        ranges: &[Range<i64>],
+    ) -> Result<Vec<RecordBatch>> {
+        let mut fields: Vec<_> = key_types
+            .iter()
+            .enumerate()
+            .map(|(i, data_type)| Field::new(format!("k{i}"), data_type.clone(), false))
+            .collect();
+        fields.push(Field::new("v", DataType::Int64, false));
+        let schema = Arc::new(Schema::new(fields));
+        ranges
+            .iter()
+            .map(|range| {
+                let int64: ArrayRef =
+                    Arc::new(Int64Array::from_iter_values(range.clone()));
+                let mut columns = key_types
+                    .iter()
+                    .map(|data_type| match data_type {
+                        DataType::Int64 => Arc::clone(&int64),
+                        DataType::Float64 => Arc::new(Float64Array::from_iter_values(
+                            range.clone().map(|v| v as f64),
+                        )),
+                        DataType::List(_) => {
+                            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+                                range.clone().map(|v| Some([Some(v)])),
+                            ))
+                        }
+                        _ => unreachable!("unsupported key type {data_type}"),
+                    })
+                    .collect::<Vec<_>>();
+                columns.push(int64);
+                Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
+            })
+            .collect()
+    }
+
+    /// Runs a partial `SUM(v) GROUP BY k0, ..` over `batches`, which are sorted
+    /// on every key.
+    async fn run(
+        batches: Vec<RecordBatch>,
+        pool: Arc<dyn MemoryPool>,
+    ) -> Result<Vec<RecordBatch>> {
+        let schema = batches[0].schema();
+        let keys = (0..schema.fields().len() - 1)
+            .map(|i| Ok((col(&format!("k{i}"), &schema)?, format!("k{i}"))))
+            .collect::<Result<Vec<_>>>()?;
+        let ordering = LexOrdering::new(
+            keys.iter()
+                .map(|(expr, _)| PhysicalSortExpr::new_default(Arc::clone(expr))),
+        )
+        .unwrap();
+        let input = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(keys),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(input),
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(aggregate.group_clustering_mode, GroupClusteringMode::Full);
+        let context = Arc::new(
+            TaskContext::default().with_runtime(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(pool)
+                    .build_arc()?,
+            ),
+        );
+        let stream =
+            ClusteredPartialAggregateStream::new(&aggregate, &context, 0)?.into_stream();
+        crate::common::collect(stream).await
+    }
+
+    /// Every row is a distinct group, and each batch shares its first key with
+    /// the previous one, so the active group spans the batches. Aggregating a
+    /// batch grows the table for about 8192 groups, for example the single-key
+    /// hash table (~272 KB) and the `group_indices` scratch (64 KB). After the
+    /// completed groups are emitted, the table must release that capacity, or
+    /// reserving it fails the limit although the active group needs a few KB.
+    /// The output must not change.
+    #[tokio::test]
+    async fn completed_groups_under_memory_pressure() -> Result<()> {
+        let list = DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true)));
+        for key_types in [
+            // `GroupValuesPrimitive`
+            vec![DataType::Int64],
+            // `GroupValuesClustered`
+            vec![DataType::Int64, DataType::Int64],
+            // `GroupValuesColumn`
+            vec![DataType::Float64, DataType::Float64],
+            // `GroupValuesRows`
+            vec![DataType::Int64, list],
+        ] {
+            let input = || batches(&key_types, &[0..8193, 8192..16385, 16384..24576]);
+            let expected =
+                run(input()?, Arc::new(UnboundedMemoryPool::default())).await?;
+            let actual = run(input()?, Arc::new(GreedyMemoryPool::new(100 * 1024)))
+                .await
+                .map_err(|e| e.context(format!("key types {key_types:?}")))?;
+            assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fully_clustered_completed_groups_under_memory_pressure() -> Result<()> {
+        let plan = sum_over_sorted_input(AggregateMode::Partial, &["k"], full_batches())?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_completed_groups_emitted_under_limit(&plan).await
+    }
+
+    /// Like [`completed_groups_under_memory_pressure`], but with accumulators
+    /// that keep per-batch scratch. For example, `APPROX_DISTINCT` keeps the
+    /// hashes of the last batch (64 KB for 8192 rows), and the
+    /// `GroupsAccumulatorAdapter` of `ANY_VALUE` keeps its per-batch indices
+    /// (~160 KB). After the completed groups are emitted, the accumulators must
+    /// release that scratch too. The limit fits the active group, but not the
+    /// scratch.
+    #[tokio::test]
+    async fn completed_groups_release_accumulator_scratch() -> Result<()> {
+        for udaf in [approx_distinct_udaf(), any_value_udaf()] {
+            let plan = aggregate_over_sorted_input(
+                AggregateMode::Partial,
+                &["k"],
+                distinct_key_batches(),
+                udaf,
+            )?;
+            assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+            assert_output_unchanged_under_limit(&plan, 64 * 1024).await?;
+        }
+        Ok(())
+    }
+
+    /// Like [`completed_groups_release_accumulator_scratch`], but the active
+    /// group holds most rows of the batch. The `GroupsAccumulatorAdapter` of
+    /// `ANY_VALUE` keeps the row indices it collected for each group (32 KB for
+    /// the 8191 rows of the active group), so it must release them too.
+    #[tokio::test]
+    async fn active_group_releases_adapter_indices() -> Result<()> {
+        let keys = std::iter::once(0)
+            .chain(std::iter::repeat_n(1, 8191))
+            .collect();
+        let plan = aggregate_over_sorted_input(
+            AggregateMode::Partial,
+            &["k"],
+            vec![vec![keys]],
+            any_value_udaf(),
+        )?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_output_unchanged_under_limit(&plan, 16 * 1024).await
+    }
+
+    /// Like [`completed_groups_release_accumulator_scratch`], with the native
+    /// `FIRST_VALUE(v ORDER BY v)` accumulator. It keeps a bitmap of the
+    /// groups each batch updated, which grows to one bit per group (16 KB for
+    /// 131072 groups), so it must release that bitmap too.
+    #[tokio::test]
+    async fn completed_groups_release_first_value_bitmap() -> Result<()> {
+        let plan = aggregate_expr_over_sorted_input(
+            AggregateMode::Partial,
+            &["k"],
+            vec![vec![(0..131072).collect()]],
+            first_value_udaf(),
+            |builder, schema| {
+                Ok(builder
+                    .order_by(vec![PhysicalSortExpr::new_default(col("v", schema)?)]))
+            },
+        )?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_output_unchanged_under_limit(&plan, 16 * 1024).await
+    }
+
+    /// With partial group clustering, the stream emits every state under
+    /// memory pressure, so the output is not compared. After the emit, the
+    /// accumulators must release their per-batch scratch, or reserving the
+    /// empty table fails the limit.
+    #[tokio::test]
+    async fn emitted_states_release_accumulator_scratch() -> Result<()> {
+        let batches = [0..8193, 8192..16385, 16384..24576]
+            .into_iter()
+            .map(|range| vec![range.clone().collect(), range.collect()])
+            .collect();
+        let plan = aggregate_over_sorted_input(
+            AggregateMode::Partial,
+            &["k", "k2"],
+            batches,
+            approx_distinct_udaf(),
+        )?;
+        assert!(matches!(
+            plan.group_clustering_mode(),
+            GroupClusteringMode::Partial(_)
+        ));
+        collect_under_limit(&plan, 64 * 1024).await?;
+        Ok(())
     }
 }

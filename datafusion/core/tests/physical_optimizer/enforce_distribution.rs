@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -28,9 +15,12 @@ use crate::physical_optimizer::test_utils::{
     sort_preserving_merge_exec, union_exec,
 };
 
-use arrow::array::{Int64Array, RecordBatch, UInt8Array, UInt64Array};
+use arrow::array::{
+    Int64Array, RecordBatch, TimestampNanosecondArray, UInt8Array, UInt64Array,
+};
 use arrow::compute::SortOptions;
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use datafusion::assert_batches_sorted_eq;
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::MemTable;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -75,7 +65,7 @@ use datafusion_physical_plan::operator_statistics::{
 
 use datafusion_physical_expr::{
     AcrossPartitions, ConstExpr, Distribution, Partitioning, RangePartitioning,
-    SplitPoint,
+    ScalarFunctionExpr, SplitPoint,
 };
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
@@ -959,6 +949,233 @@ fn range_aggregate_reuses_range_partitioning() -> Result<()> {
     Ok(())
 }
 
+fn timestamp_range_input(split: i64) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "timestamp",
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        false,
+    )]));
+    let hour = 3_600_000_000_000;
+    let (before_split, after_split): (Vec<_>, Vec<_>) =
+        [0, 1, hour, hour + 1, 2 * hour, 2 * hour + 1]
+            .into_iter()
+            .partition(|timestamp| *timestamp < split);
+    let partitions = [before_split, after_split]
+        .into_iter()
+        .map(|values| -> Result<_> {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(TimestampNanosecondArray::from(values))],
+            )?;
+            Ok(vec![batch])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let range = RangePartitioning::try_new(
+        [PhysicalSortExpr::new_default(col("timestamp", &schema)?)].into(),
+        vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+            Some(split),
+            None,
+        )])],
+    )?;
+    let source = MemorySourceConfig::try_new_exec(&partitions, schema, None)?;
+    Ok(Arc::new(
+        source
+            .as_ref()
+            .clone()
+            .with_partitioning(Partitioning::Range(range)),
+    ))
+}
+
+fn date_trunc_expr(
+    input: &dyn ExecutionPlan,
+    precision: &str,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(ScalarFunctionExpr::new(
+        "date_trunc",
+        datafusion_functions::datetime::date_trunc(),
+        vec![lit(precision), col("timestamp", &input.schema())?],
+        Field::new(
+            "bucket",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        )
+        .into(),
+        Arc::new(ConfigOptions::default()),
+    )))
+}
+
+/// Builds separate Partial and Final stages without projected range metadata.
+/// This exercises checking group locality through the partial stage's input.
+fn partial_final_date_trunc_count(
+    input: Arc<dyn ExecutionPlan>,
+    precision: &str,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    let group_by = PhysicalGroupBy::new_single(vec![(
+        date_trunc_expr(input.as_ref(), precision)?,
+        "bucket".to_string(),
+    )]);
+    let count = Arc::new(
+        AggregateExprBuilder::new(count_udaf(), vec![col("timestamp", &input_schema)?])
+            .schema(Arc::clone(&input_schema))
+            .alias("count")
+            .build()?,
+    );
+    let partial = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        group_by.clone(),
+        vec![Arc::clone(&count)],
+        vec![None],
+        input,
+        Arc::clone(&input_schema),
+    )?);
+    assert!(matches!(
+        partial.properties().output_partitioning(),
+        Partitioning::UnknownPartitioning(2)
+    ));
+
+    Ok(Arc::new(AggregateExec::try_new(
+        AggregateMode::FinalPartitioned,
+        group_by.as_final(),
+        vec![count],
+        vec![None],
+        partial,
+        input_schema,
+    )?))
+}
+
+#[tokio::test]
+async fn aligned_hour_groups_avoid_shuffle_through_partial_aggregate() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let input = timestamp_range_input(hour)?;
+    let aggregate = partial_final_date_trunc_count(input, "hour")?;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+    let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+
+    assert_plan!(
+        optimized,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[bucket@0 as bucket], aggr=[count]
+      AggregateExec: mode=Partial, gby=[date_trunc(hour, timestamp@0) as bucket], aggr=[count]
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
+    let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------------------+-------+",
+            "| bucket              | count |",
+            "+---------------------+-------+",
+            "| 1970-01-01T00:00:00 | 2     |",
+            "| 1970-01-01T01:00:00 | 2     |",
+            "| 1970-01-01T02:00:00 | 2     |",
+            "+---------------------+-------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn crossing_day_groups_keep_shuffle_through_partial_aggregate() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let input = timestamp_range_input(hour)?;
+    let aggregate = partial_final_date_trunc_count(input, "day")?;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+    let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+
+    assert_plan!(
+        optimized,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[bucket@0 as bucket], aggr=[count]
+      RepartitionExec: partitioning=Hash([bucket@0], 2), input_partitions=2
+        AggregateExec: mode=Partial, gby=[date_trunc(day, timestamp@0) as bucket], aggr=[count]
+          DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
+    let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------------------+-------+",
+            "| bucket              | count |",
+            "+---------------------+-------+",
+            "| 1970-01-01T00:00:00 | 6     |",
+            "+---------------------+-------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+#[test]
+fn range_transform_aggregate_optimization_is_idempotent() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+
+    for precision in ["hour", "day"] {
+        let input = timestamp_range_input(hour)?;
+        let aggregate = partial_final_date_trunc_count(input, precision)?;
+        let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+        SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+        let reoptimized =
+            EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
+        SanityCheckPlan::new().optimize(Arc::clone(&reoptimized), &config)?;
+        assert_plan!(optimized, reoptimized);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn range_transform_locality_does_not_satisfy_join_distribution() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let left = timestamp_range_input(hour)?;
+    let right = timestamp_range_input(2 * hour)?;
+    let left_key = date_trunc_expr(left.as_ref(), "hour")?;
+    let right_key = date_trunc_expr(right.as_ref(), "hour")?;
+    for (input, key) in [(&left, &left_key), (&right, &right_key)] {
+        assert!(input.output_partitioning().keeps_keys_local(
+            &[Arc::clone(key)],
+            input.equivalence_properties(),
+            false,
+        ));
+    }
+    let join =
+        hash_join_exec(left, right, &vec![(left_key, right_key)], &JoinType::Inner);
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+    let optimized = EnsureRequirements::new().optimize(join, &config)?;
+    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    assert_plan!(
+        optimized,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(date_trunc(hour, timestamp@0), date_trunc(hour, timestamp@0))]
+      RepartitionExec: partitioning=Hash([date_trunc(hour, timestamp@0)], 2), input_partitions=2
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+      RepartitionExec: partitioning=Hash([date_trunc(hour, timestamp@0)], 2), input_partitions=2
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
+    let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
+    assert_eq!(
+        batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        3 * 2 * 2,
+        "three hour buckets, each joining two left rows with two right rows"
+    );
+    Ok(())
+}
+
 #[test]
 fn range_grouping_set_aggregate_rehashes_with_grouping_id() -> Result<()> {
     let input = parquet_exec_with_output_partitioning(range_partitioning(
@@ -1220,32 +1437,37 @@ fn range_join_key_alignment_sort_merge_join() -> Result<()> {
 }
 
 /// Four unbounded partitions declared as `Range([a, b])` whose rows are
-/// ordered by `ordered_by` within each partition: partition membership and
-/// row order are independent.
-fn unbounded_range_stream(ordered_by: [&str; 2]) -> Result<Arc<dyn ExecutionPlan>> {
+/// ordered by each of `orderings` within each partition: partition membership
+/// and row order are independent.
+fn unbounded_range_stream(orderings: &[[&str; 2]]) -> Result<Arc<dyn ExecutionPlan>> {
     ordered_stream(
         range_partitioning_multi(
             &[("a", SortOptions::default()), ("b", SortOptions::default())],
             &[&[10, 0], &[20, 0], &[30, 0]],
         )?,
-        ordered_by,
+        orderings,
         true,
     )
 }
 
-/// A stream table with `partitioning` whose rows are ordered by `ordered_by`
-/// within each partition.
+/// A stream table with `partitioning` whose rows are ordered by each of
+/// `orderings` within each partition.
 fn ordered_stream(
     partitioning: Partitioning,
-    ordered_by: [&str; 2],
+    orderings: &[[&str; 2]],
     infinite: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let schema = schema();
-    let ordering: LexOrdering = [
-        PhysicalSortExpr::new(col(ordered_by[0], &schema)?, SortOptions::default()),
-        PhysicalSortExpr::new(col(ordered_by[1], &schema)?, SortOptions::default()),
-    ]
-    .into();
+    let orderings = orderings
+        .iter()
+        .map(|[first, second]| {
+            Ok([
+                PhysicalSortExpr::new(col(first, &schema)?, SortOptions::default()),
+                PhysicalSortExpr::new(col(second, &schema)?, SortOptions::default()),
+            ]
+            .into())
+        })
+        .collect::<Result<Vec<LexOrdering>>>()?;
     let partitions = (0..partitioning.partition_count())
         .map(|_| {
             Arc::new(TestStreamPartition {
@@ -1257,7 +1479,7 @@ fn ordered_stream(
         Arc::clone(&schema),
         partitions,
         None,
-        vec![ordering],
+        orderings,
         infinite,
         None,
     )?
@@ -1374,8 +1596,8 @@ fn range_join_key_alignment_keeps_streamable_sort_merge_join_keys() -> Result<()
     // A sort-merge join on (b, a) over unbounded Range([a, b]) inputs whose
     // rows are ordered by `ordered_by`.
     let smj_on_b_a = |ordered_by: [&str; 2]| -> Result<Arc<dyn ExecutionPlan>> {
-        let left = unbounded_range_stream(ordered_by)?;
-        let right = unbounded_range_stream(ordered_by)?;
+        let left = unbounded_range_stream(&[ordered_by])?;
+        let right = unbounded_range_stream(&[ordered_by])?;
         let on = vec![
             (col("b", &left.schema())?, col("b", &right.schema())?),
             (col("a", &left.schema())?, col("a", &right.schema())?),
@@ -1437,11 +1659,11 @@ fn range_join_key_alignment_ignores_per_partition_constants() -> Result<()> {
             &[("a", SortOptions::default()), ("b", SortOptions::default())],
             &[&[10, 0], &[20, 0], &[30, 0]],
         )?,
-        ["b", "a"],
+        &[["b", "a"]],
         false,
     )?;
     let right: Arc<dyn ExecutionPlan> = Arc::new(PerPartitionConstantExec::try_new(
-        ordered_stream(Partitioning::UnknownPartitioning(4), ["b", "a"], true)?,
+        ordered_stream(Partitioning::UnknownPartitioning(4), &[["b", "a"]], true)?,
         "a",
     )?);
     let join_on: JoinOn = vec![
@@ -1468,6 +1690,33 @@ fn range_join_key_alignment_ignores_per_partition_constants() -> Result<()> {
 }
 
 #[test]
+fn range_join_key_alignment_sees_every_ordering_of_an_unbounded_input() -> Result<()> {
+    // Unbounded Range([a, b]) inputs sorted by (c, d) and, separately, by
+    // (a, b). The second ordering satisfies the range order, so realigning
+    // the keys from (b, a) to (a, b) adds no sort and needs no exchange.
+    let left = unbounded_range_stream(&[["c", "d"], ["a", "b"]])?;
+    let right = unbounded_range_stream(&[["c", "d"], ["a", "b"]])?;
+    let join_on: JoinOn = vec![
+        (col("b", &left.schema())?, col("b", &right.schema())?),
+        (col("a", &left.schema())?, col("a", &right.schema())?),
+    ];
+    let join = sort_merge_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    check_range_join_key_alignment(join, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+              StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_orderings=[[c@2 ASC, d@3 ASC], [a@0 ASC, b@1 ASC]]
+              StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_orderings=[[c@2 ASC, d@3 ASC], [a@0 ASC, b@1 ASC]]
+            "
+            );
+        }
+    })
+}
+
+#[test]
 fn range_join_key_alignment_skips_single_partition_range() -> Result<()> {
     // A single-partition Range layout has nothing to co-partition with, so
     // realigning the keys would only replace the existing (b, a) order with
@@ -1478,7 +1727,7 @@ fn range_join_key_alignment_skips_single_partition_range() -> Result<()> {
                 &[("a", SortOptions::default()), ("b", SortOptions::default())],
                 &[],
             )?,
-            ["b", "a"],
+            &[["b", "a"]],
             false,
         )
     };
@@ -4760,7 +5009,7 @@ fn parallelization_multiple_files() -> Result<()> {
                                                                                         @r"
     SortRequiredExec: [a@0 ASC]
       FilterExec: c@2 = 0
-        DataSourceExec: file_groups={8 groups: [[x:0..25], [y:0..25], [x:25..50], [y:25..50], [x:50..75], [y:50..75], [x:75..100], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+        DataSourceExec: file_groups={8 groups: [[x:0..25], [x:25..50], [x:50..75], [x:75..100], [y:0..25], [y:25..50], [y:50..75], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
     let plan_8_sort = test_config_concurrency_8.to_plan(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_8_distrib, plan_8_sort);
@@ -6545,20 +6794,15 @@ impl ExecutionPlan for CountingStatsExec {
 /// recurse to the leaf. With one `StatisticsContext` shared across the pass the
 /// leaf is computed once; with a fresh context per node it is recomputed once
 /// per ancestor. This directly detects a regression where the cache is not
-/// actually shared (e.g. reset on every node), which no plan-output assertion
-/// can catch because the optimized plan is identical either way.
+/// actually shared (for example, by allocating a context per node), which no
+/// plan-output assertion can catch because the optimized plan is identical either
+/// way.
 #[test]
 fn ensure_distribution_shares_statistics_cache() -> Result<()> {
     // Count how many times a leaf's statistics are computed over a stack of
     // `depth` pass-through operators sitting on top of it. Each ancestor's
     // distribution enforcement inspects its child's statistics, which recurse to
     // the leaf.
-    //
-    // The measured arm drives the real `EnsureRequirements` rule, so the sharing
-    // and the cache-reset condition under test are the ones the rule actually
-    // uses — reimplementing them here would keep passing even if the rule
-    // stopped sharing. The baseline arm allocates a fresh `StatisticsContext`
-    // per node, reproducing the behavior before this change.
     fn deep_plan(depth: usize, calls: &Arc<AtomicUsize>) -> Arc<dyn ExecutionPlan> {
         let mut plan: Arc<dyn ExecutionPlan> =
             Arc::new(CountingStatsExec::new(parquet_exec(), Arc::clone(calls)));
@@ -6571,8 +6815,8 @@ fn ensure_distribution_shares_statistics_cache() -> Result<()> {
     fn config() -> ConfigOptions {
         let mut config = ConfigOptions::new();
         config.execution.target_partitions = 10;
-        // Keep the plan a fixpoint so no node is rebuilt and the shared cache is
-        // never reset; statistics are still computed for the round-robin decision.
+        // Keep the plan a fixpoint; statistics are still computed for the
+        // round-robin decision.
         config.optimizer.enable_round_robin_repartition = false;
         config
     }
@@ -6603,8 +6847,8 @@ fn ensure_distribution_shares_statistics_cache() -> Result<()> {
     let (shared_shallow, fresh_shallow) = (via_rule(4)?, per_node_context(4)?);
     let (shared_deep, fresh_deep) = (via_rule(12)?, per_node_context(12)?);
 
-    // Sharing strictly reduces statistics recomputation at any depth. A rule that
-    // stopped sharing (or reset the cache on every node) would make these equal.
+    // Sharing strictly reduces statistics recomputation at any depth. A rule
+    // that stopped sharing would make these equal.
     assert!(
         shared_shallow < fresh_shallow && shared_deep < fresh_deep,
         "shared cache must recompute less: shallow {shared_shallow} vs {fresh_shallow}, \

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -97,6 +84,12 @@ impl RowGroupAccessPlanFilter {
     /// Return true if there are no row groups
     pub fn is_empty(&self) -> bool {
         self.access_plan.is_empty()
+    }
+
+    /// Return true if no row groups remain to be scanned, either because the
+    /// file has none or because pruning has skipped every one of them.
+    pub fn is_fully_pruned(&self) -> bool {
+        self.access_plan.row_group_index_iter().next().is_none()
     }
 
     /// Return the number of row groups that are currently expected to be scanned
@@ -704,6 +697,25 @@ mod tests {
 
         filter.access_plan.skip(3);
         assert_eq!(filter.remaining_row_group_count(), 2);
+    }
+
+    #[test]
+    fn is_fully_pruned_only_when_every_row_group_is_skipped() {
+        let mut filter = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
+        assert!(!filter.is_fully_pruned());
+
+        filter.access_plan.skip(0);
+        assert!(!filter.is_fully_pruned());
+
+        filter.access_plan.skip(1);
+        assert!(filter.is_fully_pruned());
+        // Skipped row groups are still part of the plan
+        assert!(!filter.is_empty());
+
+        assert!(
+            RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(0))
+                .is_fully_pruned()
+        );
     }
 
     /// A row group with one column chunk of `size` bytes at the given offsets
