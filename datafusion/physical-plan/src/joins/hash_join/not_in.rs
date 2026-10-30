@@ -1108,6 +1108,9 @@ struct UnmarkedPairs<'a, F> {
     /// The lookups that checked the build row marks.
     #[cfg(test)]
     mark_checks: usize,
+    /// The most rows that one [`Self::pair_unmarked`] decided at once.
+    #[cfg(test)]
+    max_decided_rows: usize,
     f: F,
 }
 
@@ -1231,24 +1234,50 @@ where
             build_lookups: 0,
             #[cfg(test)]
             mark_checks: 0,
+            #[cfg(test)]
+            max_decided_rows: 0,
             f,
         }
     }
 
     /// Pairs each of `probe_rows` with each of `build_rows`. The pairing stops
     /// when every row that the pairs decide is marked.
+    ///
+    /// When the pairs decide the build rows, the build rows are paired in
+    /// chunks of at most `batch_size` rows. The rows held at once then stay
+    /// bounded by the batch size rather than by the build side, which matters
+    /// when this pairing stands in for a scope map that the memory pool
+    /// declined.
     fn cross_product(
         &mut self,
         build_rows: impl Iterator<Item = u64>,
         probe_rows: impl Iterator<Item = u32>,
     ) -> Result<()> {
-        // Drop the rows that are already marked before the first pair.
-        self.needs_refresh = true;
         match self.marks {
             UnknownMarks::Build(_) => {
-                self.pair_unmarked(&mut build_rows.collect(), probe_rows, |b, p| (b, p))
+                let probe_rows: Vec<u32> = probe_rows.collect();
+                if probe_rows.is_empty() {
+                    return Ok(());
+                }
+                let mut build_rows = build_rows.peekable();
+                let mut chunk = Vec::with_capacity(self.batch_size);
+                while build_rows.peek().is_some() {
+                    chunk.clear();
+                    chunk.extend(build_rows.by_ref().take(self.batch_size));
+                    // Drop the rows that are already marked before the first
+                    // pair of the chunk.
+                    self.needs_refresh = true;
+                    self.pair_unmarked(
+                        &mut chunk,
+                        probe_rows.iter().copied(),
+                        |b, p| (b, p),
+                    )?;
+                }
+                Ok(())
             }
             UnknownMarks::Probe(_) => {
+                // Drop the rows that are already marked before the first pair.
+                self.needs_refresh = true;
                 self.pair_unmarked(&mut probe_rows.collect(), build_rows, |p, b| (b, p))
             }
         }
@@ -1645,6 +1674,10 @@ where
         other_rows: impl Iterator<Item = O>,
         to_pair: impl Fn(D, O) -> (u64, u32),
     ) -> Result<()> {
+        #[cfg(test)]
+        {
+            self.max_decided_rows = self.max_decided_rows.max(decided_rows.len());
+        }
         for other_row in other_rows {
             // Refresh only after a chunk was sent, so the cost of the refresh
             // stays proportional to the pairs already evaluated.
@@ -1893,6 +1926,7 @@ mod tests {
             let (considered_groups, grouped) = (pairs.considered_groups, pairs.grouped);
             let looked_up_matches = pairs.looked_up_matches;
             let (build_lookups, mark_checks) = (pairs.build_lookups, pairs.mark_checks);
+            let max_decided_rows = pairs.max_decided_rows;
             pairs.finish()?;
             let bitmap = bitmap.into_inner().finish();
             let marks = (0..bitmap.len()).map(|row| bitmap.value(row)).collect();
@@ -1904,6 +1938,7 @@ mod tests {
                     looked_up_matches,
                     build_lookups,
                     mark_checks,
+                    max_decided_rows,
                     foreign_marks,
                 },
             ))
@@ -1917,6 +1952,7 @@ mod tests {
         looked_up_matches: usize,
         build_lookups: usize,
         mark_checks: usize,
+        max_decided_rows: usize,
         /// The rows that `foreign_marks` marked.
         foreign_marks: Vec<usize>,
     }
@@ -2036,6 +2072,32 @@ mod tests {
                 stats.looked_up_matches
             );
         }
+        Ok(())
+    }
+
+    /// A cross product with marks on the build rows holds at most a batch of
+    /// build rows at once, however many build rows there are. No pair passes,
+    /// so no row is marked and every build row is paired.
+    #[test]
+    fn cross_product_chunks_the_build_rows() -> Result<()> {
+        let (num_build, batch_size) = (10_000, 64);
+        let case = Case {
+            mark_build_rows: true,
+            through_scope_map: false,
+            batch_size,
+            hash_modulus: 1,
+            build_keys: vec![0; num_build],
+            probe_keys: vec![0; 3],
+            probe_rows: (0..3).collect(),
+            build_rows: (0..num_build as u64).collect(),
+            marked_before: vec![false; num_build],
+            filter_seed: 0,
+            filter_one_in: u64::MAX,
+            foreign_marks: false,
+        };
+        let (marks, stats) = case.run()?;
+        assert!(!marks.contains(&true));
+        assert_eq!(stats.max_decided_rows, batch_size);
         Ok(())
     }
 
