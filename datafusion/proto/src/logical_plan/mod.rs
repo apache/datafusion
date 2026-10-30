@@ -2395,8 +2395,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::DescribeTable(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for DescribeTable",
+            LogicalPlan::Show(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Show",
             )),
             LogicalPlan::MaterializedCte(_) => {
                 not_impl_err!(
