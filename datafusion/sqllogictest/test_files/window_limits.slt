@@ -1118,3 +1118,63 @@ physical_plan
 06)----------BoundedWindowAggExec: wdw=[sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 07)------------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
+
+# A window the rule *can* grow past must not swallow the limit below it either.
+# Growing leaves the walk in `Phase::Apply`, and the guard on `get_limit` used to
+# skip every limit while in that phase -- so the inner `GlobalLimitExec` below was
+# never read, the chain was dropped at it instead, and the inner window's sort was
+# left a full sort although a `LIMIT 5` sat directly above it.
+#
+# This is the previous query with the outer frame changed from RANGE to ROWS, and
+# the change of frame is what makes it fail: a RANGE frame cannot be grown past, so
+# it resets the state on the way down and the inner limit is seen afterwards. A ROWS
+# frame can, so nothing resets. Three other properties are load-bearing: both levels
+# must order by the same column, or `EnforceSorting` leaves an outer SortExec in
+# between and `apply_limit` resets there; the outer SELECT must reference `s1`, or
+# projection pushdown removes the inner window; and both levels need their own LIMIT.
+
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query III
+SELECT empno, s1, sum(empno) OVER (ORDER BY empno ROWS UNBOUNDED PRECEDING) AS s2
+FROM (SELECT empno, salary, sum(salary) OVER (ORDER BY empno ROWS UNBOUNDED PRECEDING) AS s1 FROM employees ORDER BY empno LIMIT 5)
+ORDER BY empno LIMIT 2;
+----
+102 3276123488 102
+299 3304897863 401
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query III
+SELECT empno, s1, sum(empno) OVER (ORDER BY empno ROWS UNBOUNDED PRECEDING) AS s2
+FROM (SELECT empno, salary, sum(salary) OVER (ORDER BY empno ROWS UNBOUNDED PRECEDING) AS s1 FROM employees ORDER BY empno LIMIT 5)
+ORDER BY empno LIMIT 2;
+----
+102 3276123488 102
+299 3304897863 401
+
+query TT
+EXPLAIN
+SELECT empno, s1, sum(empno) OVER (ORDER BY empno ROWS UNBOUNDED PRECEDING) AS s2
+FROM (SELECT empno, salary, sum(salary) OVER (ORDER BY empno ROWS UNBOUNDED PRECEDING) AS s1 FROM employees ORDER BY empno LIMIT 5)
+ORDER BY empno LIMIT 2;
+----
+logical_plan
+01)Sort: employees.empno ASC NULLS LAST, fetch=2
+02)--Projection: employees.empno, s1, sum(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS s2
+03)----WindowAggr: windowExpr=[[sum(CAST(employees.empno AS Int64)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------Sort: employees.empno ASC NULLS LAST, fetch=5
+05)--------Projection: employees.empno, sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS s1
+06)----------WindowAggr: windowExpr=[[sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+07)------------TableScan: employees projection=[empno, salary]
+physical_plan
+01)ProjectionExec: expr=[empno@0 as empno, s1@1 as s1, sum(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as s2]
+02)--GlobalLimitExec: skip=0, fetch=2
+03)----BoundedWindowAggExec: wdw=[sum(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------ProjectionExec: expr=[empno@0 as empno, sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as s1]
+05)--------GlobalLimitExec: skip=0, fetch=5
+06)----------BoundedWindowAggExec: wdw=[sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+07)------------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true

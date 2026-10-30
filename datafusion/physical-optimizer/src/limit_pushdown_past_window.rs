@@ -44,11 +44,13 @@ impl TraverseState {
         *self = Self::default();
     }
 
-    /// Start a chain from a limit we just found. The phase is deliberately left
-    /// alone: this only runs while we are still in [`Phase::FindOrGrow`].
+    /// Start a chain from a limit we just found, abandoning whatever chain we
+    /// were walking: that one never found a sort to apply to, and this limit is
+    /// the one that governs everything below here.
     pub fn reset_limit(&mut self, limit: Option<usize>) {
         self.limit = limit;
         self.lookahead = 0;
+        self.phase = Phase::FindOrGrow;
     }
 
     pub fn max_lookahead(&mut self, new_val: usize) {
@@ -82,8 +84,14 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                 return reset(node, &mut ctx);
             }
 
-            // grab the latest limit we see
-            if ctx.phase == Phase::FindOrGrow && get_limit(&node, &mut ctx) {
+            // Grab the latest limit we see. The phase only has to hold us back at
+            // a `SortPreservingMergeExec`, which is both a limit source and an
+            // apply target; a plain limit node is never an apply target, so
+            // reading it is always safe -- and it is more current than the chain
+            // we were on, which has not found a sort to apply to.
+            if (ctx.phase == Phase::FindOrGrow || !node.is::<SortPreservingMergeExec>())
+                && get_limit(&node, &mut ctx)
+            {
                 return Ok(Transformed::no(node));
             }
 
