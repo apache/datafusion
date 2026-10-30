@@ -293,7 +293,6 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             enable_round_robin_tie_breaker,
         )
-        .with_cooperative_initialization()
         .into_stream())
     }
 }

@@ -904,12 +904,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn merge_initialization_yields_only_for_row_cursors() -> Result<()> {
+    async fn merge_initialization_yields_after_batch_size_rows() -> Result<()> {
         let batch = arrow::array::record_batch!(
             ("a", Int32, [0, 1, 2, 3, 4, 5]),
             ("b", Int32, [0, 0, 0, 0, 0, 0])
         )?;
-        for row_conversion in [true, false] {
+        for row_conversion in [false, true] {
             let inputs = (0..3)
                 .map(|i| TestStream::new(vec![batch.slice(i * 2, 2)]))
                 .collect::<Vec<_>>();
@@ -925,11 +925,11 @@ mod tests {
                 let next = merge.poll_next_unpin(cx);
                 if first_poll {
                     first_poll = false;
-                    assert_eq!(next.is_pending(), row_conversion);
-                    // Row cursors yield after four rows; field cursors read all six.
+                    assert!(next.is_pending());
+                    // Two inputs reach the four-row budget before the third is read.
                     assert_eq!(
                         indexes.iter().map(|index| index.value()).sum::<usize>(),
-                        if row_conversion { 2 } else { 3 }
+                        2
                     );
                 }
                 next

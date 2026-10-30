@@ -73,9 +73,6 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Target batch size
     batch_size: usize,
 
-    /// Yield during startup when creating cursors requires row-key conversion.
-    cooperative_initialization: bool,
-
     /// Cursors for each input partition. `None` means the input is exhausted
     cursors: Vec<Option<Cursor<C>>>,
 
@@ -136,15 +133,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             poll_reset_epochs: vec![0; stream_count],
             loser_tree: vec![],
             batch_size,
-            cooperative_initialization: false,
             fetch,
             produced: 0,
         }
-    }
-
-    pub(super) fn with_cooperative_initialization(mut self) -> Self {
-        self.cooperative_initialization = true;
-        self
     }
 
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream
@@ -224,23 +215,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
         async_try_stream(|mut emitter| async move {
             // 1. Make sure we have data from each stream so we can initialize the loser tree
-            {
-                // This vector contains the indices of the partitions that have not started emitting yet.
-                let mut uninitiated_partitions =
-                    (0..self.streams.partitions()).collect::<Vec<_>>();
-
-                if self.cooperative_initialization {
-                    self.initialize_partitions_cooperatively(&mut uninitiated_partitions)
-                        .await?;
-                } else {
-                    poll_fn(|cx| {
-                        self.initialize_all_partitions(&mut uninitiated_partitions, cx)
-                    })
-                    .await?;
-                }
-
-                assert_eq!(uninitiated_partitions.len(), 0);
-            }
+            self.initialize_partitions().await?;
 
             let elapsed_compute = self.metrics.elapsed_compute().clone();
             let mut timer = elapsed_compute.timer();
@@ -315,71 +290,22 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         self.cursors[winner].is_none()
     }
 
-    /// Initialize all partitions, return `Poll::Pending` if any partition returns `Poll::Pending`
-    ///
-    /// This DOES NOT return `Poll::Pending` as soon as the first uninitiated partition returns `Poll::Pending`
-    /// so we can continue to initialize the remaining partitions
-    fn initialize_all_partitions(
-        &mut self,
-        uninitiated_partitions: &mut Vec<usize>,
-        cx: &mut Context,
-    ) -> Poll<Result<()>> {
+    async fn initialize_partitions(&mut self) -> Result<()> {
         assert_eq!(
             self.loser_tree.len(),
             0,
             "loser tree must be empty when initializing"
         );
-
-        // Manual indexing since we're iterating over the vector and shrinking it in the loop
-        let mut idx = 0;
-        while idx < uninitiated_partitions.len() {
-            let partition_idx = uninitiated_partitions[idx];
-            match self.maybe_poll_stream(cx, partition_idx) {
-                Poll::Ready(Err(e)) => {
-                    return Poll::Ready(Err(e));
-                }
-                Poll::Pending => {
-                    // The polled stream is pending which means we're already set up to
-                    // be woken when necessary
-                    // Try the next stream
-                    idx += 1;
-                }
-                _ => {
-                    // The polled stream is ready
-                    // Remove it from uninitiated_partitions
-                    // Don't bump idx here, since a new element will have taken its
-                    // place which we'll try in the next loop iteration
-                    // swap_remove will change the partition poll order, but that shouldn't
-                    // make a difference since we're waiting for all streams to be ready.
-                    uninitiated_partitions.swap_remove(idx);
-                }
-            }
-        }
-
-        if uninitiated_partitions.is_empty() {
-            Poll::Ready(Ok(()))
-        } else {
-            // There are still uninitiated partitions so return pending.
-            // We only get here if we've polled all uninitiated streams and at least one of them
-            // returned pending itself. That means we will be woken as soon as one of the
-            // streams would like to be polled again.
-            // There is no need to reschedule ourselves eagerly.
-            Poll::Pending
-        }
-    }
-
-    async fn initialize_partitions_cooperatively(
-        &mut self,
-        uninitiated_partitions: &mut Vec<usize>,
-    ) -> Result<()> {
+        let mut uninitiated_partitions =
+            (0..self.streams.partitions()).collect::<Vec<_>>();
         let mut next_partition = 0;
-        // Row-key conversion can monopolize a worker when many inputs are ready.
-        // Use the existing batch target as the row-work budget between yields.
+        // Initializing many ready inputs can monopolize a worker. Use the batch
+        // target as a simple work budget for both row and field cursors.
         let mut initialized_rows = 0usize;
         while !uninitiated_partitions.is_empty() {
             let rows = poll_fn(|cx| {
                 self.initialize_next_partition(
-                    uninitiated_partitions,
+                    &mut uninitiated_partitions,
                     &mut next_partition,
                     cx,
                 )
@@ -402,12 +328,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         next_partition: &mut usize,
         cx: &mut Context,
     ) -> Poll<Result<usize>> {
-        assert_eq!(
-            self.loser_tree.len(),
-            0,
-            "loser tree must be empty when initializing"
-        );
-
         for _ in 0..uninitiated_partitions.len() {
             *next_partition %= uninitiated_partitions.len();
             let partition_idx = uninitiated_partitions[*next_partition];
