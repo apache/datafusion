@@ -5073,6 +5073,20 @@ mod tests {
             ),
             (
                 DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Binary),
+                ),
+                true,
+            ),
+            (
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::LargeBinary),
+                ),
+                true,
+            ),
+            (
+                DataType::Dictionary(
                     Box::new(DataType::Int8),
                     Box::new(DataType::Float64),
                 ),
@@ -5093,6 +5107,16 @@ mod tests {
                             if matches!(value_type.as_ref(), DataType::Utf8) =>
                         {
                             ScalarValue::Utf8(Some(value.to_string()))
+                        }
+                        DataType::Dictionary(_, value_type)
+                            if matches!(value_type.as_ref(), DataType::Binary) =>
+                        {
+                            ScalarValue::Binary(Some(vec![value]))
+                        }
+                        DataType::Dictionary(_, value_type)
+                            if matches!(value_type.as_ref(), DataType::LargeBinary) =>
+                        {
+                            ScalarValue::LargeBinary(Some(vec![value]))
                         }
                         _ => ScalarValue::Int32(Some(i32::from(value)))
                             .cast_to(&data_type)
