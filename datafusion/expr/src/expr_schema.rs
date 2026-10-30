@@ -72,6 +72,12 @@ pub trait ExprSchemable {
 ///   output field. Callers that wish to have some mix of source and target metadata can use
 ///   Alias or construct an output field themselves (whose metadata will be used directly).
 ///
+/// Nullability handling:
+/// - The expression is nullable if either the source expression or an
+///   explicit target field is nullable.
+/// - The output field preserves source nullability for a type-only target,
+///   and is nullable if either the source or explicit target is nullable.
+///
 /// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
 fn cast_output_field(
     source_field: &FieldRef,
@@ -79,9 +85,7 @@ fn cast_output_field(
     force_nullable: bool,
 ) -> Arc<Field> {
     // Check if this is a "type-only" cast (target_field == DataType::X.into_nullable_field())
-    let is_type_only = target_field.name().is_empty()
-        && target_field.is_nullable()
-        && target_field.metadata().is_empty();
+    let is_type_only = is_type_only_field(target_field);
 
     let metadata = if is_type_only {
         // Type-only cast: propagate source metadata, stripping extension type keys
@@ -94,15 +98,23 @@ fn cast_output_field(
         target_field.metadata().clone()
     };
 
-    let mut f = source_field
-        .as_ref()
-        .clone()
-        .with_data_type(target_field.data_type().clone())
-        .with_metadata(metadata);
-    if force_nullable {
-        f = f.with_nullable(true);
-    }
-    Arc::new(f)
+    let nullable = if is_type_only {
+        source_field.is_nullable()
+    } else {
+        source_field.is_nullable() || target_field.is_nullable()
+    };
+    Arc::new(
+        source_field
+            .as_ref()
+            .clone()
+            .with_data_type(target_field.data_type().clone())
+            .with_metadata(metadata)
+            .with_nullable(nullable || force_nullable),
+    )
+}
+
+fn is_type_only_field(field: &FieldRef) -> bool {
+    field.name().is_empty() && field.is_nullable() && field.metadata().is_empty()
 }
 
 fn scalar_arguments_for_fields(
@@ -378,7 +390,8 @@ impl ExprSchemable for Expr {
                     Ok(true)
                 }
             }
-            Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
+            Expr::Cast(Cast { expr, field }) => Ok(expr.nullable(input_schema)?
+                || (!is_type_only_field(field) && field.is_nullable())),
             Expr::ScalarFunction(_)
             | Expr::AggregateFunction(_)
             | Expr::WindowFunction(_) => Ok(self.to_field(input_schema)?.1.is_nullable()),
@@ -1683,5 +1696,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_cast_field_nullability_uses_source_and_target() {
+        use crate::expr::{Cast, TryCast};
+
+        let schema = MockExprSchema::new()
+            .with_data_type(DataType::FixedSizeBinary(16))
+            .with_nullable(false);
+
+        let nullable_target = Arc::new(
+            Field::new("uuid", DataType::FixedSizeBinary(16), true).with_metadata(
+                HashMap::from([(
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    "arrow.uuid".to_string(),
+                )]),
+            ),
+        );
+        let cast = Expr::Cast(Cast {
+            expr: Box::new(col("uuid")),
+            field: Arc::clone(&nullable_target),
+        });
+        assert!(cast.nullable(&schema).unwrap());
+        assert!(cast.to_field(&schema).unwrap().1.is_nullable());
+
+        let try_cast = Expr::TryCast(TryCast {
+            expr: Box::new(col("uuid")),
+            field: nullable_target,
+        });
+        assert!(try_cast.to_field(&schema).unwrap().1.is_nullable());
+
+        let non_nullable_target =
+            Arc::new(Field::new("", DataType::FixedSizeBinary(16), false));
+        let cast = Expr::Cast(Cast {
+            expr: Box::new(col("uuid")),
+            field: Arc::clone(&non_nullable_target),
+        });
+        assert!(!cast.nullable(&schema).unwrap());
+        assert!(!cast.to_field(&schema).unwrap().1.is_nullable());
+
+        let try_cast = Expr::TryCast(TryCast {
+            expr: Box::new(col("uuid")),
+            field: non_nullable_target,
+        });
+        assert!(try_cast.to_field(&schema).unwrap().1.is_nullable());
+
+        let nullable_schema = MockExprSchema::new()
+            .with_data_type(DataType::FixedSizeBinary(16))
+            .with_nullable(true);
+        let non_nullable_target =
+            Arc::new(Field::new("", DataType::FixedSizeBinary(16), false));
+        let cast = Expr::Cast(Cast {
+            expr: Box::new(col("uuid")),
+            field: non_nullable_target,
+        });
+        assert!(cast.nullable(&nullable_schema).unwrap());
+        assert!(cast.to_field(&nullable_schema).unwrap().1.is_nullable());
     }
 }

@@ -569,14 +569,13 @@ impl PhysicalExpr for CastExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        // A cast is nullable if **either** the child is nullable or the
-        // target field allows nulls.  This conservative rule prevents
-        // optimizers from assuming a non-null result when a null input could
-        // still propagate.  `return_field()` continues to expose the exact
-        // target metadata separately.
+        // A cast is nullable if the child is nullable, the target field
+        // allows nulls, or the cast is safe (failed casts produce NULL).
+        // `return_field()` continues to expose the exact target field
+        // separately.
         let child_nullable = self.expr.nullable(input_schema)?;
         let target_nullable = self.resolved_target_field(input_schema)?.is_nullable();
-        Ok(child_nullable || target_nullable)
+        Ok(child_nullable || target_nullable || self.cast_options.safe)
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -1314,6 +1313,7 @@ mod tests {
             .expect("failed to convert to array");
 
         assert!(result_safe.is_null(0));
+        assert!(expression_safe.nullable(&schema)?);
 
         Ok(())
     }
