@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests for sort pushdown optimizer rule (Phase 1)
 //!
@@ -34,8 +21,10 @@ use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::pushdown_sort::PushdownSort;
-use datafusion_physical_plan::collect;
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::{ExecutionPlan, collect};
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
@@ -1135,6 +1124,29 @@ fn test_sort_pushdown_exact_no_fetch_no_limit() {
           - TestScan: requested_ordering=[a@0 ASC, b@1 DESC NULLS LAST]
     "
     );
+}
+
+#[test]
+fn test_custom_plan_with_fetch_keeps_outer_sort() -> Result<()> {
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let source = TestScan::new(schema.clone(), vec![[a.clone()].into()])
+        .with_supports_fetch(true)
+        .with_fetch(Some(10))
+        .unwrap();
+    let ordering = LexOrdering::new(vec![a, sort_expr("b", &schema)]).unwrap();
+    let plan = sort_exec(ordering.clone(), source);
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 1;
+    let optimized = EnsureRequirements::new().optimize(plan, &config)?;
+    let sort = optimized
+        .downcast_ref::<SortExec>()
+        .expect("a fetched custom plan must retain the requested outer sort");
+    assert_eq!(sort.expr(), &ordering);
+    assert!(sort.input().is::<TestScan>());
+    assert_eq!(sort.input().fetch(), Some(10));
+    Ok(())
 }
 
 #[test]

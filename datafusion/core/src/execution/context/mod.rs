@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
@@ -2358,6 +2345,8 @@ pub struct SQLOptions {
     allow_ddl: bool,
     /// See [`Self::with_allow_dml`]
     allow_dml: bool,
+    /// See [`Self::with_allow_copy`]
+    allow_copy: bool,
     /// See [`Self::with_allow_statements`]
     allow_statements: bool,
 }
@@ -2367,6 +2356,7 @@ impl Default for SQLOptions {
         Self {
             allow_ddl: true,
             allow_dml: true,
+            allow_copy: true,
             allow_statements: true,
         }
     }
@@ -2387,6 +2377,15 @@ impl SQLOptions {
     /// Should DML data modification commands (e.g. `INSERT` and `COPY`) be run? Defaults to `true`
     pub fn with_allow_dml(mut self, allow: bool) -> Self {
         self.allow_dml = allow;
+        self
+    }
+
+    /// Should `COPY` commands be run? Defaults to `true`.
+    ///
+    /// `COPY` commands are also disabled when DML is disabled with
+    /// [`Self::with_allow_dml`].
+    pub fn with_allow_copy(mut self, allow: bool) -> Self {
+        self.allow_copy = allow;
         self
     }
 
@@ -2423,6 +2422,9 @@ impl<'n> TreeNodeVisitor<'n> for BadPlanVisitor<'_> {
             }
             LogicalPlan::Dml(dml) if !self.options.allow_dml => {
                 plan_err!("DML not supported: {}", dml.op)
+            }
+            LogicalPlan::Copy(_) if !self.options.allow_copy => {
+                plan_err!("COPY not supported")
             }
             LogicalPlan::Copy(_) if !self.options.allow_dml => {
                 plan_err!("DML not supported: COPY")
@@ -2844,7 +2846,9 @@ mod tests {
     async fn sql_create_catalog() -> Result<()> {
         // the information schema used to introduce cyclic Arcs
         let ctx = SessionContext::new_with_config(
-            SessionConfig::new().with_information_schema(true),
+            SessionConfig::new()
+                .with_information_schema(true)
+                .with_partition_information_schema(true),
         );
 
         // Create catalog
@@ -2860,7 +2864,7 @@ mod tests {
             .await?;
 
         // Check table exists in schema
-        let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
+        let results = ctx.sql("SELECT * FROM test.information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
         Ok(())

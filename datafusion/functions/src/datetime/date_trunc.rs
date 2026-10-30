@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::num::NonZeroI64;
 use std::ops::{Add, Sub};
@@ -571,6 +558,18 @@ impl ScalarUDFImpl for DateTruncFunc {
             Ok(SortProperties::Unordered)
         }
     }
+
+    fn supports_range_key_locality_analysis(&self, argument_types: &[DataType]) -> bool {
+        // Across an America/Goose_Bay transition, ascending epoch seconds
+        // 562129259 < 562129260 truncate to 562129200 > 562125600.
+        // Keep the audited domain to timezone-less timestamp columns.
+        let [precision, timestamp] = argument_types else {
+            return false;
+        };
+
+        precision.is_string() && matches!(timestamp, Timestamp(_, None))
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -1339,7 +1338,10 @@ mod tests {
     };
 
     use arrow::array::cast::as_primitive_array;
-    use arrow::array::types::{ArrowTimestampType, TimestampNanosecondType};
+    use arrow::array::types::{
+        ArrowTimestampType, TimestampMicrosecondType, TimestampMillisecondType,
+        TimestampNanosecondType, TimestampSecondType,
+    };
     use arrow::array::{
         Array, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray,
@@ -1392,6 +1394,91 @@ mod tests {
             function.output_ordering(&[precision, unknown]).unwrap(),
             SortProperties::Unordered
         );
+    }
+
+    #[test]
+    fn range_key_locality_analysis_requires_timezone_less_timestamp() {
+        let date_trunc = DateTruncFunc::new();
+
+        assert!(date_trunc.supports_range_key_locality_analysis(&[
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ]));
+        assert!(!date_trunc.supports_range_key_locality_analysis(&[
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+        ]));
+        assert!(!date_trunc.supports_range_key_locality_analysis(&[
+            DataType::Int64,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ]));
+        assert!(!date_trunc.supports_range_key_locality_analysis(&[DataType::Utf8]));
+    }
+
+    fn invoke_date_trunc(
+        granularity: &str,
+        timestamp: ColumnarValue,
+        timestamp_type: DataType,
+        number_rows: usize,
+    ) -> datafusion_common::Result<ColumnarValue> {
+        DateTruncFunc::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![ScalarValue::from(granularity).into(), timestamp],
+            arg_fields: vec![
+                Field::new("granularity", DataType::Utf8, false).into(),
+                Field::new("timestamp", timestamp_type.clone(), true).into(),
+            ],
+            number_rows,
+            return_field: Field::new("date_trunc", timestamp_type, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        })
+    }
+
+    fn assert_timezone_less_date_trunc_preserves_nullness<T: ArrowTimestampType>() {
+        let input = PrimitiveArray::<T>::from_iter([Some(0), None]);
+        let timestamp_type = DataType::Timestamp(T::UNIT, None);
+
+        for granularity in [
+            "microsecond",
+            "millisecond",
+            "second",
+            "minute",
+            "hour",
+            "day",
+            "week",
+            "month",
+            "quarter",
+            "year",
+        ] {
+            let output = invoke_date_trunc(
+                granularity,
+                ColumnarValue::Array(Arc::new(input.clone())),
+                timestamp_type.clone(),
+                input.len(),
+            )
+            .unwrap();
+            let ColumnarValue::Array(output) = output else {
+                panic!("expected array output")
+            };
+
+            assert_eq!(
+                input.nulls(),
+                output.nulls(),
+                "{granularity} must preserve nullness for {:?}",
+                T::UNIT
+            );
+        }
+    }
+
+    /// Verifies the exact null contract required by
+    /// [`ScalarUDFImpl::supports_range_key_locality_analysis`] across every
+    /// supported granularity and timezone-less timestamp unit. Ordering metadata
+    /// and concrete range-split separation are tested separately.
+    #[test]
+    fn timezone_less_date_trunc_preserves_nullness() {
+        assert_timezone_less_date_trunc_preserves_nullness::<TimestampSecondType>();
+        assert_timezone_less_date_trunc_preserves_nullness::<TimestampMillisecondType>();
+        assert_timezone_less_date_trunc_preserves_nullness::<TimestampMicrosecondType>();
+        assert_timezone_less_date_trunc_preserves_nullness::<TimestampNanosecondType>();
     }
 
     #[test]

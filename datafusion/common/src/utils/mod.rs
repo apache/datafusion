@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module provides the bisect function, which implements binary search.
 
@@ -1356,14 +1343,8 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
             let offsets = OffsetBuffer::from_lengths(lengths);
             let values = make_array(mutable_array_data.freeze());
 
-            let field = match list.data_type() {
-                DataType::List(field) => field,
-                DataType::LargeList(field) => field,
-                _ => unreachable!(),
-            };
-
             return Ok(GenericListArray::try_new(
-                Arc::clone(field),
+                Arc::clone(list.value_field()),
                 offsets,
                 values,
                 list.nulls().cloned(),
@@ -1442,132 +1423,24 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
 }
 
 /// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array.
-/// For non-float arrays returns the input unchanged. NaN payloads are
-/// preserved.
-///
-/// Arrow's comparison kernels (`arrow::compute::kernels::cmp::eq` etc.) and
-/// row-encoding (`arrow::row::RowConverter`) use IEEE 754 totalOrder
-/// semantics, which treats `-0.0` and `+0.0` as distinct. SQL semantics
-/// (PostgreSQL / IEEE 754 equality) require them to compare equal, so
-/// callers normalize before invoking those kernels.
-///
-/// The common case - no `-0.0` present - is allocation-free: a single
-/// read-only scan of the underlying buffer (auto-vectorizable to an
-/// OR-reduction) decides whether to fall through to the rewriting path.
-/// Only arrays that actually contain `-0.0` pay for a new buffer.
+#[deprecated(
+    since = "56.0.0",
+    note = "use `datafusion_common::float_semantics::normalize_floats` instead"
+)]
 pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
-    use arrow::array::{Float16Array, Float32Array, Float64Array, make_array};
-    use arrow::datatypes::{Float16Type, Float32Type, Float64Type};
-    // -0.0 has only the sign bit set; no other finite or NaN value shares
-    // this bit pattern, so a strict-equality scan reliably gates the rewrite.
-    const NEG_ZERO_F16_BITS: u16 = half::f16::NEG_ZERO.to_bits();
-    const NEG_ZERO_F32_BITS: u32 = (-0.0_f32).to_bits();
-    const NEG_ZERO_F64_BITS: u64 = (-0.0_f64).to_bits();
-    match array.data_type() {
-        DataType::Float32 => {
-            let arr: &Float32Array = array.as_primitive::<Float32Type>();
-            if !arr
-                .values()
-                .iter()
-                .any(|v| v.to_bits() == NEG_ZERO_F32_BITS)
-            {
-                return Arc::clone(array);
-            }
-            let normalized: Float32Array =
-                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f32 } else { v });
-            Arc::new(normalized)
-        }
-        DataType::Float64 => {
-            let arr: &Float64Array = array.as_primitive::<Float64Type>();
-            if !arr
-                .values()
-                .iter()
-                .any(|v| v.to_bits() == NEG_ZERO_F64_BITS)
-            {
-                return Arc::clone(array);
-            }
-            let normalized: Float64Array =
-                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f64 } else { v });
-            Arc::new(normalized)
-        }
-        DataType::Float16 => {
-            let arr: &Float16Array = array.as_primitive::<Float16Type>();
-            if !arr
-                .values()
-                .iter()
-                .any(|v| v.to_bits() == NEG_ZERO_F16_BITS)
-            {
-                return Arc::clone(array);
-            }
-            let normalized: Float16Array = arr.unary(|v| {
-                if v.to_bits() << 1 == 0 {
-                    half::f16::from_bits(0)
-                } else {
-                    v
-                }
-            });
-            Arc::new(normalized)
-        }
-        dt if has_float_leaf(dt) => {
-            let data = array.to_data();
-            let children = data
-                .child_data()
-                .iter()
-                .map(|child| normalize_float_zero(&make_array(child.clone())).to_data())
-                .collect::<Vec<_>>();
-            if children
-                .iter()
-                .zip(data.child_data())
-                .all(|(new, old)| new.ptr_eq(old))
-            {
-                return Arc::clone(array);
-            }
-            make_array(
-                data.into_builder()
-                    .child_data(children)
-                    .build()
-                    .expect("rewriting float leaves preserves the array layout"),
-            )
-        }
-        _ => Arc::clone(array),
-    }
+    crate::float_semantics::normalize_floats(array)
 }
 
-pub fn has_float_leaf(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Float16 | DataType::Float32 | DataType::Float64 => true,
-        DataType::List(f)
-        | DataType::LargeList(f)
-        | DataType::ListView(f)
-        | DataType::LargeListView(f)
-        | DataType::FixedSizeList(f, _)
-        | DataType::Map(f, _)
-        | DataType::RunEndEncoded(_, f) => has_float_leaf(f.data_type()),
-        DataType::Struct(fields) => fields.iter().any(|f| has_float_leaf(f.data_type())),
-        DataType::Union(fields, _) => {
-            fields.iter().any(|(_, f)| has_float_leaf(f.data_type()))
-        }
-        DataType::Dictionary(_, values) => has_float_leaf(values),
-        _ => false,
-    }
-}
+pub use crate::float_semantics::has_float_leaf;
 
 /// Replace `-0.0` with `+0.0` in `Float16`, `Float32`, or `Float64` scalar
-/// values. Other variants are returned unchanged. See [`normalize_float_zero`]
-/// for context.
+/// values.
+#[deprecated(
+    since = "56.0.0",
+    note = "use `datafusion_common::float_semantics::normalize_float_scalar` instead"
+)]
 pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
-    match scalar {
-        ScalarValue::Float32(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float32(Some(0.0))
-        }
-        ScalarValue::Float64(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float64(Some(0.0))
-        }
-        ScalarValue::Float16(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float16(Some(half::f16::from_bits(0)))
-        }
-        other => other,
-    }
+    crate::float_semantics::normalize_float_scalar(scalar)
 }
 
 /// Apply a struct's nulls to one of its fields.

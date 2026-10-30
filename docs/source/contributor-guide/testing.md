@@ -74,6 +74,26 @@ cargo nextest run
 [the book]: https://doc.rust-lang.org/book/
 [cargo-nextest]: https://nexte.st/
 
+### Code coverage
+
+The [Codecov] bot posts a coverage report on GitHub pull requests with:
+
+- `all-tests`: coverage from the workspace test suite.
+- `sqllogictests`: coverage from SQLLogicTests alone.
+
+We [prefer end-to-end tests](#choosing-what-kind-of-test-to-write) because they are
+easier to maintain and verify final results through the full query pipeline,
+including optimizer passes. The SLT report helps ensure good coverage from these
+tests alone.
+
+Coverage helps find missing tests; high coverage does not guarantee good tests:
+
+- **Do:** Enumerate edge cases to build comprehensive tests, then check the
+  coverage report for gaps.
+- **Don't:** Use Codecov to choose a minimal set of tests that covers a new feature.
+
+[codecov]: https://app.codecov.io/gh/apache/datafusion
+
 ## Choosing What Kind of Test to Write
 
 When adding tests, prefer tests that exercise **user-visible behavior** over
@@ -332,8 +352,14 @@ Only committed files are checked. Commit a change before running it.
 
 CI runs two dependency checks, and `./dev/rust_lint.sh` runs both:
 
-- `ci/scripts/check_circular_dependencies.sh` builds and runs [`dev/depcheck`],
-  which fails on dependency cycles between DataFusion crates.
+- `ci/scripts/check_circular_dependencies.sh` fails on dependency cycles
+  between DataFusion crates, including one through a dev-dependency, which
+  Cargo allows when building but which prevents publishing the crates. It runs
+  `cargo publish --workspace --dry-run --no-verify`, which packages every crate
+  that does not set `publish = false` without building or uploading anything,
+  so it also fails on any other problem that would stop the crates from being
+  published to crates.io. It reads the crates.io index and accepts uncommitted
+  changes.
 - `ci/scripts/check_unused_dependencies.sh` runs `cargo machete --with-metadata`
   from the repository root. The lint suite installs [cargo-machete] with the
   version in `ci/scripts/utils/tool_versions.sh` if it is missing.
@@ -345,7 +371,6 @@ To run either check on its own:
 ./ci/scripts/check_unused_dependencies.sh
 ```
 
-[`dev/depcheck`]: https://github.com/apache/datafusion/tree/main/dev/depcheck
 [cargo-machete]: https://github.com/bnjbvr/cargo-machete
 
 ## Examples README Check
@@ -405,6 +430,19 @@ cargo bench --bench BENCHMARK_NAME
 A full list of benchmarks can be found [here](https://github.com/apache/datafusion/tree/main/datafusion/core/benches).
 
 _[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
+
+### Microbenchmark health checks (local-only)
+
+Runs each microbenchmark case once to catch runtime panics, without measuring performance:
+
+```shell
+cargo xtask ci step test microbenchmarks
+```
+
+The suite took about 10 minutes in CI, so execution is local-only, including on
+release branches; no hosted workflow or required check is provided. Runtime failures
+may go unnoticed until a local run. When changing benchmark fixtures, setup, or APIs,
+run the affected benchmarks and include the commands and results in your PR.
 
 ### Parquet SQL Benchmarks
 

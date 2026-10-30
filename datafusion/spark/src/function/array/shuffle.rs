@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{
     Array, ArrayRef, Capacities, FixedSizeListArray, GenericListArray, MutableArrayData,
@@ -141,17 +128,17 @@ fn extract_seed(seed_arg: &ColumnarValue) -> Result<Option<u64>> {
 fn array_shuffle_with_seed(arg: &[ArrayRef], seed: Option<u64>) -> Result<ArrayRef> {
     let [input_array] = take_function_args("shuffle", arg)?;
     match &input_array.data_type() {
-        List(field) => {
+        List(_) => {
             let array = as_list_array(input_array)?;
-            general_array_shuffle::<i32>(array, field, seed)
+            general_array_shuffle::<i32>(array, seed)
         }
-        LargeList(field) => {
+        LargeList(_) => {
             let array = as_large_list_array(input_array)?;
-            general_array_shuffle::<i64>(array, field, seed)
+            general_array_shuffle::<i64>(array, seed)
         }
-        FixedSizeList(field, _) => {
+        FixedSizeList(_, _) => {
             let array = as_fixed_size_list_array(input_array)?;
-            fixed_size_array_shuffle(array, field, seed)
+            fixed_size_array_shuffle(array, seed)
         }
         Null => Ok(Arc::clone(input_array)),
         array_type => exec_err!(
@@ -163,7 +150,6 @@ fn array_shuffle_with_seed(arg: &[ArrayRef], seed: Option<u64>) -> Result<ArrayR
 
 fn general_array_shuffle<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
-    field: &FieldRef,
     seed: Option<u64>,
 ) -> Result<ArrayRef> {
     let values = array.values();
@@ -212,7 +198,7 @@ fn general_array_shuffle<O: OffsetSizeTrait>(
 
     let data = mutable.freeze();
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::clone(field),
+        Arc::clone(array.value_field()),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
         Some(nulls.into()),
@@ -221,7 +207,6 @@ fn general_array_shuffle<O: OffsetSizeTrait>(
 
 fn fixed_size_array_shuffle(
     array: &FixedSizeListArray,
-    field: &FieldRef,
     seed: Option<u64>,
 ) -> Result<ArrayRef> {
     let values = array.values();
@@ -265,7 +250,7 @@ fn fixed_size_array_shuffle(
 
     let data = mutable.freeze();
     Ok(Arc::new(FixedSizeListArray::try_new(
-        Arc::clone(field),
+        Arc::clone(array.value_field()),
         array.value_length(),
         arrow::array::make_array(data),
         Some(nulls.into()),
