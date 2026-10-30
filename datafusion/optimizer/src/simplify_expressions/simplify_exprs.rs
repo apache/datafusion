@@ -1106,6 +1106,27 @@ mod tests {
     }
 
     #[test]
+    fn preserve_short_in_list_for_dictionary_strings() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8View)),
+            false,
+        )]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").in_list(vec![lit("a"), lit("b")], false))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r#"
+        Filter: test.a IN ([Utf8("a"), Utf8("b")])
+          TableScan: test
+        "#
+        )
+    }
+
+    #[test]
     fn simplify_not_not_in_list() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
