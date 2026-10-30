@@ -65,7 +65,7 @@ use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Expr, ExpressionPlacement, Projection};
 
 use crate::optimizer::ApplyOrder;
-use crate::projection_inliner::{DuplicationCost, PinnedDefinitions, ProjectionInliner};
+use crate::projection_inliner::{MayDuplicate, PinnedDefinitions, ProjectionInliner};
 use crate::push_down_filter::replace_cols_by_name;
 use crate::utils::{ColumnReference, has_all_column_refs, schema_columns};
 use crate::{OptimizerConfig, OptimizerRule};
@@ -126,7 +126,7 @@ fn pinned_for_merge<'a>(
     direct_columns: &IndexSet<Column>,
 ) -> PinnedDefinitions {
     let direct: Vec<Expr> = direct_columns.iter().cloned().map(Expr::Column).collect();
-    inliner.pinned_with_unknown_consumers(inlined, &direct, DuplicationCost::Free)
+    inliner.pinned_with_unknown_consumers(inlined, &direct, MayDuplicate::LeafExpressions)
 }
 
 /// Extracts `MoveTowardsLeafNodes` sub-expressions from non-projection nodes

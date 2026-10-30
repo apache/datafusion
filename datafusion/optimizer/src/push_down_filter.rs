@@ -56,7 +56,7 @@ use datafusion_expr::{
 
 use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
-use crate::projection_inliner::{DuplicationCost, ProjectionInliner, unalias};
+use crate::projection_inliner::{MayDuplicate, ProjectionInliner, unalias};
 use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
 use crate::utils::{
     ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
@@ -1582,7 +1582,7 @@ fn rewrite_projection(
             .filter(|(_, kept)| !**kept)
             .map(|(expr, _)| expr),
         no_other_consumers,
-        DuplicationCost::Cheap,
+        MayDuplicate::Any,
     );
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
@@ -4968,12 +4968,12 @@ mod tests {
         .call(vec![arg])
     }
 
-    /// Issue #25329: `CommonSubexprEliminate` computes `c1` one time for
-    /// predicates that reference it twice. Pushing the predicates would compute
-    /// it twice, and CSE would then create the projection again below the
-    /// filter, so the two rules never converge.
+    /// A non-volatile definition that the predicates reference two times is
+    /// pushed, as on `main`: DataFusion does not know what `c1` costs, and a
+    /// predicate that reaches the scan can prune data.
+    /// `CommonSubexprEliminate` then computes it one time again.
     #[test]
-    fn filter_with_repeated_expensive_reference_not_pushed_through_projection()
+    fn filter_with_repeated_non_volatile_reference_pushed_through_projection()
     -> Result<()> {
         let plan = LogicalPlanBuilder::from(test_table_scan()?)
             .project(vec![keep_in_place_udf(col("a")).alias("c1"), col("b")])?
@@ -4988,9 +4988,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r#"
-        Filter: c1 IS NOT NULL AND get_field_like(c1, Utf8("x")) IS NULL
-          Projection: keep_in_place_udf(test.a) AS c1, test.b
-            TableScan: test, full_filters=[test.b > Int32(1)]
+        Projection: keep_in_place_udf(test.a) AS c1, test.b
+          TableScan: test, full_filters=[test.b > Int32(1), keep_in_place_udf(test.a) IS NOT NULL, get_field_like(keep_in_place_udf(test.a), Utf8("x")) IS NULL]
         "#
         )
     }

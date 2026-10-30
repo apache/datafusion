@@ -34,7 +34,7 @@ use datafusion_expr::{
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
-use crate::projection_inliner::{DuplicationCost, ProjectionInliner};
+use crate::projection_inliner::{MayDuplicate, ProjectionInliner};
 use crate::utils::NamePreserver;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeContainer};
 
@@ -593,7 +593,7 @@ fn merge_consecutive_projections_one_level(
     // For details, see: https://github.com/apache/datafusion/issues/8296
     let no_other_consumers: [&Expr; 0] = [];
     if !ProjectionInliner::new(prev_projection)
-        .pinned(&expr, no_other_consumers, DuplicationCost::Free)
+        .pinned(&expr, no_other_consumers, MayDuplicate::LeafExpressions)
         .is_empty()
     {
         // no change

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! A single, cost-aware check for rewriting expressions through a projection.
+//! A single check for rewriting expressions through a projection.
 //!
 //! Many rules move an expression that is written over the output of a
 //! projection below that projection, or merge it into the projection. To do
@@ -14,10 +14,12 @@
 //! - The consumer can reference the column more than one time.
 //! - The projection can stay in the plan and still compute the definition.
 //!
-//! When the definition is volatile, this changes the query result. When the
-//! definition is expensive, this makes the query slower. A typical example is a
-//! column that [`CommonSubexprEliminate`] created on purpose, so that an
-//! expensive expression is computed one time only.
+//! When the definition is volatile, or is a subquery, this changes the query
+//! result. That is never allowed.
+//!
+//! Otherwise a second evaluation only costs time. DataFusion does not know
+//! what an expression costs, so the caller says what it may duplicate, see
+//! [`MayDuplicate`]. Each rule keeps the choice it made before this module.
 //!
 //! [`ProjectionInliner`] is the one place that makes this decision. Rules call
 //! it instead of doing the substitution themselves.
@@ -30,95 +32,52 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{Column, Result};
-use datafusion_expr::{Expr, ExpressionPlacement, Projection};
+use datafusion_expr::{Expr, Projection};
 
-/// The cost of one more evaluation of an expression.
-///
-/// The variants are in increasing order of cost.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum DuplicationCost {
-    /// Column references and expressions that report
-    /// [`ExpressionPlacement::MoveTowardsLeafNodes`] (for example struct field
-    /// access). These are free, or almost free, to evaluate again.
-    Free,
-    /// Built-in operators over free or cheap operands: arithmetic,
-    /// comparisons, `CAST`, `CASE`, `IS NULL`, and similar. They are
-    /// vectorized kernels, so an extra evaluation costs little.
-    ///
-    /// A bare literal is also in this class. This keeps the merge guard of
-    /// `OptimizeProjections` (issue #8296) unchanged.
-    Cheap,
-    /// Contains a scalar function that reports
-    /// [`ExpressionPlacement::KeepInPlace`] for column arguments, or a
-    /// higher-order function. This is the default for a user-defined
-    /// function, so the optimizer must assume that it can be arbitrarily
-    /// expensive.
-    Expensive,
-    /// Must never be evaluated more than one time: the expression is volatile
-    /// (for example `random()`) or contains a subquery.
-    Forbidden,
+/// What a rule may evaluate more than one time, after it inlines a
+/// definition. A definition that [`must_not_duplicate`] is never evaluated
+/// more than one time, whatever the rule allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MayDuplicate {
+    /// Only a definition that
+    /// [`should_push_to_leaves`](datafusion_expr::ExpressionPlacement::should_push_to_leaves):
+    /// a column, or a call such as struct field access that asks to move
+    /// towards the leaves. The merge guard of `OptimizeProjections`
+    /// (<https://github.com/apache/datafusion/issues/8296>) uses this rule.
+    LeafExpressions,
+    /// Any definition. `PushDownFilter` uses this rule: a filter that reaches
+    /// the scan can prune data, which is worth a second evaluation.
+    Any,
 }
 
-impl DuplicationCost {
-    /// Returns the cost of one more evaluation of `expr`.
-    fn of(expr: &Expr) -> Self {
-        let expr = unalias(expr);
+impl MayDuplicate {
+    fn allows(self, definition: &Expr) -> bool {
+        match self {
+            Self::LeafExpressions => definition.placement().should_push_to_leaves(),
+            Self::Any => true,
+        }
+    }
+}
 
-        // Volatility and subqueries are asked about first, before placement.
-        // A volatile function is free to report
-        // `ExpressionPlacement::MoveTowardsLeafNodes`, and `file_row_index()`
-        // does. Such a call is cheap to evaluate and still must never be
-        // evaluated at two sites, because the two sites give two different
-        // answers. Every kind of function node can be volatile, not only a
-        // scalar function (see [`Expr::is_volatile_node`]).
-        let mut cost = Self::Cheap;
-        expr.apply(|e| {
-            let node_cost = match e {
-                Expr::ScalarSubquery(_)
+/// Returns `true` if a second evaluation of `expr` can change the query
+/// result: `expr` contains a volatile call or a subquery.
+///
+/// This is checked before placement. A volatile function is free to report
+/// [`MoveTowardsLeafNodes`](datafusion_expr::ExpressionPlacement::MoveTowardsLeafNodes),
+/// and `file_row_index()` does.
+/// Every kind of function node can be volatile, not only a scalar function
+/// (see [`Expr::is_volatile_node`]).
+fn must_not_duplicate(expr: &Expr) -> bool {
+    expr.exists(|e| {
+        Ok(matches!(
+            e,
+            Expr::ScalarSubquery(_)
                 | Expr::Exists(_)
                 | Expr::InSubquery(_)
-                | Expr::SetComparison(_) => Self::Forbidden,
-                _ if e.is_volatile_node() => Self::Forbidden,
-                Expr::HigherOrderFunction(_) => Self::Expensive,
-                Expr::ScalarFunction(func) => {
-                    // Ask the function for its own placement, as if its
-                    // arguments were plain columns and literals. This isolates
-                    // the cost of the function from the cost of its arguments
-                    // (the walk visits the arguments separately). For example
-                    // `get_field(CAST(s AS ...), 'f')` is a cheap field access
-                    // over a cheap cast.
-                    let arg_placements: Vec<_> = func
-                        .args
-                        .iter()
-                        .map(|arg| match arg.placement() {
-                            ExpressionPlacement::Literal => ExpressionPlacement::Literal,
-                            _ => ExpressionPlacement::Column,
-                        })
-                        .collect();
-                    match func.func.placement(&arg_placements) {
-                        ExpressionPlacement::KeepInPlace => Self::Expensive,
-                        _ => Self::Cheap,
-                    }
-                }
-                _ => Self::Cheap,
-            };
-            cost = cost.max(node_cost);
-            Ok(if cost == Self::Forbidden {
-                TreeNodeRecursion::Stop
-            } else {
-                TreeNodeRecursion::Continue
-            })
-        })
-        .expect("traversal is infallible");
-
-        if cost == Self::Forbidden {
-            return Self::Forbidden;
-        }
-        if expr.placement().should_push_to_leaves() {
-            return Self::Free;
-        }
-        cost
-    }
+                | Expr::SetComparison(_)
+        ) || e.is_volatile_node())
+    })
+    .expect("exists closure is infallible")
 }
 
 /// Definitions that [`ProjectionInliner::pinned`] refuses to inline.
@@ -136,13 +95,11 @@ impl PinnedDefinitions {
 /// too many times.
 ///
 /// The rule is: after the rewrite, a definition that is evaluated more than
-/// one time must have a [`DuplicationCost`] of at most the `max_cost` that the
-/// caller gives. See [`ProjectionInliner::pinned`].
+/// one time must not [`must_not_duplicate`], and the caller's
+/// [`MayDuplicate`] must allow it. See [`ProjectionInliner::pinned`].
 #[derive(Debug)]
 pub(crate) struct ProjectionInliner<'a> {
-    /// Definitions without top-level alias, in output column order. Their
-    /// [`DuplicationCost`] is computed only for the definitions that a check
-    /// references.
+    /// Definitions without top-level alias, in output column order.
     definitions: Vec<&'a Expr>,
     /// Output column -> index into `definitions`
     by_column: HashMap<Column, usize>,
@@ -204,19 +161,19 @@ impl<'a> ProjectionInliner<'a> {
     /// from the projection (for example by `OptimizeProjections`).
     ///
     /// A definition that `inlined` references is pinned if it is then
-    /// evaluated more than one time and its [`DuplicationCost`] is more than
-    /// `max_cost`.
+    /// evaluated more than one time, and either [`must_not_duplicate`] holds
+    /// or `may_duplicate` does not allow it.
     pub(crate) fn pinned<'i, 'o>(
         &self,
         inlined: impl IntoIterator<Item = &'i Expr>,
         others: impl IntoIterator<Item = &'o Expr>,
-        max_cost: DuplicationCost,
+        may_duplicate: MayDuplicate,
     ) -> PinnedDefinitions {
-        self.pinned_impl(inlined, others, max_cost, false)
+        self.pinned_impl(inlined, others, may_duplicate, false)
     }
 
-    /// Returns [`Self::pinned`], and also pins every
-    /// [`DuplicationCost::Forbidden`] definition that `inlined` references.
+    /// Returns [`Self::pinned`], and also pins every definition that
+    /// `inlined` references and that [`must_not_duplicate`].
     ///
     /// Use this when the projection can stay in the plan for consumers that
     /// the caller can not see. A copy of a forbidden definition would then
@@ -226,22 +183,18 @@ impl<'a> ProjectionInliner<'a> {
         &self,
         inlined: impl IntoIterator<Item = &'i Expr>,
         others: impl IntoIterator<Item = &'o Expr>,
-        max_cost: DuplicationCost,
+        may_duplicate: MayDuplicate,
     ) -> PinnedDefinitions {
-        self.pinned_impl(inlined, others, max_cost, true)
+        self.pinned_impl(inlined, others, may_duplicate, true)
     }
 
     fn pinned_impl<'i, 'o>(
         &self,
         inlined: impl IntoIterator<Item = &'i Expr>,
         others: impl IntoIterator<Item = &'o Expr>,
-        max_cost: DuplicationCost,
+        may_duplicate: MayDuplicate,
         pin_forbidden: bool,
     ) -> PinnedDefinitions {
-        debug_assert!(
-            max_cost < DuplicationCost::Forbidden,
-            "a forbidden definition must never be duplicated"
-        );
         let inlined_references = self.count_references(inlined);
         if inlined_references.is_empty() {
             return PinnedDefinitions::default();
@@ -254,9 +207,11 @@ impl<'a> ProjectionInliner<'a> {
                 if evaluations <= 1 && !pin_forbidden {
                     return false;
                 }
-                let cost = DuplicationCost::of(self.definitions[*idx]);
-                (pin_forbidden && cost == DuplicationCost::Forbidden)
-                    || (evaluations > 1 && cost > max_cost)
+                let definition = self.definitions[*idx];
+                if must_not_duplicate(definition) {
+                    return true;
+                }
+                evaluations > 1 && !may_duplicate.allows(definition)
             })
             .map(|(idx, _)| idx)
             .collect();
@@ -284,7 +239,7 @@ impl<'a> ProjectionInliner<'a> {
     }
 
     /// Replaces each column reference in `expr` with its definition, without a
-    /// cost check. Callers must check [`Self::pinned`] first.
+    /// check. Callers must check [`Self::pinned`] first.
     pub(crate) fn substitute(&self, expr: Expr) -> Result<Expr> {
         expr.transform_up(|e| {
             if let Expr::Column(col) = &e
@@ -334,7 +289,8 @@ mod tests {
     use crate::test::udfs::{PlacementTestUDF, get_field_like};
     use arrow::datatypes::DataType;
     use datafusion_expr::{
-        LogicalPlan, LogicalPlanBuilder, ScalarUDF, Volatility, cast, col, lit,
+        ExpressionPlacement, LogicalPlan, LogicalPlanBuilder, ScalarUDF, Volatility,
+        cast, col, lit,
     };
 
     fn udf(placement: ExpressionPlacement, volatility: Volatility) -> ScalarUDF {
@@ -377,102 +333,84 @@ mod tests {
     }
 
     #[test]
-    fn duplication_cost_classification() {
-        use DuplicationCost::*;
-        assert_eq!(DuplicationCost::of(&col("a")), Free);
-        assert_eq!(DuplicationCost::of(&get_field_like(col("a"), "x")), Free);
-        assert_eq!(DuplicationCost::of(&lit(1)), Cheap);
-        assert_eq!(DuplicationCost::of(&(col("a") * lit(2))), Cheap);
-        assert_eq!(
-            DuplicationCost::of(&cast(col("a"), DataType::Int64).alias("x")),
-            Cheap
-        );
-        // A field access over a cheap operand is still cheap.
-        assert_eq!(
-            DuplicationCost::of(&get_field_like(col("a") + lit(1), "x")),
-            Cheap
-        );
-        assert_eq!(DuplicationCost::of(&expensive(col("a"))), Expensive);
-        assert_eq!(
-            DuplicationCost::of(&get_field_like(expensive(col("a")), "x")),
-            Expensive
-        );
-        assert_eq!(
-            DuplicationCost::of(&(expensive(col("a")) + lit(1))),
-            Expensive
-        );
-        assert_eq!(
-            DuplicationCost::of(&(volatile(col("a")) + lit(1))),
-            Forbidden
-        );
+    fn must_not_duplicate_volatile_calls_and_subqueries() {
+        assert!(!must_not_duplicate(&col("a")));
+        assert!(!must_not_duplicate(&expensive(col("a"))));
+        assert!(must_not_duplicate(&(volatile(col("a")) + lit(1))));
+        assert!(must_not_duplicate(&get_field_like(volatile(col("a")), "x")));
     }
 
     /// Volatility beats placement. A volatile function that reports
-    /// `MoveTowardsLeafNodes` is cheap to evaluate, and two evaluations still
-    /// give two different answers.
+    /// `MoveTowardsLeafNodes` still gives two different answers.
     #[test]
-    fn a_volatile_leaf_function_is_forbidden() {
-        use DuplicationCost::*;
-        assert_eq!(DuplicationCost::of(&volatile_leaf(col("a"))), Forbidden);
-        assert_eq!(
-            DuplicationCost::of(&volatile_leaf(col("a")).alias("x")),
-            Forbidden
-        );
-        assert_eq!(
-            DuplicationCost::of(&get_field_like(volatile_leaf(col("a")), "x")),
-            Forbidden
-        );
-        // The same function, not volatile, is free.
-        assert_eq!(
-            DuplicationCost::of(
+    fn a_volatile_leaf_function_must_not_be_duplicated() {
+        assert!(must_not_duplicate(&volatile_leaf(col("a"))));
+        assert!(must_not_duplicate(&volatile_leaf(col("a")).alias("x")));
+        assert!(
+            MayDuplicate::LeafExpressions.allows(
                 &udf(
                     ExpressionPlacement::MoveTowardsLeafNodes,
                     Volatility::Immutable
                 )
                 .call(vec![col("a")])
-            ),
-            Free
+            )
         );
     }
 
     #[test]
+    fn may_duplicate_rules() {
+        use MayDuplicate::*;
+        assert!(LeafExpressions.allows(&col("a")));
+        assert!(LeafExpressions.allows(&get_field_like(col("a"), "x")));
+        assert!(!LeafExpressions.allows(&lit(1)));
+        assert!(!LeafExpressions.allows(&(col("a") * lit(2))));
+        assert!(!LeafExpressions.allows(&cast(col("a"), DataType::Int64)));
+        assert!(!LeafExpressions.allows(&expensive(col("a"))));
+        assert!(Any.allows(&expensive(col("a"))));
+    }
+
+    #[test]
     fn pinned_counts_evaluations() {
-        use DuplicationCost::*;
-        let p = projection(vec![
-            col("a"),
-            (col("b") + lit(1)).alias("cheap"),
-            expensive(col("c")).alias("exp"),
-        ]);
+        use MayDuplicate::*;
+        let p = projection(vec![col("a"), expensive(col("c")).alias("exp")]);
         let inliner = ProjectionInliner::new(&p);
         let no_others: [&Expr; 0] = [];
 
-        // One reference of an expensive definition: allowed.
+        // One reference: allowed.
         let one = get_field_like(col("exp"), "x");
-        assert!(inliner.pinned([&one], no_others, Free).is_empty());
+        assert!(
+            inliner
+                .pinned([&one], no_others, LeafExpressions)
+                .is_empty()
+        );
         // The same reference when another consumer keeps the column: refused,
-        // unless the caller accepts expensive duplicates.
-        assert!(!inliner.pinned([&one], [&col("exp")], Cheap).is_empty());
-        assert!(inliner.pinned([&one], [&col("exp")], Expensive).is_empty());
-        // Two references in one expression: refused unless allowed.
+        // unless the caller allows any duplicate.
+        assert!(
+            !inliner
+                .pinned([&one], [&col("exp")], LeafExpressions)
+                .is_empty()
+        );
+        assert!(inliner.pinned([&one], [&col("exp")], Any).is_empty());
+        // Two references in one expression.
         let two = col("exp")
             .is_not_null()
             .and(get_field_like(col("exp"), "x"));
-        assert!(!inliner.pinned([&two], no_others, Cheap).is_empty());
-        assert!(inliner.pinned([&two], no_others, Expensive).is_empty());
+        assert!(
+            !inliner
+                .pinned([&two], no_others, LeafExpressions)
+                .is_empty()
+        );
+        assert!(inliner.pinned([&two], no_others, Any).is_empty());
         // References are counted across all inlined expressions.
         assert!(
             !inliner
-                .pinned([&col("exp"), &col("exp")], no_others, Cheap)
+                .pinned([&col("exp"), &col("exp")], no_others, LeafExpressions)
                 .is_empty()
         );
-        // Cheap definitions follow `max_cost`.
-        let cheap = col("cheap").gt(lit(5));
-        assert!(inliner.pinned([&cheap], [&col("cheap")], Cheap).is_empty());
-        assert!(!inliner.pinned([&cheap], [&col("cheap")], Free).is_empty());
-        // Free definitions are always allowed.
+        // A column is always allowed.
         assert!(
             inliner
-                .pinned([&col("a"), &col("a")], [&col("a")], Free)
+                .pinned([&col("a"), &col("a")], [&col("a")], LeafExpressions)
                 .is_empty()
         );
         // An unqualified reference resolves to a qualified output column.
@@ -489,7 +427,7 @@ mod tests {
         let p = projection(vec![volatile(col("a")).alias("r")]);
         let inliner = ProjectionInliner::new(&p);
         let no_others: [&Expr; 0] = [];
-        let max = DuplicationCost::Expensive;
+        let max = MayDuplicate::Any;
         assert!(inliner.pinned([&col("r")], no_others, max).is_empty());
         assert!(
             !inliner
@@ -522,7 +460,7 @@ mod tests {
         let pinned = inliner.pinned_with_unknown_consumers(
             [&twice, &other],
             no_others,
-            DuplicationCost::Cheap,
+            MayDuplicate::LeafExpressions,
         );
         assert!(inliner.references_pinned(&twice, &pinned));
         assert!(!inliner.references_pinned(&other, &pinned));
