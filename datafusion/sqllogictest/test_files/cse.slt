@@ -383,6 +383,9 @@ a
 a
 
 # Filter shape: `arrow_field(a)` appears one time in the physical plan.
+# PushDownFilter still inlines it and CommonSubexprEliminate hoists it again
+# in every pass, which renumbers the alias. That is the convergence issue, not
+# fixed here.
 query TT
 EXPLAIN SELECT a FROM cse_keep_in_place WHERE CASE WHEN arrow_field(a) IS NOT NULL THEN arrow_field(a)['nullable'] IS NOT NULL END;
 ----

@@ -65,7 +65,7 @@ use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Expr, ExpressionPlacement, Projection};
 
 use crate::optimizer::ApplyOrder;
-use crate::projection_inliner::{MayDuplicate, PinnedDefinitions, ProjectionInliner};
+use crate::projection_inliner::{PinnedDefinitions, ProjectionInliner};
 use crate::push_down_filter::replace_cols_by_name;
 use crate::utils::{ColumnReference, has_all_column_refs, schema_columns};
 use crate::{OptimizerConfig, OptimizerRule};
@@ -98,8 +98,8 @@ fn has_extractable_expr(exprs: &[Expr]) -> bool {
 /// projection. The merge keeps every expression of the input and resolves the
 /// column references of the extracted expressions to their definitions (see
 /// [`build_extraction_projection_impl`]). The inliner decides if that is
-/// allowed: after the merge, a definition that is not free to copy must be
-/// evaluated one time only. For example:
+/// allowed: after the merge, a definition that is not a column or a leaf
+/// expression must be evaluated one time only. For example:
 ///
 /// ```text
 /// Filter: __common_expr_1 IS NOT NULL AND get_field(__common_expr_1, 'a') = 1
@@ -126,7 +126,7 @@ fn pinned_for_merge<'a>(
     direct_columns: &IndexSet<Column>,
 ) -> PinnedDefinitions {
     let direct: Vec<Expr> = direct_columns.iter().cloned().map(Expr::Column).collect();
-    inliner.pinned_with_unknown_consumers(inlined, &direct, MayDuplicate::LeafExpressions)
+    inliner.pinned_with_unknown_consumers(inlined, &direct)
 }
 
 /// Extracts `MoveTowardsLeafNodes` sub-expressions from non-projection nodes
@@ -2330,6 +2330,41 @@ mod tests {
         "#)
     }
 
+    /// A predicate that reads a volatile column does not stop the extraction
+    /// of a leaf expression from the other predicates. The volatile column is
+    /// not inlined.
+    #[test]
+    fn test_extraction_next_to_a_volatile_column() -> Result<()> {
+        let table_scan = test_table_scan_with_struct()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("user"), volatile_udf(col("id")).alias("v")])?
+            .filter(
+                leaf_udf(col("user"), "status")
+                    .eq(lit("active"))
+                    .and(col("v").is_not_null()),
+            )?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Filter: leaf_udf(test.user, Utf8("status")) = Utf8("active") AND v IS NOT NULL
+          Projection: test.user, keep_in_place_udf(test.id) AS v
+            TableScan: test projection=[id, user]
+
+        ## After Extraction
+        Projection: test.user, v
+          Filter: __datafusion_extracted_1 = Utf8("active") AND v IS NOT NULL
+            Projection: test.user, keep_in_place_udf(test.id) AS v, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1
+              TableScan: test projection=[id, user]
+
+        ## After Pushdown
+        (same as after extraction)
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
     /// Projections with aliased columns (nothing to extract) return unchanged.
     #[test]
     fn test_projection_early_return_no_extraction() -> Result<()> {
@@ -4010,10 +4045,9 @@ mod tests {
     }
 
     /// `pinned_for_merge` must block a merge only when it would inline one
-    /// `KeepInPlace` definition into more than one reference site.
-    /// It must count reference sites for `KeepInPlace` columns alone: a plain
-    /// column is cheap to duplicate, and a merge that touches only plain
-    /// columns must still go ahead.
+    /// definition that is not a leaf expression into more than one reference
+    /// site. A plain column may be duplicated, and a merge that touches only
+    /// plain columns must still go ahead.
     #[test]
     fn test_pinned_for_merge_counts_only_kept_columns() -> Result<()> {
         let scan = test_table_scan_with_struct()?;

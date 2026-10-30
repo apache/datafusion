@@ -14,17 +14,20 @@
 //! - The consumer can reference the column more than one time.
 //! - The projection can stay in the plan and still compute the definition.
 //!
-//! When the definition is volatile, or is a subquery, this changes the query
-//! result. That is never allowed.
+//! When the definition is volatile, this changes the query result. That is
+//! never allowed.
 //!
-//! Otherwise a second evaluation only costs time. DataFusion does not know
-//! what an expression costs, so the caller says what it may duplicate, see
-//! [`MayDuplicate`]. Each rule keeps the choice it made before this module.
+//! Otherwise a second evaluation only costs time, and DataFusion does not
+//! know what an expression costs. So only a definition that
+//! [`should_push_to_leaves`] is evaluated more than one time: a column, or a
+//! call such as struct field access that asks to move towards the leaves.
+//! This is the merge guard of `OptimizeProjections`
+//! (<https://github.com/apache/datafusion/issues/8296>).
 //!
+//! [`should_push_to_leaves`]: datafusion_expr::ExpressionPlacement::should_push_to_leaves
 //! [`ProjectionInliner`] is the one place that makes this decision. Rules call
 //! it instead of doing the substitution themselves.
 //!
-//! [`CommonSubexprEliminate`]: crate::common_subexpr_eliminate::CommonSubexprEliminate
 
 use std::collections::{HashMap, HashSet};
 
@@ -34,50 +37,19 @@ use datafusion_common::tree_node::{
 use datafusion_common::{Column, Result};
 use datafusion_expr::{Expr, Projection};
 
-/// What a rule may evaluate more than one time, after it inlines a
-/// definition. A definition that [`must_not_duplicate`] is never evaluated
-/// more than one time, whatever the rule allows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MayDuplicate {
-    /// Only a definition that
-    /// [`should_push_to_leaves`](datafusion_expr::ExpressionPlacement::should_push_to_leaves):
-    /// a column, or a call such as struct field access that asks to move
-    /// towards the leaves. The merge guard of `OptimizeProjections`
-    /// (<https://github.com/apache/datafusion/issues/8296>) uses this rule.
-    LeafExpressions,
-    /// Any definition. `PushDownFilter` uses this rule: a filter that reaches
-    /// the scan can prune data, which is worth a second evaluation.
-    Any,
-}
-
-impl MayDuplicate {
-    fn allows(self, definition: &Expr) -> bool {
-        match self {
-            Self::LeafExpressions => definition.placement().should_push_to_leaves(),
-            Self::Any => true,
-        }
-    }
-}
-
 /// Returns `true` if a second evaluation of `expr` can change the query
-/// result: `expr` contains a volatile call or a subquery.
+/// result.
 ///
 /// This is checked before placement. A volatile function is free to report
 /// [`MoveTowardsLeafNodes`](datafusion_expr::ExpressionPlacement::MoveTowardsLeafNodes),
 /// and `file_row_index()` does.
-/// Every kind of function node can be volatile, not only a scalar function
-/// (see [`Expr::is_volatile_node`]).
 fn must_not_duplicate(expr: &Expr) -> bool {
-    expr.exists(|e| {
-        Ok(matches!(
-            e,
-            Expr::ScalarSubquery(_)
-                | Expr::Exists(_)
-                | Expr::InSubquery(_)
-                | Expr::SetComparison(_)
-        ) || e.is_volatile_node())
-    })
-    .expect("exists closure is infallible")
+    expr.is_volatile()
+}
+
+/// Returns `true` if `expr` may be evaluated more than one time.
+fn may_duplicate(expr: &Expr) -> bool {
+    !must_not_duplicate(expr) && expr.placement().should_push_to_leaves()
 }
 
 /// Definitions that [`ProjectionInliner::pinned`] refuses to inline.
@@ -95,8 +67,8 @@ impl PinnedDefinitions {
 /// too many times.
 ///
 /// The rule is: after the rewrite, a definition that is evaluated more than
-/// one time must not [`must_not_duplicate`], and the caller's
-/// [`MayDuplicate`] must allow it. See [`ProjectionInliner::pinned`].
+/// one time must be a column or a leaf expression, and must not be volatile.
+/// See [`ProjectionInliner::pinned`].
 #[derive(Debug)]
 pub(crate) struct ProjectionInliner<'a> {
     /// Definitions without top-level alias, in output column order.
@@ -161,15 +133,13 @@ impl<'a> ProjectionInliner<'a> {
     /// from the projection (for example by `OptimizeProjections`).
     ///
     /// A definition that `inlined` references is pinned if it is then
-    /// evaluated more than one time, and either [`must_not_duplicate`] holds
-    /// or `may_duplicate` does not allow it.
+    /// evaluated more than one time and [`may_duplicate`] does not hold.
     pub(crate) fn pinned<'i, 'o>(
         &self,
         inlined: impl IntoIterator<Item = &'i Expr>,
         others: impl IntoIterator<Item = &'o Expr>,
-        may_duplicate: MayDuplicate,
     ) -> PinnedDefinitions {
-        self.pinned_impl(inlined, others, may_duplicate, false)
+        self.pinned_impl(inlined, others, false)
     }
 
     /// Returns [`Self::pinned`], and also pins every definition that
@@ -183,16 +153,14 @@ impl<'a> ProjectionInliner<'a> {
         &self,
         inlined: impl IntoIterator<Item = &'i Expr>,
         others: impl IntoIterator<Item = &'o Expr>,
-        may_duplicate: MayDuplicate,
     ) -> PinnedDefinitions {
-        self.pinned_impl(inlined, others, may_duplicate, true)
+        self.pinned_impl(inlined, others, true)
     }
 
     fn pinned_impl<'i, 'o>(
         &self,
         inlined: impl IntoIterator<Item = &'i Expr>,
         others: impl IntoIterator<Item = &'o Expr>,
-        may_duplicate: MayDuplicate,
         pin_forbidden: bool,
     ) -> PinnedDefinitions {
         let inlined_references = self.count_references(inlined);
@@ -208,10 +176,8 @@ impl<'a> ProjectionInliner<'a> {
                     return false;
                 }
                 let definition = self.definitions[*idx];
-                if must_not_duplicate(definition) {
-                    return true;
-                }
-                evaluations > 1 && !may_duplicate.allows(definition)
+                (pin_forbidden && must_not_duplicate(definition))
+                    || (evaluations > 1 && !may_duplicate(definition))
             })
             .map(|(idx, _)| idx)
             .collect();
@@ -301,7 +267,7 @@ mod tests {
         )
     }
 
-    fn expensive(arg: Expr) -> Expr {
+    fn keep_in_place(arg: Expr) -> Expr {
         udf(ExpressionPlacement::KeepInPlace, Volatility::Immutable).call(vec![arg])
     }
 
@@ -333,84 +299,51 @@ mod tests {
     }
 
     #[test]
-    fn must_not_duplicate_volatile_calls_and_subqueries() {
-        assert!(!must_not_duplicate(&col("a")));
-        assert!(!must_not_duplicate(&expensive(col("a"))));
-        assert!(must_not_duplicate(&(volatile(col("a")) + lit(1))));
-        assert!(must_not_duplicate(&get_field_like(volatile(col("a")), "x")));
+    fn may_duplicate_columns_and_leaf_expressions() {
+        assert!(may_duplicate(&col("a")));
+        assert!(may_duplicate(&get_field_like(col("a"), "x")));
+        assert!(!may_duplicate(&lit(1)));
+        assert!(!may_duplicate(&(col("a") * lit(2))));
+        assert!(!may_duplicate(&cast(col("a"), DataType::Int64)));
+        assert!(!may_duplicate(&keep_in_place(col("a"))));
+        assert!(!may_duplicate(&get_field_like(volatile(col("a")), "x")));
     }
 
     /// Volatility beats placement. A volatile function that reports
     /// `MoveTowardsLeafNodes` still gives two different answers.
     #[test]
     fn a_volatile_leaf_function_must_not_be_duplicated() {
-        assert!(must_not_duplicate(&volatile_leaf(col("a"))));
-        assert!(must_not_duplicate(&volatile_leaf(col("a")).alias("x")));
-        assert!(
-            MayDuplicate::LeafExpressions.allows(
-                &udf(
-                    ExpressionPlacement::MoveTowardsLeafNodes,
-                    Volatility::Immutable
-                )
-                .call(vec![col("a")])
+        assert!(!may_duplicate(&volatile_leaf(col("a"))));
+        assert!(!may_duplicate(&volatile_leaf(col("a")).alias("x")));
+        assert!(may_duplicate(
+            &udf(
+                ExpressionPlacement::MoveTowardsLeafNodes,
+                Volatility::Immutable
             )
-        );
-    }
-
-    #[test]
-    fn may_duplicate_rules() {
-        use MayDuplicate::*;
-        assert!(LeafExpressions.allows(&col("a")));
-        assert!(LeafExpressions.allows(&get_field_like(col("a"), "x")));
-        assert!(!LeafExpressions.allows(&lit(1)));
-        assert!(!LeafExpressions.allows(&(col("a") * lit(2))));
-        assert!(!LeafExpressions.allows(&cast(col("a"), DataType::Int64)));
-        assert!(!LeafExpressions.allows(&expensive(col("a"))));
-        assert!(Any.allows(&expensive(col("a"))));
+            .call(vec![col("a")])
+        ));
     }
 
     #[test]
     fn pinned_counts_evaluations() {
-        use MayDuplicate::*;
-        let p = projection(vec![col("a"), expensive(col("c")).alias("exp")]);
+        let p = projection(vec![col("a"), keep_in_place(col("c")).alias("k")]);
         let inliner = ProjectionInliner::new(&p);
         let no_others: [&Expr; 0] = [];
 
         // One reference: allowed.
-        let one = get_field_like(col("exp"), "x");
-        assert!(
-            inliner
-                .pinned([&one], no_others, LeafExpressions)
-                .is_empty()
-        );
-        // The same reference when another consumer keeps the column: refused,
-        // unless the caller allows any duplicate.
-        assert!(
-            !inliner
-                .pinned([&one], [&col("exp")], LeafExpressions)
-                .is_empty()
-        );
-        assert!(inliner.pinned([&one], [&col("exp")], Any).is_empty());
-        // Two references in one expression.
-        let two = col("exp")
-            .is_not_null()
-            .and(get_field_like(col("exp"), "x"));
-        assert!(
-            !inliner
-                .pinned([&two], no_others, LeafExpressions)
-                .is_empty()
-        );
-        assert!(inliner.pinned([&two], no_others, Any).is_empty());
+        let one = get_field_like(col("k"), "x");
+        assert!(inliner.pinned([&one], no_others).is_empty());
+        // The same reference when another consumer keeps the column: refused.
+        assert!(!inliner.pinned([&one], [&col("k")]).is_empty());
+        // Two references in one expression: refused.
+        let two = col("k").is_not_null().and(get_field_like(col("k"), "x"));
+        assert!(!inliner.pinned([&two], no_others).is_empty());
         // References are counted across all inlined expressions.
-        assert!(
-            !inliner
-                .pinned([&col("exp"), &col("exp")], no_others, LeafExpressions)
-                .is_empty()
-        );
+        assert!(!inliner.pinned([&col("k"), &col("k")], no_others).is_empty());
         // A column is always allowed.
         assert!(
             inliner
-                .pinned([&col("a"), &col("a")], [&col("a")], LeafExpressions)
+                .pinned([&col("a"), &col("a")], [&col("a")])
                 .is_empty()
         );
         // An unqualified reference resolves to a qualified output column.
@@ -427,18 +360,17 @@ mod tests {
         let p = projection(vec![volatile(col("a")).alias("r")]);
         let inliner = ProjectionInliner::new(&p);
         let no_others: [&Expr; 0] = [];
-        let max = MayDuplicate::Any;
-        assert!(inliner.pinned([&col("r")], no_others, max).is_empty());
+        assert!(inliner.pinned([&col("r")], no_others).is_empty());
         assert!(
             !inliner
-                .pinned([&(col("r") + col("r"))], no_others, max)
+                .pinned([&(col("r") + col("r"))], no_others)
                 .is_empty()
         );
-        assert!(!inliner.pinned([&col("r")], [&col("r")], max).is_empty());
+        assert!(!inliner.pinned([&col("r")], [&col("r")]).is_empty());
         // Without all the consumers, a single reference is pinned as well.
         assert!(
             !inliner
-                .pinned_with_unknown_consumers([&col("r")], no_others, max)
+                .pinned_with_unknown_consumers([&col("r")], no_others)
                 .is_empty()
         );
     }
@@ -447,27 +379,21 @@ mod tests {
     fn substitute_and_references_pinned() -> Result<()> {
         let p = projection(vec![
             col("a"),
-            expensive(col("c")).alias("exp"),
-            (col("b") + lit(1)).alias("cheap"),
+            keep_in_place(col("c")).alias("k"),
+            (col("b") + lit(1)).alias("b1"),
         ]);
         let inliner = ProjectionInliner::new(&p);
         let no_others: [&Expr; 0] = [];
 
-        let twice = col("exp")
-            .is_not_null()
-            .and(get_field_like(col("exp"), "x"));
-        let other = col("cheap").gt(col("a"));
-        let pinned = inliner.pinned_with_unknown_consumers(
-            [&twice, &other],
-            no_others,
-            MayDuplicate::LeafExpressions,
-        );
+        let twice = col("k").is_not_null().and(get_field_like(col("k"), "x"));
+        let other = col("b1").gt(col("a"));
+        let pinned = inliner.pinned_with_unknown_consumers([&twice, &other], no_others);
         assert!(inliner.references_pinned(&twice, &pinned));
         assert!(!inliner.references_pinned(&other, &pinned));
 
         assert_eq!(
-            inliner.definition(&Column::from_name("exp")),
-            Some(&expensive(col("test.c")))
+            inliner.definition(&Column::from_name("k")),
+            Some(&keep_in_place(col("test.c")))
         );
         assert_eq!(
             inliner.substitute(other)?,
