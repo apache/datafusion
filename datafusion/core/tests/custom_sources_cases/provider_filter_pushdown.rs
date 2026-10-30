@@ -285,7 +285,6 @@ struct RejectScanProvider {
     pushdown: TableProviderFilterPushDown,
 }
 
-#[async_trait]
 impl TableProvider for RejectScanProvider {
     fn schema(&self) -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)]))
@@ -295,14 +294,16 @@ impl TableProvider for RejectScanProvider {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        _projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        _projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        internal_err!("An unsatisfiable branch must not call scan()")
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(
+            async move { internal_err!("An unsatisfiable branch must not call scan()") },
+        )
     }
 
     fn supports_filters_pushdown(

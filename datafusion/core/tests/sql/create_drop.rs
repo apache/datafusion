@@ -7,10 +7,10 @@ use datafusion::catalog::{
 };
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::CreateExternalCatalog;
-use futures::future::BoxFuture;
 use datafusion::test_util::TestTableFactory;
 use datafusion_catalog::Session;
 use datafusion_common::exec_err;
+use futures::future::BoxFuture;
 
 use super::*;
 

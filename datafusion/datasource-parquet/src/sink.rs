@@ -309,10 +309,10 @@ impl FileSink for ParquetSink {
                                 writer.write(&batch).await?;
                                 reservation.try_resize(writer.memory_size())?;
                             }
-                            let parquet_meta_data = writer
-                                .close()
-                                .await
-                                .map_err(|e| DataFusionError::ParquetError(Box::new(e)))?;
+                            let parquet_meta_data =
+                                writer.close().await.map_err(|e| {
+                                    DataFusionError::ParquetError(Box::new(e))
+                                })?;
                             Ok((file_metadata.path, parquet_meta_data))
                         }
                         .with_elapsed_compute(elapsed_compute.clone()),

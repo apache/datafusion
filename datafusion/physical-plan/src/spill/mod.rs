@@ -1035,9 +1035,7 @@ mod tests {
         }
 
         fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
-            Box::pin(async move {
-                Ok(())
-            })
+            Box::pin(async move { Ok(()) })
         }
 
         fn abort<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
@@ -1075,9 +1073,7 @@ mod tests {
 
     impl AsyncSpillWriter for PendingFinishAsyncWriter {
         fn write_all<'a>(&'a mut self, _data: bytes::Bytes) -> BoxFuture<'a, Result<()>> {
-            Box::pin(async move {
-                Ok(())
-            })
+            Box::pin(async move { Ok(()) })
         }
 
         fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
@@ -1098,15 +1094,11 @@ mod tests {
 
     impl AsyncSpillWriter for FailOnceAbortWriter {
         fn write_all<'a>(&'a mut self, _data: bytes::Bytes) -> BoxFuture<'a, Result<()>> {
-            Box::pin(async move {
-                Ok(())
-            })
+            Box::pin(async move { Ok(()) })
         }
 
         fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
-            Box::pin(async move {
-                Ok(())
-            })
+            Box::pin(async move { Ok(()) })
         }
 
         fn abort<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {

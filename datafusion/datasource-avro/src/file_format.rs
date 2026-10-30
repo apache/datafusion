@@ -3,8 +3,8 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Apache Avro [`FileFormat`] abstractions
-use std::collections::HashMap;
 use futures::future::BoxFuture;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::{fmt, io};
@@ -138,7 +138,6 @@ impl FileFormat for AvroFormat {
             }
             let merged_schema = Schema::try_merge(schemas)?;
             Ok(Arc::new(merged_schema))
-    
         })
     }
 
@@ -149,10 +148,7 @@ impl FileFormat for AvroFormat {
         table_schema: SchemaRef,
         _object: &'a ObjectMeta,
     ) -> BoxFuture<'a, Result<Statistics>> {
-        Box::pin(async move {
-            Ok(Statistics::new_unknown(&table_schema))
-    
-        })
+        Box::pin(async move { Ok(Statistics::new_unknown(&table_schema)) })
     }
 
     fn create_physical_plan<'a>(
@@ -161,8 +157,7 @@ impl FileFormat for AvroFormat {
         conf: FileScanConfig,
     ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         Box::pin(async move {
-            Ok(DataSourceExec::from_data_source(conf))
-    
+            Ok(DataSourceExec::from_data_source(conf) as Arc<dyn ExecutionPlan>)
         })
     }
 
@@ -175,13 +170,14 @@ impl FileFormat for AvroFormat {
     ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         Box::pin(async move {
             if conf.insert_op != InsertOp::Append {
-                return not_impl_err!("Overwrites are not implemented yet for Avro format");
+                return not_impl_err!(
+                    "Overwrites are not implemented yet for Avro format"
+                );
             }
 
             let sink = Arc::new(AvroFileSink::new(conf));
 
             Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
-    
         })
     }
 
@@ -261,11 +257,12 @@ impl FileSink for AvroFileSink {
                     if let Err(e) = avro_writer.finish() {
                         return Err(match e {
                             AvroError::NYI(e) => DataFusionError::NotImplemented(e),
-                            AvroError::EOF(e) => DataFusionError::IoError(io::Error::new(
-                                io::ErrorKind::UnexpectedEof,
-                                e,
-                            )),
-                            AvroError::ArrowError(e) => DataFusionError::ArrowError(e, None),
+                            AvroError::EOF(e) => DataFusionError::IoError(
+                                io::Error::new(io::ErrorKind::UnexpectedEof, e),
+                            ),
+                            AvroError::ArrowError(e) => {
+                                DataFusionError::ArrowError(e, None)
+                            }
                             AvroError::External(e) => DataFusionError::External(e),
                             AvroError::IoError(msg, e) => DataFusionError::IoError(e)
                                 .with_diagnostic(Diagnostic::new_error(msg, None)),
@@ -301,7 +298,6 @@ impl FileSink for AvroFileSink {
                 .await
                 .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
             Ok(row_count as u64)
-    
         })
     }
 }
@@ -338,9 +334,6 @@ impl DataSink for AvroFileSink {
         data: SendableRecordBatchStream,
         context: &'a Arc<TaskContext>,
     ) -> BoxFuture<'a, Result<u64>> {
-        Box::pin(async move {
-            FileSink::write_all(self, data, context).await
-    
-        })
+        Box::pin(async move { FileSink::write_all(self, data, context).await })
     }
 }

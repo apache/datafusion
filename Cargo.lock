@@ -2184,6 +2184,7 @@ dependencies = [
  "datafusion-proto-common",
  "datafusion-proto-models",
  "env_logger",
+ "futures",
  "indexmap 2.14.2",
  "insta",
  "itertools 0.15.0",
@@ -2369,6 +2370,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-proto-common",
  "datafusion-proto-models",
+ "futures",
  "parking_lot 0.13.0",
 ]
 
@@ -2586,6 +2588,7 @@ dependencies = [
  "datafusion-proto-models",
  "doc-comment",
  "flate2",
+ "futures",
  "object_store",
  "parking_lot 0.13.0",
  "pretty_assertions",
@@ -2751,6 +2754,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-functions-aggregate",
+ "futures",
  "half",
  "insta",
  "itertools 0.15.0",

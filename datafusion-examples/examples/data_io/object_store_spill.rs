@@ -305,9 +305,7 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
 
-        fn complete<'a>(
-            &'a mut self,
-        ) -> BoxFuture<'a, object_store::Result<PutResult>> {
+        fn complete<'a>(&'a mut self) -> BoxFuture<'a, object_store::Result<PutResult>> {
             Box::pin(async move {
                 Ok(PutResult {
                     e_tag: None,

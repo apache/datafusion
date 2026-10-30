@@ -463,8 +463,9 @@ impl FileFormat for ParquetFormat {
             // is not deterministic. Thus, to ensure deterministic schema inference
             // sort the files first.
             // https://github.com/apache/datafusion/pull/6629
-            schemas
-                .sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
+            schemas.sort_unstable_by(|(location1, _), (location2, _)| {
+                location1.cmp(location2)
+            });
 
             let mut seen = HashSet::new();
             for (location, schema) in &schemas {
@@ -506,7 +507,6 @@ impl FileFormat for ParquetFormat {
             };
 
             Ok(Arc::new(schema))
-    
         })
     }
 
@@ -529,7 +529,6 @@ impl FileFormat for ParquetFormat {
                 .with_file_metadata_cache(Some(file_metadata_cache))
                 .fetch_statistics(&table_schema)
                 .await
-    
         })
     }
 
@@ -553,7 +552,6 @@ impl FileFormat for ParquetFormat {
                 .fetch_metadata()
                 .await?;
             crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)
-    
         })
     }
 
@@ -580,13 +578,14 @@ impl FileFormat for ParquetFormat {
                 &metadata,
                 &table_schema,
             )?;
-            let ordering =
-                crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)?;
+            let ordering = crate::metadata::ordering_from_parquet_metadata(
+                &metadata,
+                &table_schema,
+            )?;
             Ok(
                 datafusion_datasource::file_format::FileMeta::new(statistics)
                     .with_ordering(ordering),
             )
-    
         })
     }
 
@@ -610,7 +609,8 @@ impl FileFormat for ParquetFormat {
             source = source.with_table_parquet_options(self.options.clone());
 
             // Use the CachedParquetFileReaderFactory
-            let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
+            let metadata_cache =
+                state.runtime_env().cache_manager.get_file_metadata_cache();
             let store = state
                 .runtime_env()
                 .object_store(conf.object_store_url.clone())?;
@@ -627,8 +627,7 @@ impl FileFormat for ParquetFormat {
             let conf = FileScanConfigBuilder::from(conf)
                 .with_source(Arc::new(source))
                 .build();
-            Ok(DataSourceExec::from_data_source(conf))
-    
+            Ok(DataSourceExec::from_data_source(conf) as Arc<dyn ExecutionPlan>)
         })
     }
 
@@ -669,7 +668,6 @@ impl FileFormat for ParquetFormat {
             );
 
             Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
-    
         })
     }
 

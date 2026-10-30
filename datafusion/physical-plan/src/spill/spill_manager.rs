@@ -241,7 +241,6 @@ mod tests {
         array::{ArrayRef, Int32Array, StringArray, StringViewArray},
         record_batch::RecordBatch,
     };
-    use futures::future::BoxFuture;
     use bytes::Bytes;
     use datafusion_common::{DataFusionError, Result, not_impl_err};
     use datafusion_execution::disk_manager::DiskManagerBuilder;
@@ -251,6 +250,7 @@ mod tests {
         TempFileFactory,
     };
     use futures::Stream;
+    use futures::future::BoxFuture;
     use std::path::Path;
     use std::pin::Pin;
     use std::sync::Arc;

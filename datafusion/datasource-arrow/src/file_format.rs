@@ -6,8 +6,8 @@
 //!
 //! Works with files following the [Arrow IPC format](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format)
 
-use std::collections::HashMap;
 use futures::future::BoxFuture;
+use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
@@ -192,13 +192,14 @@ impl FileFormat for ArrowFormat {
                             }
                         }
                     }
-                    GetResultPayload::Stream(stream) => infer_stream_schema(stream).await?,
+                    GetResultPayload::Stream(stream) => {
+                        infer_stream_schema(stream).await?
+                    }
                 };
                 schemas.push(Arc::unwrap_or_clone(schema));
             }
             let merged_schema = Schema::try_merge(schemas)?;
             Ok(Arc::new(merged_schema))
-    
         })
     }
 
@@ -209,10 +210,7 @@ impl FileFormat for ArrowFormat {
         table_schema: SchemaRef,
         _object: &'a ObjectMeta,
     ) -> BoxFuture<'a, Result<Statistics>> {
-        Box::pin(async move {
-            Ok(Statistics::new_unknown(&table_schema))
-    
-        })
+        Box::pin(async move { Ok(Statistics::new_unknown(&table_schema)) })
     }
 
     fn create_physical_plan<'a>(
@@ -221,7 +219,8 @@ impl FileFormat for ArrowFormat {
         conf: FileScanConfig,
     ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         Box::pin(async move {
-            let object_store = state.runtime_env().object_store(&conf.object_store_url)?;
+            let object_store =
+                state.runtime_env().object_store(&conf.object_store_url)?;
             let object_location = &conf
                 .file_groups
                 .first()
@@ -237,10 +236,13 @@ impl FileFormat for ArrowFormat {
                 .build();
 
             let mut source: Arc<dyn FileSource> =
-                match is_object_in_arrow_ipc_file_format(object_store, object_location).await
+                match is_object_in_arrow_ipc_file_format(object_store, object_location)
+                    .await
                 {
                     Ok(true) => Arc::new(ArrowSource::new_file_source(table_schema)),
-                    Ok(false) => Arc::new(ArrowSource::new_stream_file_source(table_schema)),
+                    Ok(false) => {
+                        Arc::new(ArrowSource::new_stream_file_source(table_schema))
+                    }
                     Err(e) => Err(e)?,
                 };
 
@@ -255,8 +257,7 @@ impl FileFormat for ArrowFormat {
                 .with_source(source)
                 .build();
 
-            Ok(DataSourceExec::from_data_source(config))
-    
+            Ok(DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>)
         })
     }
 
@@ -269,13 +270,14 @@ impl FileFormat for ArrowFormat {
     ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         Box::pin(async move {
             if conf.insert_op != InsertOp::Append {
-                return not_impl_err!("Overwrites are not implemented yet for Arrow format");
+                return not_impl_err!(
+                    "Overwrites are not implemented yet for Arrow format"
+                );
             }
 
             let sink = Arc::new(ArrowFileSink::new(conf, self.options.clone()));
 
             Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
-    
         })
     }
 
@@ -309,8 +311,9 @@ impl FileSink for ArrowFileSink {
         object_store: Arc<dyn ObjectStore>,
     ) -> BoxFuture<'a, Result<u64>> {
         Box::pin(async move {
-            let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
-                JoinSet::new();
+            let mut file_write_tasks: JoinSet<
+                std::result::Result<usize, DataFusionError>,
+            > = JoinSet::new();
 
             let ipc_options = IpcWriteOptions::try_new(
                 self.options.alignment,
@@ -321,11 +324,12 @@ impl FileSink for ArrowFileSink {
             .try_with_compression_level(self.options.compression_level)?;
             while let Some((file_metadata, mut rx)) = file_stream_rx.recv().await {
                 let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
-                let mut arrow_writer = arrow_ipc::writer::FileWriter::try_new_with_options(
-                    shared_buffer.clone(),
-                    &get_writer_schema(&self.config),
-                    ipc_options.clone(),
-                )?;
+                let mut arrow_writer =
+                    arrow_ipc::writer::FileWriter::try_new_with_options(
+                        shared_buffer.clone(),
+                        &get_writer_schema(&self.config),
+                        ipc_options.clone(),
+                    )?;
                 let mut object_store_writer = ObjectWriterBuilder::new(
                     FileCompressionType::UNCOMPRESSED,
                     &file_metadata.path,
@@ -383,7 +387,6 @@ impl FileSink for ArrowFileSink {
                 .await
                 .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
             Ok(row_count as u64)
-    
         })
     }
 }
@@ -420,10 +423,7 @@ impl DataSink for ArrowFileSink {
         data: SendableRecordBatchStream,
         context: &'a Arc<TaskContext>,
     ) -> BoxFuture<'a, Result<u64>> {
-        Box::pin(async move {
-            FileSink::write_all(self, data, context).await
-    
-        })
+        Box::pin(async move { FileSink::write_all(self, data, context).await })
     }
 }
 
@@ -634,11 +634,8 @@ mod tests {
             &'a self,
             _logical_plan: &'a LogicalPlan,
         ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
-        Box::pin(async move {
-                unimplemented!()
-        
-        })
-    }
+            Box::pin(async move { unimplemented!() })
+        }
 
         fn create_physical_expr(
             &self,
