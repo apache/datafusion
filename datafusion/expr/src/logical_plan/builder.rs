@@ -15,7 +15,7 @@ use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     ColumnNormalizer, coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
-    rewrite_sort_cols_by_aggs,
+    replace_col, rewrite_sort_cols_by_aggs,
 };
 use crate::logical_plan::{
     Aggregate, Analyze, AsOfJoin, AsOfMatch, Distinct, DistinctOn, EmptyRelation,
@@ -872,12 +872,13 @@ impl LogicalPlanBuilder {
         curr_plan: LogicalPlan,
         missing_cols: &IndexSet<Column>,
         is_distinct: bool,
+        aliases: &mut HashMap<Column, Column>,
     ) -> Result<LogicalPlan> {
         match curr_plan {
             LogicalPlan::Projection(Projection {
                 input,
                 mut expr,
-                schema: _,
+                schema,
             }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
                 let mut missing_exprs = missing_cols
                     .iter()
@@ -891,6 +892,22 @@ impl LogicalPlanBuilder {
                 if is_distinct {
                     Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
                 }
+
+                // A schema cannot hold both `t.c` and `c`, so a column that is
+                // already projected under its own name is carried under its
+                // flat name instead, and the caller rebinds the sort to it.
+                for e in &mut missing_exprs {
+                    if let Expr::Column(c) = e
+                        && schema
+                            .iter()
+                            .any(|(q, f)| q.is_none() && f.name() == c.name())
+                    {
+                        let alias = c.flat_name();
+                        aliases.insert(c.clone(), Column::new_unqualified(alias.clone()));
+                        *e = e.clone().alias(alias);
+                    }
+                }
+
                 expr.extend(missing_exprs);
                 project(Arc::unwrap_or_clone(input), expr)
             }
@@ -905,6 +922,7 @@ impl LogicalPlanBuilder {
                             (*input_plan).clone(),
                             missing_cols,
                             is_distinct,
+                            aliases,
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -1008,11 +1026,27 @@ impl LogicalPlanBuilder {
         let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
 
         let is_distinct = false;
+        let mut aliases = HashMap::new();
         let plan = Self::add_missing_columns(
             Arc::unwrap_or_clone(self.plan),
             &missing_cols,
             is_distinct,
+            &mut aliases,
         )?;
+
+        // The sorts refer to the columns of the plan below the projection, so
+        // any column that was carried under an alias has to be rebound to it.
+        let replace: HashMap<&Column, &Column> = aliases.iter().collect();
+        let sorts = sorts
+            .into_iter()
+            .map(|sort| {
+                Ok(SortExpr::new(
+                    replace_col(sort.expr, &replace)?,
+                    sort.asc,
+                    sort.nulls_first,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
@@ -2665,6 +2699,49 @@ mod tests {
           TableScan: employee_csv projection=[state, salary]
         ");
 
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_sort_column_already_projected() -> Result<()> {
+        // `salary` is projected under its own name, so ordering by
+        // `employee_csv.salary` cannot add that column under its own name too.
+        let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![4]))?
+            .project(vec![(col("salary") + lit(1)).alias("salary")])?
+            .sort(vec![expr::Sort::new(
+                col("employee_csv.salary"),
+                true,
+                false,
+            )])?
+            .build()?;
+
+        assert_snapshot!(plan, @r"
+        Projection: salary
+          Sort: employee_csv.salary ASC NULLS LAST
+            Projection: employee_csv.salary + Int32(1) AS salary, employee_csv.salary AS employee_csv.salary
+              TableScan: employee_csv projection=[salary]
+        ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_sort_column_from_another_relation() -> Result<()> {
+        // `a.a` and `b.a` can share a schema, so nothing has to be renamed here.
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_name("a")?)
+            .cross_join(test_table_scan_with_name("b")?)?
+            .project(vec![col("a.a")])?
+            .sort(vec![expr::Sort::new(col("b.a"), true, false)])?
+            .build()?;
+
+        assert_snapshot!(plan, @r"
+        Projection: a.a
+          Sort: b.a ASC NULLS LAST
+            Projection: a.a, b.a
+              Cross Join:
+                TableScan: a
+                TableScan: b
+        ");
         Ok(())
     }
 
