@@ -120,7 +120,7 @@ SELECT CAST(12345 AS UUID);
 statement error Unsupported CAST from Utf8 to FixedSizeBinary\(16\)
 SELECT CAST('too-short' AS UUID);
 
-# This should trigger cast plan_err: "Cannot cast Utf8 to extension type at column 0"
+# This should trigger cast plan_err: "Types don't match and no valid cast exists"
 # Because 'not-a-uuid' is Utf8, and it's being compared to a UUID target in a VALUES list.
 statement ok
 CREATE TABLE t1 (id UUID);
