@@ -666,18 +666,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // If no type_planner can handle this type, use the default conversion
         match sql_type {
             // Canonical Arrow extension types
-            SQLDataType::Uuid => {
-                Ok(Arc::new(
-                    Field::new("", DataType::FixedSizeBinary(16), true)
-                        .with_extension_type(Uuid),
-                ))
-            }
-            SQLDataType::JSON => {
-                Ok(Arc::new(
-                    Field::new("", DataType::Utf8, true)
-                        .with_extension_type(Json::default()),
-                ))
-            }
+            SQLDataType::Uuid => Ok(Arc::new(
+                Field::new("", DataType::FixedSizeBinary(16), true)
+                    .with_extension_type(Uuid),
+            )),
+            SQLDataType::JSON => Ok(Arc::new(
+                Field::new("", DataType::Utf8, true).with_extension_type(Json::default()),
+            )),
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
                 Ok(self.convert_data_type_to_field(inner_sql_type)?.into_list())
