@@ -2,22 +2,19 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! The `canon` and `raw` tables. `canon` contains no `-0.0`; `raw` is `canon`
-//! with some of its zeros flipped to `-0.0`.
+//! The `raw` and `canon` tables. `raw` has some `-0.0` values; `canon` is
+//! `raw` with every float normalized by `normalize_floats`, so it has none.
 
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, Float32Array, Float64Array, Int64Array, ListArray,
-    RecordBatch, make_array,
+    ArrayRef, Float32Array, Float64Array, Int64Array, ListArray, RecordBatch,
 };
-use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Float64Type, Schema, SchemaRef};
+use datafusion_common::float_semantics::normalize_floats;
 use rand::Rng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-
-/// Probability that a zero in `canon` becomes `-0.0` in `raw`.
-const FLIP_PROBABILITY: f64 = 0.5;
 
 /// Both copies of the table, split into the same partitions and batches.
 pub struct Dataset {
@@ -60,25 +57,24 @@ impl Columns {
     }
 }
 
-/// The 4-row tables from
+/// `raw` with every `-0.0`, also nested ones, replaced by `0.0`.
+fn canon_of(raw: &RecordBatch) -> RecordBatch {
+    let columns = raw.columns().iter().map(normalize_floats).collect();
+    RecordBatch::try_new(raw.schema(), columns).unwrap()
+}
+
+/// Whether `array` has a `-0.0` at any depth. `normalize_floats` returns
+/// `array` itself when there is nothing to normalize.
+fn has_negative_zero(array: &ArrayRef) -> bool {
+    !Arc::ptr_eq(&normalize_floats(array), array)
+}
+
+/// The 4-row `raw` table from
 /// <https://github.com/apache/datafusion/issues/26138#issuecomment-6497193637>,
-/// as a single batch. Every known failure reproduces on them.
+/// as a single batch. Every known failure reproduces on it.
 pub fn fixed() -> Dataset {
     let schema = schema();
-    let z = -0.0_f64;
-    let canon = Columns {
-        id: vec![1, 2, 3, 4],
-        b: vec![1, 0, 2, 3],
-        g: vec![1, 1, 1, 1],
-        a: vec![Some(0.0), Some(0.0), Some(1.0), Some(0.0)],
-        a32: vec![Some(0.0), Some(0.0), Some(1.0), Some(0.0)],
-        k: vec![
-            Some(vec![Some(0.0), Some(1.0)]),
-            Some(vec![Some(0.0), Some(0.0)]),
-            Some(vec![Some(1.0)]),
-            Some(vec![Some(0.0), Some(1.0)]),
-        ],
-    };
+    let z = -0.0;
     let raw = Columns {
         id: vec![1, 2, 3, 4],
         b: vec![1, 0, 2, 3],
@@ -91,10 +87,11 @@ pub fn fixed() -> Dataset {
             Some(vec![Some(1.0)]),
             Some(vec![Some(0.0), Some(1.0)]),
         ],
-    };
+    }
+    .into_batch(&schema);
     Dataset {
-        canon: vec![vec![canon.into_batch(&schema)]],
-        raw: vec![vec![raw.into_batch(&schema)]],
+        canon: vec![vec![canon_of(&raw)]],
+        raw: vec![vec![raw]],
         schema,
     }
 }
@@ -105,7 +102,8 @@ pub fn fixed() -> Dataset {
 /// decided whether all NaNs are equal.
 fn pool_value(rng: &mut impl Rng) -> Option<f64> {
     match rng.random_range(0..10) {
-        0..4 => Some(0.0),
+        0..2 => Some(0.0),
+        2..4 => Some(-0.0),
         4 => Some(1.0),
         5 => Some(-1.0),
         6 => Some(f64::INFINITY),
@@ -118,10 +116,10 @@ fn pool_value(rng: &mut impl Rng) -> Option<f64> {
 /// Retries until `raw` has a `-0.0` both at the top level and inside a list.
 pub fn random(rng: &mut StdRng, num_rows: usize) -> Dataset {
     let schema = schema();
-    loop {
+    let raw = loop {
         let mut b: Vec<i64> = (1..=num_rows as i64).collect();
         b.shuffle(rng);
-        let canon = Columns {
+        let raw = Columns {
             id: (1..=num_rows as i64).collect(),
             b,
             g: (0..num_rows).map(|_| rng.random_range(0..3)).collect(),
@@ -138,25 +136,14 @@ pub fn random(rng: &mut StdRng, num_rows: usize) -> Dataset {
                 .collect(),
         }
         .into_batch(&schema);
-
-        let raw = RecordBatch::try_new(
-            Arc::clone(&schema),
-            canon
-                .columns()
-                .iter()
-                .map(|c| flip_zeros(c, rng, FLIP_PROBABILITY))
-                .collect(),
-        )
-        .unwrap();
-        let top_level = count_negative_zeros(raw.column_by_name("a").unwrap());
-        let nested = count_negative_zeros(raw.column_by_name("k").unwrap());
-        if top_level == 0 || nested == 0 {
-            continue;
+        if has_negative_zero(raw.column_by_name("a").unwrap())
+            && has_negative_zero(raw.column_by_name("k").unwrap())
+        {
+            break raw;
         }
-
-        let (canon, raw) = split(rng, &canon, &raw);
-        return Dataset { schema, canon, raw };
-    }
+    };
+    let (canon, raw) = split(rng, &canon_of(&raw), &raw);
+    Dataset { schema, canon, raw }
 }
 
 /// Splits both batches at the same random offsets into partitions of batches.
@@ -179,76 +166,15 @@ fn split(
     (canon_parts, raw_parts)
 }
 
-/// Rewrites each float `0.0` in `array`, at any nesting depth, to `-0.0` with
-/// probability `p`. The recursion follows `normalize_floats` in
-/// `datafusion_common::float_semantics`.
-fn flip_zeros(array: &ArrayRef, rng: &mut impl Rng, p: f64) -> ArrayRef {
-    match array.data_type() {
-        DataType::Float32 => Arc::new(
-            array
-                .as_primitive::<Float32Type>()
-                .iter()
-                .map(|v| {
-                    v.map(|v| {
-                        if v == 0.0 && rng.random_bool(p) {
-                            -0.0
-                        } else {
-                            v
-                        }
-                    })
-                })
-                .collect::<Float32Array>(),
-        ),
-        DataType::Float64 => Arc::new(
-            array
-                .as_primitive::<Float64Type>()
-                .iter()
-                .map(|v| {
-                    v.map(|v| {
-                        if v == 0.0 && rng.random_bool(p) {
-                            -0.0
-                        } else {
-                            v
-                        }
-                    })
-                })
-                .collect::<Float64Array>(),
-        ),
-        _ => {
-            let data = array.to_data();
-            if data.child_data().is_empty() {
-                return Arc::clone(array);
-            }
-            let children = data
-                .child_data()
-                .iter()
-                .map(|child| flip_zeros(&make_array(child.clone()), rng, p).to_data())
-                .collect::<Vec<_>>();
-            make_array(data.into_builder().child_data(children).build().unwrap())
-        }
-    }
-}
-
-/// The number of `-0.0` values in `array`, at any nesting depth.
-fn count_negative_zeros(array: &ArrayRef) -> usize {
-    match array.data_type() {
-        DataType::Float32 => array
-            .as_primitive::<Float32Type>()
-            .iter()
-            .flatten()
-            .filter(|v| *v == 0.0 && v.is_sign_negative())
-            .count(),
-        DataType::Float64 => array
-            .as_primitive::<Float64Type>()
-            .iter()
-            .flatten()
-            .filter(|v| *v == 0.0 && v.is_sign_negative())
-            .count(),
-        _ => array
-            .to_data()
-            .child_data()
-            .iter()
-            .map(|child| count_negative_zeros(&make_array(child.clone())))
-            .sum(),
-    }
+/// `random` relies on `has_negative_zero` seeing a `-0.0` inside a list,
+/// and only then.
+#[test]
+fn has_negative_zero_in_lists() {
+    let list = |v: f64| -> ArrayRef {
+        Arc::new(ListArray::from_iter_primitive::<Float64Type, _, _>([Some(
+            vec![Some(1.0), Some(v)],
+        )]))
+    };
+    assert!(!has_negative_zero(&list(0.0)));
+    assert!(has_negative_zero(&list(-0.0)));
 }

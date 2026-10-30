@@ -32,7 +32,7 @@ mod data;
 mod queries;
 mod settings;
 
-use queries::{KnownFailure, TEMPLATES, Template};
+use queries::{KNOWN_FAILURES, KnownFailure, TEMPLATES, Template};
 use settings::Setting;
 
 /// Number of rows in each round of the random test.
@@ -42,26 +42,27 @@ const ROUND_SIZES: &[usize] = &[8, 16, 32, 64, 128];
 /// every other pair must pass.
 #[tokio::test(flavor = "multi_thread")]
 async fn float_zero_fixed() {
-    let data = data::fixed();
+    for known in KNOWN_FAILURES {
+        assert!(
+            TEMPLATES.iter().any(|t| t.name == known.template),
+            "KNOWN_FAILURES names unknown template {}",
+            known.template
+        );
+    }
+
     let mut errors = vec![];
-    for setting in Setting::all() {
-        let ctx = setting.context(&data).unwrap();
-        for template in TEMPLATES {
-            let raw_zero = if setting.negative_literals {
-                "-0.0"
-            } else {
-                "0.0"
-            };
-            let raw_sql = template.render("raw", || raw_zero);
-            let result = check(&ctx, template, &setting, &raw_sql).await;
-            match (result, KnownFailure::matches(template, &setting)) {
-                (Ok(()), None) | (Err(_), Some(_)) => {}
-                (Err(e), None) => errors.push(e),
-                (Ok(()), Some(known)) => errors.push(format!(
-                    "{} under {setting:?} now passes, remove it from KNOWN_FAILURES ({})",
-                    template.name, known.issue
-                )),
-            }
+    for (template, setting, result) in check_all(&data::fixed()).await {
+        match (result, KnownFailure::matches(template, &setting)) {
+            (Ok(()), None) | (Err(Failure::Mismatch(_)), Some(_)) => {}
+            (Err(failure), None) => errors.push(failure.to_string()),
+            (Err(Failure::Error(e)), Some(known)) => errors.push(format!(
+                "{e}\nknown to give a wrong result, but now fails ({})",
+                known.issue
+            )),
+            (Ok(()), Some(known)) => errors.push(format!(
+                "{} under {setting:?} now passes, remove it from KNOWN_FAILURES ({})",
+                template.name, known.issue
+            )),
         }
     }
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
@@ -80,22 +81,11 @@ async fn float_zero_fuzz() {
     let mut errors = vec![];
     for &num_rows in ROUND_SIZES {
         let data = data::random(&mut rng, num_rows);
-        for setting in Setting::all() {
-            let ctx = setting.context(&data).unwrap();
-            for template in TEMPLATES {
-                if KnownFailure::matches(template, &setting).is_some() {
-                    continue;
-                }
-                let raw_sql = template.render("raw", || {
-                    if setting.negative_literals && rng.random_bool(0.5) {
-                        "-0.0"
-                    } else {
-                        "0.0"
-                    }
-                });
-                if let Err(e) = check(&ctx, template, &setting, &raw_sql).await {
-                    errors.push(format!("seed {seed}, {num_rows} rows: {e}"));
-                }
+        for (template, setting, result) in check_all(&data).await {
+            if let Err(failure) = result
+                && KnownFailure::matches(template, &setting).is_none()
+            {
+                errors.push(format!("seed {seed}, {num_rows} rows: {failure}"));
             }
         }
     }
@@ -115,15 +105,51 @@ async fn float_zero_negative_literal() {
     assert!(v == 0.0 && v.is_sign_negative(), "expected -0.0, got {v}");
 }
 
-/// Runs `template` on `canon` and `raw_sql` on `raw`, and compares the
-/// results with all floats normalized.
+/// Why a (template, setting) pair failed.
+enum Failure {
+    /// Both queries ran, but the results differ.
+    Mismatch(String),
+    /// Only one of the queries ran.
+    Error(String),
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failure::Mismatch(msg) | Failure::Error(msg) => f.write_str(msg),
+        }
+    }
+}
+
+/// Runs every template under every setting on `data`. Templates without a
+/// zero literal skip the `negative_literals` settings, which would run the
+/// same queries again.
+async fn check_all(
+    data: &data::Dataset,
+) -> Vec<(&'static Template, Setting, Result<(), Failure>)> {
+    let mut results = vec![];
+    for setting in Setting::all() {
+        let ctx = setting.context(data).unwrap();
+        for template in TEMPLATES {
+            if setting.negative_literals && !template.sql.contains("{z}") {
+                continue;
+            }
+            let result = check(&ctx, template, &setting).await;
+            results.push((template, setting, result));
+        }
+    }
+    results
+}
+
+/// Runs `template` on `raw` and `canon` and compares the results with all
+/// floats normalized.
 async fn check(
     ctx: &SessionContext,
     template: &Template,
     setting: &Setting,
-    raw_sql: &str,
-) -> Result<(), String> {
-    let canon_sql = template.render("canon", || "0.0");
+) -> Result<(), Failure> {
+    let raw_sql = template.render("raw", setting.raw_zero());
+    let canon_sql = template.render("canon", "0.0");
     let describe = || {
         format!(
             "{} under {setting:?}\n  raw:   {raw_sql}\n  canon: {canon_sql}",
@@ -131,7 +157,7 @@ async fn check(
         )
     };
     let canon = run_sql(&canon_sql, ctx).await;
-    let raw = run_sql(raw_sql, ctx).await;
+    let raw = run_sql(&raw_sql, ctx).await;
     let (mut canon, mut raw) = match (canon, raw) {
         (Ok(canon), Ok(raw)) => (format_rows(&canon), format_rows(&raw)),
         (Err(canon), Err(raw)) => {
@@ -140,8 +166,12 @@ async fn check(
                 describe()
             )
         }
-        (Ok(_), Err(e)) => return Err(format!("{}\nraw fails: {e}", describe())),
-        (Err(e), Ok(_)) => return Err(format!("{}\ncanon fails: {e}", describe())),
+        (Ok(_), Err(e)) => {
+            return Err(Failure::Error(format!("{}\nraw fails: {e}", describe())));
+        }
+        (Err(e), Ok(_)) => {
+            return Err(Failure::Error(format!("{}\ncanon fails: {e}", describe())));
+        }
     };
     if !template.ordered {
         canon.sort_unstable();
@@ -156,7 +186,7 @@ async fn check(
         .position(|(c, r)| c != r)
         .map(|i| format!("row {i}: raw {}, canon {}", raw[i], canon[i]))
         .unwrap_or_else(|| format!("raw {} rows, canon {} rows", raw.len(), canon.len()));
-    Err(format!("{}\n{diff}", describe()))
+    Err(Failure::Mismatch(format!("{}\n{diff}", describe())))
 }
 
 /// One string per row, with every float, also nested ones, normalized so

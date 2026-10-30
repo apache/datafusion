@@ -44,6 +44,15 @@ impl Setting {
         settings
     }
 
+    /// The zero literal in the `raw` query.
+    pub fn raw_zero(&self) -> &'static str {
+        if self.negative_literals {
+            "-0.0"
+        } else {
+            "0.0"
+        }
+    }
+
     /// A context with the `raw` and `canon` tables registered.
     pub fn context(&self, data: &Dataset) -> Result<SessionContext> {
         let mut config = SessionConfig::new()

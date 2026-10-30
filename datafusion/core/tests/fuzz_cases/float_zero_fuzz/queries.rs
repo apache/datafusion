@@ -18,13 +18,9 @@ pub struct Template {
 }
 
 impl Template {
-    /// The query for `table`, taking each zero literal from `zero`.
-    pub fn render(&self, table: &str, mut zero: impl FnMut() -> &'static str) -> String {
-        let mut sql = self.sql.replace("{t}", table);
-        while let Some(pos) = sql.find("{z}") {
-            sql.replace_range(pos..pos + 3, zero());
-        }
-        sql
+    /// The query for `table`, with every zero literal written as `zero`.
+    pub fn render(&self, table: &str, zero: &str) -> String {
+        self.sql.replace("{t}", table).replace("{z}", zero)
     }
 }
 
