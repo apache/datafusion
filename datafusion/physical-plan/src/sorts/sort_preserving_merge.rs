@@ -879,6 +879,150 @@ mod tests {
     use insta::assert_snapshot;
     use tokio::time::timeout;
 
+    fn initialization_test_merge(
+        streams: Vec<SendableRecordBatchStream>,
+        schema: SchemaRef,
+        row_conversion: bool,
+    ) -> Result<SendableRecordBatchStream> {
+        let task_ctx = TaskContext::default();
+        let mut expressions = vec![PhysicalSortExpr::new_default(col("a", &schema)?)];
+        if row_conversion {
+            expressions.push(PhysicalSortExpr::new_default(col("b", &schema)?));
+        }
+        let ordering = LexOrdering::new(expressions).expect("at least one sort key");
+        StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_schema(schema)
+            .with_expressions(&ordering)
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            .with_batch_size(4)
+            .with_reservation(
+                MemoryConsumer::new("initialization test")
+                    .register(&task_ctx.runtime_env().memory_pool),
+            )
+            .build()
+    }
+
+    // Outside Tokio, yield_now wakes immediately instead of deferring the wake.
+    #[test]
+    fn merge_initialization_yields_after_batch_size_rows() -> Result<()> {
+        // Poll outside Tokio so the voluntary yield wakes our counting waker directly.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct WakeCount(AtomicUsize);
+        impl std::task::Wake for WakeCount {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let batch = arrow::array::record_batch!(
+            ("a", Int32, [0, 1, 2, 3, 4, 5]),
+            ("b", Int32, [0, 0, 0, 0, 0, 0])
+        )?;
+        let polled = Arc::new(AtomicUsize::new(0));
+        let streams = (0..3)
+            .map(|i| {
+                let polled = Arc::clone(&polled);
+                let input = futures::stream::iter([Ok(batch.slice(i * 2, 2))]).inspect(
+                    move |_| {
+                        polled.fetch_add(1, Ordering::SeqCst);
+                    },
+                );
+                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                    batch.schema(),
+                    input,
+                )) as SendableRecordBatchStream
+            })
+            .collect();
+        let mut merge = initialization_test_merge(streams, batch.schema(), true)?;
+        let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&wakes));
+        let mut cx = Context::from_waker(&waker);
+        let mut next = merge.next();
+        // Two two-row inputs exhaust the four-row budget before the third is read.
+        assert!(next.poll_unpin(&mut cx).is_pending());
+        assert_eq!(polled.load(Ordering::SeqCst), 2);
+        assert!(wakes.0.load(Ordering::SeqCst) > 0);
+        drop(next);
+        let output = futures::executor::block_on(common::collect(merge))?;
+        assert_eq!(
+            arrow::compute::concat_batches(&batch.schema(), &output)?,
+            batch
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn field_cursor_initialization_keeps_ready_inputs_inline() -> Result<()> {
+        let batch = arrow::array::record_batch!(
+            ("a", Int32, [0, 1, 2, 3, 4, 5]),
+            ("b", Int32, [0, 0, 0, 0, 0, 0])
+        )?;
+        let streams = (0..3)
+            .map(|i| {
+                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                    batch.schema(),
+                    futures::stream::iter([Ok(batch.slice(i * 2, 2))]),
+                )) as SendableRecordBatchStream
+            })
+            .collect();
+        let mut merge = initialization_test_merge(streams, batch.schema(), false)?;
+        // Opening six rows exceeds the four-row target, but field cursors stay inline.
+        let first = merge.next().now_or_never().expect("field cursors yielded");
+        let mut output = vec![first.expect("merge returned no rows")?];
+        output.extend(futures::executor::block_on(common::collect(merge))?);
+        assert_eq!(
+            arrow::compute::concat_batches(&batch.schema(), &output)?,
+            batch
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn merge_initialization_repolls_pending_inputs_after_yield() -> Result<()> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let batch = arrow::array::record_batch!(
+            ("a", Int32, (0..12).collect::<Vec<i32>>()),
+            ("b", Int32, vec![0; 12])
+        )?;
+        let released = Arc::new(AtomicBool::new(false));
+        let waiting = Arc::new(Mutex::new(None::<Waker>));
+        let streams = (0..3)
+            .map(|i| {
+                let released = Arc::clone(&released);
+                let waiting = Arc::clone(&waiting);
+                let mut input = Some(batch.slice(i * 4, 4));
+                let stream = futures::stream::poll_fn(move |cx| {
+                    if i == 0 && !released.load(Ordering::SeqCst) {
+                        *waiting.lock().unwrap() = Some(cx.waker().clone());
+                        return Poll::Pending;
+                    }
+                    if i == 2 {
+                        released.store(true, Ordering::SeqCst);
+                        if let Some(waker) = waiting.lock().unwrap().take() {
+                            waker.wake();
+                        }
+                    }
+                    Poll::Ready(input.take().map(Ok))
+                });
+                Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                    batch.schema(),
+                    stream,
+                )) as SendableRecordBatchStream
+            })
+            .collect();
+        let merge = initialization_test_merge(streams, batch.schema(), true)?;
+        // Input 1 triggers a yield. Input 2 then wakes input 0 before the next yield.
+        // Completion must rely on those wakeups, without manually repolling the merge.
+        let output = timeout(Duration::from_secs(3), common::collect(merge))
+            .await
+            .expect("initialization lost a pending input's wakeup")?;
+        assert_eq!(
+            arrow::compute::concat_batches(&batch.schema(), &output)?,
+            batch
+        );
+        Ok(())
+    }
+
     // The number in the function is highly related to the memory limit we are testing
     // any change of the constant should be aware of
     fn generate_task_ctx_for_round_robin_tie_breaker(

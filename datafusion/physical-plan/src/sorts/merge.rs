@@ -73,6 +73,9 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Target batch size
     batch_size: usize,
 
+    /// Yield during startup when creating cursors requires row-key conversion.
+    cooperative_initialization: bool,
+
     /// Cursors for each input partition. `None` means the input is exhausted
     cursors: Vec<Option<Cursor<C>>>,
 
@@ -133,9 +136,15 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             poll_reset_epochs: vec![0; stream_count],
             loser_tree: vec![],
             batch_size,
+            cooperative_initialization: false,
             fetch,
             produced: 0,
         }
+    }
+
+    pub(super) fn with_cooperative_initialization(mut self) -> Self {
+        self.cooperative_initialization = true;
+        self
     }
 
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream
@@ -156,22 +165,24 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// If the stream at the given index is not exhausted, and the last cursor for the
     /// stream is finished, poll the stream for the next RecordBatch and create a new
     /// cursor for the stream from the returned result
+    /// Returns the number of rows read, or zero when no new batch was read.
     fn maybe_poll_stream(
         &mut self,
         cx: &mut Context<'_>,
         idx: usize,
-    ) -> Poll<Result<()>> {
+    ) -> Poll<Result<usize>> {
         if self.cursors[idx].is_some() {
             // Cursor is not finished - don't need a new RecordBatch yet
-            return Poll::Ready(Ok(()));
+            return Poll::Ready(Ok(0));
         }
 
         match futures::ready!(self.streams.poll_next(cx, idx)) {
-            None => Poll::Ready(Ok(())),
+            None => Poll::Ready(Ok(0)),
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
+                let rows = batch.num_rows();
                 self.cursors[idx] = Some(Cursor::new(cursor));
-                Poll::Ready(self.in_progress.push_batch(idx, batch))
+                Poll::Ready(self.in_progress.push_batch(idx, batch).map(|_| rows))
             }
         }
     }
@@ -218,10 +229,15 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 let mut uninitiated_partitions =
                     (0..self.streams.partitions()).collect::<Vec<_>>();
 
-                poll_fn(|cx| {
-                    self.initialize_all_partitions(&mut uninitiated_partitions, cx)
-                })
-                .await?;
+                if self.cooperative_initialization {
+                    self.initialize_partitions_cooperatively(&mut uninitiated_partitions)
+                        .await?;
+                } else {
+                    poll_fn(|cx| {
+                        self.initialize_all_partitions(&mut uninitiated_partitions, cx)
+                    })
+                    .await?;
+                }
 
                 assert_eq!(uninitiated_partitions.len(), 0);
             }
@@ -350,6 +366,66 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             // There is no need to reschedule ourselves eagerly.
             Poll::Pending
         }
+    }
+
+    async fn initialize_partitions_cooperatively(
+        &mut self,
+        uninitiated_partitions: &mut Vec<usize>,
+    ) -> Result<()> {
+        let mut next_partition = 0;
+        // Row-key conversion can monopolize a worker when many inputs are ready.
+        // Use the existing batch target as the row-work budget between yields.
+        let mut initialized_rows = 0usize;
+        while !uninitiated_partitions.is_empty() {
+            let rows = poll_fn(|cx| {
+                self.initialize_next_partition(
+                    uninitiated_partitions,
+                    &mut next_partition,
+                    cx,
+                )
+            })
+            .await?;
+            initialized_rows = initialized_rows.saturating_add(rows);
+            if initialized_rows >= self.batch_size && !uninitiated_partitions.is_empty() {
+                tokio::task::yield_now().await;
+                initialized_rows = 0;
+            }
+        }
+        Ok(())
+    }
+
+    /// Initializes one ready input, polling every remaining input before waiting.
+    /// The scan position survives voluntary yields, avoiding repeated prefix scans.
+    fn initialize_next_partition(
+        &mut self,
+        uninitiated_partitions: &mut Vec<usize>,
+        next_partition: &mut usize,
+        cx: &mut Context,
+    ) -> Poll<Result<usize>> {
+        assert_eq!(
+            self.loser_tree.len(),
+            0,
+            "loser tree must be empty when initializing"
+        );
+
+        for _ in 0..uninitiated_partitions.len() {
+            *next_partition %= uninitiated_partitions.len();
+            let partition_idx = uninitiated_partitions[*next_partition];
+            match self.maybe_poll_stream(cx, partition_idx) {
+                Poll::Ready(Err(e)) => {
+                    return Poll::Ready(Err(e));
+                }
+                Poll::Pending => {
+                    *next_partition += 1;
+                }
+                Poll::Ready(Ok(rows)) => {
+                    uninitiated_partitions.swap_remove(*next_partition);
+                    return Poll::Ready(Ok(rows));
+                }
+            }
+        }
+
+        Poll::Pending
     }
 
     /// Returns the poll count of `partition_idx` for the current tie-breaker
