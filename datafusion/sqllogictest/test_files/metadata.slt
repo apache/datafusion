@@ -652,6 +652,51 @@ NULL the l_name field
 BAR the l_name field
 l_baz the l_name field
 
+# Native binary/NOT fields do not erase a marked sibling result.
+query IT rowsort
+select
+  case when id is null then id + 1 else with_metadata(id, 'case_result', 'marked') end,
+  arrow_metadata(
+    case when id is null then id + 1 else with_metadata(id, 'case_result', 'marked') end,
+    'case_result')
+from table_with_metadata;
+----
+1 marked
+3 marked
+NULL marked
+
+query BT rowsort
+select
+  case when id is null then not (id > 0)
+    else with_metadata(id > 0, 'case_result', 'marked') end,
+  arrow_metadata(
+    case when id is null then not (id > 0)
+      else with_metadata(id > 0, 'case_result', 'marked') end,
+    'case_result')
+from table_with_metadata;
+----
+NULL marked
+true marked
+true marked
+
+# A depth greater than eight must not erase function result metadata.
+query T
+select arrow_metadata(
+  case when id is null then
+    with_metadata(with_metadata(with_metadata(
+      with_metadata(with_metadata(with_metadata(
+        with_metadata(with_metadata(with_metadata(name, 'deep', 'marked'),
+          'deep', 'marked'), 'deep', 'marked'),
+        'deep', 'marked'), 'deep', 'marked'), 'deep', 'marked'),
+      'deep', 'marked'), 'deep', 'marked'), 'deep', 'marked')
+  else name end,
+  'deep')
+from table_with_metadata;
+----
+marked
+marked
+marked
+
 # A LIMIT keeps an unmarked derived column at the physical operator boundary.
 query TT rowsort
 select value, arrow_metadata(value, 'metadata_key') from (

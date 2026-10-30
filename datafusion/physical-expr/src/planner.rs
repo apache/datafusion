@@ -813,7 +813,10 @@ mod tests {
         };
         let logical = when(lit(true), marked(aliased)).otherwise(marked(col("a")))?;
         let logical_field = logical.to_field(&df_schema)?.1;
-        assert!(logical_field.metadata().is_empty());
+        assert_eq!(
+            logical_field.metadata(),
+            &Metadata::new().with("source", "test")
+        );
 
         let physical = create_physical_expr(
             &logical,

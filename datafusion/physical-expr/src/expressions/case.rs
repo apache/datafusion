@@ -9,7 +9,7 @@ use crate::expressions::{
     BinaryExpr, CastExpr, LambdaVariable, NegativeExpr, NotExpr, TryCastExpr, lit,
     try_cast,
 };
-use crate::{HigherOrderFunctionExpr, PhysicalExpr, ScalarFunctionExpr};
+use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
@@ -1337,21 +1337,6 @@ fn case_result_field_metadata(
     case: &CaseExpr,
     input_schema: &Schema,
 ) -> Result<(DataType, Metadata)> {
-    const MAX_EXACT_BRANCH_DEPTH: usize = 8;
-
-    fn can_infer_exact_function_branch(expr: &dyn PhysicalExpr) -> bool {
-        let mut work = vec![(expr, 1)];
-        while let Some((node, depth)) = work.pop() {
-            if depth > MAX_EXACT_BRANCH_DEPTH {
-                return false;
-            }
-            for child in node.children() {
-                work.push((child.as_ref(), depth + 1));
-            }
-        }
-        true
-    }
-
     struct BranchField {
         field: FieldRef,
         certainly_null: bool,
@@ -1419,21 +1404,6 @@ fn case_result_field_metadata(
                 } else if expr.is::<NotExpr>() {
                     fields.push(BranchField {
                         field: Arc::new(Field::new("", DataType::Boolean, true)),
-                        certainly_null: false,
-                    });
-                } else if expr.is::<ScalarFunctionExpr>()
-                    || expr.is::<HigherOrderFunctionExpr>()
-                {
-                    let field = expr.return_field(input_schema)?;
-                    let field = if field.metadata().is_empty()
-                        || can_infer_exact_function_branch(expr)
-                    {
-                        field
-                    } else {
-                        Arc::new(Field::new("", field.data_type().clone(), true))
-                    };
-                    fields.push(BranchField {
-                        field,
                         certainly_null: false,
                     });
                 } else {
@@ -2504,7 +2474,7 @@ mod tests {
     }
 
     #[test]
-    fn case_function_metadata_respects_logical_depth_limit() -> Result<()> {
+    fn case_function_metadata_preserves_cached_fields_at_any_depth() -> Result<()> {
         let metadata = HashMap::from([("logical".to_string(), "binary".to_string())]);
         let schema = Schema::new(vec![
             Field::new("a", DataType::Binary, false).with_metadata(metadata.clone()),
@@ -2522,7 +2492,7 @@ mod tests {
                 .with_metadata(metadata.clone()),
         );
         let options = Arc::new(ConfigOptions::default());
-        for (depth, expected_marked) in [(2, true), (9, false)] {
+        for depth in [2, 9, 32, 128] {
             let mut branch = col("a", &schema)?;
             for _ in 0..depth {
                 branch = Arc::new(ScalarFunctionExpr::new(
@@ -2535,11 +2505,7 @@ mod tests {
             }
             let expr = case(None, vec![(lit(true), branch)], Some(col("b", &schema)?))?;
             let field = expr.return_field(&schema)?;
-            if expected_marked {
-                assert_eq!(field.metadata(), &metadata);
-            } else {
-                assert!(field.metadata().is_empty());
-            }
+            assert_eq!(field.metadata(), &metadata);
         }
         Ok(())
     }
