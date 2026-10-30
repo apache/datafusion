@@ -1435,12 +1435,9 @@ pub use crate::float_semantics::has_float_leaf;
 
 /// Replace `-0.0` with `+0.0` in `Float16`, `Float32`, or `Float64` scalar
 /// values.
-#[deprecated(
-    since = "56.0.0",
-    note = "use `datafusion_common::float_semantics::normalize_float_scalar` instead"
-)]
+#[deprecated(since = "56.0.0", note = "use `ScalarValue::normalize` instead")]
 pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
-    crate::float_semantics::normalize_float_scalar(scalar)
+    scalar.normalize()
 }
 
 /// Apply a struct's nulls to one of its fields.
