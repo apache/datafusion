@@ -90,20 +90,16 @@ git push -u apache branch-55 # push branch to apache remote
 
 ### 2. Prepare PR to Update the Release Version
 
-Update the DataFusion version in the root `Cargo.toml`, in `Cargo.lock` and in the user
-documentation. At the time of this writing the documentation files are
-
-- `docs/source/download.md`
-- `docs/source/user-guide/configs.md`
-- `docs/source/user-guide/crate-configuration.md`
-- `docs/source/user-guide/example-usage.md`
-
-For example, to update the version from `55.1.0` to `55.2.0`:
+Update the DataFusion version using the following Python script:
 
 ```shell
-# version and lockfile
-sed -i '' 's/"55\.1\.0"/"55.2.0"/g' Cargo.toml
-sed -i '' 's/55\.1\.0/55.2.0/' docs/source/download.md docs/source/user-guide/{configs,crate-configuration,example-usage}.md
+# replace NEW_VERSION before executing (e.g., 55.2.0)
+python3 dev/update_datafusion_versions.py NEW_VERSION
+```
+
+This updates the DataFusion version across all files, including documentation. The only extra step required is to update the `Cargo.lock` file, using the following command:
+
+```shell
 cargo update --workspace
 ```
 

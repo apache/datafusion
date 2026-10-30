@@ -16,8 +16,7 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaRef, TimeUnit, UInt32Type,
-    UnionFields,
+    DataType, Field, Fields, Schema, SchemaRef, TimeUnit, UInt32Type, UnionFields,
 };
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
@@ -28,7 +27,6 @@ use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
-use datafusion::logical_expr::planner::TypePlanner;
 use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
@@ -58,7 +56,6 @@ use datafusion::physical_plan::operator_statistics::{
 };
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use log::info;
-use sqlparser::ast;
 use tempfile::TempDir;
 
 mod custom_sort_pushdown;
@@ -70,22 +67,6 @@ pub struct TestContext {
     ctx: SessionContext,
     /// Temporary directory created and cleared at the end of the test
     test_dir: Option<TempDir>,
-}
-
-#[derive(Debug)]
-struct SqlLogicTestTypePlanner;
-
-impl TypePlanner for SqlLogicTestTypePlanner {
-    fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
-        match sql_type {
-            ast::DataType::Uuid => Ok(Some(Arc::new(
-                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
-                ),
-            ))),
-            _ => Ok(None),
-        }
-    }
 }
 
 impl TestContext {
@@ -105,7 +86,13 @@ impl TestContext {
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
-            .with_target_partitions(4);
+            .with_target_partitions(4)
+            // The default `created_by` embeds the DataFusion version, which
+            // changes the size of written parquet files (and thus metrics such
+            // as `scan_efficiency_ratio` in EXPLAIN ANALYZE output) whenever
+            // the version string length changes. Pin it so test output is
+            // independent of the version.
+            .set_str("datafusion.execution.parquet.created_by", "datafusion");
         let pool = crate::memory_drift::wrap_pool(
             Arc::new(UnboundedMemoryPool::default()),
             &relative_path.display().to_string(),
@@ -125,14 +112,6 @@ impl TestContext {
             if let Some(config) = state_builder.config() {
                 config.options_mut().sql_parser.dialect = Dialect::Spark;
             }
-        }
-
-        if matches!(
-            relative_path.file_name().and_then(|name| name.to_str()),
-            Some("cast_extension_type_metadata.slt")
-        ) {
-            state_builder =
-                state_builder.with_type_planner(Arc::new(SqlLogicTestTypePlanner));
         }
 
         if matches!(
