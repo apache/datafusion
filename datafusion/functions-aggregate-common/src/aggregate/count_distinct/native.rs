@@ -112,10 +112,15 @@ where
     }
 
     fn size(&self) -> usize {
-        let num_elements = self.values.len();
-        let fixed_size = size_of_val(self) + size_of_val(&self.values);
-
-        estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
+        // Bulk insertion can reserve for duplicate values too, so the number
+        // of distinct values does not describe the table's allocation.
+        let num_elements = self.values.capacity();
+        let fixed_size = size_of_val(self);
+        if num_elements == 0 {
+            fixed_size
+        } else {
+            estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
+        }
     }
 }
 
@@ -615,6 +620,29 @@ mod tests {
     use super::*;
     use arrow::array::Int64Array;
     use arrow::datatypes::Int64Type;
+
+    #[test]
+    fn empty_size_does_not_include_a_hash_table_allocation() {
+        let acc = PrimitiveDistinctCountAccumulator::<Int64Type>::new(&DataType::Int64);
+        assert_eq!(acc.size(), size_of_val(&acc));
+    }
+
+    #[test]
+    fn size_accounts_for_reserved_capacity() {
+        let mut acc =
+            PrimitiveDistinctCountAccumulator::<Int64Type>::new(&DataType::Int64);
+        let initial = acc.size();
+        acc.values.reserve(10_000);
+        let reserved = acc.size();
+        assert!(reserved >= initial + acc.values.capacity() * size_of::<i64>());
+
+        // Changing the number of values without reallocating must not change
+        // the reported allocation, including when the reserved table is empty.
+        acc.values.extend(0..128);
+        assert_eq!(acc.size(), reserved);
+        acc.values.clear();
+        assert_eq!(acc.size(), reserved);
+    }
 
     #[test]
     fn update_batch_null_free_fast_path_agrees_with_general_path() {
