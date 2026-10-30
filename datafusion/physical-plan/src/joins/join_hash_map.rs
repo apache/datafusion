@@ -15,6 +15,10 @@ use arrow::datatypes::ArrowNativeType;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
+use datafusion_execution::memory_pool::MemoryReservation;
+
+use crate::metrics::Gauge;
+
 /// Resume point of a chunked lookup, see
 /// [`JoinHashMapType::get_matched_indices_with_limit_offset`].
 ///
@@ -30,9 +34,11 @@ use hashbrown::hash_table::Entry::{Occupied, Vacant};
 pub enum ProbeOffset {
     /// Resume at probe row `row`, from the head of its chain.
     AtRow { row: usize },
-    /// Resume in the middle of probe row `row`'s chain, where `next` is the
-    /// 1-based index of the next build row in the chain. `next` is never `0`,
-    /// the end-of-chain marker.
+    /// Resume in the middle of probe row `row`'s matches. In a chain, `next`
+    /// is the 1-based index of the next build row. In rows stored next to each
+    /// other, see [`JoinHashMapType::group_rows`], it is the position of the
+    /// next row, after at least one row of the probe row. Either way, `next`
+    /// is never `0`, the end-of-chain marker.
     MidChain { row: usize, next: u64 },
 }
 
@@ -100,9 +106,8 @@ pub enum ProbeOffset {
 /// ```
 ///
 /// Once every build row has been inserted, [`JoinHashMapType::group_rows`] can replace the
-/// chain with the rows of each hash value stored next to each other, so that a probe row reads
-/// its matches in order instead of loading each next index from the previous one. The map then
-/// holds the position of each hash value's group, which starts with its number of rows:
+/// chain with the rows of each hash value stored next to each other. The map then holds the
+/// position of each hash value's group, which starts with its number of rows:
 ///
 /// ``` text
 /// map:                 groups:
@@ -167,35 +172,45 @@ pub trait JoinHashMapType: Send + Sync {
     /// Returns the number of entries in the join hash map.
     fn len(&self) -> usize;
 
-    /// Returns the number of bytes that [`Self::group_rows`] would allocate,
-    /// or `None` if it would not group the rows: when the hash values have
-    /// fewer than two build rows each on average, the chains are too short for
-    /// grouping to pay for itself.
-    fn grouped_rows_size(&self) -> Option<usize> {
-        None
-    }
-
     /// Stores the build rows of each hash value next to each other, in chain
-    /// order, and drops the chain. A probe row then reads its matches from one
-    /// place, instead of following the chain with a dependent load for every
-    /// match, which misses the cache when the build side is large. Call this
-    /// once every build row has been inserted. Returns the number of bytes
-    /// freed.
-    fn group_rows(&mut self) -> usize {
-        0
+    /// order, and drops the chain, if the hash values have at least two build
+    /// rows each on average and `reservation` can grow by the memory the
+    /// groups take.
+    /// `mem_used` follows the change of `reservation`. Call this once every
+    /// build row has been inserted. Returns whether the rows were grouped.
+    ///
+    /// A probe row then reads its matches from one place, instead of
+    /// following the chain with a dependent load for every match, which misses
+    /// the cache when the build side is large. When the hash values have fewer
+    /// than two rows each on average, the chains are too short for that to pay
+    /// for grouping them.
+    fn group_rows(
+        &mut self,
+        _reservation: &MemoryReservation,
+        _mem_used: &Gauge,
+    ) -> bool {
+        false
     }
 }
 
+/// The build rows of each hash value of a [`JoinHashMapU32`] or
+/// [`JoinHashMapU64`].
+enum KeyRows<T> {
+    /// `next[row]` is the next row (+1) of `row`'s hash value, or `0` after
+    /// its last, and `chained` is whether any hash value has more than one row.
+    Chain { next: Vec<T>, chained: bool },
+    /// The rows grouped by [`JoinHashMapType::group_rows`]: the map holds the
+    /// position of each hash value's group in `groups`, where its number of
+    /// rows is followed by the rows (0-based).
+    Grouped { groups: Vec<T> },
+}
+
 pub struct JoinHashMapU32 {
-    // Stores hash value to last row index, or to its group in `groups`
+    // Stores hash value to last row index, or to its group once the rows are
+    // grouped
     map: HashTable<(u64, u32)>,
-    // Stores indices in chained list data structure
-    next: Vec<u32>,
-    // Whether any hash value maps to more than one row
-    chained: bool,
-    // The build rows of each hash value once `group_rows` has grouped them,
-    // after which `next` is empty
-    groups: Vec<u32>,
+    // The build rows of each hash value
+    rows: KeyRows<u32>,
 }
 
 impl JoinHashMapU32 {
@@ -204,18 +219,17 @@ impl JoinHashMapU32 {
         let chained = map.len() != next.len();
         Self {
             map,
-            next,
-            chained,
-            groups: vec![],
+            rows: KeyRows::Chain { next, chained },
         }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             map: HashTable::with_capacity(cap),
-            next: vec![0; cap],
-            chained: false,
-            groups: vec![],
+            rows: KeyRows::Chain {
+                next: vec![0; cap],
+                chained: false,
+            },
         }
     }
 }
@@ -234,8 +248,10 @@ impl JoinHashMapType for JoinHashMapU32 {
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
         deleted_offset: usize,
     ) {
-        self.chained |=
-            update_from_iter::<u32>(&mut self.map, &mut self.next, iter, deleted_offset);
+        let KeyRows::Chain { next, chained } = &mut self.rows else {
+            unreachable!("build rows are inserted before they are grouped");
+        };
+        *chained |= update_from_iter::<u32>(&mut self.map, next, iter, deleted_offset);
     }
 
     fn get_matched_indices<'a>(
@@ -243,13 +259,12 @@ impl JoinHashMapType for JoinHashMapU32 {
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
         deleted_offset: Option<usize>,
     ) -> (Vec<u32>, Vec<u64>) {
-        get_matched_indices::<u32>(
-            &self.map,
-            &self.next,
-            &self.groups,
-            iter,
-            deleted_offset,
-        )
+        let KeyRows::Chain { next, .. } = &self.rows else {
+            unreachable!(
+                "only the symmetric hash join, which never groups its rows, calls this"
+            );
+        };
+        get_matched_indices::<u32>(&self.map, next, iter, deleted_offset)
     }
 
     fn get_matched_indices_with_limit_offset(
@@ -261,18 +276,31 @@ impl JoinHashMapType for JoinHashMapU32 {
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
     ) -> Option<ProbeOffset> {
-        get_matched_indices_with_limit_offset::<u32>(
-            &self.map,
-            &self.next,
-            &self.groups,
-            !self.chained,
-            hash_values,
-            valid_keys,
-            limit,
-            offset,
-            input_indices,
-            match_indices,
-        )
+        match &self.rows {
+            KeyRows::Chain { next, chained } => {
+                get_matched_indices_with_limit_offset::<u32>(
+                    &self.map,
+                    next,
+                    !chained,
+                    hash_values,
+                    valid_keys,
+                    limit,
+                    offset,
+                    input_indices,
+                    match_indices,
+                )
+            }
+            KeyRows::Grouped { groups } => get_grouped_matched_indices(
+                &self.map,
+                groups,
+                hash_values,
+                valid_keys,
+                limit,
+                offset,
+                input_indices,
+                match_indices,
+            ),
+        }
     }
 
     fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
@@ -287,31 +315,17 @@ impl JoinHashMapType for JoinHashMapU32 {
         self.map.len()
     }
 
-    fn grouped_rows_size(&self) -> Option<usize> {
-        grouped_rows_size(&self.map, &self.next, self.chained)
-    }
-
-    fn group_rows(&mut self) -> usize {
-        if self.grouped_rows_size().is_none() {
-            return 0;
-        }
-        let freed = self.next.capacity() * size_of::<u32>();
-        self.groups = group_rows(&mut self.map, &self.next);
-        self.next = vec![];
-        freed
+    fn group_rows(&mut self, reservation: &MemoryReservation, mem_used: &Gauge) -> bool {
+        group_rows(&mut self.map, &mut self.rows, reservation, mem_used)
     }
 }
 
 pub struct JoinHashMapU64 {
-    // Stores hash value to last row index, or to its group in `groups`
+    // Stores hash value to last row index, or to its group once the rows are
+    // grouped
     map: HashTable<(u64, u64)>,
-    // Stores indices in chained list data structure
-    next: Vec<u64>,
-    // Whether any hash value maps to more than one row
-    chained: bool,
-    // The build rows of each hash value once `group_rows` has grouped them,
-    // after which `next` is empty
-    groups: Vec<u64>,
+    // The build rows of each hash value
+    rows: KeyRows<u64>,
 }
 
 impl JoinHashMapU64 {
@@ -320,18 +334,17 @@ impl JoinHashMapU64 {
         let chained = map.len() != next.len();
         Self {
             map,
-            next,
-            chained,
-            groups: vec![],
+            rows: KeyRows::Chain { next, chained },
         }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             map: HashTable::with_capacity(cap),
-            next: vec![0; cap],
-            chained: false,
-            groups: vec![],
+            rows: KeyRows::Chain {
+                next: vec![0; cap],
+                chained: false,
+            },
         }
     }
 }
@@ -350,8 +363,10 @@ impl JoinHashMapType for JoinHashMapU64 {
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
         deleted_offset: usize,
     ) {
-        self.chained |=
-            update_from_iter::<u64>(&mut self.map, &mut self.next, iter, deleted_offset);
+        let KeyRows::Chain { next, chained } = &mut self.rows else {
+            unreachable!("build rows are inserted before they are grouped");
+        };
+        *chained |= update_from_iter::<u64>(&mut self.map, next, iter, deleted_offset);
     }
 
     fn get_matched_indices<'a>(
@@ -359,13 +374,12 @@ impl JoinHashMapType for JoinHashMapU64 {
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
         deleted_offset: Option<usize>,
     ) -> (Vec<u32>, Vec<u64>) {
-        get_matched_indices::<u64>(
-            &self.map,
-            &self.next,
-            &self.groups,
-            iter,
-            deleted_offset,
-        )
+        let KeyRows::Chain { next, .. } = &self.rows else {
+            unreachable!(
+                "only the symmetric hash join, which never groups its rows, calls this"
+            );
+        };
+        get_matched_indices::<u64>(&self.map, next, iter, deleted_offset)
     }
 
     fn get_matched_indices_with_limit_offset(
@@ -377,18 +391,31 @@ impl JoinHashMapType for JoinHashMapU64 {
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
     ) -> Option<ProbeOffset> {
-        get_matched_indices_with_limit_offset::<u64>(
-            &self.map,
-            &self.next,
-            &self.groups,
-            !self.chained,
-            hash_values,
-            valid_keys,
-            limit,
-            offset,
-            input_indices,
-            match_indices,
-        )
+        match &self.rows {
+            KeyRows::Chain { next, chained } => {
+                get_matched_indices_with_limit_offset::<u64>(
+                    &self.map,
+                    next,
+                    !chained,
+                    hash_values,
+                    valid_keys,
+                    limit,
+                    offset,
+                    input_indices,
+                    match_indices,
+                )
+            }
+            KeyRows::Grouped { groups } => get_grouped_matched_indices(
+                &self.map,
+                groups,
+                hash_values,
+                valid_keys,
+                limit,
+                offset,
+                input_indices,
+                match_indices,
+            ),
+        }
     }
 
     fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
@@ -403,51 +430,69 @@ impl JoinHashMapType for JoinHashMapU64 {
         self.map.len()
     }
 
-    fn grouped_rows_size(&self) -> Option<usize> {
-        grouped_rows_size(&self.map, &self.next, self.chained)
-    }
-
-    fn group_rows(&mut self) -> usize {
-        if self.grouped_rows_size().is_none() {
-            return 0;
-        }
-        let freed = self.next.capacity() * size_of::<u64>();
-        self.groups = group_rows(&mut self.map, &self.next);
-        self.next = vec![];
-        freed
+    fn group_rows(&mut self, reservation: &MemoryReservation, mem_used: &Gauge) -> bool {
+        group_rows(&mut self.map, &mut self.rows, reservation, mem_used)
     }
 }
 
 use crate::joins::chain::{emit_grouped_rows, traverse_chain};
 use crate::joins::join_hash_map::ProbeOffset::{AtRow, MidChain};
 
-/// Returns the number of bytes that [`group_rows`] allocates for `map` and
-/// `next`, or `None` if the hash values have fewer than two rows each on
-/// average, or if a position in the groups would not fit in `T`.
-fn grouped_rows_size<T>(
-    map: &HashTable<(u64, T)>,
-    next: &[T],
-    chained: bool,
-) -> Option<usize>
+/// See [`JoinHashMapType::group_rows`].
+fn group_rows<T>(
+    map: &mut HashTable<(u64, T)>,
+    rows: &mut KeyRows<T>,
+    reservation: &MemoryReservation,
+    mem_used: &Gauge,
+) -> bool
 where
-    T: ArrowNativeType,
+    T: ArrowNativeType + Sub<Output = T> + PartialEq,
 {
-    // Following a chain costs a cache miss for each row after the first, which
-    // only adds up when the average chain is long enough. `next.len()` counts
-    // the rows left out of the map, such as NULL keys, too.
-    if !chained || next.len() < map.len().saturating_mul(2) {
+    let KeyRows::Chain {
+        next,
+        chained: true,
+    } = rows
+    else {
+        return false;
+    };
+    let Some(len) = grouped_rows_len(map.len(), next) else {
+        return false;
+    };
+    let size = len * size_of::<T>();
+    if reservation.try_grow(size).is_err() {
+        return false;
+    }
+    mem_used.add(size);
+    let groups = group_chains(map, next, len);
+    let freed = next.capacity() * size_of::<T>();
+    *rows = KeyRows::Grouped { groups };
+    reservation.shrink(freed);
+    mem_used.sub(freed);
+    true
+}
+
+/// Returns the length of the groups of the `map_len` hash values whose chains
+/// are in `next`, or `None` if the hash values have fewer than two rows each
+/// on average, or if a position in the groups would not fit in `T`.
+fn grouped_rows_len<T: ArrowNativeType>(map_len: usize, next: &[T]) -> Option<usize> {
+    // Each row inserted after the first of its hash value points at the row
+    // inserted before it, while the rows left out of the map, such as NULL
+    // keys, keep `0`.
+    let zero = T::usize_as(0);
+    let chained_rows = next.iter().filter(|&&index| index != zero).count();
+    if chained_rows < map_len {
         return None;
     }
-    // Each group holds its length and then its rows.
-    let len = next.len().checked_add(map.len())?;
-    T::from_usize(len).map(|_| len * size_of::<T>())
+    // Each group holds its number of rows and then its rows.
+    let len = map_len.checked_mul(2)?.checked_add(chained_rows)?;
+    T::from_usize(len).map(|_| len)
 }
 
 /// Lays out the rows of each hash value in `map` next to each other, in the
-/// order of their chain in `next`, and points each map entry at its group: at
-/// `pos` the group holds its number of rows, followed by the rows (0-based).
-/// Returns the groups.
-fn group_rows<T>(map: &mut HashTable<(u64, T)>, next: &[T]) -> Vec<T>
+/// order of their chain in `next`, in groups of length `len` in all, and points
+/// each map entry at its group: at `pos` the group holds its number of rows,
+/// followed by the rows (0-based). Returns the groups.
+fn group_chains<T>(map: &mut HashTable<(u64, T)>, next: &[T], len: usize) -> Vec<T>
 where
     T: ArrowNativeType + Sub<Output = T> + PartialEq,
 {
@@ -472,7 +517,7 @@ where
 
     let zero = T::usize_as(0);
     let one = T::usize_as(1);
-    let mut groups = Vec::with_capacity(next.len() + map.len());
+    let mut groups = Vec::with_capacity(len);
     let mut entries = map.iter_mut().map(|(_, value)| value);
     let mut lanes: Vec<Lane<'_, T>> = entries
         .by_ref()
@@ -610,12 +655,9 @@ where
     chained
 }
 
-/// `groups` holds the rows grouped by [`JoinHashMapType::group_rows`], or is empty if the rows
-/// are in the chain in `next`.
 pub fn get_matched_indices<'a, T>(
     map: &HashTable<(u64, T)>,
     next: &[T],
-    groups: &[T],
     iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
     deleted_offset: Option<usize>,
 ) -> (Vec<u32>, Vec<u64>)
@@ -627,33 +669,6 @@ where
     let mut match_indices = vec![];
     let zero = T::try_from(0).unwrap();
     let one = T::try_from(1).unwrap();
-
-    if !groups.is_empty() {
-        for (row_idx, hash_value) in iter {
-            if let Some((_, pos)) =
-                map.find(*hash_value, |(hash, _)| *hash_value == *hash)
-            {
-                let pos: u64 = (*pos).into();
-                let pos = pos as usize;
-                let len: u64 = groups[pos].into();
-                for &row in &groups[pos + 1..=pos + len as usize] {
-                    let match_row_idx = if let Some(offset) = deleted_offset {
-                        let offset = T::try_from(offset).unwrap();
-                        if row < offset {
-                            // End of the list due to pruning, as for the chain
-                            break;
-                        }
-                        row - offset
-                    } else {
-                        row
-                    };
-                    match_indices.push(match_row_idx.into());
-                    input_indices.push(row_idx as u32);
-                }
-            }
-        }
-        return (input_indices, match_indices);
-    }
 
     for (row_idx, hash_value) in iter {
         // Get the hash and find it in the index
@@ -689,13 +704,11 @@ where
 }
 
 /// `unique` must be `true` only if every hash value in `map` maps to a single
-/// row; the chain in `next_chain` is then not traversed. `groups` holds the
-/// rows grouped by [`JoinHashMapType::group_rows`], or is empty if the rows are in the chain.
+/// row; the chain in `next_chain` is then not traversed.
 #[expect(clippy::too_many_arguments)]
 pub fn get_matched_indices_with_limit_offset<T>(
     map: &HashTable<(u64, T)>,
     next_chain: &[T],
-    groups: &[T],
     unique: bool,
     hash_values: &[u64],
     valid_keys: Option<&NullBuffer>,
@@ -744,19 +757,6 @@ where
     }
 
     let mut remaining_output = limit;
-
-    if !groups.is_empty() {
-        return get_grouped_matched_indices(
-            map,
-            groups,
-            hash_values,
-            valid_keys,
-            offset,
-            &mut remaining_output,
-            input_indices,
-            match_indices,
-        );
-    }
 
     // Calculate initial `hash_values` index before iterating
     let to_skip = match offset {
@@ -811,22 +811,28 @@ where
     None
 }
 
-/// The lookup of [`get_matched_indices_with_limit_offset`] once the rows are
-/// grouped: the matches of a probe row are the rows of its group.
+/// [`get_matched_indices_with_limit_offset`] for the rows grouped by
+/// [`JoinHashMapType::group_rows`]: the matches of a probe row are the rows of
+/// its group.
 #[expect(clippy::too_many_arguments)]
 fn get_grouped_matched_indices<T>(
     map: &HashTable<(u64, T)>,
     groups: &[T],
     hash_values: &[u64],
     valid_keys: Option<&NullBuffer>,
+    limit: usize,
     offset: ProbeOffset,
-    remaining_output: &mut usize,
     input_indices: &mut Vec<u32>,
     match_indices: &mut Vec<u64>,
 ) -> Option<ProbeOffset>
 where
     T: Copy + Into<u64>,
 {
+    // Clear the buffer before producing new results
+    input_indices.clear();
+    match_indices.clear();
+    let mut remaining_output = limit;
+
     // The position of the group of `hash`, and the end of its rows
     let find_group = |hash: u64| {
         map.find(hash, |(h, _)| hash == *h).map(|(_, pos)| {
@@ -849,11 +855,10 @@ where
                 .expect("a probe row resumed mid-group has a group");
             let is_last = idx == hash_values_len - 1;
             if let Some(next_offset) = emit_grouped_rows(
-                groups,
+                &groups[..end],
                 next_pos as usize,
-                end,
                 idx,
-                remaining_output,
+                &mut remaining_output,
                 input_indices,
                 match_indices,
                 is_last,
@@ -873,11 +878,10 @@ where
         if let Some((pos, end)) = find_group(hash) {
             let is_last = row_idx == hash_values_len - 1;
             if let Some(next_offset) = emit_grouped_rows(
-                groups,
+                &groups[..end],
                 pos + 1,
-                end,
                 row_idx,
-                remaining_output,
+                &mut remaining_output,
                 input_indices,
                 match_indices,
                 is_last,
@@ -900,6 +904,10 @@ pub fn contain_hashes<T>(map: &HashTable<(u64, T)>, hash_values: &[u64]) -> Bool
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+    };
+    use std::sync::Arc;
 
     #[test]
     fn test_contain_hashes() {
@@ -1079,35 +1087,58 @@ mod tests {
         }
     }
 
-    /// Builds two maps from the same rows, inserted batch by batch and last
-    /// to first as `update_hash` does, with row 7 left out as a NULL key would
-    /// be, and groups the rows of the second.
+    /// Builds a map from `build_hashes`, inserted batch by batch and last to
+    /// first as `update_hash` does, leaving out the rows without a hash as it
+    /// leaves out NULL keys.
+    fn build_map<M: JoinHashMapType>(
+        new_map: impl Fn(usize) -> M,
+        build_hashes: &[Option<u64>],
+    ) -> M {
+        let mut hash_map = new_map(build_hashes.len());
+        for (batch_idx, hashes) in build_hashes.chunks(64).enumerate().rev() {
+            let offset = batch_idx * 64;
+            hash_map.update_from_iter(
+                Box::new(
+                    hashes
+                        .iter()
+                        .enumerate()
+                        .filter_map(move |(i, hash)| {
+                            hash.as_ref().map(|h| (offset + i, h))
+                        })
+                        .rev(),
+                ),
+                0,
+            );
+        }
+        hash_map
+    }
+
+    /// A reservation of `size` bytes from an unbounded pool, and a gauge that
+    /// follows it, as `build_mem_used` follows the build's reservation.
+    fn reserved(size: usize) -> (MemoryReservation, Gauge) {
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation = MemoryConsumer::new("test").register(&pool);
+        reservation.grow(size);
+        let mem_used = Gauge::new();
+        mem_used.add(size);
+        (reservation, mem_used)
+    }
+
+    /// Builds two maps from the same rows, with row 7 left out as a NULL key
+    /// would be, and groups the rows of the second.
     fn chained_and_grouped<M: JoinHashMapType>(
         new_map: impl Fn(usize) -> M,
         build_hashes: &[u64],
     ) -> (M, M) {
-        let insert = |hash_map: &mut M| {
-            for (batch_idx, hashes) in build_hashes.chunks(64).enumerate().rev() {
-                let offset = batch_idx * 64;
-                hash_map.update_from_iter(
-                    Box::new(
-                        hashes
-                            .iter()
-                            .enumerate()
-                            .map(move |(i, hash)| (offset + i, hash))
-                            .filter(|(row, _)| *row != 7)
-                            .rev(),
-                    ),
-                    0,
-                );
-            }
-        };
-        let mut chained = new_map(build_hashes.len());
-        insert(&mut chained);
-        let mut grouped = new_map(build_hashes.len());
-        insert(&mut grouped);
-        assert!(grouped.grouped_rows_size().is_some());
-        assert!(grouped.group_rows() > 0);
+        let build_hashes: Vec<Option<u64>> = build_hashes
+            .iter()
+            .enumerate()
+            .map(|(row, &hash)| (row != 7).then_some(hash))
+            .collect();
+        let chained = build_map(&new_map, &build_hashes);
+        let mut grouped = build_map(&new_map, &build_hashes);
+        let (reservation, mem_used) = reserved(build_hashes.len() * size_of::<u64>());
+        assert!(grouped.group_rows(&reservation, &mem_used));
         (chained, grouped)
     }
 
@@ -1122,7 +1153,7 @@ mod tests {
 
         let (chained, grouped) =
             chained_and_grouped(JoinHashMapU32::with_capacity, &build_hashes);
-        let (chained_u64, grouped_u64) =
+        let (_, grouped_u64) =
             chained_and_grouped(JoinHashMapU64::with_capacity, &build_hashes);
         for limit in [1, 2, 3, 5, 23, 64, 8192] {
             for valid in [None, Some(&valid_keys)] {
@@ -1130,20 +1161,11 @@ mod tests {
                 assert!(!expected.is_empty());
                 assert_eq!(all_matches(&grouped, &probe_hashes, valid, limit), expected);
                 assert_eq!(
-                    all_matches(&chained_u64, &probe_hashes, valid, limit),
-                    expected
-                );
-                assert_eq!(
                     all_matches(&grouped_u64, &probe_hashes, valid, limit),
                     expected
                 );
             }
         }
-
-        let iter = || Box::new(probe_hashes.iter().enumerate());
-        let expected = chained.get_matched_indices(iter(), None);
-        assert_eq!(grouped.get_matched_indices(iter(), None), expected);
-        assert_eq!(grouped_u64.get_matched_indices(iter(), None), expected);
         assert_eq!(
             grouped.contain_hashes(&probe_hashes),
             chained.contain_hashes(&probe_hashes)
@@ -1169,46 +1191,94 @@ mod tests {
     }
 
     #[test]
-    fn test_unique_hash_values_are_not_grouped() {
-        let mut hash_map = JoinHashMapU32::with_capacity(3);
-        hash_map.update_from_iter(Box::new([10u64, 20u64, 30u64].iter().enumerate()), 0);
-        assert_eq!(hash_map.grouped_rows_size(), None);
-        assert_eq!(hash_map.group_rows(), 0);
+    fn test_which_build_rows_are_grouped() {
+        let n = None;
+        // The build hashes, `None` for a row left out as a NULL key is, and the
+        // length of the groups if the rows are grouped: the number of rows of
+        // each hash value, and the rows.
+        let cases: &[(&[Option<u64>], Option<usize>)] = &[
+            // Unique hash values
+            (&[Some(10), Some(20), Some(30)], None),
+            // Four rows over three hash values, fewer than two each on average
+            (&[Some(10), Some(20), Some(30), Some(10)], None),
+            // Two rows each on average
+            (&[Some(10), Some(20), Some(10), Some(20)], Some(2 + 4)),
+            (&[Some(10), Some(20), Some(10), Some(10)], Some(2 + 4)),
+            // The rows left out count towards neither the average...
+            (&[Some(10), n, n, n, n, Some(20), Some(10), Some(30)], None),
+            // ...nor the groups
+            (
+                &[Some(10), n, Some(10), n, Some(10), Some(20), Some(20)],
+                Some(2 + 5),
+            ),
+        ];
+        for &(build_hashes, groups_len) in cases {
+            let u32_map = JoinHashMapU32::with_capacity;
+            assert_grouped(u32_map, size_of::<u32>(), build_hashes, groups_len);
+            let u64_map = JoinHashMapU64::with_capacity;
+            assert_grouped(u64_map, size_of::<u64>(), build_hashes, groups_len);
+        }
+    }
+
+    /// Asserts that the rows of a map with indices of `index_size` bytes,
+    /// built from `build_hashes`, are grouped in groups of `groups_len`
+    /// indices, or keep their chain if `None`, and that their matches are the
+    /// build rows with the probe row's hash, in order.
+    fn assert_grouped<M: JoinHashMapType>(
+        new_map: impl Fn(usize) -> M,
+        index_size: usize,
+        build_hashes: &[Option<u64>],
+        groups_len: Option<usize>,
+    ) {
+        let mut hash_map = build_map(new_map, build_hashes);
+        let chain_size = build_hashes.len() * index_size;
+        let (reservation, mem_used) = reserved(chain_size);
         assert_eq!(
-            all_matches(&hash_map, &[30, 10, 40], None, 8192),
-            vec![(0, 2), (1, 0)]
+            hash_map.group_rows(&reservation, &mem_used),
+            groups_len.is_some(),
+            "{build_hashes:?}"
+        );
+        // The groups take the place of the chain in the reservation
+        let size = groups_len.map_or(chain_size, |len| len * index_size);
+        assert_eq!(reservation.size(), size, "{build_hashes:?}");
+        assert_eq!(mem_used.value(), size, "{build_hashes:?}");
+
+        let probe_hashes = [10, 20, 30, 40];
+        let expected: Vec<(u32, u64)> = probe_hashes
+            .iter()
+            .enumerate()
+            .flat_map(|(p, &hash)| {
+                build_hashes
+                    .iter()
+                    .enumerate()
+                    .filter(move |(_, build_hash)| **build_hash == Some(hash))
+                    .map(move |(b, _)| (p as u32, b as u64))
+            })
+            .collect();
+        assert_eq!(
+            all_matches(&hash_map, &probe_hashes, None, 8192),
+            expected,
+            "{build_hashes:?}"
         );
     }
 
     #[test]
-    fn test_short_chains_are_not_grouped() {
-        // Four rows over three hash values: fewer than two rows each on average
-        let mut hash_map = JoinHashMapU32::with_capacity(4);
-        hash_map.update_from_iter(
-            Box::new([10u64, 20u64, 30u64, 10u64].iter().enumerate().rev()),
-            0,
-        );
-        assert_eq!(hash_map.grouped_rows_size(), None);
-        assert_eq!(hash_map.group_rows(), 0);
-        assert_eq!(
-            all_matches(&hash_map, &[10, 30], None, 8192),
-            vec![(0, 0), (0, 3), (1, 2)]
-        );
-    }
+    fn test_rows_stay_chained_without_memory() {
+        let build_hashes: Vec<Option<u64>> =
+            [10, 20, 10, 10].into_iter().map(Some).collect();
+        let mut hash_map = build_map(JoinHashMapU32::with_capacity, &build_hashes);
+        // A pool with room for the chain only
+        let chain_size = build_hashes.len() * size_of::<u32>();
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(chain_size));
+        let reservation = MemoryConsumer::new("test").register(&pool);
+        reservation.try_grow(chain_size).unwrap();
+        let mem_used = Gauge::new();
+        mem_used.add(chain_size);
 
-    #[test]
-    fn test_group_rows_replaces_the_chain() {
-        let mut hash_map = JoinHashMapU64::with_capacity(4);
-        hash_map.update_from_iter(
-            Box::new([10u64, 20u64, 10u64, 10u64].iter().enumerate().rev()),
-            0,
-        );
-        // A length and the rows for each of the two hash values
-        assert_eq!(hash_map.grouped_rows_size(), Some(6 * size_of::<u64>()));
-        assert_eq!(hash_map.group_rows(), 4 * size_of::<u64>());
-        assert!(hash_map.next.is_empty());
-        assert_eq!(hash_map.groups.len(), 6);
-        // The rows of a hash value keep the chain's order, earliest first
+        assert!(!hash_map.group_rows(&reservation, &mem_used));
+        assert!(matches!(hash_map.rows, KeyRows::Chain { .. }));
+        assert_eq!(reservation.size(), chain_size);
+        assert_eq!(mem_used.value(), chain_size);
         assert_eq!(
             all_matches(&hash_map, &[10, 20], None, 8192),
             vec![(0, 0), (0, 2), (0, 3), (1, 1)]

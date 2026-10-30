@@ -102,6 +102,7 @@ pub(crate) const HASH_JOIN_SEED: SeededRandomState =
     SeededRandomState::with_seed(12210250226015887276);
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
+const GROUPED_MAP_COUNT_METRIC_NAME: &str = "grouped_map_count";
 
 /// Decides whether the build side should be joined with an [`ArrayMap`]
 /// (perfect hash join), returning the `(min, max)` key range to build it over.
@@ -1665,6 +1666,9 @@ impl ExecutionPlan for HashJoinExec {
         let array_map_created_count = MetricBuilder::new(&self.metrics)
             .with_category(MetricCategory::Rows)
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
+        let grouped_map_count = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
+            .counter(GROUPED_MAP_COUNT_METRIC_NAME, partition);
 
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
@@ -1723,6 +1727,7 @@ impl ExecutionPlan for HashJoinExec {
                     self.null_equality,
                     not_in,
                     array_map_created_count,
+                    grouped_map_count,
                     BuildMode::Ordinary,
                 ))
             })?,
@@ -1745,6 +1750,7 @@ impl ExecutionPlan for HashJoinExec {
                     self.null_equality,
                     not_in,
                     array_map_created_count,
+                    grouped_map_count,
                     BuildMode::Ordinary,
                 ))
             }
@@ -3065,6 +3071,7 @@ async fn collect_left_input(
     null_equality: NullEquality,
     not_in: Option<NotIn>,
     array_map_created_count: Count,
+    grouped_map_count: Count,
     mode: BuildMode,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
@@ -3158,6 +3165,7 @@ async fn collect_left_input(
         null_equality,
         not_in,
         &array_map_created_count,
+        &grouped_map_count,
         prepared,
     )
 }
@@ -3189,11 +3197,12 @@ fn build_in_memory(
     null_equality: NullEquality,
     not_in: Option<NotIn>,
     array_map_created_count: &Count,
+    grouped_map_count: &Count,
     prepared: bool,
 ) -> Result<JoinLeftData> {
     let is_phj_candidate = is_perfect_hash_join_candidate(on_left, schema)?;
 
-    let (join_hash_map, batch, left_values) = if let Some((min_val, max_val)) =
+    let (mut join_hash_map, batch, left_values) = if let Some((min_val, max_val)) =
         array_map_key_range(
             bounds.as_ref(),
             schema,
@@ -3213,6 +3222,9 @@ fn build_in_memory(
         let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
 
         array_map_created_count.add(1);
+        if array_map.is_grouped() {
+            grouped_map_count.add(1);
+        }
         metrics.build_mem_used.add(array_map.size());
 
         (Map::ArrayMap(array_map), batch, left_values)
@@ -3254,18 +3266,6 @@ fn build_in_memory(
                 true,
                 null_equality,
             )?;
-        }
-
-        // Store the rows of each repeated key next to each other, so that a
-        // probe reads its matches in order. Keep the chain if the memory for
-        // the groups is not available.
-        if let Some(size) = hashmap.grouped_rows_size()
-            && reservation.try_grow(size).is_ok()
-        {
-            metrics.build_mem_used.add(size);
-            let freed = hashmap.group_rows();
-            reservation.shrink(freed);
-            metrics.build_mem_used.sub(freed);
         }
 
         // Merge all batches into a single batch, so we can directly index into the arrays
@@ -3330,6 +3330,15 @@ fn build_in_memory(
             )
         })
         .transpose()?;
+
+    // Grouping the rows of repeated keys is optional: it keeps the chain if
+    // the memory for the groups is not available. Doing it after every
+    // reservation the build needs keeps it from making one of them fail.
+    if let Map::HashMap(hashmap) = &mut join_hash_map
+        && hashmap.group_rows(&reservation, &metrics.build_mem_used)
+    {
+        grouped_map_count.add(1);
+    }
 
     let map = Arc::new(join_hash_map);
 
@@ -3620,6 +3629,111 @@ mod tests {
         assert!(build_mem_used(1_000_000, false).await? < 100_000);
         assert!(build_mem_used(1_000_000, true).await? > 100_000);
         build_mem_used(100_000, true).await?;
+        Ok(())
+    }
+
+    /// Joins 10 build batches of 1,000 rows, whose keys are `key(row)`, with
+    /// three probe rows, in `pool`, and returns how many maps had their rows
+    /// grouped.
+    async fn grouped_build(
+        key: impl Fn(i64) -> i64,
+        pool: Arc<dyn MemoryPool>,
+    ) -> Result<usize> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let batch = |keys: Vec<i64>| {
+            let column = Arc::new(Int64Array::from(keys)) as ArrayRef;
+            RecordBatch::try_new(Arc::clone(&schema), vec![column])
+        };
+        let build_batches = (0..10)
+            .map(|b| batch((b * 1_000..(b + 1) * 1_000).map(&key).collect()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let build =
+            TestMemoryExec::try_new_exec(&[build_batches], Arc::clone(&schema), None)?;
+        let probe = batch(vec![key(0), key(1), key(999)])?;
+        let probe =
+            TestMemoryExec::try_new_exec(&[vec![probe]], Arc::clone(&schema), None)?;
+        let on = vec![(
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+        )];
+        let join = join(
+            build,
+            probe,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+        )?;
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(pool)
+            .build_arc()?;
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        common::collect(join.execute(0, task_ctx)?).await?;
+        Ok(join
+            .metrics()
+            .unwrap()
+            .sum_by_name(GROUPED_MAP_COUNT_METRIC_NAME)
+            .unwrap()
+            .as_usize())
+    }
+
+    /// Grouping the rows of repeated keys comes after every reservation the
+    /// build needs, and is skipped without the memory for it, so a build that
+    /// fits without its groups never fails for them.
+    #[tokio::test]
+    async fn grouping_needs_no_more_memory_than_the_build() -> Result<()> {
+        use std::fmt::{self, Display};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// An unbounded pool that remembers the most it had reserved at once
+        #[derive(Debug, Default)]
+        struct PeakPool {
+            reserved: AtomicUsize,
+            peak: AtomicUsize,
+        }
+        impl Display for PeakPool {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "PeakPool")
+            }
+        }
+        impl MemoryPool for PeakPool {
+            fn name(&self) -> &str {
+                "PeakPool"
+            }
+            fn grow(&self, _: &MemoryReservation, additional: usize) {
+                let reserved = self.reserved.fetch_add(additional, Ordering::Relaxed);
+                self.peak
+                    .fetch_max(reserved + additional, Ordering::Relaxed);
+            }
+            fn shrink(&self, _: &MemoryReservation, shrink: usize) {
+                self.reserved.fetch_sub(shrink, Ordering::Relaxed);
+            }
+            fn try_grow(
+                &self,
+                reservation: &MemoryReservation,
+                additional: usize,
+            ) -> Result<()> {
+                self.grow(reservation, additional);
+                Ok(())
+            }
+            fn reserved(&self) -> usize {
+                self.reserved.load(Ordering::Relaxed)
+            }
+        }
+
+        // The memory a build of 10,000 rows needs without grouping: that of a
+        // build with unique keys, whose map and chain take the same room
+        let pool = Arc::new(PeakPool::default());
+        grouped_build(|row| row * 1_000_003, Arc::clone(&pool) as _).await?;
+        let limit = pool.peak.load(Ordering::Relaxed);
+
+        // With 10 rows for each of 1,000 keys, the build still fits and groups
+        // its rows, with sparse keys for a hash map and dense keys for an
+        // `ArrayMap`
+        for spacing in [1_000_003, 1] {
+            let pool = Arc::new(GreedyMemoryPool::new(limit));
+            assert_eq!(grouped_build(|row| (row % 1_000) * spacing, pool).await?, 1);
+        }
         Ok(())
     }
 
@@ -4293,6 +4407,7 @@ mod tests {
             Arc::new(ConfigOptions::default()),
             NullEquality::NullEqualsNothing,
             None,
+            Count::new(),
             Count::new(),
             BuildMode::Ordinary,
         )

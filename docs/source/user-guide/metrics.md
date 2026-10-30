@@ -60,6 +60,7 @@ subsequent join processing time.
 | probe_hit_rate          | Fraction of probe-side rows with a build-side join-key match before applying any join filter.             |
 | avg_fanout              | Average number of build-side join-key matches per matched probe-side row before applying any join filter. |
 | array_map_created_count | Number of times `HashJoinExec` created an `ArrayMap` for perfect hash join lookup execution.              |
+| grouped_map_count       | Number of build-side maps that store the rows of each repeated key next to each other.                    |
 
 ### AggregateExec
 
