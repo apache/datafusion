@@ -879,6 +879,42 @@ mod tests {
     use insta::assert_snapshot;
     use tokio::time::timeout;
 
+    #[test]
+    fn merging_sorted_partitions_clears_explicit_grouping() -> Result<()> {
+        // Each partition is grouped on `a`, but merging on `b` splits the `a` runs.
+        let first = test::build_table_i32_two_cols(
+            ("a", &vec![1, 1, 2, 2]),
+            ("b", &vec![1, 3, 5, 7]),
+        );
+        let second = test::build_table_i32_two_cols(
+            ("a", &vec![2, 2, 1, 1]),
+            ("b", &vec![2, 4, 6, 8]),
+        );
+        let schema = first.schema();
+        let grouping = col("a", &schema)?;
+        let sort_key = col("b", &schema)?;
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::clone(&sort_key))].into();
+        let input = TestMemoryExec::try_new(&[vec![first], vec![second]], schema, None)?
+            .try_with_sort_information(vec![ordering.clone()])?
+            .try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?;
+        assert!(
+            input
+                .properties()
+                .equivalence_properties()
+                .grouping_satisfy([Arc::clone(&grouping)])?
+        );
+        let merge = SortPreservingMergeExec::new(ordering.clone(), Arc::new(input));
+        let properties = merge.properties().equivalence_properties();
+
+        assert!(properties.geq_class().is_empty());
+        assert!(!properties.grouping_satisfy([grouping])?);
+        // The merge key remains ordered, and therefore grouped.
+        assert!(properties.ordering_satisfy(ordering)?);
+        assert!(properties.grouping_satisfy([sort_key])?);
+        Ok(())
+    }
+
     // The number in the function is highly related to the memory limit we are testing
     // any change of the constant should be aware of
     fn generate_task_ctx_for_round_robin_tie_breaker(

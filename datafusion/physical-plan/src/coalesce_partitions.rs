@@ -463,8 +463,31 @@ mod tests {
 
     use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr::expressions::col;
 
     use futures::FutureExt;
+
+    #[rstest::rstest]
+    #[case::single_partition(1)]
+    #[case::multiple_partitions(2)]
+    fn coalesce_clears_explicit_grouping(#[case] partitions: usize) -> Result<()> {
+        let input = test::mem_exec(partitions);
+        let grouping = col("i", &input.schema())?;
+        let input = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
+        );
+        assert!(
+            input
+                .properties()
+                .equivalence_properties()
+                .grouping_satisfy([Arc::clone(&grouping)])?
+        );
+        let merge = CoalescePartitionsExec::new(input);
+        let properties = merge.properties().equivalence_properties();
+        assert!(properties.geq_class().is_empty());
+        assert!(!properties.grouping_satisfy([grouping])?);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn merge() -> Result<()> {
