@@ -1,0 +1,164 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# The optimizer must not evaluate a volatile call more times than the query
+# says, because each evaluation gives a different answer.
+#
+# `counted_volatile(x)` returns `x`, is volatile like `random()`, and counts
+# the rows it is evaluated for. `evaluations()` returns that count and resets
+# it. `counted_immutable(x)` is the same, but immutable. See
+# `datafusion/sqllogictest/src/test_context/evaluation_counter.rs`.
+
+statement ok
+CREATE TABLE t (a INT, b DOUBLE, n INT) AS VALUES
+  (1, 1.5, 1), (2, 2.5, NULL), (3, 3.5, 3), (4, 4.5, NULL), (5, 5.5, 5),
+  (6, 6.5, 6), (7, 7.5, NULL), (8, 8.5, 8), (9, 9.5, 9), (10, 10.5, NULL);
+
+statement ok
+SELECT evaluations();
+
+# One evaluation per row.
+
+query I
+SELECT count(counted_volatile(a)) FROM t;
+----
+10
+
+query I
+SELECT evaluations();
+----
+10
+
+# A volatile column used two times is evaluated one time.
+
+query I
+SELECT count(*) FROM (SELECT r, r + 1 AS r1 FROM (SELECT counted_volatile(a) AS r FROM t)) WHERE r1 = r + 1;
+----
+10
+
+query I
+SELECT evaluations();
+----
+10
+
+# Two calls in the query are two evaluations: they must not be merged.
+
+query I
+SELECT count(x + y) FROM (SELECT counted_volatile(a) AS x, counted_volatile(a) AS y FROM t);
+----
+10
+
+query I
+SELECT evaluations();
+----
+20
+
+# A filter on a volatile column is not pushed below the projection that
+# computes it.
+
+query I
+SELECT count(*) FROM (SELECT counted_volatile(a) AS r FROM t) WHERE r > 5;
+----
+5
+
+query I
+SELECT evaluations();
+----
+10
+
+# The same, above a join.
+
+query I
+SELECT count(*) FROM (SELECT a, counted_volatile(a) AS r FROM t) x
+JOIN t y ON x.a = y.a WHERE x.r > 5;
+----
+5
+
+query I
+SELECT evaluations();
+----
+10
+
+# The same, above a UNION ALL.
+
+query I
+SELECT count(*) FROM (SELECT counted_volatile(a) AS r FROM t UNION ALL SELECT a FROM t)
+WHERE r > 5;
+----
+10
+
+query I
+SELECT evaluations();
+----
+10
+
+# HAVING on a volatile group key.
+
+query I
+SELECT count(*) FROM (SELECT r FROM (SELECT counted_volatile(a) AS r FROM t) GROUP BY r HAVING r > 5);
+----
+5
+
+query I
+SELECT evaluations();
+----
+10
+
+# https://github.com/apache/datafusion/issues/26910
+# Known bug: the preimage rewrite of `floor(x) = 3` copies `x`, so a volatile
+# `x` is evaluated two times. The count must be 10.
+
+query I
+SELECT count(*) FROM t WHERE floor(counted_volatile(b)) = 3;
+----
+1
+
+query I
+SELECT evaluations();
+----
+20
+
+# `x BETWEEN low AND high` evaluates `x` two times. This is accepted behaviour,
+# Postgres does the same: https://github.com/apache/datafusion/issues/25457
+
+query I
+SELECT count(*) FROM t WHERE counted_volatile(a) BETWEEN 3 AND 5;
+----
+3
+
+query I
+SELECT evaluations();
+----
+20
+
+# A repeated call that is not volatile is evaluated one time:
+# `CommonSubexprEliminate` computes it once and field accesses read the result.
+# A second evaluation would not change the answer, only the cost.
+
+# https://github.com/apache/datafusion/issues/23655
+query II
+SELECT sum(counted_immutable(s)['x']), sum(counted_immutable(s)['y'])
+FROM (SELECT named_struct('x', a, 'y', a) AS s FROM t);
+----
+55 55
+
+query I
+SELECT evaluations();
+----
+10
+
+# https://github.com/apache/datafusion/issues/25329
+query II
+SELECT sum(counted_immutable(s)['x']), count(counted_immutable(s))
+FROM (SELECT named_struct('x', a, 'y', a) AS s FROM t);
+----
+55 10
+
+query I
+SELECT evaluations();
+----
+10
+
+statement ok
+DROP TABLE t;
