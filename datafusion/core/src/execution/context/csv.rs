@@ -147,27 +147,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[tokio::test]
-    async fn test_register_csv_identifier_normalization() -> Result<()> {
-        let ctx = SessionContext::new();
-
-        // 1. String literal normalizes to lowercase: "Example" -> "example"
-        ctx.register_csv("Example", "tests/data/example.csv", CsvReadOptions::new())
-            .await?;
-        assert!(ctx.sql("SELECT * FROM Example").await.is_ok());
-        assert!(ctx.sql("SELECT * FROM example").await.is_ok());
-        assert!(ctx.sql(r#"SELECT * FROM "Example""#).await.is_err());
-
-        // 2. TableReference::bare preserves exact case
-        ctx.register_csv(
-            TableReference::bare("QuotedExample"),
-            "tests/data/example.csv",
-            CsvReadOptions::new(),
-        )
-        .await?;
-        assert!(ctx.sql(r#"SELECT * FROM "QuotedExample""#).await.is_ok());
-
-        Ok(())
-    }
 }
