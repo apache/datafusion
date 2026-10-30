@@ -1,29 +1,16 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, PrimitiveArray},
     buffer::BooleanBuffer,
     compute,
     datatypes::{
-        DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        FieldRef, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-        Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-        Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+        DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type,
+        Decimal256Type, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type,
+        Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
+        Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
@@ -193,6 +180,13 @@ fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
         DataType::UInt8 | DataType::Int8 | DataType::UInt16 | DataType::Int16 => {
             get_small_int_accumulator(data_type).unwrap()
         }
+
+        DataType::Decimal32(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal32Type,
+        >::new(data_type)),
+        DataType::Decimal64(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal64Type,
+        >::new(data_type)),
         DataType::Decimal128(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
             Decimal128Type,
         >::new(data_type)),

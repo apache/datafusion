@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Final aggregate stream for partial-state input with group-clustering
 //! guarantees.
@@ -261,7 +248,9 @@ impl ClusteredFinalAggregateStream {
     /// 1. Start.
     /// 2. Merge one input batch:
     ///    - If memory fits and no groups are complete, continue reading input.
-    ///    - If OOM, spill.
+    ///    - If OOM with a spill context, spill.
+    ///    - If OOM without one, emit the completed groups (edge 3), or return
+    ///      the error when no group is complete.
     /// 3. Prepare output:
     ///    - Before any spill, a prefix of groups is complete: materialize the
     ///      entire prefix once, retaining the input and active groups to resume
@@ -336,27 +325,33 @@ impl Aggregating {
             let timer = elapsed_compute.timer();
             self.table.aggregate_batch(&batch)?;
 
-            match reservation.try_resize(self.reservation_size()) {
-                Ok(()) => {}
+            // Check the reservation before taking completed groups, as the partial
+            // stream does, so spilling is unchanged. Without spilling, the refusal
+            // is returned below only if no group is complete.
+            let oom = match reservation.try_resize(self.reservation_size()) {
+                Ok(()) => None,
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
-                    let Some(spill_context) = self.spill_context.as_mut() else {
-                        return Err(oom);
-                    };
-                    if self.table.is_empty() {
-                        return Err(oom);
+                    match self.spill_context.as_mut() {
+                        None => Some(oom),
+                        Some(spill_context) => {
+                            if self.table.is_empty() {
+                                return Err(oom);
+                            }
+                            spill_context
+                                .sort_and_spill(self.table.take_state_batch()?)?;
+                            reservation.try_resize(self.table.memory_size()).map_err(
+                                |e| {
+                                    e.context(
+                                        "Decreasing allocation after spilling should succeed",
+                                    )
+                                },
+                            )?;
+                            continue;
+                        }
                     }
-                    spill_context.sort_and_spill(self.table.take_state_batch()?)?;
-                    reservation
-                        .try_resize(self.table.memory_size())
-                        .map_err(|e| {
-                            e.context(
-                                "Decreasing allocation after spilling should succeed",
-                            )
-                        })?;
-                    continue;
                 }
                 Err(e) => return Err(e),
-            }
+            };
 
             if self.spill_context.as_ref().is_some_and(|s| s.has_spills()) {
                 // Spilled groups may recur, so all remaining states must go
@@ -364,8 +359,16 @@ impl Aggregating {
                 continue;
             }
             let Some(batch) = self.table.take_completed_result_batch()? else {
-                continue;
+                match oom {
+                    Some(oom) => return Err(oom),
+                    None => continue,
+                }
             };
+            if oom.is_some() {
+                // Release the capacity the table grew for this batch so that
+                // reserving the remaining groups can succeed.
+                self.table.shrink_to_fit();
+            }
             timer.done();
             return Ok(Some(ExecutionStage::Outputting(Outputting {
                 batch,
@@ -460,6 +463,11 @@ mod tests {
     use crate::ExecutionPlan;
     use crate::aggregates::GroupClusteringMode;
     use crate::aggregates::PhysicalGroupBy;
+    use crate::aggregates::clustered_test_util::{
+        assert_completed_groups_emitted_under_limit, assert_output_unchanged_under_limit,
+        assert_resources_exhausted_under_limit, distinct_key_batches, full_batches,
+        held_memory, single_key_batches, sum_over_sorted_input,
+    };
     use crate::common::collect;
     use crate::test::TestMemoryExec;
     use arrow::array::{Int64Array, StringViewArray};
@@ -731,5 +739,33 @@ mod tests {
         drop(second);
         assert_eq!(pool.reserved(), 0);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn fully_clustered_completed_groups_under_memory_pressure() -> Result<()> {
+        let plan = sum_over_sorted_input(AggregateMode::Final, &["k"], full_batches())?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_completed_groups_emitted_under_limit(&plan).await
+    }
+
+    /// The limit fits the active group, but not the capacity the table grows
+    /// for one batch, so the table must release it after the completed groups
+    /// are emitted.
+    #[tokio::test]
+    async fn completed_groups_release_batch_capacity() -> Result<()> {
+        let plan =
+            sum_over_sorted_input(AggregateMode::Final, &["k"], distinct_key_batches())?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_output_unchanged_under_limit(&plan, 100 * 1024).await
+    }
+
+    /// A single key never completes a group before the input ends. The limit
+    /// fits only the initial table.
+    #[tokio::test]
+    async fn memory_pressure_without_completed_groups() -> Result<()> {
+        let plan =
+            sum_over_sorted_input(AggregateMode::Final, &["k"], single_key_batches())?;
+        let limit = held_memory(&plan).await?;
+        assert_resources_exhausted_under_limit(&plan, limit).await
     }
 }
