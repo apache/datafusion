@@ -52,8 +52,12 @@ async fn null_aware_join_matches_reference() {
                         0,
                     );
                 let ctx = SessionContext::new_with_config(config);
-                ctx.register_table("o", Arc::clone(&outer) as _).unwrap();
-                ctx.register_table("i", Arc::clone(&inner) as _).unwrap();
+                ctx.register_table("o", Arc::clone(&outer) as _)
+                    .await
+                    .unwrap();
+                ctx.register_table("i", Arc::clone(&inner) as _)
+                    .await
+                    .unwrap();
                 for (query, reference) in cases() {
                     let (actual, plan) = run(&ctx, &query).await;
                     plans.record(plan.as_ref());

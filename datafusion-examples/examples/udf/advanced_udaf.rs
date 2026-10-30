@@ -452,7 +452,7 @@ impl AggregateUDFImpl for SimplifiedGeoMeanUdaf {
 }
 
 // create local session context with an in-memory table
-fn create_context() -> Result<SessionContext> {
+async fn create_context() -> Result<SessionContext> {
     use datafusion::datasource::MemTable;
     // define a schema.
     let schema = Arc::new(Schema::new(vec![
@@ -481,14 +481,14 @@ fn create_context() -> Result<SessionContext> {
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_table("t", Arc::new(provider)).await?;
     Ok(ctx)
 }
 
 /// In this example we register `GeoMeanUdaf` and `SimplifiedGeoMeanUdaf`
 /// as user defined aggregate functions and invoke them via the DataFrame API and SQL
 pub async fn advanced_udaf() -> Result<()> {
-    let ctx = create_context()?;
+    let ctx = create_context().await?;
 
     let geo_mean_udf = AggregateUDF::from(GeoMeanUdaf::new());
     let simplified_geo_mean_udf = AggregateUDF::from(SimplifiedGeoMeanUdaf::new());

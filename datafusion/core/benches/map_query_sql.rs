@@ -42,15 +42,17 @@ fn t_batch(num: i32) -> RecordBatch {
     RecordBatch::try_from_iter(vec![("c1", c1)]).unwrap()
 }
 
-fn create_context(num: i32) -> datafusion_common::Result<Arc<Mutex<SessionContext>>> {
+async fn create_context(
+    num: i32,
+) -> datafusion_common::Result<Arc<Mutex<SessionContext>>> {
     let ctx = SessionContext::new();
-    ctx.register_batch("t", t_batch(num))?;
+    ctx.register_batch("t", t_batch(num)).await?;
     Ok(Arc::new(Mutex::new(ctx)))
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let ctx = create_context(1).unwrap();
     let rt = Runtime::new().unwrap();
+    let ctx = rt.block_on(create_context(1)).unwrap();
     let df = rt.block_on(ctx.lock().table("t")).unwrap();
 
     let mut rng = StdRng::seed_from_u64(0);

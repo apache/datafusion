@@ -12,7 +12,9 @@ use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-fn create_context(field_count: u32) -> datafusion_common::Result<Arc<SessionContext>> {
+async fn create_context(
+    field_count: u32,
+) -> datafusion_common::Result<Arc<SessionContext>> {
     let mut fields = vec![];
     for i in 0..field_count {
         fields.push(Field::new(format!("str{i}"), DataType::Utf8, true))
@@ -22,7 +24,7 @@ fn create_context(field_count: u32) -> datafusion_common::Result<Arc<SessionCont
     let ctx = SessionContext::new();
     let table = MemTable::try_new(Arc::clone(&schema), vec![vec![]])?;
 
-    ctx.register_table("t", Arc::new(table))?;
+    ctx.register_table("t", Arc::new(table)).await?;
 
     Ok(Arc::new(ctx))
 }
@@ -52,7 +54,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
 
     for column_count in [10, 100, 200, 500] {
-        let ctx = create_context(column_count).unwrap();
+        let ctx = rt.block_on(create_context(column_count)).unwrap();
 
         c.bench_function(&format!("with_column_{column_count}"), |b| {
             b.iter(|| run(column_count, ctx.clone(), &rt))

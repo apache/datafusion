@@ -172,7 +172,7 @@ pub mod expr_fn {
     /// )?;
     ///
     /// let ctx = SessionContext::new();
-    /// ctx.register_batch("t", batch)?;
+    /// ctx.register_batch("t", batch).await?;
     /// let df = ctx.table("t").await?;
     ///
     /// // use the to_char function to convert col 'values',
@@ -241,7 +241,7 @@ pub mod expr_fn {
     ///     let ctx = SessionContext::new();
     ///
     ///     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    ///     ctx.register_batch("t", batch)?;
+    ///     ctx.register_batch("t", batch).await?;
     ///     let df = ctx.table("t").await?;
     ///
     ///     // use to_date function to convert col 'a' to timestamp type using the default parsing

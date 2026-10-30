@@ -85,7 +85,7 @@ impl SchemaProvider for MemorySchemaProvider {
         Ok(self.tables.get(name).map(|table| table.value().clone()))
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
@@ -98,7 +98,7 @@ impl SchemaProvider for MemorySchemaProvider {
         Ok(self.tables.insert(name, table))
     }
 
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    async fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         Ok(self.tables.remove(name).map(|(_, table)| table))
     }
 
@@ -138,7 +138,7 @@ Without getting into a `CatalogProvider` implementation, we can create a `Memory
 #         Ok(self.tables.get(name).map(|table| table.value().clone()))
 #     }
 #
-#     fn register_table(
+#     async fn register_table(
 #         &self,
 #         name: String,
 #         table: Arc<dyn TableProvider>,
@@ -151,7 +151,7 @@ Without getting into a `CatalogProvider` implementation, we can create a `Memory
 #         Ok(self.tables.insert(name, table))
 #     }
 #
-#     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+#     async fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
 #         Ok(self.tables.remove(name).map(|(_, table)| table))
 #     }
 #
@@ -174,6 +174,8 @@ impl MemorySchemaProvider {
     }
 }
 
+# #[tokio::main]
+# async fn main() -> Result<()> {
 let schema_provider = Arc::new(MemorySchemaProvider::new());
 
 let table_provider = {
@@ -183,16 +185,18 @@ let table_provider = {
     Arc::new(MemTable::try_new(schema, partitions).unwrap())
 };
 
-schema_provider.register_table("users".to_string(), table_provider);
+schema_provider.register_table("users".to_string(), table_provider).await?;
 
-let table = schema_provider.table("users");
+let table = schema_provider.table("users").await?;
+# Ok(())
+# }
 ```
 
 ### Asynchronous `SchemaProvider`
 
-It's often useful to fetch metadata about which tables are in a schema, from a remote source. For example, a schema provider could fetch metadata from a remote database. To support this, the `SchemaProvider` trait has an asynchronous `table` method.
+It's often useful to fetch metadata about which tables are in a schema, from a remote source. For example, a schema provider could fetch metadata from a remote database. To support this, the `SchemaProvider` trait has asynchronous `table`, `register_table`, and `deregister_table` methods. Schema providers can perform remote I/O when looking up, registering, or removing tables.
 
-The trait is roughly the same except for the `table` method, and the addition of the `#[async_trait]` attribute.
+Implementations use the `#[async_trait]` attribute, and callers await these methods. The `SessionContext::register_table`, `SessionContext::deregister_table`, and `SessionContext::register_batch` helpers are also asynchronous.
 
 ```rust
 # use async_trait::async_trait;

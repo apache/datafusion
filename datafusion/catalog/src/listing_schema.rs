@@ -122,8 +122,9 @@ impl ListingSchemaProvider {
                         .build(),
                     )
                     .await?;
-                let _ =
-                    self.register_table(table_name.to_string(), Arc::clone(&provider))?;
+                let _ = self
+                    .register_table(table_name.to_string(), Arc::clone(&provider))
+                    .await?;
             }
         }
         Ok(())
@@ -153,7 +154,7 @@ impl SchemaProvider for ListingSchemaProvider {
             .cloned())
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
@@ -165,7 +166,7 @@ impl SchemaProvider for ListingSchemaProvider {
         Ok(Some(table))
     }
 
-    fn deregister_table(
+    async fn deregister_table(
         &self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {

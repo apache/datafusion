@@ -157,7 +157,7 @@ async fn custom_rule_requests_reach_custom_provider() -> Result<()> {
         .with_optimizer_rule(Arc::new(RequestColumnStatistics))
         .build();
     let ctx = SessionContext::new_with_state(state);
-    ctx.register_table("t", provider)?;
+    ctx.register_table("t", provider).await?;
 
     ctx.sql("SELECT a, b FROM t").await?.collect().await?;
 
@@ -192,7 +192,7 @@ async fn no_requests_without_a_rule() -> Result<()> {
     // provider sees an empty request list — stock DataFusion behavior.
     let (provider, last_requests) = make_table();
     let ctx = SessionContext::new();
-    ctx.register_table("t", provider)?;
+    ctx.register_table("t", provider).await?;
 
     ctx.sql("SELECT a, b FROM t").await?.collect().await?;
 

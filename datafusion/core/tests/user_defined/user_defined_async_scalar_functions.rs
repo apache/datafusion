@@ -16,7 +16,7 @@ use datafusion_expr::{
     Volatility,
 };
 
-fn register_table_and_udf() -> Result<SessionContext> {
+async fn register_table_and_udf() -> Result<SessionContext> {
     let num_rows = 3;
     let batch_size = 2;
 
@@ -38,7 +38,7 @@ fn register_table_and_udf() -> Result<SessionContext> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("test_table", batch)?;
+    ctx.register_batch("test_table", batch).await?;
 
     ctx.register_udf(
         AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl::new(batch_size)))
@@ -52,7 +52,7 @@ fn register_table_and_udf() -> Result<SessionContext> {
 // the number of rows.
 #[tokio::test]
 async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
-    let ctx = register_table_and_udf()?;
+    let ctx = register_table_and_udf().await?;
 
     let df = ctx
         .sql("SELECT id, test_async_udf(prompt) as result FROM test_table")
@@ -81,7 +81,7 @@ async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
 // each chunk rather than to a single row.
 #[tokio::test]
 async fn test_async_udf_with_scalar_result() -> Result<()> {
-    let ctx = register_table_and_udf()?;
+    let ctx = register_table_and_udf().await?;
 
     let df = ctx
         .sql("SELECT id, test_async_udf('constant') as result FROM test_table")
@@ -108,7 +108,7 @@ async fn test_async_udf_with_scalar_result() -> Result<()> {
 // This test checks if metrics are printed for `AsyncFuncExec`
 #[tokio::test]
 async fn test_async_udf_metrics() -> Result<()> {
-    let ctx = register_table_and_udf()?;
+    let ctx = register_table_and_udf().await?;
 
     let df = ctx
         .sql(
@@ -197,7 +197,7 @@ async fn test_async_udf_preserves_result_field_metadata() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("test_table", batch)?;
+    ctx.register_batch("test_table", batch).await?;
     ctx.register_udf(
         AsyncScalarUDF::new(Arc::new(AsyncExtensionUDF::default())).into_scalar_udf(),
     );

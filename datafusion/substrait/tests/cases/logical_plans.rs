@@ -34,7 +34,7 @@ mod tests {
         // ./isthmus-cli/build/graal/isthmus --create "create table data (d boolean)" "select not d from data"
         let proto_plan =
             read_json("tests/testdata/test_plans/select_not_bool.substrait.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -65,7 +65,7 @@ mod tests {
         // ./isthmus-cli/build/graal/isthmus --create "create table data (d int, part int, ord int)" "select sum(d) OVER (PARTITION BY part ORDER BY ord ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) AS lead_expr from data"
         let proto_plan =
             read_json("tests/testdata/test_plans/select_window.substrait.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -90,7 +90,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/nested_window_expression.substrait.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -117,7 +117,7 @@ mod tests {
         // ./isthmus-cli/build/graal/isthmus --create "create table data (a int)" "select ROW_NUMBER() OVER (), ROW_NUMBER() OVER () AS aliased from data";
         let proto_plan =
             read_json("tests/testdata/test_plans/double_window.substrait.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -146,7 +146,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/double_window_distinct_windows.substrait.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -175,7 +175,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/disambiguate_literals_with_same_name.substrait.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -207,7 +207,7 @@ mod tests {
         // This test confirms that reading a plan with non-nullable lists works as expected.
         let proto_plan =
             read_json("tests/testdata/test_plans/non_nullable_lists.substrait.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -336,7 +336,7 @@ mod tests {
         {
             let proto_plan =
                 read_json(&format!("tests/testdata/test_plans/{file}.substrait.json"));
-            let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+            let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
             // Give each table rows, so the batch schemas below come from real batches
             for (table, rows) in rows {
                 let schema = ctx.table_provider(table).await?.schema();
@@ -352,11 +352,12 @@ mod tests {
                     })
                     .collect();
                 let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
-                ctx.deregister_table(table)?;
+                ctx.deregister_table(table).await?;
                 ctx.register_table(
                     table,
                     Arc::new(MemTable::try_new(schema, vec![vec![batch]])?),
-                )?;
+                )
+                .await?;
             }
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
@@ -447,7 +448,7 @@ mod tests {
     async fn multilayer_aggregate() -> Result<()> {
         let proto_plan =
             read_json("tests/testdata/test_plans/multilayer_aggregate.substrait.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -470,7 +471,7 @@ mod tests {
     async fn duplicate_name_in_union() -> Result<()> {
         let proto_plan =
             read_json("tests/testdata/test_plans/duplicate_name_in_union.substrait.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -517,7 +518,7 @@ mod tests {
         // expressions (column references) uses the make_array UDF.
         let proto_plan =
             read_json("tests/testdata/test_plans/nested_list_expressions.substrait.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -564,7 +565,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/any_match_dictionary_list_element.substrait.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -600,7 +601,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/any_match_string_view_list_element.substrait.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         let df = DataFrame::new(ctx.state(), plan);
@@ -629,7 +630,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/nested_any_match_dictionary_list_element.substrait.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         let df = DataFrame::new(ctx.state(), plan);

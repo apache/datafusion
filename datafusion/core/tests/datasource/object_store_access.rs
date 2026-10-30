@@ -239,6 +239,7 @@ async fn insert_invalidates_overlapping_unscoped_listings() {
             .with_listing_options(options)
             .with_schema(Arc::clone(&schema));
         ctx.register_table(name, Arc::new(ListingTable::try_new(config).unwrap()))
+            .await
             .unwrap();
         ctx.sql(&format!("SELECT * FROM {name}"))
             .await
@@ -1089,6 +1090,7 @@ impl Test {
         let table = Arc::new(ListingTable::try_new(config).unwrap());
         self.session_context
             .register_table(table_name, table)
+            .await
             .unwrap();
         self
     }
@@ -1211,6 +1213,7 @@ impl Test {
         let table = Arc::new(ListingTable::try_new(config).unwrap());
         self.session_context
             .register_table(table_name, table)
+            .await
             .unwrap();
         self
     }

@@ -241,7 +241,7 @@ fn maybe_pow_in_place(base: f64, exp_array: ArrayRef) -> Result<ArrayRef> {
 /// | 5.1 | 4.0 |
 /// +-----+-----+
 /// ```
-fn create_context() -> Result<SessionContext> {
+async fn create_context() -> Result<SessionContext> {
     // define data.
     let a: ArrayRef = Arc::new(Float32Array::from(vec![2.1, 3.1, 4.1, 5.1]));
     let b: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0]));
@@ -251,14 +251,14 @@ fn create_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
     // declare a table in memory. In Spark API, this corresponds to createDataFrame(...).
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     Ok(ctx)
 }
 
 /// In this example we register `PowUdf` as a user defined function
 /// and invoke it via the DataFrame API and SQL
 pub async fn advanced_udf() -> Result<()> {
-    let ctx = create_context()?;
+    let ctx = create_context().await?;
 
     // create the UDF
     let pow = ScalarUDF::from(PowUdf::new());

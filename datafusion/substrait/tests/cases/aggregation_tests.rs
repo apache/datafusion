@@ -145,7 +145,8 @@ mod tests {
                 ("PART", Int32, [1, 1, 1]),
                 ("ORD", Int32, [1, 2, 3])
             )?,
-        )?;
+        )
+        .await?;
         for phase in [
             AggregationPhase::Unspecified as i32,
             AggregationPhase::InitialToResult as i32,
@@ -208,7 +209,7 @@ mod tests {
     async fn no_grouping_set() -> Result<()> {
         let proto_plan =
             read_json("tests/testdata/test_plans/aggregate_groupings/no_groupings.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -230,7 +231,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/aggregate_groupings/single_grouping.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -252,7 +253,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/aggregate_groupings/multiple_groupings.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(

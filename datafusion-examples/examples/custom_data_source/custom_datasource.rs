@@ -45,7 +45,7 @@ pub async fn custom_datasource() -> Result<()> {
     // - `SELECT 1 ...` requests no source columns (projection: Some([]))
     // - `SELECT COUNT(id) ...` requests a single column (projection: Some([0]))
     let ctx = SessionContext::new();
-    ctx.register_table("accounts", Arc::new(db))?;
+    ctx.register_table("accounts", Arc::new(db)).await?;
     let constant_batches = ctx
         .sql("SELECT 1 AS a FROM accounts")
         .await?

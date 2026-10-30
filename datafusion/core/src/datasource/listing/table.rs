@@ -946,7 +946,9 @@ mod tests {
             schema.clone(),
             vec![vec![batch.clone(), batch.clone()]],
         )?);
-        session_ctx.register_table("source", source_table.clone())?;
+        session_ctx
+            .register_table("source", source_table.clone())
+            .await?;
         // Convert the source table into a provider so that it can be used in a query
         let source = provider_as_source(source_table);
         let target = session_ctx.table_provider("t").await?;
@@ -2021,7 +2023,8 @@ mod tests {
             ctx.register_table(
                 "soft_limit_source",
                 Arc::new(MemTable::try_new(schema, vec![batches])?),
-            )?;
+            )
+            .await?;
 
             let output = TempDir::new()?;
             let copy_sql = format!(

@@ -35,7 +35,11 @@ use tokio::runtime::Runtime;
 /// "0","100"..."9900"
 /// "0","200"..."19800"
 /// "0","300"..."29700"
-fn register_string_table(ctx: &SessionContext, num_columns: usize, num_rows: usize) {
+async fn register_string_table(
+    ctx: &SessionContext,
+    num_columns: usize,
+    num_rows: usize,
+) {
     // ("c0", ["0", "0", ...])
     // ("c1": ["100", "200", ...])
     // etc
@@ -54,12 +58,12 @@ fn register_string_table(ctx: &SessionContext, num_columns: usize, num_rows: usi
     // create the table
     let table = MemTable::try_new(schema, partitions).unwrap();
 
-    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx.register_table("t", Arc::new(table)).await.unwrap();
 }
 
 /// Registers a table `name` with `num_columns` Int32 columns (`a0..aN`) plus an
 /// `arr` `List<Int32>` column, used to benchmark `UNNEST` planning.
-fn register_list_table(ctx: &SessionContext, name: &str, num_columns: usize) {
+async fn register_list_table(ctx: &SessionContext, name: &str, num_columns: usize) {
     let mut fields: Vec<Field> = (0..num_columns)
         .map(|i| Field::new(format!("a{i}"), DataType::Int32, true))
         .collect();
@@ -70,7 +74,7 @@ fn register_list_table(ctx: &SessionContext, name: &str, num_columns: usize) {
     ));
     let schema = Arc::new(Schema::new(fields));
     let table = MemTable::try_new(schema, vec![vec![]]).unwrap();
-    ctx.register_table(name, Arc::new(table)).unwrap();
+    ctx.register_table(name, Arc::new(table)).await.unwrap();
 }
 
 /// Create a logical plan from the specified sql (parse + plan only, NO
@@ -81,7 +85,7 @@ fn logical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
 
 /// Build a dataframe for testing logical plan optimization
 fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
-    register_string_table(ctx, 100, 1000);
+    rt.block_on(register_string_table(ctx, 100, 1000));
 
     rt.block_on(async {
         let mut df = ctx.table("t").await.unwrap();
@@ -226,7 +230,7 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
 /// Build a CASE-heavy dataframe over a non-inner join to stress
 /// planner-time filter pushdown and nullability/type inference.
 fn build_case_heavy_left_join_df(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
-    register_string_table(ctx, 100, 1000);
+    rt.block_on(register_string_table(ctx, 100, 1000));
     let query = build_case_heavy_left_join_query(30, 1);
     rt.block_on(async { ctx.sql(&query).await.unwrap() })
 }
@@ -269,7 +273,7 @@ fn build_case_heavy_left_join_df_with_push_down_filter(
     push_down_filter_enabled: bool,
 ) -> DataFrame {
     let ctx = SessionContext::new();
-    register_string_table(&ctx, 100, 1000);
+    rt.block_on(register_string_table(&ctx, 100, 1000));
     if !push_down_filter_enabled {
         let removed = ctx.remove_optimizer_rule("push_down_filter");
         assert!(
@@ -321,7 +325,7 @@ fn build_non_case_left_join_df_with_push_down_filter(
     push_down_filter_enabled: bool,
 ) -> DataFrame {
     let ctx = SessionContext::new();
-    register_string_table(&ctx, 100, 1000);
+    rt.block_on(register_string_table(&ctx, 100, 1000));
     if !push_down_filter_enabled {
         let removed = ctx.remove_optimizer_rule("push_down_filter");
         assert!(
@@ -380,7 +384,7 @@ fn build_chained_case_projection_df(
     or_width: usize,
 ) -> DataFrame {
     let ctx = SessionContext::new();
-    register_string_table(&ctx, 100, 1000);
+    rt.block_on(register_string_table(&ctx, 100, 1000));
     let query = build_chained_case_projection_query(chained_steps, case_depth, or_width);
     rt.block_on(async { ctx.sql(&query).await.unwrap() })
 }
@@ -540,8 +544,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     // deduplicated on every pushed expression, so wide select lists stress it.
     // See `push_projection_dedupl` in datafusion/sql/src/utils.rs.
     let unnest_ctx = SessionContext::new();
-    register_list_table(&unnest_ctx, "t_list200", 200);
-    register_list_table(&unnest_ctx, "t_list1000", 1000);
+    rt.block_on(register_list_table(&unnest_ctx, "t_list200", 200));
+    rt.block_on(register_list_table(&unnest_ctx, "t_list1000", 1000));
 
     // Bare columns next to an unnest: each column is pushed once.
     for num_columns in [200usize, 1000] {

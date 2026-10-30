@@ -968,7 +968,7 @@ async fn main() -> Result<()> {
     let ctx = SessionContext::new();
 
     let provider = CountingTable::new(4, 1000);
-    ctx.register_table("counting", Arc::new(provider))?;
+    ctx.register_table("counting", Arc::new(provider)).await?;
 
     let df = ctx.sql("SELECT * FROM counting LIMIT 10").await?;
     df.show().await?;

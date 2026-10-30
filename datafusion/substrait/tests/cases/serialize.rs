@@ -496,7 +496,8 @@ mod tests {
         ctx.register_table(
             "t",
             Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![batch]])?),
-        )?;
+        )
+        .await?;
 
         // The same WHEN operand that earns a guard over a nullable base.
         let sql = "SELECT CASE a WHEN 10 / a THEN 'x' ELSE 'z' END FROM t";

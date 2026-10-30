@@ -88,7 +88,7 @@ pub async fn default_column_values() -> Result<()> {
     let ctx = SessionContext::new_with_config(cfg);
 
     // Register our table
-    ctx.register_table("example_table", table_provider)?;
+    ctx.register_table("example_table", table_provider).await?;
 
     ctx.runtime_env().register_object_store(
         ObjectStoreUrl::parse("memory://")?.as_ref(),

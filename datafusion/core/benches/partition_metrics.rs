@@ -32,7 +32,7 @@ async fn query(partitions: usize) -> Result<(SessionContext, Arc<dyn ExecutionPl
             .with_target_partitions(partitions)
             .with_batch_size(16),
     );
-    ctx.register_table("t", Arc::new(table))?;
+    ctx.register_table("t", Arc::new(table)).await?;
     let plan = ctx
         .sql("SELECT a + 1 AS b FROM t WHERE a < 16")
         .await?

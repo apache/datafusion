@@ -20,7 +20,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/emit_kind/direct_on_project.substrait.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
@@ -38,7 +38,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/emit_kind/emit_on_filter.substrait.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(

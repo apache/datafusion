@@ -4081,8 +4081,8 @@ mod tests {
         });
         let source = Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![]])?);
         let ctx = SessionContext::new();
-        ctx.register_table("target", target.clone())?;
-        ctx.register_table("source", source)?;
+        ctx.register_table("target", target.clone()).await?;
+        ctx.register_table("source", source).await?;
 
         ctx.sql(
             "MERGE INTO target AS t USING source AS target ON t.id = target.id \
@@ -6134,7 +6134,9 @@ digraph {
             physical_schema,
         };
         let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", Arc::new(provider))
+            .await
+            .unwrap();
 
         ctx.sql(query).await.unwrap().create_physical_plan().await
     }

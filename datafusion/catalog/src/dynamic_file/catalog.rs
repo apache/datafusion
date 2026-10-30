@@ -138,19 +138,19 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         self.factory.try_new(name).await
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.register_table(name, table)
+        self.inner.register_table(name, table).await
     }
 
-    fn deregister_table(
+    async fn deregister_table(
         &self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.deregister_table(name)
+        self.inner.deregister_table(name).await
     }
 
     fn table_exist(&self, name: &str) -> bool {

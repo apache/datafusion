@@ -183,7 +183,9 @@ mod test {
         let table = MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap();
 
         let ctx = get_ctx();
-        ctx.register_table("test_table", Arc::new(table)).unwrap();
+        ctx.register_table("test_table", Arc::new(table))
+            .await
+            .unwrap();
 
         let statement = DFParser::parse_sql(sql).unwrap().pop_back().unwrap();
 

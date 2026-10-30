@@ -78,7 +78,7 @@ async fn register_temperature_table(ctx: &SessionContext) -> Result<DataFrame> {
         ],
     )?;
 
-    ctx.register_batch("example", batch)?;
+    ctx.register_batch("example", batch).await?;
     ctx.table("example").await
 }
 

@@ -412,7 +412,7 @@ mod tests {
             &ctx.state(),
         ))?;
 
-        let _ = ctx.register_table("test-table", table)?;
+        let _ = ctx.register_table("test-table", table).await?;
 
         let returned_batches = ctx.table("test-table").await?.collect().await?;
 

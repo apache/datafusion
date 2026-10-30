@@ -343,7 +343,7 @@ async fn count_distinct_dictionary_all_null_values() -> Result<()> {
     let ctx =
         SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
     let provider = MemTable::try_new(schema.clone(), vec![vec![batch.clone()]])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_table("t", Arc::new(provider)).await?;
 
     let df = ctx
         .sql("SELECT count(distinct dict) as cnt, count(num2) FROM t GROUP BY num1")
@@ -369,7 +369,9 @@ async fn count_distinct_dictionary_all_null_values() -> Result<()> {
     let ctx_multi =
         SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2));
     let provider_multi = MemTable::try_new(schema, vec![vec![batch]])?;
-    ctx_multi.register_table("t", Arc::new(provider_multi))?;
+    ctx_multi
+        .register_table("t", Arc::new(provider_multi))
+        .await?;
 
     let df_multi = ctx_multi
         .sql("SELECT count(distinct dict) as cnt, count(num2) FROM t GROUP BY num1")
@@ -409,7 +411,7 @@ async fn count_distinct_dictionary_mixed_values() -> Result<()> {
     let batch = RecordBatch::try_new(schema.clone(), vec![num, Arc::new(dict)])?;
     let provider = MemTable::try_new(schema, vec![vec![batch]])?;
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_table("t", Arc::new(provider)).await?;
 
     // COUNT(DISTINCT) should only count non-null values "abc" and "def"
     let df = ctx.sql("SELECT count(distinct dict) FROM t").await?;
@@ -460,7 +462,7 @@ async fn group_by_ree_dict_column() -> Result<()> {
         vec![Arc::new(ree_col), Arc::new(value_col)],
     )?;
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
-    ctx.register_table("t", Arc::new(table))?;
+    ctx.register_table("t", Arc::new(table)).await?;
 
     let results = ctx
         .sql("SELECT group_col, SUM(value) as total FROM t GROUP BY group_col ORDER BY group_col")

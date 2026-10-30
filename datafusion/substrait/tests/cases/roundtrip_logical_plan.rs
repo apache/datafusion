@@ -399,7 +399,8 @@ async fn reject_table_scan_fetch_above_i64_max() -> Result<()> {
             "x",
             Arc::new(Int64Array::from(vec![0, 1, 2])) as ArrayRef,
         )])?,
-    )?;
+    )
+    .await?;
     let plan = ctx
         .sql("SELECT * FROM t LIMIT 9223372036854775807 OFFSET 1")
         .await?

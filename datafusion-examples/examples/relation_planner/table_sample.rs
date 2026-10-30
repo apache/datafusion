@@ -139,7 +139,7 @@ pub async fn table_sample() -> Result<()> {
 
     // Register custom relation planner for logical planning
     ctx.register_relation_planner(Arc::new(TableSamplePlanner))?;
-    register_sample_data(&ctx)?;
+    register_sample_data(&ctx).await?;
 
     println!("TABLESAMPLE Example");
     println!("===================\n");
@@ -283,14 +283,14 @@ async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<Str
 }
 
 /// Register test data: 10 rows with column1=1..10 and column2="row_1".."row_10"
-fn register_sample_data(ctx: &SessionContext) -> Result<()> {
+async fn register_sample_data(ctx: &SessionContext) -> Result<()> {
     let column1: ArrayRef = Arc::new(Int32Array::from((1..=10).collect::<Vec<i32>>()));
     let column2: ArrayRef = Arc::new(StringArray::from(
         (1..=10).map(|i| format!("row_{i}")).collect::<Vec<_>>(),
     ));
     let batch =
         RecordBatch::try_from_iter(vec![("column1", column1), ("column2", column2)])?;
-    ctx.register_batch("sample_data", batch)?;
+    ctx.register_batch("sample_data", batch).await?;
     Ok(())
 }
 

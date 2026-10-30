@@ -2662,8 +2662,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_from_existing() -> Result<()> {
+    #[tokio::test]
+    async fn test_from_existing() -> Result<()> {
         fn employee_batch() -> RecordBatch {
             let name: ArrayRef =
                 Arc::new(StringArray::from_iter_values(["Andy", "Andrew"]));
@@ -2682,7 +2682,8 @@ mod tests {
         let table_ref = session_state.resolve_table_ref("employee").to_string();
         session_state
             .schema_for_ref(&table_ref)?
-            .register_table("employee".to_string(), Arc::new(table))?;
+            .register_table("employee".to_string(), Arc::new(table))
+            .await?;
 
         let default_catalog = session_state
             .config()

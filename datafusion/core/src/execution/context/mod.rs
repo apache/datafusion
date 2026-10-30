@@ -521,13 +521,13 @@ impl SessionContext {
     }
 
     /// Registers the given [`RecordBatch`] as the specified table reference.
-    pub fn register_batch(
+    pub async fn register_batch(
         &self,
         table_ref: impl Into<TableReference>,
         batch: RecordBatch,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        self.register_table(table_ref, Arc::new(table))
+        self.register_table(table_ref, Arc::new(table)).await
     }
 
     /// Return the [RuntimeEnv] used to run queries with this `SessionContext`
@@ -692,9 +692,7 @@ impl SessionContext {
                 // stack overflows.
                 match ddl {
                     DdlStatement::CreateExternalTable(cmd) => {
-                        (Box::pin(async move { self.create_external_table(&cmd).await })
-                            as std::pin::Pin<Box<dyn Future<Output = _> + Send>>)
-                            .await
+                        Box::pin(self.create_external_table(&cmd)).await
                     }
                     DdlStatement::CreateMemoryTable(cmd) => {
                         Box::pin(self.create_memory_table(cmd)).await
@@ -837,13 +835,15 @@ impl SessionContext {
                     Ok(true) => {
                         let table_provider: Arc<dyn TableProvider> =
                             self.create_custom_table(cmd).await?;
-                        self.register_table(cmd.name.clone(), table_provider)?;
+                        self.register_table(cmd.name.clone(), table_provider)
+                            .await?;
                         self.return_empty_dataframe()
                     }
                     Ok(false) => {
                         let table_provider: Arc<dyn TableProvider> =
                             self.create_custom_table(cmd).await?;
-                        self.register_table(cmd.name.clone(), table_provider)?;
+                        self.register_table(cmd.name.clone(), table_provider)
+                            .await?;
                         self.return_empty_dataframe()
                     }
                     Err(e) => {
@@ -857,7 +857,8 @@ impl SessionContext {
             (_, _, false) => {
                 let table_provider: Arc<dyn TableProvider> =
                     self.create_custom_table(cmd).await?;
-                self.register_table(cmd.name.clone(), table_provider)?;
+                self.register_table(cmd.name.clone(), table_provider)
+                    .await?;
                 self.return_empty_dataframe()
             }
             (false, false, true) => {
@@ -889,7 +890,7 @@ impl SessionContext {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
                 Self::ensure_unique_column_names(input.schema())?;
-                self.deregister_table(name.clone())?;
+                self.deregister_table(name.clone()).await?;
                 let schema = Arc::clone(input.schema().inner());
                 let physical = DataFrame::new(self.state(), input);
 
@@ -901,7 +902,7 @@ impl SessionContext {
                         .with_column_defaults(column_defaults.into_iter().collect()),
                 );
 
-                self.register_table(name.clone(), table)?;
+                self.register_table(name.clone(), table).await?;
                 self.return_empty_dataframe()
             }
             (true, true, Ok(_)) => {
@@ -920,7 +921,7 @@ impl SessionContext {
                         .with_column_defaults(column_defaults.into_iter().collect()),
                 );
 
-                self.register_table(name, table)?;
+                self.register_table(name, table).await?;
                 self.return_empty_dataframe()
             }
             (false, false, Ok(_)) => exec_err!("Table '{name}' already exists"),
@@ -956,16 +957,16 @@ impl SessionContext {
             (true, Ok(_)) => {
                 let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
                 Self::ensure_unique_column_names(input.schema())?;
-                self.deregister_table(name.clone())?;
+                self.deregister_table(name.clone()).await?;
                 let table = Arc::new(ViewTable::new(input, definition));
-                self.register_table(name, table)?;
+                self.register_table(name, table).await?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
                 let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
                 Self::ensure_unique_column_names(input.schema())?;
                 let table = Arc::new(ViewTable::new(input, definition));
-                self.register_table(name, table)?;
+                self.register_table(name, table).await?;
                 self.return_empty_dataframe()
             }
             (false, Ok(_)) => exec_err!("Table '{name}' already exists"),
@@ -1533,7 +1534,7 @@ impl SessionContext {
             && let Some(table_provider) = schema.table(&table).await?
             && table_provider.table_type() == table_type
         {
-            schema.deregister_table(&table)?;
+            schema.deregister_table(&table).await?;
             self.invalidate_caches(&table_ref, table_type)?;
             return Ok(true);
         }
@@ -1922,7 +1923,7 @@ impl SessionContext {
         let table = ListingTable::try_new(config)?
             .with_definition(sql_definition)
             .with_cache(self.runtime_env().cache_manager.get_file_statistic_cache());
-        self.register_table(table_ref, Arc::new(table))?;
+        self.register_table(table_ref, Arc::new(table)).await?;
         Ok(())
     }
 
@@ -2003,33 +2004,28 @@ impl SessionContext {
     ///
     /// If a table of the same name was already registered, returns "Table
     /// already exists" error.
-    pub fn register_table(
+    pub async fn register_table(
         &self,
         table_ref: impl Into<TableReference>,
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref: TableReference = table_ref.into();
         let table = table_ref.table().to_owned();
-        self.state
-            .read()
-            .schema_for_ref(table_ref)?
-            .register_table(table, provider)
+        let schema = self.state.read().schema_for_ref(table_ref)?;
+        schema.register_table(table, provider).await
     }
 
     /// Deregisters the given table.
     ///
     /// Returns the registered provider, if any
-    pub fn deregister_table(
+    pub async fn deregister_table(
         &self,
         table_ref: impl Into<TableReference>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_owned();
-        let result = self
-            .state
-            .read()
-            .schema_for_ref(table_ref.clone())?
-            .deregister_table(&table);
+        let schema = self.state.read().schema_for_ref(table_ref.clone())?;
+        let result = schema.deregister_table(&table).await;
 
         if let Ok(Some(ref table_provider)) = result {
             self.invalidate_caches(&table_ref, table_provider.table_type())?;
@@ -2511,7 +2507,7 @@ mod tests {
         ctx.register_variable(VarType::UserDefined, Arc::new(variable_provider));
 
         let provider = test::create_table_dual();
-        ctx.register_table("dual", provider)?;
+        ctx.register_table("dual", provider).await?;
 
         let results =
             plan_and_collect(&ctx, "SELECT @@version, @name, @integer + 1 FROM dual")
@@ -2547,10 +2543,10 @@ mod tests {
         let ctx = create_ctx(&tmp_dir, partition_count).await?;
 
         let provider = test::create_table_dual();
-        ctx.register_table("dual", provider)?;
+        ctx.register_table("dual", provider).await?;
 
-        assert!(ctx.deregister_table("dual")?.is_some());
-        assert!(ctx.deregister_table("dual")?.is_none());
+        assert!(ctx.deregister_table("dual").await?.is_some());
+        assert!(ctx.deregister_table("dual").await?.is_none());
 
         Ok(())
     }
@@ -2673,7 +2669,8 @@ mod tests {
         );
 
         assert!(matches!(
-            ctx.register_table("test", test::table_with_sequence(1, 1)?),
+            ctx.register_table("test", test::table_with_sequence(1, 1)?)
+                .await,
             Err(DataFusionError::Plan(_))
         ));
 
@@ -2722,6 +2719,7 @@ mod tests {
         let schema = MemorySchemaProvider::new();
         schema
             .register_table("test".to_owned(), test::table_with_sequence(1, 1).unwrap())
+            .await
             .unwrap();
         catalog
             .register_schema("my_schema", Arc::new(schema))
@@ -2760,14 +2758,16 @@ mod tests {
         let catalog_a = MemoryCatalogProvider::new();
         let schema_a = MemorySchemaProvider::new();
         schema_a
-            .register_table("table_a".to_owned(), test::table_with_sequence(1, 1)?)?;
+            .register_table("table_a".to_owned(), test::table_with_sequence(1, 1)?)
+            .await?;
         catalog_a.register_schema("schema_a", Arc::new(schema_a))?;
         ctx.register_catalog("catalog_a", Arc::new(catalog_a));
 
         let catalog_b = MemoryCatalogProvider::new();
         let schema_b = MemorySchemaProvider::new();
         schema_b
-            .register_table("table_b".to_owned(), test::table_with_sequence(1, 2)?)?;
+            .register_table("table_b".to_owned(), test::table_with_sequence(1, 2)?)
+            .await?;
         catalog_b.register_schema("schema_b", Arc::new(schema_b))?;
         ctx.register_catalog("catalog_b", Arc::new(catalog_b));
 

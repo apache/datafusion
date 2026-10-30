@@ -310,7 +310,7 @@ async fn execute_sql_to_string(ctx: &SessionContext, sql: &str) -> String {
 /// Create a SessionContext with a catalog table containing Int64 and Utf8 columns.
 ///
 /// Creates a table with the specified name and sample data for fallback/integration tests.
-fn create_context_with_catalog_table(
+async fn create_context_with_catalog_table(
     table_name: &str,
     id_values: Vec<i64>,
     name_values: Vec<&str>,
@@ -332,7 +332,9 @@ fn create_context_with_catalog_table(
     .unwrap();
 
     let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
-    ctx.register_table(table_name, Arc::new(table)).unwrap();
+    ctx.register_table(table_name, Arc::new(table))
+        .await
+        .unwrap();
 
     ctx
 }
@@ -340,7 +342,7 @@ fn create_context_with_catalog_table(
 /// Create a SessionContext with a simple single-column Int64 table.
 ///
 /// Useful for basic tests that need a real catalog table.
-fn create_context_with_simple_table(
+async fn create_context_with_simple_table(
     table_name: &str,
     values: Vec<i64>,
 ) -> SessionContext {
@@ -357,7 +359,9 @@ fn create_context_with_simple_table(
             .unwrap();
 
     let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
-    ctx.register_table(table_name, Arc::new(table)).unwrap();
+    ctx.register_table(table_name, Arc::new(table))
+        .await
+        .unwrap();
 
     ctx
 }
@@ -646,6 +650,7 @@ mod tests {
     #[tokio::test]
     async fn delegation_pass_through_to_catalog() {
         let ctx = create_context_with_simple_table("real_table", vec![42])
+            .await
             .with_planner(PassThroughPlanner);
 
         let result = execute_sql_to_string(&ctx, "SELECT * FROM real_table").await;
@@ -664,6 +669,7 @@ mod tests {
     async fn catalog_fallback_when_no_planner() {
         let ctx =
             create_context_with_catalog_table("users", vec![1, 2], vec!["Alice", "Bob"])
+                .await
                 .with_planner(NumbersPlanner);
 
         let result = execute_sql_to_string(&ctx, "SELECT * FROM users ORDER BY id").await;

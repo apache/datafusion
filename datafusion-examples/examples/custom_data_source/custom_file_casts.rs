@@ -70,7 +70,7 @@ pub async fn custom_file_casts() -> Result<()> {
                 )),
             ));
     let table = ListingTable::try_new(listing_table_config).unwrap();
-    ctx.register_table("good_table", Arc::new(table))?;
+    ctx.register_table("good_table", Arc::new(table)).await?;
     let listing_table_config =
         ListingTableConfig::new(ListingTableUrl::parse("memory:///bad.parquet")?)
             .infer_options(&ctx.state())
@@ -82,7 +82,7 @@ pub async fn custom_file_casts() -> Result<()> {
                 )),
             ));
     let table = ListingTable::try_new(listing_table_config).unwrap();
-    ctx.register_table("bad_table", Arc::new(table))?;
+    ctx.register_table("bad_table", Arc::new(table)).await?;
 
     println!("\n=== File with narrower schema is cast ===");
     let query = "SELECT id FROM good_table WHERE id > 1";

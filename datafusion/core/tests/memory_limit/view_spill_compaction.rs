@@ -144,7 +144,7 @@ async fn run_spilling_query(
         .with_batch_size(batch_size)
         .with_sort_spill_reservation_bytes(256 * 1024);
     let ctx = SessionContext::new_with_config_rt(config, runtime);
-    ctx.register_table("t", Arc::new(table))?;
+    ctx.register_table("t", Arc::new(table)).await?;
 
     let plan = ctx.sql(sql).await?.create_physical_plan().await?;
     collect(Arc::clone(&plan), ctx.task_ctx()).await?;

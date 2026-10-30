@@ -23,14 +23,14 @@ fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     black_box(rt.block_on(df.collect()).unwrap());
 }
 
-fn create_context(
+async fn create_context(
     partitions_len: usize,
     array_len: usize,
     batch_size: usize,
 ) -> Result<Arc<Mutex<SessionContext>>> {
     let ctx = SessionContext::new();
     let provider = create_table_provider(partitions_len, array_len, batch_size)?;
-    ctx.register_table("t", provider)?;
+    ctx.register_table("t", provider).await?;
     Ok(Arc::new(Mutex::new(ctx)))
 }
 
@@ -38,8 +38,10 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
     let partitions_len = 10;
     let array_len = 1 << 26; // 64 M
     let batch_size = 8192;
-    let ctx = create_context(partitions_len, array_len, batch_size).unwrap();
     let rt = Runtime::new().unwrap();
+    let ctx = rt
+        .block_on(create_context(partitions_len, array_len, batch_size))
+        .unwrap();
 
     let mut group = c.benchmark_group("custom-measurement-time");
     group.measurement_time(Duration::from_secs(40));
@@ -125,7 +127,7 @@ pub async fn create_context_sampled_data(
     // Create the DataFrame
     let cfg = SessionConfig::new();
     let ctx = SessionContext::new_with_config(cfg);
-    let _ = ctx.register_table("traces", mem_table)?;
+    let _ = ctx.register_table("traces", mem_table).await?;
     let df = ctx.sql(sql).await?;
     let physical_plan = df.create_physical_plan().await?;
     Ok((physical_plan, ctx.task_ctx()))

@@ -197,11 +197,11 @@ impl ExecutionPlan for StatisticsValidation {
     }
 }
 
-fn init_ctx(stats: Statistics, schema: Schema) -> Result<SessionContext> {
+async fn init_ctx(stats: Statistics, schema: Schema) -> Result<SessionContext> {
     let ctx = SessionContext::new();
     let provider: Arc<dyn TableProvider> =
         Arc::new(StatisticsValidation::new(stats, Arc::new(schema)));
-    ctx.register_table("stats_table", provider)?;
+    ctx.register_table("stats_table", provider).await?;
     Ok(ctx)
 }
 
@@ -239,7 +239,7 @@ fn fully_defined() -> (Statistics, Schema) {
 #[tokio::test]
 async fn sql_basic() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let ctx = init_ctx(stats.clone(), schema)?;
+    let ctx = init_ctx(stats.clone(), schema).await?;
 
     let df = ctx.sql("SELECT * from stats_table").await.unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
@@ -257,7 +257,7 @@ async fn sql_basic() -> Result<()> {
 #[tokio::test]
 async fn sql_filter() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let ctx = init_ctx(stats, schema)?;
+    let ctx = init_ctx(stats, schema).await?;
 
     let df = ctx
         .sql("SELECT * FROM stats_table WHERE c1 = 5")
@@ -272,7 +272,7 @@ async fn sql_filter() -> Result<()> {
     Ok(())
 }
 
-fn string_filter_ctx(
+async fn string_filter_ctx(
     data_type: DataType,
     distinct_count: Precision<usize>,
 ) -> Result<SessionContext> {
@@ -288,6 +288,7 @@ fn string_filter_ctx(
         },
         Schema::new(vec![Field::new("c1", data_type, true)]),
     )
+    .await
 }
 
 async fn string_filter_rows(
@@ -338,7 +339,7 @@ async fn sql_string_filter_selectivity() -> Result<()> {
         ("c1 NOT ILIKE 'foo'", 640),
     ];
     for data_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
-        let ctx = string_filter_ctx(data_type.clone(), Precision::Exact(20))?;
+        let ctx = string_filter_ctx(data_type.clone(), Precision::Exact(20)).await?;
         for (predicate, expected_rows) in cases {
             assert_eq!(
                 string_filter_rows(&ctx, predicate).await?,
@@ -352,7 +353,7 @@ async fn sql_string_filter_selectivity() -> Result<()> {
 
 #[tokio::test]
 async fn sql_string_filter_without_distinct_count() -> Result<()> {
-    let ctx = string_filter_ctx(DataType::Utf8View, Precision::Absent)?;
+    let ctx = string_filter_ctx(DataType::Utf8View, Precision::Absent).await?;
     // Without NDV, use the configured default (20%) over non-null rows.
     for (predicate, expected_rows) in [
         ("c1 = 'foo'", 160),
@@ -371,7 +372,7 @@ async fn sql_string_filter_without_distinct_count() -> Result<()> {
 
 #[tokio::test]
 async fn sql_string_filter_custom_selectivity() -> Result<()> {
-    let ctx = string_filter_ctx(DataType::Utf8View, Precision::Absent)?;
+    let ctx = string_filter_ctx(DataType::Utf8View, Precision::Absent).await?;
     ctx.sql("SET datafusion.optimizer.default_filter_selectivity = 40")
         .await?
         .collect()
@@ -397,7 +398,7 @@ async fn sql_string_filter_custom_selectivity() -> Result<()> {
 #[tokio::test]
 async fn sql_limit() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let ctx = init_ctx(stats.clone(), schema)?;
+    let ctx = init_ctx(stats.clone(), schema).await?;
 
     let df = ctx.sql("SELECT * FROM stats_table LIMIT 5").await.unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
@@ -438,7 +439,7 @@ async fn sql_limit() -> Result<()> {
 #[tokio::test]
 async fn sql_window() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let ctx = init_ctx(stats.clone(), schema)?;
+    let ctx = init_ctx(stats.clone(), schema).await?;
 
     let df = ctx
         .sql("SELECT c2, sum(c1) over (partition by c2) FROM stats_table")

@@ -462,11 +462,12 @@ impl RunOpt {
     ) -> Result<Vec<QueryResult>> {
         let batches = self.make_record_batches(query)?;
         let schema = batches.first().expect("at least one input batch").schema();
-        ctx.deregister_table("test_data")?;
+        ctx.deregister_table("test_data").await?;
         ctx.register_table(
             "test_data",
             Arc::new(MemTable::try_new(schema, vec![batches])?),
-        )?;
+        )
+        .await?;
 
         let sql = self.query_sql(query);
 
@@ -835,6 +836,7 @@ mod tests {
             "test_data",
             Arc::new(MemTable::try_new(schema, vec![batches]).unwrap()),
         )
+        .await
         .unwrap();
 
         let batches = ctx

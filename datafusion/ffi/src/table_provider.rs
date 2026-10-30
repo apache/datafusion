@@ -947,7 +947,7 @@ mod tests {
 
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
 
-        ctx.register_table("t", foreign_table_provider)?;
+        ctx.register_table("t", foreign_table_provider).await?;
 
         let df = ctx.table("t").await?;
 
@@ -972,7 +972,7 @@ mod tests {
 
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
 
-        ctx.register_table("t", foreign_table_provider)?;
+        ctx.register_table("t", foreign_table_provider).await?;
 
         let result = ctx
             .sql("INSERT INTO t VALUES (128.0);")
@@ -1101,7 +1101,7 @@ mod tests {
 
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
 
-        ctx.register_table("t", foreign_table_provider)?;
+        ctx.register_table("t", foreign_table_provider).await?;
 
         let result = ctx
             .sql("SELECT COUNT(*) as cnt FROM t")

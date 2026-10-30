@@ -924,7 +924,7 @@ async fn explain_analyze_output_rows_skew_on_hash_partitioned_operators() {
         })
         .collect();
     let table = MemTable::try_new(schema, partitions).unwrap();
-    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx.register_table("t", Arc::new(table)).await.unwrap();
 
     let sql = "EXPLAIN ANALYZE \
                SELECT a.k, count(*) FROM t a JOIN t b ON a.k = b.k GROUP BY a.k";

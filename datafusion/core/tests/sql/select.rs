@@ -141,7 +141,7 @@ async fn prepared_statement_type_coercion() -> Result<()> {
         ("signed", Arc::new(signed_ints) as ArrayRef),
         ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
     ])?;
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
     let results = ctx.sql("SELECT signed, unsigned FROM test WHERE $1 >= signed AND signed <= $2 AND unsigned = $3")
         .await?
         .with_param_values(vec![
@@ -170,7 +170,7 @@ async fn test_parameter_type_coercion() -> Result<()> {
         ("signed", Arc::new(signed_ints) as ArrayRef),
         ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
     ])?;
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
     let results = ctx.sql("SELECT signed, unsigned FROM test WHERE $foo >= signed AND signed <= $bar AND unsigned <= $baz AND unsigned = $str")
         .await?
         .with_param_values(vec![
@@ -200,7 +200,7 @@ async fn test_parameter_invalid_types() -> Result<()> {
     ])]);
     let batch =
         RecordBatch::try_from_iter(vec![("list", Arc::new(list_array) as ArrayRef)])?;
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
     let results = ctx
         .sql("SELECT list FROM test WHERE list = $1")
         .await?
@@ -225,7 +225,7 @@ async fn test_positional_parameter_not_bound() -> Result<()> {
         ("signed", Arc::new(signed_ints) as ArrayRef),
         ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
     ])?;
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
 
     let query = "SELECT signed, unsigned FROM test \
             WHERE $1 >= signed AND signed <= $2 \
@@ -270,7 +270,7 @@ async fn test_named_parameter_not_bound() -> Result<()> {
         ("signed", Arc::new(signed_ints) as ArrayRef),
         ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
     ])?;
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
 
     let query = "SELECT signed, unsigned FROM test \
             WHERE $foo >= signed AND signed <= $bar \
@@ -420,7 +420,8 @@ async fn test_limit_offset_parameters_keep_field_metadata() -> Result<()> {
     ctx.register_batch(
         "t",
         RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 1]))])?,
-    )?;
+    )
+    .await?;
 
     for clause in ["LIMIT", "OFFSET"] {
         let sql = format!("SELECT $1 AS value FROM t WHERE value = $1 {clause} $1");

@@ -71,7 +71,7 @@ use insta::assert_snapshot;
 pub async fn pivot_unpivot() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_relation_planner(Arc::new(PivotUnpivotPlanner))?;
-    register_sample_data(&ctx)?;
+    register_sample_data(&ctx).await?;
 
     println!("PIVOT and UNPIVOT Example");
     println!("=========================\n");
@@ -240,7 +240,7 @@ async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<Str
 }
 
 /// Register test data tables.
-fn register_sample_data(ctx: &SessionContext) -> Result<()> {
+async fn register_sample_data(ctx: &SessionContext) -> Result<()> {
     // quarterly_sales: normalized sales data (region, quarter, amount)
     ctx.register_batch(
         "quarterly_sales",
@@ -259,7 +259,8 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
                 Arc::new(Int64Array::from(vec![1000, 1500, 1200, 1300])),
             ),
         ])?,
-    )?;
+    )
+    .await?;
 
     // product_sales: sales with additional grouping dimension
     ctx.register_batch(
@@ -279,7 +280,8 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
             ),
             ("amount", Arc::new(Int64Array::from(vec![500, 500, 650]))),
         ])?,
-    )?;
+    )
+    .await?;
 
     // wide_sales: denormalized/wide format (for UNPIVOT)
     ctx.register_batch(
@@ -292,7 +294,8 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
             ("q1", Arc::new(Int64Array::from(vec![1000, 1200]))),
             ("q2", Arc::new(Int64Array::from(vec![1500, 1300]))),
         ])?,
-    )?;
+    )
+    .await?;
 
     // point_stats: grouped data with a quoted mixed-case pivot column.
     ctx.register_batch(
@@ -320,7 +323,8 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
                 Arc::new(Int64Array::from(vec![10, 20, 30, 40])),
             ),
         ])?,
-    )?;
+    )
+    .await?;
 
     Ok(())
 }

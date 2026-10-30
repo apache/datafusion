@@ -290,7 +290,8 @@ fn test_schema() -> SchemaRef {
 async fn test_delete_single_filter() -> Result<()> {
     let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     ctx.sql("DELETE FROM t WHERE id = 1")
         .await?
@@ -309,7 +310,8 @@ async fn test_delete_single_filter() -> Result<()> {
 async fn test_delete_multiple_filters() -> Result<()> {
     let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     ctx.sql("DELETE FROM t WHERE id = 1 AND status = 'x'")
         .await?
@@ -327,7 +329,8 @@ async fn test_delete_multiple_filters() -> Result<()> {
 async fn test_delete_no_filters() -> Result<()> {
     let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     ctx.sql("DELETE FROM t").await?.collect().await?;
 
@@ -345,7 +348,8 @@ async fn test_delete_no_filters() -> Result<()> {
 async fn test_delete_complex_expr() -> Result<()> {
     let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     ctx.sql("DELETE FROM t WHERE id > 5 AND (status = 'a' OR status = 'b')")
         .await?
@@ -366,7 +370,8 @@ async fn test_delete_filter_pushdown_extracts_table_scan_filters() -> Result<()>
         TableProviderFilterPushDown::Exact,
     ));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     let df = ctx.sql("DELETE FROM t WHERE id = 1").await?;
     let optimized_plan = df.clone().into_optimized_plan()?;
@@ -399,7 +404,8 @@ async fn test_delete_compound_filters_with_pushdown() -> Result<()> {
         TableProviderFilterPushDown::Exact,
     ));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     ctx.sql("DELETE FROM t WHERE id = 1 AND status = 'active'")
         .await?
@@ -438,7 +444,8 @@ async fn test_delete_mixed_filter_locations() -> Result<()> {
         TableProviderFilterPushDown::Inexact,
     ));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     // Execute DELETE with compound WHERE clause
     ctx.sql("DELETE FROM t WHERE id = 1 AND status = 'active'")
@@ -482,7 +489,8 @@ async fn test_delete_per_filter_pushdown_mixed_locations() -> Result<()> {
     ));
 
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     let df = ctx
         .sql("DELETE FROM t WHERE id = 1 AND status = 'active'")
@@ -525,7 +533,8 @@ async fn test_delete_per_filter_pushdown_mixed_locations() -> Result<()> {
 async fn test_update_assignments() -> Result<()> {
     let provider = Arc::new(CaptureUpdateProvider::new(test_schema()));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     ctx.sql("UPDATE t SET value = 100, status = 'updated' WHERE id = 5")
         .await?
@@ -551,7 +560,8 @@ async fn test_update_filter_pushdown_extracts_table_scan_filters() -> Result<()>
         TableProviderFilterPushDown::Exact,
     ));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     let df = ctx.sql("UPDATE t SET value = 100 WHERE id = 1").await?;
     let optimized_plan = df.clone().into_optimized_plan()?;
@@ -586,7 +596,8 @@ async fn test_update_filter_pushdown_passes_table_scan_filters() -> Result<()> {
         TableProviderFilterPushDown::Exact,
     ));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     let df = ctx
         .sql("UPDATE t SET value = 42 WHERE status = 'ready'")
@@ -628,7 +639,8 @@ async fn test_truncate_calls_provider() -> Result<()> {
 
     let ctx = SessionContext::new_with_config(config);
 
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     ctx.sql("TRUNCATE TABLE t").await?.collect().await?;
 
@@ -646,7 +658,7 @@ async fn test_unsupported_table_delete() -> Result<()> {
     let ctx = SessionContext::new();
 
     let empty_table = datafusion::datasource::empty::EmptyTable::new(schema);
-    ctx.register_table("empty_t", Arc::new(empty_table))?;
+    ctx.register_table("empty_t", Arc::new(empty_table)).await?;
 
     let result = ctx.sql("DELETE FROM empty_t WHERE id = 1").await;
     assert!(result.is_err() || result.unwrap().collect().await.is_err());
@@ -659,7 +671,7 @@ async fn test_unsupported_table_update() -> Result<()> {
     let ctx = SessionContext::new();
 
     let empty_table = datafusion::datasource::empty::EmptyTable::new(schema);
-    ctx.register_table("empty_t", Arc::new(empty_table))?;
+    ctx.register_table("empty_t", Arc::new(empty_table)).await?;
 
     let result = ctx.sql("UPDATE empty_t SET value = 1 WHERE id = 1").await;
 
@@ -679,7 +691,8 @@ async fn test_delete_target_table_scoping() -> Result<()> {
     ctx.register_table(
         "target_t",
         Arc::clone(&target_provider) as Arc<dyn TableProvider>,
-    )?;
+    )
+    .await?;
 
     // For now, we test single-table DELETE
     // and validate that the scoping logic is correct
@@ -710,7 +723,8 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
         TableProviderFilterPushDown::Exact,
     ));
     let ctx = SessionContext::new();
-    ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)
+        .await?;
 
     let source_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
@@ -719,7 +733,7 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
         Field::new("src_only", DataType::Utf8, true),
     ]));
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
-    ctx.register_table("t2", Arc::new(source_table))?;
+    ctx.register_table("t2", Arc::new(source_table)).await?;
 
     let result = ctx
         .sql(
@@ -748,7 +762,8 @@ async fn test_delete_qualifier_stripping_and_validation() -> Result<()> {
         TableProviderFilterPushDown::Exact,
     ));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     // Execute DELETE with unqualified column reference
     // (After parsing, the planner adds qualifiers, but our validation should accept them)
@@ -787,7 +802,7 @@ async fn test_unsupported_table_truncate() -> Result<()> {
     let ctx = SessionContext::new();
 
     let empty_table = datafusion::datasource::empty::EmptyTable::new(schema);
-    ctx.register_table("empty_t", Arc::new(empty_table))?;
+    ctx.register_table("empty_t", Arc::new(empty_table)).await?;
 
     let result = ctx.sql("TRUNCATE TABLE empty_t").await;
 
@@ -799,14 +814,14 @@ async fn test_unsupported_table_truncate() -> Result<()> {
 /// Register a source table named `src` with one row, for the subquery of a
 /// DELETE or an UPDATE. The table holds a row so that the optimizer keeps the
 /// semi join instead of folding it into an empty relation.
-fn register_source_table(ctx: &SessionContext) -> Result<()> {
+async fn register_source_table(ctx: &SessionContext) -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![Arc::new(Int32Array::from(vec![1]))],
     )?;
     let source = MemTable::try_new(schema, vec![vec![batch]])?;
-    ctx.register_table("src", Arc::new(source))?;
+    ctx.register_table("src", Arc::new(source)).await?;
     Ok(())
 }
 
@@ -830,8 +845,9 @@ fn rows_affected(batches: &[RecordBatch]) -> u64 {
 async fn test_delete_in_subquery_is_rejected() -> Result<()> {
     let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
-    register_source_table(&ctx)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
+    register_source_table(&ctx).await?;
 
     let result = ctx
         .sql("DELETE FROM t WHERE id IN (SELECT id FROM src)")
@@ -857,8 +873,9 @@ async fn test_delete_in_subquery_is_rejected() -> Result<()> {
 async fn test_delete_exists_subquery_is_rejected() -> Result<()> {
     let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
-    register_source_table(&ctx)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
+    register_source_table(&ctx).await?;
 
     let result = ctx
         .sql("DELETE FROM t WHERE EXISTS (SELECT 1 FROM src WHERE src.id = t.id)")
@@ -883,8 +900,9 @@ async fn test_delete_exists_subquery_is_rejected() -> Result<()> {
 async fn test_delete_not_in_subquery_is_rejected() -> Result<()> {
     let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
-    register_source_table(&ctx)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
+    register_source_table(&ctx).await?;
 
     let result = ctx
         .sql("DELETE FROM t WHERE id NOT IN (SELECT id FROM src)")
@@ -910,8 +928,9 @@ async fn test_delete_not_in_subquery_is_rejected() -> Result<()> {
 async fn test_update_in_subquery_is_rejected() -> Result<()> {
     let provider = Arc::new(CaptureUpdateProvider::new(test_schema()));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
-    register_source_table(&ctx)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
+    register_source_table(&ctx).await?;
 
     let result = ctx
         .sql("UPDATE t SET value = 1 WHERE id IN (SELECT id FROM src)")
@@ -939,7 +958,8 @@ async fn test_update_in_subquery_is_rejected() -> Result<()> {
 async fn test_delete_always_false_predicate_affects_no_rows() -> Result<()> {
     let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     let batches = ctx
         .sql("DELETE FROM t WHERE 1 = 2")
@@ -960,7 +980,8 @@ async fn test_delete_always_false_predicate_affects_no_rows() -> Result<()> {
 async fn test_update_always_false_predicate_affects_no_rows() -> Result<()> {
     let provider = Arc::new(CaptureUpdateProvider::new(test_schema()));
     let ctx = SessionContext::new();
-    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)
+        .await?;
 
     let batches = ctx
         .sql("UPDATE t SET value = 1 WHERE false")
@@ -990,8 +1011,8 @@ async fn test_dml_partial_predicate_is_rejected() -> Result<()> {
             update_provider.clone()
         };
         let ctx = SessionContext::new();
-        ctx.register_table("t", provider)?;
-        register_source_table(&ctx)?;
+        ctx.register_table("t", provider).await?;
+        register_source_table(&ctx).await?;
 
         let result = ctx.sql(sql).await?.collect().await;
         assert!(

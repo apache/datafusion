@@ -151,26 +151,32 @@ fn create_struct_table_provider() -> Arc<MemTable> {
         .unwrap()
 }
 
-fn create_context() -> SessionContext {
+async fn create_context() -> SessionContext {
     let ctx = SessionContext::new();
     ctx.register_table("t1", create_table_provider("a", 200))
+        .await
         .unwrap();
     ctx.register_table("t2", create_table_provider("b", 200))
+        .await
         .unwrap();
     ctx.register_table("t700", create_table_provider("c", 700))
+        .await
         .unwrap();
     ctx.register_table("t1000", create_table_provider("d", 1000))
+        .await
         .unwrap();
     ctx.register_table("struct_t1", create_struct_table_provider())
+        .await
         .unwrap();
     ctx.register_table("struct_t2", create_struct_table_provider())
+        .await
         .unwrap();
     ctx
 }
 
 /// Register the table definitions as a MemTable with the context and return the
 /// context
-fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
+async fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
     for TableDef {
         name,
         schema,
@@ -185,6 +191,7 @@ fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
                     .with_constraints(constraints),
             ),
         )
+        .await
         .unwrap();
     }
     ctx
@@ -255,7 +262,7 @@ fn benchmark_with_param_values_many_columns(
 /// 0,100...9900
 /// 0,200...19800
 /// 0,300...29700
-fn register_union_order_table_generic<T>(
+async fn register_union_order_table_generic<T>(
     ctx: &SessionContext,
     num_columns: usize,
     num_rows: usize,
@@ -293,7 +300,7 @@ fn register_union_order_table_generic<T>(
         .unwrap()
         .with_sort_order(vec![sort_order]);
 
-    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx.register_table("t", Arc::new(table)).await.unwrap();
 }
 /// return a query like
 /// ```sql
@@ -376,8 +383,8 @@ fn criterion_benchmark(c: &mut Criterion) {
          or set CLICKBENCH_DATA_PATH to an existing dataset"
     );
 
-    let ctx = create_context();
     let rt = Runtime::new().unwrap();
+    let ctx = rt.block_on(create_context());
 
     // Test simplest
     // https://github.com/apache/datafusion/issues/5157
@@ -575,11 +582,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     // https://github.com/apache/datafusion/issues/17261
 
     for column_count in [10, 50 /* 100, 200, 300 */] {
-        register_union_order_table_generic::<arrow::datatypes::Int64Type>(
-            &ctx,
-            column_count,
-            1000,
-        );
+        rt.block_on(register_union_order_table_generic::<
+            arrow::datatypes::Int64Type,
+        >(&ctx, column_count, 1000));
 
         // this query has many expressions in its sort order so stresses
         // order equivalence validation
@@ -592,15 +597,13 @@ fn criterion_benchmark(c: &mut Criterion) {
             },
         );
 
-        let _ = ctx.deregister_table("t");
+        let _ = rt.block_on(ctx.deregister_table("t"));
     }
 
     for column_count in [10, 50 /* 100, 200, 300 */] {
-        register_union_order_table_generic::<arrow::datatypes::UInt64Type>(
-            &ctx,
-            column_count,
-            1000,
-        );
+        rt.block_on(register_union_order_table_generic::<
+            arrow::datatypes::UInt64Type,
+        >(&ctx, column_count, 1000));
         c.bench_function(
             &format!("physical_sorted_union_order_by_{column_count}_uint64"),
             |b| {
@@ -610,12 +613,12 @@ fn criterion_benchmark(c: &mut Criterion) {
             },
         );
 
-        let _ = ctx.deregister_table("t");
+        let _ = rt.block_on(ctx.deregister_table("t"));
     }
 
     // --- TPC-H ---
 
-    let tpch_ctx = register_defs(SessionContext::new(), tpch_schemas());
+    let tpch_ctx = rt.block_on(register_defs(SessionContext::new(), tpch_schemas()));
 
     let tpch_queries = [
         "q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9", "q10", "q11", "q12", "q13",
@@ -662,7 +665,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     // --- TPC-DS ---
 
-    let tpcds_ctx = register_defs(SessionContext::new(), tpcds_schemas());
+    let tpcds_ctx = rt.block_on(register_defs(SessionContext::new(), tpcds_schemas()));
     let tests_path = if PathBuf::from("./tests/").exists() {
         "./tests/"
     } else {
@@ -750,7 +753,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     // Register additional tables for join benchmarks
     for i in 3..=16 {
-        ctx.register_table(format!("j{i}"), create_table_provider("x", 10))
+        rt.block_on(ctx.register_table(format!("j{i}"), create_table_provider("x", 10)))
             .unwrap();
     }
 

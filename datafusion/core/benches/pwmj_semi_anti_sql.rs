@@ -157,7 +157,11 @@ fn build_batches(
 }
 
 /// Register `lhs` and `rhs` in a context with PWMJ planning on or off.
-fn create_context(right_offset: i32, pwmj: bool, schema: &SchemaRef) -> SessionContext {
+async fn create_context(
+    right_offset: i32,
+    pwmj: bool,
+    schema: &SchemaRef,
+) -> SessionContext {
     let config = SessionConfig::new()
         // Pinned so results are comparable across machines, and so the comparison
         // isolates the join operator rather than how much repartitioning surrounds it.
@@ -173,7 +177,7 @@ fn create_context(right_offset: i32, pwmj: bool, schema: &SchemaRef) -> SessionC
             vec![build_batches(num_rows, key_offset, schema)],
         )
         .unwrap();
-        ctx.register_table(name, Arc::new(table)).unwrap();
+        ctx.register_table(name, Arc::new(table)).await.unwrap();
     }
     ctx
 }
@@ -452,7 +456,7 @@ fn bench_case(
     ]
     .into_iter()
     .map(|(arm, pwmj, operators)| {
-        let ctx = create_context(right_offset, pwmj, schema);
+        let ctx = rt.block_on(create_context(right_offset, pwmj, schema));
         let name = format!("{arm}_{label}_{regime}");
         let planned = assert_plan_operator(
             &physical_plan(&ctx, rt, sql),

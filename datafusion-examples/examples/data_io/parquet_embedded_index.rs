@@ -140,7 +140,7 @@ pub async fn parquet_embedded_index() -> Result<()> {
     let provider = Arc::new(DistinctIndexTable::try_new(dir, schema_ref.clone())?);
 
     let ctx = SessionContext::new();
-    ctx.register_table("t", provider)?;
+    ctx.register_table("t", provider).await?;
 
     // 3. Run a query: only files containing 'foo' get scanned. The rest are pruned.
     // based on the distinct index.

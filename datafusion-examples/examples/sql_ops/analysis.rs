@@ -135,7 +135,8 @@ from
                 Arc::new(table.schema.clone()),
                 vec![vec![]],
             )?),
-        )?;
+        )
+        .await?;
     }
     // We can create a LogicalPlan from a SQL query like this
     let logical_plan = ctx.sql(tpcds_query_88).await?.into_optimized_plan()?;

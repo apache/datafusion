@@ -798,7 +798,8 @@ async fn roundtrip_coalesce() -> Result<()> {
         Arc::new(EmptyTable::new(Arc::new(Schema::new(Fields::from([
             Arc::new(Field::new("f", DataType::Int64, false)),
         ]))))),
-    )?;
+    )
+    .await?;
     let df = ctx.sql("select coalesce(f) as f from t").await?;
     let plan = df.create_physical_plan().await?;
 
@@ -834,7 +835,8 @@ async fn roundtrip_generate_series() -> Result<()> {
         Arc::new(EmptyTable::new(Arc::new(Schema::new(Fields::from([
             Arc::new(Field::new("f", DataType::Int64, false)),
         ]))))),
-    )?;
+    )
+    .await?;
     let df = ctx.sql("select * from generate_series(1, 10000)").await?;
     let plan = df.create_physical_plan().await?;
 
@@ -945,7 +947,7 @@ async fn roundtrip_memory_source_empty_projection() -> Result<()> {
             Arc::new(arrow::array::Int64Array::from(vec![18i64])),
         ],
     )?;
-    ctx.register_batch("tmem", batch)?;
+    ctx.register_batch("tmem", batch).await?;
     let sql = "select 1 from tmem";
     roundtrip_test_sql_with_context(sql, &ctx).await
 }
@@ -1042,7 +1044,8 @@ async fn roundtrip_listing_table_with_schema_metadata() -> Result<()> {
         .expect("Must decorate metadata");
 
     let config = config.with_schema(Arc::new(schema_with_meta));
-    ctx.register_table("hive_style", Arc::new(ListingTable::try_new(config)?))?;
+    ctx.register_table("hive_style", Arc::new(ListingTable::try_new(config)?))
+        .await?;
 
     let plan = ctx
         .sql("select * from hive_style limit 1")

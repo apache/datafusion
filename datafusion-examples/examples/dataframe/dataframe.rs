@@ -151,7 +151,7 @@ async fn read_memory(ctx: &SessionContext) -> Result<()> {
     let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)])?;
 
     // declare a table in memory. In Apache Spark API, this corresponds to createDataFrame(...).
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let df = ctx.table("t").await?;
 
     // construct an expression corresponding to "SELECT a, b FROM t WHERE b = 10" in SQL
@@ -196,7 +196,8 @@ async fn write_out(ctx: &SessionContext) -> Result<()> {
     )]));
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)])?;
     let mem_table = MemTable::try_new(schema.clone(), vec![vec![batch]])?;
-    ctx.register_table("initial_data", Arc::new(mem_table))?;
+    ctx.register_table("initial_data", Arc::new(mem_table))
+        .await?;
     let df = ctx.table("initial_data").await?;
 
     // Create a single temp root with subdirectories

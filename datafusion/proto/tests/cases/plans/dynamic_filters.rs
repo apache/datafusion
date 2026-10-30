@@ -440,7 +440,7 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
 }
 
 /// returns a SessionContext with an empty `netflow` table registered
-fn netflow_context() -> Result<SessionContext> {
+async fn netflow_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![
         Field::new("dst_geo_country_name", DataType::Utf8, true),
@@ -450,7 +450,8 @@ fn netflow_context() -> Result<SessionContext> {
         Field::new("dst_addr", DataType::Utf8, true),
     ]));
 
-    ctx.register_table("netflow", Arc::new(EmptyTable::new(schema)))?;
+    ctx.register_table("netflow", Arc::new(EmptyTable::new(schema)))
+        .await?;
 
     Ok(ctx)
 }
@@ -463,7 +464,7 @@ fn netflow_context() -> Result<SessionContext> {
 /// could fail with `DecodeError: recursion limit reached`.
 #[tokio::test]
 async fn roundtrip_issue_18602_complex_filter_decode_recursion() -> Result<()> {
-    let ctx = netflow_context()?;
+    let ctx = netflow_context().await?;
     let sql = "SELECT \
       dst_geo_country_name AS x_axis_1, \
       dst_geo_city_name AS x_axis_2, \

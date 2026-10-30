@@ -352,7 +352,8 @@ impl SqlBenchmark {
         let schema = first_batch.schema();
         let provider = MemTable::try_new(schema, vec![results.clone()])?;
 
-        ctx.register_table("persist_data", Arc::new(provider))?;
+        ctx.register_table("persist_data", Arc::new(provider))
+            .await?;
 
         let df = ctx.table("persist_data").await?;
         df.write_csv(
@@ -366,7 +367,7 @@ impl SqlBenchmark {
         )
         .await?;
 
-        ctx.deregister_table("persist_data")?;
+        ctx.deregister_table("persist_data").await?;
 
         Ok(())
     }

@@ -34,17 +34,17 @@ pub mod test {
         .expect("failed to parse json")
     }
 
-    pub fn add_plan_schemas_to_ctx(
+    pub async fn add_plan_schemas_to_ctx(
         ctx: SessionContext,
         plan: &Plan,
     ) -> Result<SessionContext> {
         let extensions = Extensions::default();
         let state = ctx.state();
         let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
-        add_plan_schemas_to_ctx_with_consumer(&consumer, ctx, plan)
+        add_plan_schemas_to_ctx_with_consumer(&consumer, ctx, plan).await
     }
 
-    fn add_plan_schemas_to_ctx_with_consumer(
+    async fn add_plan_schemas_to_ctx_with_consumer(
         consumer: &impl SubstraitConsumer,
         ctx: SessionContext,
         plan: &Plan,
@@ -67,7 +67,7 @@ pub mod test {
             }
         }
         for (table_reference, table) in schema_map.into_iter() {
-            ctx.register_table(table_reference, table)?;
+            ctx.register_table(table_reference, table).await?;
         }
         Ok(ctx)
     }

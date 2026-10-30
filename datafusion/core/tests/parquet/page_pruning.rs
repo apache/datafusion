@@ -1113,7 +1113,7 @@ async fn page_level_limit_pruning_preserves_eliminated_sort() {
         vec![batch],
     )
     .await;
-    context.ctx.deregister_table("t").unwrap();
+    context.ctx.deregister_table("t").await.unwrap();
     context
         .ctx
         .register_parquet(

@@ -124,12 +124,12 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
         self.inner.table_names()
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.register_table(name, table)
+        self.inner.register_table(name, table).await
     }
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -191,8 +191,11 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
         self.inner.table(name).await
     }
 
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.deregister_table(name)
+    async fn deregister_table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        self.inner.deregister_table(name).await
     }
 
     fn table_exist(&self, name: &str) -> bool {

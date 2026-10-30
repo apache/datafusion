@@ -200,7 +200,7 @@ mod tests {
         let ffi_provider = (library_b.create_table)(true, logical_codec.clone());
         let provider: Arc<dyn TableProvider> = (&ffi_provider).into();
         assert!(provider.downcast_ref::<ForeignTableProvider>().is_some());
-        ctx.register_table("library_b", provider)?;
+        ctx.register_table("library_b", provider).await?;
         let logical_plan = ctx.table("library_b").await?.into_optimized_plan()?;
 
         // Library C: a foreign query planner sees B's scan result as opaque,
@@ -269,7 +269,7 @@ mod tests {
         // Library B: a table provider that is foreign to both A and C.
         let ffi_provider = (library_b.create_table)(true, logical_codec.clone());
         let provider: Arc<dyn TableProvider> = (&ffi_provider).into();
-        ctx.register_table("library_b", provider)?;
+        ctx.register_table("library_b", provider).await?;
 
         // Library A exports its default planner *before* the swap. Fetching it
         // afterwards through `FFI_SessionRef::query_planner` would hand library C

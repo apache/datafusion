@@ -102,7 +102,7 @@ pub async fn adapter_serialization() -> Result<()> {
                 Arc::clone(&adapter_factory) as Arc<dyn PhysicalExprAdapterFactory>
             );
     let table = ListingTable::try_new(listing_config)?;
-    ctx.register_table("my_table", Arc::new(table))?;
+    ctx.register_table("my_table", Arc::new(table)).await?;
 
     // Step 3: Create physical plan with filter
     println!("Step 3: Creating physical plan with filter...");

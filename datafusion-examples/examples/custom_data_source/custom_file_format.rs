@@ -49,7 +49,7 @@ pub async fn custom_file_format() -> Result<()> {
     let ctx = SessionContext::new_with_state(state);
 
     let mem_table = create_mem_table();
-    ctx.register_table("mem_table", mem_table)?;
+    ctx.register_table("mem_table", mem_table).await?;
 
     let temp_dir = tempdir().unwrap();
     let table_save_path = temp_dir.path().join("mem_table.tsv");

@@ -26,14 +26,14 @@ fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     black_box(rt.block_on(df.collect()).unwrap());
 }
 
-fn create_context(
+async fn create_context(
     partitions_len: usize,
     array_len: usize,
     batch_size: usize,
 ) -> Result<Arc<Mutex<SessionContext>>> {
     let ctx = SessionContext::new();
     let provider = create_table_provider(partitions_len, array_len, batch_size)?;
-    ctx.register_table("t", provider)?;
+    ctx.register_table("t", provider).await?;
     Ok(Arc::new(Mutex::new(ctx)))
 }
 
@@ -41,8 +41,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     let partitions_len = 8;
     let array_len = 32768 * 2; // 2^16
     let batch_size = 2048; // 2^11
-    let ctx = create_context(partitions_len, array_len, batch_size).unwrap();
     let rt = Runtime::new().unwrap();
+    let ctx = rt
+        .block_on(create_context(partitions_len, array_len, batch_size))
+        .unwrap();
 
     c.bench_function("aggregate_query_no_group_by 15 12", |b| {
         b.iter(|| {
@@ -504,7 +506,7 @@ async fn fully_ordered_context(
         col("k1").sort(true, true),
         col("k2").sort(true, true),
     ]]);
-    ctx.register_table("ordered_input", Arc::new(table))?;
+    ctx.register_table("ordered_input", Arc::new(table)).await?;
 
     let plan = ctx.sql(sql).await?.create_physical_plan().await?;
     let description = displayable(plan.as_ref()).indent(true).to_string();

@@ -34,7 +34,7 @@ use datafusion::prelude::SessionContext;
 
 /// Registers a simple range-partitioned listing table for testing before
 /// declaring such tables is supported via SQL.
-pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
+pub(super) async fn register_range_partitioned_table(ctx: &SessionContext) {
     const RANGE_PARTITIONS: [&[(i32, i32, i32)]; 4] = [
         &[(1, 1, 10), (5, 2, 50)],
         &[(10, 1, 100), (15, 2, 150)],
@@ -93,7 +93,8 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         range_batches(&schema, RANGE_PARTITIONS),
         output_partitioning,
         None,
-    );
+    )
+    .await;
 
     register_unbounded_range_stream_table(
         ctx,
@@ -101,14 +102,16 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         Arc::clone(&schema),
         [10, 20, 30],
         RANGE_PARTITIONS.map(|rows| rows.to_vec()),
-    );
+    )
+    .await;
     register_unbounded_range_stream_table(
         ctx,
         "unbounded_range_like_shifted",
         Arc::clone(&schema),
         [15, 20, 30],
         SHIFTED_RANGE_PARTITIONS.map(|rows| rows.to_vec()),
-    );
+    )
+    .await;
 
     let shifted_output_partitioning = Partitioning::Range(
         RangePartitioning::try_new(
@@ -131,7 +134,8 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         range_batches(&schema, SHIFTED_RANGE_PARTITIONS),
         shifted_output_partitioning,
         None,
-    );
+    )
+    .await;
 
     // Same rows as `range_partitioned` but split into only three range
     // partitions on `range_key`. Used to exercise the co-partition check when
@@ -156,7 +160,8 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         range_batches(&schema, NARROW_RANGE_PARTITIONS),
         narrow_output_partitioning,
         None,
-    );
+    )
+    .await;
 
     let sparse_output_partitioning = Partitioning::Range(
         RangePartitioning::try_new(
@@ -179,7 +184,8 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         range_batches(&schema, SPARSE_RANGE_PARTITIONS),
         sparse_output_partitioning,
         None,
-    );
+    )
+    .await;
     let composite_partitioning = Partitioning::Range(
         RangePartitioning::try_new(
             vec![
@@ -208,12 +214,13 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         range_batches(&schema, COMPOSITE_RANGE_PARTITIONS),
         composite_partitioning,
         None,
-    );
+    )
+    .await;
 
-    register_sampled_range_stream_table(ctx, schema);
+    register_sampled_range_stream_table(ctx, schema).await;
 }
 
-fn register_parquet_listing_table(
+async fn register_parquet_listing_table(
     ctx: &SessionContext,
     name: &str,
     table_dir: impl AsRef<Path>,
@@ -260,10 +267,11 @@ fn register_parquet_listing_table(
         ListingTable::try_new(config).expect("test listing table should be valid");
 
     ctx.register_table(name, Arc::new(table))
+        .await
         .expect("test listing table registration should succeed");
 }
 
-fn register_unbounded_range_stream_table(
+async fn register_unbounded_range_stream_table(
     ctx: &SessionContext,
     name: &str,
     schema: Arc<Schema>,
@@ -299,13 +307,14 @@ fn register_unbounded_range_stream_table(
                 .with_output_partitioning(output_partitioning),
         ),
     )
+    .await
     .expect("test stream table registration should succeed");
 }
 
 /// A finite source with more retained samples than effective range boundaries.
 /// The physical metadata is needed because logical listing tables currently
 /// describe only their effective split points.
-fn register_sampled_range_stream_table(ctx: &SessionContext, schema: Arc<Schema>) {
+async fn register_sampled_range_stream_table(ctx: &SessionContext, schema: Arc<Schema>) {
     const PARTITIONS: [&[(i32, i32, i32)]; 3] = [
         &[(1, 1, 10), (10, 1, 100)],
         &[(20, 1, 200), (30, 1, 300)],
@@ -341,6 +350,7 @@ fn register_sampled_range_stream_table(ctx: &SessionContext, schema: Arc<Schema>
                 .with_output_partitioning(output_partitioning),
         ),
     )
+    .await
     .expect("sampled range table registration should succeed");
 }
 
@@ -413,7 +423,7 @@ type TimeBinRow = (
 /// The hour split permits partition-local `date_trunc('hour')` aggregation,
 /// but `date_trunc('day')` straddles it. Aligned `date_bin` remains a negative
 /// control because the function is not admitted to range analysis.
-pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
+pub(super) async fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("key", DataType::Utf8, false),
         Field::new("col1", DataType::Utf8, false),
@@ -476,7 +486,8 @@ pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
             col("key").sort(true, true),
             col("timestamp").sort(true, true),
         ]]),
-    );
+    )
+    .await;
 }
 
 fn time_bin_batch(schema: SchemaRef, rows: &[TimeBinRow]) -> RecordBatch {

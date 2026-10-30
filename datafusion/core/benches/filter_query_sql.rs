@@ -20,7 +20,7 @@ fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     black_box(rt.block_on(df.collect()).unwrap());
 }
 
-fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext> {
+async fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext> {
     // define a schema.
     let schema = Arc::new(Schema::new(vec![
         Field::new("f32", DataType::Float32, false),
@@ -45,7 +45,7 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext>
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![batches])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_table("t", Arc::new(provider)).await?;
 
     Ok(ctx)
 }
@@ -56,12 +56,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
 
     c.bench_function("filter_array", |b| {
-        let ctx = create_context(array_len, batch_size).unwrap();
+        let ctx = rt.block_on(create_context(array_len, batch_size)).unwrap();
         b.iter(|| query(&ctx, &rt, "select f32, f64 from t where f32 >= f64"))
     });
 
     c.bench_function("filter_scalar", |b| {
-        let ctx = create_context(array_len, batch_size).unwrap();
+        let ctx = rt.block_on(create_context(array_len, batch_size)).unwrap();
         b.iter(|| {
             query(
                 &ctx,
@@ -72,7 +72,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("filter_scalar in list", |b| {
-        let ctx = create_context(array_len, batch_size).unwrap();
+        let ctx = rt.block_on(create_context(array_len, batch_size)).unwrap();
         b.iter(|| {
             query(
                 &ctx,

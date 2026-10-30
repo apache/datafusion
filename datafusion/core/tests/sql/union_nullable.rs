@@ -33,7 +33,7 @@ async fn union_all_mismatched_nullable(
             Arc::new(StringArray::from(vec!["ok", "ok"])),
         ],
     )?;
-    ctx.register_batch("table_a", batch_a)?;
+    ctx.register_batch("table_a", batch_a).await?;
 
     let schema_b = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -51,7 +51,7 @@ async fn union_all_mismatched_nullable(
             Arc::new(StringArray::from(status_values)),
         ],
     )?;
-    ctx.register_batch("table_b", batch_b)?;
+    ctx.register_batch("table_b", batch_b).await?;
 
     ctx.sql(
         "SELECT id, status FROM table_a \
@@ -152,7 +152,7 @@ async fn union_all_widening_cast_also_fixes_nullable() -> Result<()> {
             Arc::new(Int32Array::from(vec![10, 20])),
         ],
     )?;
-    ctx.register_batch("table_a", batch_a)?;
+    ctx.register_batch("table_a", batch_a).await?;
 
     let schema_b = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -165,7 +165,7 @@ async fn union_all_widening_cast_also_fixes_nullable() -> Result<()> {
             Arc::new(Int64Array::from(vec![Some(30), None])),
         ],
     )?;
-    ctx.register_batch("table_b", batch_b)?;
+    ctx.register_batch("table_b", batch_b).await?;
 
     let df = ctx
         .sql(

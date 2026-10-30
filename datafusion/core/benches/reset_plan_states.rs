@@ -158,16 +158,16 @@ fn bench_reset_plan_states(c: &mut Criterion) {
 
     let rt = Runtime::new().unwrap();
     let ctx = SessionContext::new();
-    ctx.register_table(
+    rt.block_on(ctx.register_table(
         "t",
         Arc::new(MemTable::try_new(Arc::clone(&SCHEMA), vec![vec![], vec![]]).unwrap()),
-    )
+    ))
     .unwrap();
 
-    ctx.register_table(
+    rt.block_on(ctx.register_table(
         "v",
         Arc::new(MemTable::try_new(Arc::clone(&SCHEMA), vec![vec![], vec![]]).unwrap()),
-    )
+    ))
     .unwrap();
 
     macro_rules! bench_query {
