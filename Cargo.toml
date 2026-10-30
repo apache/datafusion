@@ -180,7 +180,7 @@ loom = "0.7"
 memchr = "2.8.1"
 num-traits = { version = "0.2" }
 object_store = { version = "0.14.2", default-features = false }
-parking_lot = "0.12"
+parking_lot = "0.13"
 parquet = { version = "60.0.0", default-features = false, features = [
     "arrow",
     "async",
