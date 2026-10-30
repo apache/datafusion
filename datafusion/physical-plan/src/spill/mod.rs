@@ -819,8 +819,8 @@ fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
 /// The IPC writer writes every data buffer of an array in full, once per
 /// entry, and `gc()` copies the bytes of every view separately. Neither
 /// handles views that share bytes, as the views of a dictionary-encoded
-/// Parquet column do: after `concat` or `interleave` the dictionary is often
-/// listed once per input batch, and `gc()` copies it once per row
+/// Parquet column do: after `concat` the dictionary is listed once per input
+/// batch, and `gc()` copies it once per row
 /// (<https://github.com/apache/datafusion/issues/23564>).
 ///
 /// Repeated buffer entries are merged first. `gc()` then runs only if it
@@ -2493,9 +2493,8 @@ mod tests {
     }
 
     /// Arrays that each hold views into one shared dictionary buffer, as the
-    /// Parquet reader produces for a dictionary-encoded column, combined the
-    /// way a sort combines its input batches: the combined array lists the
-    /// dictionary buffer once per input and each output row cycles through
+    /// Parquet reader produces for a dictionary-encoded column, combined with
+    /// `concat` as a sort combines its buffered batches. The rows cycle through
     /// the dictionary (<https://github.com/apache/datafusion/issues/23564>).
     fn shared_dictionary_views(
         dictionary_len: u32,
@@ -2503,7 +2502,7 @@ mod tests {
         rows_per_input: u32,
     ) -> Result<(StringViewArray, StringViewArray)> {
         use arrow::array::{AsArray, UInt32Array};
-        use arrow::compute::take;
+        use arrow::compute::{concat, take};
 
         let dictionary = dictionary_array(dictionary_len)?;
         let arrays = (0..inputs)
@@ -2512,39 +2511,18 @@ mod tests {
                     (0..rows_per_input)
                         .map(|row| (input * rows_per_input + row) % dictionary_len),
                 );
-                let taken = take(&dictionary, &indices, None)?;
-                let taken = taken.as_string_view().clone();
-                assert_eq!(taken.data_buffers().len(), 1);
-                Ok(taken)
+                take(&dictionary, &indices, None)
             })
-            .collect::<Result<Vec<_>>>()?;
-        // Output row `r` holds row `r` of each input in turn, and the views of
-        // input `i` point at buffer entry `i`
-        let views: Vec<u128> = (0..rows_per_input as usize)
-            .flat_map(|row| {
-                arrays.iter().enumerate().map(move |(input, array)| {
-                    let raw = array.views()[row];
-                    if (raw as u32) <= MAX_INLINE_VIEW_LEN {
-                        raw
-                    } else {
-                        ByteView {
-                            buffer_index: input as u32,
-                            ..ByteView::from(raw)
-                        }
-                        .as_u128()
-                    }
-                })
-            })
-            .collect();
-        let buffers = vec![dictionary.data_buffers()[0].clone(); inputs as usize];
-        let merged = StringViewArray::try_new(ScalarBuffer::from(views), buffers, None)?;
-        Ok((dictionary, merged))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let arrays: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+        let merged = concat(&arrays)?;
+        Ok((dictionary, merged.as_string_view().clone()))
     }
 
     #[test]
     fn test_gc_keeps_shared_dictionary_buffer() -> Result<()> {
         let (dictionary, merged) = shared_dictionary_views(1000, 8, 1024)?;
-        // the combined array lists the dictionary once per input
+        // `concat` lists the dictionary once per input
         assert_eq!(merged.data_buffers().len(), 8);
         // `gc()` would copy 8192 values of 63 bytes, 8x the dictionary
         assert!(merged.total_buffer_bytes_used() > data_buffers_size(&dictionary));
