@@ -181,7 +181,7 @@ async fn run_query_with_config(
         .with_schema(schema);
     let table = Arc::new(ListingTable::try_new(config).unwrap());
 
-    ctx.register_table("test_table", table).unwrap();
+    ctx.register_table("test_table", table).await.unwrap();
 
     let results = ctx.sql(query).await.unwrap().collect().await.unwrap();
     let explain_batches = ctx

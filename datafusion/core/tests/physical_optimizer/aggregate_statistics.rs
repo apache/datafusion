@@ -354,7 +354,7 @@ async fn utf8_grouping_min_max_limit_fallbacks() -> Result<()> {
         ],
     )?;
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-    ctx.register_table("t", Arc::new(table))?;
+    ctx.register_table("t", Arc::new(table)).await?;
 
     // Supported path: numeric min/max with UTF-8 grouping should still use TopK aggregation
     // and return correct results.
@@ -560,7 +560,7 @@ async fn topk_distinct_preserves_nulls() -> Result<()> {
         vec![Arc::new(StringArray::from(vec![None, Some(""), Some("a")]))],
     )?;
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-    ctx.register_table("t", Arc::new(table))?;
+    ctx.register_table("t", Arc::new(table)).await?;
 
     // ASC NULLS FIRST LIMIT 1 → NULL should come first
     let result = ctx
@@ -607,7 +607,7 @@ async fn topk_distinct_preserves_nulls() -> Result<()> {
         vec![Arc::new(Int64Array::from(vec![None, Some(3), Some(1)]))],
     )?;
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-    ctx.register_table("t_int", Arc::new(table))?;
+    ctx.register_table("t_int", Arc::new(table)).await?;
 
     let result = ctx
         .sql("SELECT DISTINCT v FROM t_int ORDER BY v ASC NULLS FIRST LIMIT 1")

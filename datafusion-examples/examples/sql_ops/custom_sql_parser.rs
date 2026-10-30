@@ -210,7 +210,7 @@ async fn handle_create_foreign_catalog(
 
             match factory.create(&ctx.state(), &cmd).await {
                 Ok(table) => {
-                    schema.register_table(name, table)?;
+                    schema.register_table(name, table).await?;
                     table_count += 1;
                 }
                 Err(e) => {

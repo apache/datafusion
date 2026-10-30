@@ -212,7 +212,8 @@ fn register_table(
         .unwrap()
         .with_schema(table_schema);
     let provider = ListingTable::try_new(config).unwrap();
-    ctx.register_table(table, Arc::new(provider)).unwrap();
+    rt.block_on(ctx.register_table(table, Arc::new(provider)))
+        .unwrap();
 }
 
 fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {

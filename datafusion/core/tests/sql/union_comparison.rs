@@ -137,7 +137,7 @@ async fn test_union_eq_int32() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
 
     let df = ctx
         .sql("SELECT id FROM test WHERE val = CAST(67 AS INT)")
@@ -186,7 +186,7 @@ async fn test_union_eq_string() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
 
     let df = ctx.sql("SELECT id FROM test WHERE val = 'hello'").await?;
     let results = df.collect().await?;
@@ -234,7 +234,7 @@ async fn test_union_comparison_operators() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
 
     // test > - cast literals to Int32
     let df = ctx
@@ -300,7 +300,7 @@ async fn test_union_with_null_values() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
 
     let df = ctx
         .sql("SELECT id FROM test WHERE val = CAST(10 AS INT)")
@@ -356,7 +356,7 @@ async fn test_union_non_matching_variants_are_null() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
 
     // When casting to Int32, the string variant becomes NULL
     let df = ctx
@@ -414,7 +414,7 @@ async fn test_union_cast_compatible_variant() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
 
     // Int32 variant can be cast to Int64, so this should work
     let df = ctx
@@ -477,7 +477,7 @@ async fn test_union_eq_same_union() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
 
     let df = ctx
         .sql("SELECT id FROM test WHERE val1 = val2")

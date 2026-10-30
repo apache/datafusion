@@ -193,7 +193,7 @@ impl RunOpt {
     async fn register_tables(&self, ctx: &SessionContext) -> Result<()> {
         for table in Self::TABLES {
             let table_provider = self.get_table(ctx, table).await?;
-            ctx.register_table(table, table_provider)?;
+            ctx.register_table(table, table_provider).await?;
         }
         Ok(())
     }

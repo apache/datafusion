@@ -46,7 +46,7 @@ async fn create_test_table() -> Result<DataFrame> {
         .build();
     let ctx = SessionContext::new_with_state(state);
 
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
 
     ctx.table("test").await
 }

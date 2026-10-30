@@ -460,7 +460,7 @@ impl SortFuzzerTestGenerator {
         (query, limit)
     }
 
-    pub fn generate_random_config(
+    pub async fn generate_random_config(
         &self,
         rng_seed: u64,
         with_memory_limit: bool,
@@ -548,7 +548,8 @@ impl SortFuzzerTestGenerator {
         let schema = &init_state.schema;
 
         let provider = MemTable::try_new(schema.clone(), dataset.clone())?;
-        ctx.register_table("sort_fuzz_table", Arc::new(provider))?;
+        ctx.register_table("sort_fuzz_table", Arc::new(provider))
+            .await?;
 
         Ok(ctx)
     }
@@ -572,7 +573,9 @@ impl SortFuzzerTestGenerator {
         // 2. Memory limiting is enabled in the test generator config
         let with_mem_limit = !query_str.contains("LIMIT") && self.set_memory_limit;
 
-        let ctx = self.generate_random_config(config_seed, with_mem_limit, None)?;
+        let ctx = self
+            .generate_random_config(config_seed, with_mem_limit, None)
+            .await?;
         let df = ctx.sql(&query_str).await.unwrap();
         let schema = Arc::clone(df.schema().inner());
         let results = concat_batches(&schema, &df.collect().await?)?;

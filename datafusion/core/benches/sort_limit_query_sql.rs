@@ -76,6 +76,7 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
             .await
             .unwrap();
         ctx.register_table("aggregate_test_100", Arc::new(mem_table))
+            .await
             .unwrap();
         ctx_holder.lock().push(Arc::new(Mutex::new(ctx)))
     });

@@ -84,7 +84,7 @@ use insta::assert_snapshot;
 pub async fn match_recognize() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_relation_planner(Arc::new(MatchRecognizePlanner))?;
-    register_sample_data(&ctx)?;
+    register_sample_data(&ctx).await?;
 
     println!("MATCH_RECOGNIZE Example (Logical Planning Only)");
     println!("================================================\n");
@@ -150,7 +150,7 @@ async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<Str
 }
 
 /// Register test data tables.
-fn register_sample_data(ctx: &SessionContext) -> Result<()> {
+async fn register_sample_data(ctx: &SessionContext) -> Result<()> {
     // events: simple price series
     ctx.register_batch(
         "events",
@@ -158,7 +158,8 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
             "price",
             Arc::new(Int32Array::from(vec![5, 12, 8, 15, 20])) as ArrayRef,
         )])?,
-    )?;
+    )
+    .await?;
 
     // stock_prices: realistic stock data
     ctx.register_batch(
@@ -174,7 +175,8 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
                 Arc::new(Float64Array::from(vec![150.0, 155.0, 152.0, 158.0])),
             ),
         ])?,
-    )?;
+    )
+    .await?;
 
     Ok(())
 }

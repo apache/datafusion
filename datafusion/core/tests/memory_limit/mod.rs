@@ -188,6 +188,7 @@ mod count_distinct_spill {
         let config = SessionConfig::new().with_target_partitions(4);
         let ctx = SessionContext::new_with_config_rt(config, runtime);
         ctx.register_table("t", Arc::new(count_distinct_table()))
+            .await
             .unwrap();
 
         let batches = ctx
@@ -326,6 +327,7 @@ async fn nested_key_spill_keeps_groups_unique() {
             runtime.build_arc().unwrap(),
         );
         ctx.register_table("t", Arc::new(nested_key_table()))
+            .await
             .unwrap();
 
         let df = ctx
@@ -458,7 +460,8 @@ async fn topk_reserves_shared_input_buffers_once() -> Result<()> {
         .build_arc()?;
     let config = SessionConfig::new().with_target_partitions(1);
     let ctx = SessionContext::new_with_config_rt(config, runtime);
-    ctx.register_table("t", Arc::new(MemTable::try_new(schema, vec![slices])?))?;
+    ctx.register_table("t", Arc::new(MemTable::try_new(schema, vec![slices])?))
+        .await?;
 
     // The limit is larger than the input, so TopK retains every slice
     let batches = ctx
@@ -872,7 +875,7 @@ async fn test_stringview_external_sort() {
         .with_repartition_file_scans(false);
 
     let ctx = SessionContext::new_with_config_rt(config, runtime);
-    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx.register_table("t", Arc::new(table)).await.unwrap();
 
     let df = ctx
         .sql("explain analyze SELECT * FROM t ORDER BY random_numbers")
@@ -1408,7 +1411,9 @@ impl TestCase {
         };
 
         let ctx = SessionContext::new_with_state(builder.build());
-        ctx.register_table("t", table).expect("registering table");
+        ctx.register_table("t", table)
+            .await
+            .expect("registering table");
 
         let query = query.expect("Test error: query not specified");
         let df = ctx.sql(&query).await.expect("Planning query");

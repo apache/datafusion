@@ -6144,7 +6144,7 @@ async fn test_distribute_sort_memtable() -> Result<()> {
         .with_repartition_file_min_size(1000)
         .with_target_partitions(3);
     let ctx = SessionContext::new_with_config(session_config);
-    ctx.register_table("users", Arc::new(mem_table))?;
+    ctx.register_table("users", Arc::new(mem_table)).await?;
 
     let dataframe = ctx.sql("SELECT * FROM users order by id;").await?;
     let physical_plan = dataframe.create_physical_plan().await?;

@@ -139,7 +139,7 @@ async fn round_trip_parquet_with_encryption_factory() {
         RecordBatch::try_from_iter(vec![("string", strings), ("x1", x1), ("x2", x2)])
             .unwrap();
     let test_data_schema = batch.schema();
-    ctx.register_batch("test_data", batch).unwrap();
+    ctx.register_batch("test_data", batch).await.unwrap();
     let df = ctx.table("test_data").await.unwrap();
 
     // Write encrypted Parquet, partitioned by string column into separate files

@@ -47,11 +47,13 @@ async fn volatile_join_filter_preserves_evaluations_below_min() -> Result<()> {
     ctx.register_batch(
         "l",
         record_batch!(("id", Int32, vec![1, 2]), ("x", Int32, vec![20, 10]))?,
-    )?;
+    )
+    .await?;
     ctx.register_batch(
         "r",
         record_batch!(("id", Int32, vec![1, 1, 2]), ("y", Int32, vec![0, 0, 0]))?,
-    )?;
+    )
+    .await?;
 
     // The inner join evaluates both pairs for id=1, so id=2 receives the
     // third (true) result. A semi join would stop after the first match for
@@ -107,7 +109,8 @@ async fn join_change_in_planner() -> Result<()> {
         &left_file_path,
         "left",
         file_sort_order.clone(),
-    )?;
+    )
+    .await?;
     let right_file_path = tmp_dir.path().join("right.csv");
     File::create(right_file_path.clone()).unwrap();
     register_unbounded_file_with_ordering(
@@ -116,7 +119,8 @@ async fn join_change_in_planner() -> Result<()> {
         &right_file_path,
         "right",
         file_sort_order,
-    )?;
+    )
+    .await?;
     let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
     let dataframe = ctx.sql(sql).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
@@ -165,7 +169,8 @@ async fn join_no_order_on_filter() -> Result<()> {
         &left_file_path,
         "left",
         file_sort_order.clone(),
-    )?;
+    )
+    .await?;
     let right_file_path = tmp_dir.path().join("right.csv");
     File::create(right_file_path.clone()).unwrap();
     register_unbounded_file_with_ordering(
@@ -174,7 +179,8 @@ async fn join_no_order_on_filter() -> Result<()> {
         &right_file_path,
         "right",
         file_sort_order,
-    )?;
+    )
+    .await?;
     let sql = "SELECT * FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a3 > t2.a3 + 3 AND t1.a3 < t2.a3 + 10";
     let dataframe = ctx.sql(sql).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
@@ -207,13 +213,15 @@ async fn join_change_in_planner_without_sort() -> Result<()> {
     ]));
     let left_source = FileStreamProvider::new_file(schema.clone(), left_file_path);
     let left = StreamConfig::new(Arc::new(left_source));
-    ctx.register_table("left", Arc::new(StreamTable::new(Arc::new(left))))?;
+    ctx.register_table("left", Arc::new(StreamTable::new(Arc::new(left))))
+        .await?;
 
     let right_file_path = tmp_dir.path().join("right.csv");
     File::create(right_file_path.clone())?;
     let right_source = FileStreamProvider::new_file(schema, right_file_path);
     let right = StreamConfig::new(Arc::new(right_source));
-    ctx.register_table("right", Arc::new(StreamTable::new(Arc::new(right))))?;
+    ctx.register_table("right", Arc::new(StreamTable::new(Arc::new(right))))
+        .await?;
     let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
     let dataframe = ctx.sql(sql).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
@@ -248,12 +256,14 @@ async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
     ]));
     let left_source = FileStreamProvider::new_file(schema.clone(), left_file_path);
     let left = StreamConfig::new(Arc::new(left_source));
-    ctx.register_table("left", Arc::new(StreamTable::new(Arc::new(left))))?;
+    ctx.register_table("left", Arc::new(StreamTable::new(Arc::new(left))))
+        .await?;
     let right_file_path = tmp_dir.path().join("right.csv");
     File::create(right_file_path.clone())?;
     let right_source = FileStreamProvider::new_file(schema.clone(), right_file_path);
     let right = StreamConfig::new(Arc::new(right_source));
-    ctx.register_table("right", Arc::new(StreamTable::new(Arc::new(right))))?;
+    ctx.register_table("right", Arc::new(StreamTable::new(Arc::new(right))))
+        .await?;
     let df = ctx.sql("SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10").await?;
     match df.create_physical_plan().await {
         Ok(_) => panic!("Expecting error."),
@@ -328,8 +338,10 @@ async fn unparse_cross_join() -> Result<()> {
         Field::new("j2_string", DataType::Utf8, true),
     ]));
 
-    ctx.register_table("j1", Arc::new(MemTable::try_new(j1_schema, vec![vec![]])?))?;
-    ctx.register_table("j2", Arc::new(MemTable::try_new(j2_schema, vec![vec![]])?))?;
+    ctx.register_table("j1", Arc::new(MemTable::try_new(j1_schema, vec![vec![]])?))
+        .await?;
+    ctx.register_table("j2", Arc::new(MemTable::try_new(j2_schema, vec![vec![]])?))
+        .await?;
 
     let df = ctx
         .sql(
@@ -352,7 +364,7 @@ async fn unparse_cross_join() -> Result<()> {
     Ok(())
 }
 
-fn register_asof_test_tables(ctx: &SessionContext) -> Result<()> {
+async fn register_asof_test_tables(ctx: &SessionContext) -> Result<()> {
     let trades_schema = Arc::new(Schema::new(vec![
         Field::new("symbol", DataType::Utf8, true),
         Field::new("ts", DataType::Int64, true),
@@ -382,7 +394,8 @@ fn register_asof_test_tables(ctx: &SessionContext) -> Result<()> {
             trades_schema,
             trades.into_iter().map(|batch| vec![batch]).collect(),
         )?),
-    )?;
+    )
+    .await?;
 
     let prices_schema = Arc::new(Schema::new(vec![
         Field::new("symbol", DataType::Utf8, true),
@@ -413,7 +426,8 @@ fn register_asof_test_tables(ctx: &SessionContext) -> Result<()> {
             prices_schema,
             prices.into_iter().map(|batch| vec![batch]).collect(),
         )?),
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
@@ -430,7 +444,7 @@ async fn asof_join_all_match_directions_across_batches() -> Result<()> {
         .with_batch_size(2)
         .with_target_partitions(2);
     let ctx = SessionContext::new_with_config(config);
-    register_asof_test_tables(&ctx)?;
+    register_asof_test_tables(&ctx).await?;
 
     for (op, expected) in [
         (
@@ -512,7 +526,7 @@ async fn asof_join_all_match_directions_across_batches() -> Result<()> {
 async fn asof_join_broadcasts_multi_partition_right_input() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(4);
     let ctx = SessionContext::new_with_config(config);
-    register_asof_test_tables(&ctx)?;
+    register_asof_test_tables(&ctx).await?;
     let df = ctx
         .sql(
             "SELECT t.trade_id, t.ts, p.price FROM trades t ASOF JOIN \
@@ -575,7 +589,7 @@ async fn asof_join_broadcasts_multi_partition_right_input() -> Result<()> {
 #[tokio::test]
 async fn asof_join_projection_drops_output_ordering() -> Result<()> {
     let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx)?;
+    register_asof_test_tables(&ctx).await?;
     let plan = ctx
         .sql(
             "SELECT t.trade_id, p.price FROM trades t ASOF JOIN \
@@ -620,7 +634,8 @@ async fn asof_join_rejects_unbounded_inputs_during_physical_planning() -> Result
             &path,
             table,
             ordering.clone(),
-        )?;
+        )
+        .await?;
     }
     let error = ctx
         .sql(
@@ -638,7 +653,7 @@ async fn asof_join_rejects_unbounded_inputs_during_physical_planning() -> Result
 #[tokio::test]
 async fn asof_join_using_unparser_round_trips() -> Result<()> {
     let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx)?;
+    register_asof_test_tables(&ctx).await?;
     let df = ctx
         .sql(
             "SELECT * FROM trades t ASOF JOIN prices p \
@@ -656,7 +671,7 @@ async fn asof_join_using_unparser_round_trips() -> Result<()> {
 #[tokio::test]
 async fn asof_join_unparser_preserves_right_preselection() -> Result<()> {
     let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx)?;
+    register_asof_test_tables(&ctx).await?;
     for query in [
         "SELECT t.trade_id, p.price FROM trades t \
          ASOF JOIN (SELECT * FROM prices WHERE price < 100) p \

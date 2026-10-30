@@ -229,8 +229,10 @@ fn plan_in_list(
     negated: bool,
     list_has_null: bool,
 ) -> Arc<dyn PhysicalExpr> {
-    ctx.deregister_table(kind.name()).unwrap();
-    ctx.register_batch(kind.name(), batch.clone()).unwrap();
+    runtime.block_on(ctx.deregister_table(kind.name())).unwrap();
+    runtime
+        .block_on(ctx.register_batch(kind.name(), batch.clone()))
+        .unwrap();
     let params = (0..list_len)
         .map(|i| kind.scalar((!list_has_null || i + 1 < list_len).then_some(i)))
         .collect::<Vec<_>>();

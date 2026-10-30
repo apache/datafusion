@@ -34,7 +34,7 @@ pub async fn analyzer_rule() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.add_analyzer_rule(Arc::clone(&rule) as _);
 
-    ctx.register_batch("employee", employee_batch())?;
+    ctx.register_batch("employee", employee_batch()).await?;
 
     // Now, planning any SQL statement also invokes the AnalyzerRule
     let plan = ctx

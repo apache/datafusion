@@ -50,4 +50,41 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_async_schema_registration() -> datafusion_common::Result<()> {
+        let module = get_module()?;
+        let (ctx, codec) = crate::utils::ctx_and_codec();
+        let ffi_catalog = (module.create_catalog)(codec);
+        let catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();
+        let schema = catalog.schema("apple").unwrap();
+        let table = schema.table("purchases").await?.unwrap();
+
+        assert!(
+            schema
+                .register_table("sales".into(), Arc::clone(&table))
+                .await?
+                .is_none()
+        );
+        assert!(
+            schema
+                .register_table("sales".into(), Arc::clone(&table))
+                .await
+                .is_err()
+        );
+        assert!(
+            schema
+                .register_table("unsupported".into(), table)
+                .await
+                .is_err()
+        );
+        ctx.register_catalog("fruit", catalog);
+        assert_eq!(ctx.table("fruit.apple.sales").await?.count().await?, 5);
+
+        let removed = schema.deregister_table("sales").await?.unwrap();
+        assert_eq!(removed.schema().fields().len(), 2);
+        assert!(schema.deregister_table("sales").await?.is_none());
+        assert!(!schema.table_exist("sales"));
+        Ok(())
+    }
 }

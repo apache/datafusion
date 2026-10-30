@@ -180,7 +180,7 @@ impl SchemaProvider for DirSchema {
         tables.contains_key(name)
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
@@ -193,7 +193,10 @@ impl SchemaProvider for DirSchema {
 
     /// If supported by the implementation, removes an existing table from this schema and returns it.
     /// If no table of that name exists, returns Ok(None).
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    async fn deregister_table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         let mut tables = self.tables.write().unwrap();
         log::info!("dropping table {name}");
         Ok(tables.remove(name))

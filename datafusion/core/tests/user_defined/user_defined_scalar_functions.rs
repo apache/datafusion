@@ -100,7 +100,7 @@ async fn scalar_udf() -> Result<()> {
 
     let ctx = SessionContext::new();
 
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
 
     let myfunc = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(l) = &args[0] else {
@@ -166,7 +166,7 @@ async fn scalar_udf() -> Result<()> {
         assert_eq!(a.value(i) + b.value(i), sum.value(i));
     }
 
-    ctx.deregister_table("t")?;
+    ctx.deregister_table("t").await?;
 
     Ok(())
 }
@@ -217,7 +217,7 @@ async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
 
     let ctx = SessionContext::new();
 
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
 
     // udf that always return 1 row
     let buggy_udf = Arc::new(|_: &[ColumnarValue]| {
@@ -254,7 +254,7 @@ async fn scalar_udf_zero_params() -> Result<()> {
     )?;
     let ctx = SessionContext::new();
 
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
 
     let get_100_udf = Simple0ArgsScalarUDF {
         name: "get_100".to_string(),
@@ -304,7 +304,7 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
     )?;
     let ctx = SessionContext::new();
 
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     // register a UDF that has the same name as a builtin function (abs) and just returns 1 regardless of input
     ctx.register_udf(create_udf(
         "abs",
@@ -364,15 +364,17 @@ async fn udaf_as_window_func() -> Result<()> {
     );
 
     let context = SessionContext::new();
-    context.register_table(
-        "my_table",
-        Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::new(
-            Schema::new(vec![
-                Field::new("a", DataType::UInt32, false),
-                Field::new("b", DataType::Int32, false),
-            ]),
-        ))),
-    )?;
+    context
+        .register_table(
+            "my_table",
+            Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::new(
+                Schema::new(vec![
+                    Field::new("a", DataType::UInt32, false),
+                    Field::new("b", DataType::Int32, false),
+                ]),
+            ))),
+        )
+        .await?;
     context.register_udaf(my_acc);
 
     let sql = "SELECT a, MY_ACC(b) OVER(PARTITION BY a) FROM my_table";
@@ -390,7 +392,7 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
     let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
 
     let myfunc = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(array) = &args[0] else {
@@ -435,7 +437,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
     let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
 
     let myfunc = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(array) = &args[0] else {
@@ -556,7 +558,7 @@ async fn volatile_scalar_udf_with_params() -> Result<()> {
         )?;
         let ctx = SessionContext::new();
 
-        ctx.register_batch("t", batch)?;
+        ctx.register_batch("t", batch).await?;
 
         let get_new_str_udf = AddIndexToStringVolatileScalarUDF::new();
 
@@ -621,7 +623,7 @@ async fn volatile_scalar_udf_with_params() -> Result<()> {
         )?;
         let ctx = SessionContext::new();
 
-        ctx.register_batch("t", batch)?;
+        ctx.register_batch("t", batch).await?;
 
         let get_new_str_udf = AddIndexToStringVolatileScalarUDF::new();
 
@@ -710,7 +712,7 @@ async fn test_user_defined_functions_cast_to_i64() -> Result<()> {
         vec![Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]))],
     )?;
 
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
 
     let cast_to_i64_udf = ScalarUDF::from(CastToI64UDF::new());
     ctx.register_udf(cast_to_i64_udf);
@@ -1437,7 +1439,7 @@ async fn test_parameterized_scalar_udf() -> Result<()> {
     )])?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let t = ctx.table("t").await?;
     let foo_udf = ScalarUDF::from(MyRegexUdf::new("fo{2}"));
     let bar_udf = ScalarUDF::from(MyRegexUdf::new("[Bb]ar"));
@@ -1467,7 +1469,7 @@ async fn test_parameterized_scalar_udf() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    ctx.deregister_table("t")?;
+    ctx.deregister_table("t").await?;
     Ok(())
 }
 
@@ -1626,7 +1628,7 @@ async fn test_metadata_based_udf() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let t = ctx.table("t").await?;
     let no_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new(HashMap::new()));
     let with_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new(
@@ -1676,7 +1678,7 @@ async fn test_metadata_based_udf() -> Result<()> {
 
     assert_eq!(expected, actual[0]);
 
-    ctx.deregister_table("t")?;
+    ctx.deregister_table("t").await?;
     Ok(())
 }
 
@@ -1872,7 +1874,7 @@ async fn test_extension_based_udf() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let t = ctx.table("t").await?;
     let extension_based_udf = ScalarUDF::from(ExtensionBasedUdf::default());
 
@@ -1910,7 +1912,7 @@ async fn test_extension_based_udf() -> Result<()> {
 
     assert_eq!(expected, actual[0]);
 
-    ctx.deregister_table("t")?;
+    ctx.deregister_table("t").await?;
     Ok(())
 }
 
@@ -2212,8 +2214,8 @@ async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("l", batch_lhs)?;
-    ctx.register_batch("r", batch_rhs)?;
+    ctx.register_batch("l", batch_lhs).await?;
+    ctx.register_batch("r", batch_rhs).await?;
     ctx.register_udf(ExtensionScalarPredicate::default().into());
 
     let df = ctx
@@ -2304,8 +2306,8 @@ async fn test_extension_metadata_preserve_in_uncorrelated_scalar_subquery() -> R
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("l", batch.clone())?;
-    ctx.register_batch("r", batch)?;
+    ctx.register_batch("l", batch.clone()).await?;
+    ctx.register_batch("r", batch).await?;
     ctx.register_udf(MetadataRequired::default().into());
 
     let df = ctx

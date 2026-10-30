@@ -344,8 +344,8 @@ impl ContextWithParquet {
         ctx.register_parquet("t", &parquet_path, ParquetReadOptions::default())
             .await
             .unwrap();
-        let provider = ctx.deregister_table("t").unwrap().unwrap();
-        ctx.register_table("t", provider.clone()).unwrap();
+        let provider = ctx.deregister_table("t").await.unwrap().unwrap();
+        ctx.register_table("t", provider.clone()).await.unwrap();
 
         Self {
             file,

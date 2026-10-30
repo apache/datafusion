@@ -67,7 +67,8 @@ async fn main() -> Result<()> {
     let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_table_provider).into();
 
     // Display the data to show the full cycle works.
-    ctx.register_table("external_table", foreign_table_provider)?;
+    ctx.register_table("external_table", foreign_table_provider)
+        .await?;
     let df = ctx.table("external_table").await?;
     df.show().await?;
 

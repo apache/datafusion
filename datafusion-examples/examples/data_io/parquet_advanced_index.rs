@@ -157,7 +157,8 @@ pub async fn parquet_advanced_index() -> Result<()> {
     // SessionContext for running queries that has the table provider
     // registered as "index_table"
     let ctx = SessionContext::new();
-    ctx.register_table("index_table", Arc::clone(&provider) as _)?;
+    ctx.register_table("index_table", Arc::clone(&provider) as _)
+        .await?;
 
     // register object store provider for urls like `file://` work
     let url = Url::try_from("file://").unwrap();

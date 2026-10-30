@@ -36,7 +36,7 @@ pub async fn query_memtable() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Register the in-memory table containing the data
-    ctx.register_table("users", Arc::new(mem_table))?;
+    ctx.register_table("users", Arc::new(mem_table)).await?;
 
     // running a SQL query results in a "DataFrame", which can be used
     // to execute the query and collect the results

@@ -65,9 +65,10 @@ impl Default for FixedSchemaProvider {
 
         let table = fruit_table();
 
-        let _ = inner
-            .register_table("purchases".to_string(), table)
-            .unwrap();
+        let _ = futures::executor::block_on(
+            inner.register_table("purchases".to_string(), table),
+        )
+        .unwrap();
 
         Self { inner }
     }
@@ -87,22 +88,27 @@ impl SchemaProvider for FixedSchemaProvider {
         self.inner.table_exist(name)
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
+        tokio::task::yield_now().await;
         if name.as_str() != "sales" && name.as_str() != "purchases" {
             return exec_err!(
                 "FixedSchemaProvider only provides two tables: sales and purchases"
             );
         }
 
-        self.inner.register_table(name, table)
+        self.inner.register_table(name, table).await
     }
 
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.deregister_table(name)
+    async fn deregister_table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        tokio::task::yield_now().await;
+        self.inner.deregister_table(name).await
     }
 }
 

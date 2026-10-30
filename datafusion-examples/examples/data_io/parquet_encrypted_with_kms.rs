@@ -61,7 +61,7 @@ pub async fn parquet_encrypted_with_kms() -> Result<()> {
     let b: ArrayRef = Arc::new(Int32Array::from(vec![1, 10, 10, 100]));
     let c: ArrayRef = Arc::new(Int32Array::from(vec![2, 20, 20, 200]));
     let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)])?;
-    ctx.register_batch("test_data", batch)?;
+    ctx.register_batch("test_data", batch).await?;
 
     {
         // Write and read encrypted Parquet with the programmatic API

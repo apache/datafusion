@@ -52,7 +52,7 @@ pub trait SchemaProvider: Any + Debug + Sync + Send {
     /// If a table of the same name was already registered, returns "Table
     /// already exists" error.
     #[expect(unused_variables)]
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
@@ -65,7 +65,10 @@ pub trait SchemaProvider: Any + Debug + Sync + Send {
     ///
     /// If no `name` table exists, returns Ok(None).
     #[expect(unused_variables)]
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    async fn deregister_table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         exec_err!("schema provider does not support deregistering tables")
     }
 

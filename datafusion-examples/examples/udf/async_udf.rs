@@ -46,7 +46,7 @@ pub async fn async_udf() -> Result<()> {
     ctx.register_udf(udf.into_scalar_udf());
 
     // Create a table named 'animal' with some sample data
-    ctx.register_batch("animal", animal()?)?;
+    ctx.register_batch("animal", animal()?).await?;
 
     // You can use the async UDF as normal in SQL queries
     //

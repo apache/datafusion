@@ -41,7 +41,7 @@ async fn test_repartition_memory_limit() {
         .unwrap(),
     ];
     let table = Arc::new(MemTable::try_new(batches[0].schema(), vec![batches]).unwrap());
-    ctx.register_table("t", table).unwrap();
+    ctx.register_table("t", table).await.unwrap();
     let plan = ctx
         .state()
         .create_logical_plan("SELECT c1, count(*) as c FROM t GROUP BY c1;")

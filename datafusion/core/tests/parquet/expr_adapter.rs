@@ -257,7 +257,7 @@ async fn register_memory_listing_table(
             .with_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
 
     let table = ListingTable::try_new(listing_table_config).unwrap();
-    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx.register_table("t", Arc::new(table)).await.unwrap();
 }
 
 fn test_context() -> SessionContext {
@@ -624,7 +624,7 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
             .with_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
 
     let table = ListingTable::try_new(listing_table_config).unwrap();
-    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx.register_table("t", Arc::new(table)).await.unwrap();
 
     let batches = ctx
         .sql("SELECT c2, c1 FROM t WHERE c1 = 2 AND c2 IS NULL")
@@ -654,8 +654,8 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
             .with_schema(table_schema.clone())
             .with_expr_adapter_factory(Arc::new(CustomPhysicalExprAdapterFactory));
     let table = ListingTable::try_new(listing_table_config).unwrap();
-    ctx.deregister_table("t").unwrap();
-    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx.deregister_table("t").await.unwrap();
+    ctx.register_table("t", Arc::new(table)).await.unwrap();
     let batches = ctx
         .sql("SELECT c2, c1 FROM t WHERE c1 = 2 AND c2 = 'b'")
         .await
@@ -715,7 +715,7 @@ async fn test_physical_expr_adapter_with_non_null_defaults() {
             .with_expr_adapter_factory(Arc::new(CustomPhysicalExprAdapterFactory));
 
     let table = ListingTable::try_new(listing_table_config).unwrap();
-    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx.register_table("t", Arc::new(table)).await.unwrap();
 
     // Query all columns - missing columns should have default values
     let batches = ctx
@@ -1049,7 +1049,7 @@ async fn test_struct_schema_evolution_projection_and_filter() -> Result<()> {
             .with_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
 
     let table = ListingTable::try_new(listing_table_config).unwrap();
-    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx.register_table("t", Arc::new(table)).await.unwrap();
 
     let batches = ctx
         .sql("SELECT s FROM t")
@@ -1472,7 +1472,7 @@ async fn test_physical_expr_adapter_factory_reuse_across_tables() {
             .with_expr_adapter_factory(Arc::clone(&factory)); // Clone the Arc, not create new factory
 
     let table1 = ListingTable::try_new(listing_table_config1).unwrap();
-    ctx.register_table("t1", Arc::new(table1)).unwrap();
+    ctx.register_table("t1", Arc::new(table1)).await.unwrap();
 
     // Create ListingTable 2 using the SAME factory instance
     let listing_table_config2 =
@@ -1484,7 +1484,7 @@ async fn test_physical_expr_adapter_factory_reuse_across_tables() {
             .with_expr_adapter_factory(Arc::clone(&factory)); // Reuse same factory
 
     let table2 = ListingTable::try_new(listing_table_config2).unwrap();
-    ctx.register_table("t2", Arc::new(table2)).unwrap();
+    ctx.register_table("t2", Arc::new(table2)).await.unwrap();
 
     // Verify table 1 works correctly with the shared factory
     // CustomPhysicalExprAdapterFactory fills missing Utf8 columns with 'b'

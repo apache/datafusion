@@ -32,7 +32,7 @@ impl SchemaProvider for ResolvedSchemaProvider {
         Ok(self.cached_tables.get(name).cloned())
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         _table: Arc<dyn TableProvider>,
@@ -42,7 +42,10 @@ impl SchemaProvider for ResolvedSchemaProvider {
         )
     }
 
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    async fn deregister_table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         not_impl_err!(
             "Attempt to deregister table '{name}' with ResolvedSchemaProvider which is not supported"
         )

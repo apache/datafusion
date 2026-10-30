@@ -70,8 +70,8 @@ async fn run(sql: &str, memory_limit: Option<usize>) -> Vec<String> {
         None => RuntimeEnvBuilder::new().build_arc().unwrap(),
     };
     let ctx = SessionContext::new_with_config_rt(config, runtime);
-    ctx.register_batch("l", table(200, "v", 11)).unwrap();
-    ctx.register_batch("r", table(90, "w", 16)).unwrap();
+    ctx.register_batch("l", table(200, "v", 11)).await.unwrap();
+    ctx.register_batch("r", table(90, "w", 16)).await.unwrap();
 
     let plan = ctx
         .sql(sql)

@@ -3637,7 +3637,8 @@ async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
         .infer_schema(&ctx.state())
         .await?;
 
-    ctx.register_table("hive_style", Arc::new(ListingTable::try_new(config)?))?;
+    ctx.register_table("hive_style", Arc::new(ListingTable::try_new(config)?))
+        .await?;
 
     let plan = ctx
         .sql("SELECT part, value FROM hive_style LIMIT 1")
@@ -3801,7 +3802,7 @@ async fn roundtrip_empty_table_scan() -> Result<()> {
     let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
-    ctx.register_table("empty", table)?;
+    ctx.register_table("empty", table).await?;
 
     let plan = ctx.table("empty").await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -3823,7 +3824,7 @@ async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
     let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
-    ctx.register_table("empty", table)?;
+    ctx.register_table("empty", table).await?;
 
     let plan = ctx
         .table("empty")
@@ -3853,7 +3854,7 @@ async fn roundtrip_empty_relation_schema() -> Result<()> {
     let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
-    ctx.register_table("empty", table)?;
+    ctx.register_table("empty", table).await?;
 
     for query in [
         "SELECT * FROM empty LIMIT 0",
@@ -3945,8 +3946,10 @@ async fn roundtrip_join_null_equality() -> Result<()> {
     let left_schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
     let right_schema =
         Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
-    ctx.register_table("t1", Arc::new(EmptyTable::new(left_schema)))?;
-    ctx.register_table("t2", Arc::new(EmptyTable::new(right_schema)))?;
+    ctx.register_table("t1", Arc::new(EmptyTable::new(left_schema)))
+        .await?;
+    ctx.register_table("t2", Arc::new(EmptyTable::new(right_schema)))
+        .await?;
     let left = ctx.table("t1").await?.into_optimized_plan()?;
     let right = ctx.table("t2").await?.into_optimized_plan()?;
 
@@ -3981,8 +3984,10 @@ async fn roundtrip_asof_join() -> Result<()> {
         Field::new("ts", DataType::Int64, true),
         Field::new("price", DataType::Int32, false),
     ]));
-    ctx.register_table("trades", Arc::new(EmptyTable::new(left_schema)))?;
-    ctx.register_table("prices", Arc::new(EmptyTable::new(right_schema)))?;
+    ctx.register_table("trades", Arc::new(EmptyTable::new(left_schema)))
+        .await?;
+    ctx.register_table("prices", Arc::new(EmptyTable::new(right_schema)))
+        .await?;
 
     let left = ctx.table("trades").await?.into_optimized_plan()?;
     let right = ctx.table("prices").await?.into_optimized_plan()?;
@@ -4011,7 +4016,7 @@ async fn roundtrip_range_partitioning_single_col() -> Result<()> {
     let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
-    ctx.register_table("empty", table)?;
+    ctx.register_table("empty", table).await?;
 
     let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
     let plan = LogicalPlan::Repartition(Repartition {
@@ -4037,7 +4042,7 @@ async fn roundtrip_range_partitioning_multi_col() -> Result<()> {
     let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
-    ctx.register_table("empty", table)?;
+    ctx.register_table("empty", table).await?;
 
     let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
     let plan = LogicalPlan::Repartition(Repartition {
@@ -4073,7 +4078,7 @@ async fn roundtrip_range_partitioning_desc_nulls_last() -> Result<()> {
     let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
     let ctx = SessionContext::new();
-    ctx.register_table("empty", table)?;
+    ctx.register_table("empty", table).await?;
 
     let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
     let plan = LogicalPlan::Repartition(Repartition {

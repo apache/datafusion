@@ -52,7 +52,7 @@ use datafusion_functions_aggregate::sum::sum_udaf;
 /// Test to show the contents of the setup
 #[tokio::test]
 async fn test_setup() {
-    let TestContext { ctx, test_state: _ } = TestContext::new();
+    let TestContext { ctx, test_state: _ } = TestContext::new().await;
     let sql = "SELECT * from t order by time";
 
     let actual = execute(&ctx, sql).await.unwrap();
@@ -73,7 +73,7 @@ async fn test_setup() {
 /// Basic user defined aggregate
 #[tokio::test]
 async fn test_udaf() {
-    let TestContext { ctx, test_state } = TestContext::new();
+    let TestContext { ctx, test_state } = TestContext::new().await;
     assert!(!test_state.update_batch());
     let sql = "SELECT time_sum(time) from t";
 
@@ -95,7 +95,7 @@ async fn test_udaf() {
 /// User defined aggregate used as a window function
 #[tokio::test]
 async fn test_udaf_as_window() {
-    let TestContext { ctx, test_state } = TestContext::new();
+    let TestContext { ctx, test_state } = TestContext::new().await;
     let sql = "SELECT time_sum(time) OVER() as time_sum from t";
 
     let actual = execute(&ctx, sql).await.unwrap();
@@ -120,7 +120,7 @@ async fn test_udaf_as_window() {
 /// User defined aggregate used as a window function with a window frame
 #[tokio::test]
 async fn test_udaf_as_window_with_frame() {
-    let TestContext { ctx, test_state } = TestContext::new();
+    let TestContext { ctx, test_state } = TestContext::new().await;
     let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
 
     let actual = execute(&ctx, sql).await.unwrap();
@@ -148,7 +148,8 @@ async fn test_udaf_as_window_with_frame() {
 async fn test_udaf_as_window_with_frame_without_retract_batch() {
     let test_state = Arc::new(TestState::new().with_error_on_retract_batch());
 
-    let TestContext { ctx, test_state: _ } = TestContext::new_with_test_state(test_state);
+    let TestContext { ctx, test_state: _ } =
+        TestContext::new_with_test_state(test_state).await;
     let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
     // Note if this query ever does start working
     let err = execute(&ctx, sql).await.unwrap_err();
@@ -161,7 +162,7 @@ async fn test_udaf_as_window_with_frame_without_retract_batch() {
 /// Basic query for with a udaf returning a structure
 #[tokio::test]
 async fn test_udaf_returning_struct() {
-    let TestContext { ctx, test_state: _ } = TestContext::new();
+    let TestContext { ctx, test_state: _ } = TestContext::new().await;
     let sql = "SELECT first(value, time) from t";
 
     let actual = execute(&ctx, sql).await.unwrap();
@@ -178,7 +179,7 @@ async fn test_udaf_returning_struct() {
 /// Demonstrate extracting the fields from a structure using a subquery
 #[tokio::test]
 async fn test_udaf_returning_struct_subquery() {
-    let TestContext { ctx, test_state: _ } = TestContext::new();
+    let TestContext { ctx, test_state: _ } = TestContext::new().await;
     let sql = "select sq.first['value'], sq.first['time'] from (SELECT first(value, time) as first from t) as sq";
 
     let actual = execute(&ctx, sql).await.unwrap();
@@ -197,7 +198,7 @@ async fn test_udaf_shadows_builtin_fn() {
     let TestContext {
         mut ctx,
         test_state,
-    } = TestContext::new();
+    } = TestContext::new().await;
     let sql = "SELECT sum(arrow_cast(time, 'Int64')) from t";
 
     // compute with builtin `sum` aggregator
@@ -247,7 +248,7 @@ async fn simple_udaf() -> Result<()> {
     let ctx = SessionContext::new();
 
     let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_table("t", Arc::new(provider)).await?;
 
     // define a udaf, using a DataFusion's accumulator
     let my_avg = create_udaf(
@@ -304,7 +305,7 @@ async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
     let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch).await.unwrap();
 
     // Note capitalization
     let my_avg = create_udaf(
@@ -348,7 +349,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
     let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch).await.unwrap();
 
     let my_avg = create_udaf(
         "dummy",
@@ -386,11 +387,11 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 }
 
 /// Creates a context with table `t` (single `Int32` column `i` holding 1, 2, 3, 4).
-fn context_with_int_table() -> Result<SessionContext> {
+async fn context_with_int_table() -> Result<SessionContext> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1, 2, 3, 4]);
     let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     Ok(ctx)
 }
 
@@ -398,7 +399,7 @@ fn context_with_int_table() -> Result<SessionContext> {
 /// function's sliding accumulator. Windows are [1], [1,2], [2,3], [3,4].
 #[tokio::test]
 async fn test_aliased_udaf_as_window_with_frame() -> Result<()> {
-    let ctx = context_with_int_table()?;
+    let ctx = context_with_int_table().await?;
     ctx.register_udaf(sum_udaf().as_ref().clone().with_aliases(["my_sum"]));
     ctx.register_udaf(min_udaf().as_ref().clone().with_aliases(["my_min"]));
     ctx.register_udaf(max_udaf().as_ref().clone().with_aliases(["my_max"]));
@@ -451,7 +452,7 @@ async fn test_aliased_udaf_as_window_with_frame() -> Result<()> {
 /// overwrites the built-in `sum` as well: the original name is affected too.
 #[tokio::test]
 async fn test_aliased_udaf_as_window_with_frame_original_name() -> Result<()> {
-    let ctx = context_with_int_table()?;
+    let ctx = context_with_int_table().await?;
     ctx.register_udaf(sum_udaf().as_ref().clone().with_aliases(["my_sum"]));
 
     let sql = "SELECT sum(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS r FROM t";
@@ -474,7 +475,7 @@ async fn test_aliased_udaf_as_window_with_frame_original_name() -> Result<()> {
 /// passes both before and after the fix.
 #[tokio::test]
 async fn test_aliased_udaf_as_window_unbounded_preceding() -> Result<()> {
-    let ctx = context_with_int_table()?;
+    let ctx = context_with_int_table().await?;
     ctx.register_udaf(sum_udaf().as_ref().clone().with_aliases(["my_sum"]));
 
     let sql = "SELECT my_sum(i) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS r FROM t";
@@ -498,7 +499,7 @@ async fn test_groups_accumulator() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
     let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(arr) as _)])?;
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch).await.unwrap();
 
     let udaf = AggregateUDF::from(TestGroupsAccumulator {
         signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
@@ -520,7 +521,7 @@ async fn test_parameterized_aggregate_udf() -> Result<()> {
     )])?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let t = ctx.table("t").await?;
     let signature = Signature::exact(vec![DataType::Utf8], Volatility::Immutable);
     let udf1 = AggregateUDF::from(TestGroupsAccumulator {
@@ -557,7 +558,7 @@ async fn test_parameterized_aggregate_udf() -> Result<()> {
     +------+---+---+
     ");
 
-    ctx.deregister_table("t")?;
+    ctx.deregister_table("t").await?;
     Ok(())
 }
 
@@ -580,12 +581,12 @@ struct TestContext {
 }
 
 impl TestContext {
-    fn new() -> Self {
+    async fn new() -> Self {
         let test_state = Arc::new(TestState::new());
-        Self::new_with_test_state(test_state)
+        Self::new_with_test_state(test_state).await
     }
 
-    fn new_with_test_state(test_state: Arc<TestState>) -> Self {
+    async fn new_with_test_state(test_state: Arc<TestState>) -> Self {
         let value = Float64Array::from(vec![3.0, 2.0, 1.0, 5.0, 5.0]);
         let time = TimestampNanosecondArray::from(vec![3000, 2000, 4000, 5000, 5000]);
 
@@ -597,7 +598,7 @@ impl TestContext {
 
         let mut ctx = SessionContext::new();
 
-        ctx.register_batch("t", batch).unwrap();
+        ctx.register_batch("t", batch).await.unwrap();
 
         // Tell DataFusion about the "first" function
         FirstSelector::register(&mut ctx);
@@ -1125,7 +1126,7 @@ async fn test_metadata_based_aggregate() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let df = ctx.table("t").await?;
 
     let no_output_meta_udf =
@@ -1196,7 +1197,7 @@ async fn test_metadata_based_aggregate_as_window() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let df = ctx.table("t").await?;
 
     let no_output_meta_udf = Arc::new(AggregateUDF::from(

@@ -175,13 +175,14 @@ fn narrow_batch() -> RecordBatch {
     table_batch(0).project(&[0, 3]).unwrap()
 }
 
-fn memory_ctx(leaf_pushdown: bool) -> SessionContext {
+async fn memory_ctx(leaf_pushdown: bool) -> SessionContext {
     let ctx = SessionContext::new_with_config(config(leaf_pushdown, false));
     for (i, name) in TABLES.iter().enumerate() {
         ctx.register_batch(*name, table_batch(i as i32 * 3))
+            .await
             .unwrap();
     }
-    ctx.register_batch(NARROW, narrow_batch()).unwrap();
+    ctx.register_batch(NARROW, narrow_batch()).await.unwrap();
     ctx
 }
 
@@ -687,8 +688,8 @@ fn seed() -> u64 {
 }
 
 async fn run_memory(cases: usize) {
-    let on = memory_ctx(true);
-    let off = memory_ctx(false);
+    let on = memory_ctx(true).await;
+    let off = memory_ctx(false).await;
     run(&on, &off, "pushdown on", "pushdown off", cases, seed()).await;
 }
 
@@ -833,6 +834,7 @@ async fn check_evolved_filters(on: &SessionContext, off: &SessionContext, wide: 
             arrow::compute::concat_batches(&widened.schema(), [&widened, &widened])
                 .unwrap(),
         )
+        .await
         .unwrap();
     for sql in [
         "SELECT b, s['a'] FROM t1 WHERE b > 0",

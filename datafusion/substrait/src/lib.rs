@@ -67,7 +67,7 @@
 //!     "x",
 //!     Arc::new(Int32Array::from(vec![42])) as _,
 //! )])?;
-//! ctx.register_batch("t", batch)?;
+//! ctx.register_batch("t", batch).await?;
 //! let df = ctx.sql("SELECT x from t").await?;
 //! let plan = df.into_optimized_plan()?;
 //!

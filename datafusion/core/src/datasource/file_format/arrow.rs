@@ -70,7 +70,7 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new()?;
         let path = format!("{}/empty_batch.arrow", tmp_dir.path().to_string_lossy());
 
-        ctx.register_batch("empty_table", empty_batch)?;
+        ctx.register_batch("empty_table", empty_batch).await?;
 
         ctx.sql(&format!("COPY empty_table TO '{path}' STORED AS ARROW"))
             .await?

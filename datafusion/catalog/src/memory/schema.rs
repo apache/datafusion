@@ -47,7 +47,7 @@ impl SchemaProvider for MemorySchemaProvider {
         Ok(self.tables.get(name).map(|table| Arc::clone(table.value())))
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
@@ -58,7 +58,7 @@ impl SchemaProvider for MemorySchemaProvider {
         Ok(self.tables.insert(name, table))
     }
 
-    fn deregister_table(
+    async fn deregister_table(
         &self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {

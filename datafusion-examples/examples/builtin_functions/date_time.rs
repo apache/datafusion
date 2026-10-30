@@ -60,7 +60,7 @@ async fn query_make_date() -> Result<()> {
     let ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let df = ctx.table("t").await?;
 
     // use make_date function to convert col 'y', 'm' & 'd' to a date
@@ -211,7 +211,7 @@ async fn query_to_date() -> Result<()> {
     let ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let df = ctx.table("t").await?;
 
     // use to_date function to convert col 'a' to timestamp type using the default parsing
@@ -266,7 +266,7 @@ async fn query_to_timestamp() -> Result<()> {
     let ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let df = ctx.table("t").await?;
 
     // use to_timestamp function to convert col 'a' to timestamp type using the default parsing
@@ -442,7 +442,7 @@ async fn query_to_char() -> Result<()> {
     let ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let _ = ctx.table("t").await?;
 
     // use to_char function to convert col 'values' to timestamp type using

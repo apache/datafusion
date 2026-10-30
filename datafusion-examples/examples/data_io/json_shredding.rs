@@ -96,7 +96,7 @@ pub async fn json_shredding() -> Result<()> {
     let table_provider = Arc::new(table);
 
     // Register our table
-    ctx.register_table("structs", table_provider)?;
+    ctx.register_table("structs", table_provider).await?;
     ctx.register_udf(ScalarUDF::new_from_impl(JsonGetStr::default()));
 
     println!("\n=== Showing all data ===");

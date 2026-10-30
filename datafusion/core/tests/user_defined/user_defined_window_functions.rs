@@ -55,7 +55,7 @@ const BOUNDED_WINDOW_QUERY: &str = "SELECT x, y, val, \
 #[tokio::test]
 async fn test_setup() {
     let test_state = TestState::new();
-    let TestContext { ctx, test_state: _ } = TestContext::new(test_state);
+    let TestContext { ctx, test_state: _ } = TestContext::new(test_state).await;
 
     let sql = "SELECT * from t order by x, y";
     let actual = execute(&ctx, sql).await.unwrap();
@@ -82,7 +82,7 @@ async fn test_setup() {
 #[tokio::test]
 async fn test_udwf() {
     let test_state = TestState::new();
-    let TestContext { ctx, test_state } = TestContext::new(test_state);
+    let TestContext { ctx, test_state } = TestContext::new(test_state).await;
 
     let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
 
@@ -127,7 +127,7 @@ async fn test_deregister_udwf() -> Result<()> {
 #[tokio::test]
 async fn test_udwf_with_alias() {
     let test_state = TestState::new();
-    let TestContext { ctx, .. } = TestContext::new(test_state);
+    let TestContext { ctx, .. } = TestContext::new(test_state).await;
 
     let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY_WITH_ALIAS)
         .await
@@ -155,7 +155,7 @@ async fn test_udwf_with_alias() {
 #[tokio::test]
 async fn test_udwf_bounded_window_ignores_frame() {
     let test_state = TestState::new();
-    let TestContext { ctx, test_state } = TestContext::new(test_state);
+    let TestContext { ctx, test_state } = TestContext::new(test_state).await;
 
     // Since the UDWF doesn't say it needs the window frame, the frame is ignored
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
@@ -186,7 +186,7 @@ async fn test_udwf_bounded_window_ignores_frame() {
 #[tokio::test]
 async fn test_udwf_bounded_window() {
     let test_state = TestState::new().with_uses_window_frame();
-    let TestContext { ctx, test_state } = TestContext::new(test_state);
+    let TestContext { ctx, test_state } = TestContext::new(test_state).await;
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
@@ -218,7 +218,7 @@ async fn test_stateful_udwf() {
     let test_state = TestState::new()
         .with_supports_bounded_execution()
         .with_uses_window_frame();
-    let TestContext { ctx, test_state } = TestContext::new(test_state);
+    let TestContext { ctx, test_state } = TestContext::new(test_state).await;
 
     let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
 
@@ -249,7 +249,7 @@ async fn test_stateful_udwf_bounded_window() {
     let test_state = TestState::new()
         .with_supports_bounded_execution()
         .with_uses_window_frame();
-    let TestContext { ctx, test_state } = TestContext::new(test_state);
+    let TestContext { ctx, test_state } = TestContext::new(test_state).await;
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
@@ -279,7 +279,7 @@ async fn test_stateful_udwf_bounded_window() {
 #[tokio::test]
 async fn test_udwf_query_include_rank() {
     let test_state = TestState::new().with_include_rank();
-    let TestContext { ctx, test_state } = TestContext::new(test_state);
+    let TestContext { ctx, test_state } = TestContext::new(test_state).await;
 
     let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
 
@@ -310,7 +310,7 @@ async fn test_udwf_query_include_rank() {
 #[tokio::test]
 async fn test_udwf_bounded_query_include_rank() {
     let test_state = TestState::new().with_include_rank();
-    let TestContext { ctx, test_state } = TestContext::new(test_state);
+    let TestContext { ctx, test_state } = TestContext::new(test_state).await;
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
@@ -343,7 +343,7 @@ async fn test_udwf_bounded_window_returns_null() {
     let test_state = TestState::new()
         .with_uses_window_frame()
         .with_null_for_zero();
-    let TestContext { ctx, test_state } = TestContext::new(test_state);
+    let TestContext { ctx, test_state } = TestContext::new(test_state).await;
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
@@ -397,7 +397,7 @@ struct TestContext {
 }
 
 impl TestContext {
-    fn new(test_state: TestState) -> Self {
+    async fn new(test_state: TestState) -> Self {
         let test_state = Arc::new(test_state);
         let x = Int64Array::from(vec![1, 1, 1, 2, 2, 2, 2, 2, 2, 2]);
         let y = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]);
@@ -412,7 +412,7 @@ impl TestContext {
 
         let mut ctx = SessionContext::new();
 
-        ctx.register_batch("t", batch).unwrap();
+        ctx.register_batch("t", batch).await.unwrap();
 
         // Tell DataFusion about the window function
         OddCounter::register(&mut ctx, Arc::clone(&test_state));
@@ -865,7 +865,7 @@ async fn test_metadata_based_window_fn() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let df = ctx.table("t").await?;
 
     let no_output_meta_udf = WindowUDF::from(MetadataBasedWindowUdf::new(HashMap::new()));

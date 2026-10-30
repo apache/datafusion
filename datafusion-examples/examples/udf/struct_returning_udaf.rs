@@ -24,7 +24,7 @@ use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 
 pub async fn struct_returning_udaf() -> Result<()> {
-    let ctx = create_context()?;
+    let ctx = create_context().await?;
 
     register_augmented_avg(&ctx);
 
@@ -58,7 +58,7 @@ pub async fn struct_returning_udaf() -> Result<()> {
     Ok(())
 }
 
-fn create_context() -> Result<SessionContext> {
+async fn create_context() -> Result<SessionContext> {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "time",
@@ -80,7 +80,7 @@ fn create_context() -> Result<SessionContext> {
 
     let ctx = SessionContext::new();
     let provider = MemTable::try_new(schema, vec![vec![batch]])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_table("t", Arc::new(provider)).await?;
     Ok(ctx)
 }
 

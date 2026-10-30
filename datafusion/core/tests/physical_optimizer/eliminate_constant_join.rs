@@ -122,14 +122,15 @@ async fn keeps_metadata_of_constant_input() -> Result<()> {
     let sql = "SELECT * FROM (SELECT count(*) AS n FROM tagged) c \
                JOIN events e ON e.t >= c.n";
     let expected = rows(
-        metadata_session(false)?
+        metadata_session(false)
+            .await?
             .sql(sql)
             .await?
             .create_physical_plan()
             .await?,
     )
     .await?;
-    let ctx = metadata_session(true)?;
+    let ctx = metadata_session(true).await?;
     let plan = ctx.sql(sql).await?.create_physical_plan().await?;
     assert_eq!(rows(plan).await?, expected);
     Ok(())
@@ -137,7 +138,7 @@ async fn keeps_metadata_of_constant_input() -> Result<()> {
 
 /// Registers `events` and `tagged`, a table whose schema carries metadata, with the
 /// default rules, without [`EliminateConstantJoin`] unless `eliminate` is set.
-fn metadata_session(eliminate: bool) -> Result<SessionContext> {
+async fn metadata_session(eliminate: bool) -> Result<SessionContext> {
     let mut state = SessionStateBuilder::new().with_default_features().build();
     if !eliminate {
         let rules = state
@@ -169,7 +170,8 @@ fn metadata_session(eliminate: bool) -> Result<SessionContext> {
         ctx.register_table(
             name,
             Arc::new(MemTable::try_new(schema, vec![vec![batch]])?),
-        )?;
+        )
+        .await?;
     }
     Ok(ctx)
 }

@@ -137,7 +137,7 @@ async fn describe_binary_columns() -> Result<()> {
         ],
     )?;
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let result = ctx.table("t").await?.describe().await?.collect().await?;
 
     assert_snapshot!(batches_to_string(&result),

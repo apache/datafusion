@@ -297,7 +297,8 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", ctx.table("test").await?.into_view())?;
+        ctx.register_table("t1", ctx.table("test").await?.into_view())
+            .await?;
 
         ctx.sql("CREATE VIEW t2 as SELECT * FROM t1").await?;
 
@@ -328,7 +329,8 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", ctx.table("test").await?.into_view())?;
+        ctx.register_table("t1", ctx.table("test").await?.into_view())
+            .await?;
 
         ctx.sql("CREATE VIEW t2 as SELECT * FROM t1").await?;
 
@@ -491,7 +493,9 @@ mod tests {
             .await?
             .into_optimized_plan()?;
         let view = crate::datasource::ViewTable::new(plan, None);
-        session_ctx.register_table("w", std::sync::Arc::new(NotInlinedView(view)))?;
+        session_ctx
+            .register_table("w", std::sync::Arc::new(NotInlinedView(view)))
+            .await?;
 
         // Each read of `w` plans the saved query, which has the same CTE id
         // each time.

@@ -3076,7 +3076,7 @@ async fn test_partial_sort_with_homogeneous_batches() -> Result<()> {
     let provider = StreamingTable::try_new(schema.clone(), vec![batches])?
         .with_sort_order(sort_order)
         .with_infinite_table(true);
-    ctx.register_table("test_table", Arc::new(provider))?;
+    ctx.register_table("test_table", Arc::new(provider)).await?;
 
     let sql = "SELECT * FROM test_table ORDER BY a ASC, c ASC";
     let df = ctx.sql(sql).await?;
@@ -3162,7 +3162,7 @@ async fn test_sort_with_streaming_table() -> Result<()> {
     }) as _;
     let provider = StreamingTable::try_new(schema.clone(), vec![batches])?
         .with_sort_order(sort_order);
-    ctx.register_table("test_table", Arc::new(provider))?;
+    ctx.register_table("test_table", Arc::new(provider)).await?;
 
     let sql = "SELECT a FROM test_table GROUP BY a ORDER BY a";
     let results = ctx.sql(sql).await?.collect().await?;

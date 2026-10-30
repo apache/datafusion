@@ -164,7 +164,7 @@ impl AggregateBatchesTest {
             }
             None => SessionContext::new(),
         };
-        ctx.register_table("t", Arc::new(table))?;
+        ctx.register_table("t", Arc::new(table)).await?;
         if self.disable_single_distinct_to_groupby {
             assert!(ctx.remove_optimizer_rule("single_distinct_aggregation_to_group_by"));
         }

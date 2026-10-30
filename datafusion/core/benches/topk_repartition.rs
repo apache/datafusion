@@ -37,7 +37,7 @@ fn create_context(
     rt.block_on(async {
         let provider =
             create_table_provider(partitions_len, array_len, batch_size).unwrap();
-        ctx.register_table("t", provider).unwrap();
+        ctx.register_table("t", provider).await.unwrap();
     });
     Arc::new(Mutex::new(ctx))
 }

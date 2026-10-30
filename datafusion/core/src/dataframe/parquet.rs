@@ -140,7 +140,8 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", ctx.table("test").await?.into_view())?;
+        ctx.register_table("t1", ctx.table("test").await?.into_view())
+            .await?;
 
         let df = ctx
             .table("t1")
@@ -458,7 +459,7 @@ mod tests {
                 Arc::new(Int32Array::from(vals)),
             ],
         )?;
-        ctx.register_batch("source", batch)?;
+        ctx.register_batch("source", batch).await?;
 
         // Create the physical plan for COPY TO
         let df = ctx
@@ -542,7 +543,7 @@ mod tests {
             Arc::clone(&schema),
             vec![Arc::new(Int32Array::from(ids))],
         )?;
-        ctx.register_batch("source2", batch)?;
+        ctx.register_batch("source2", batch).await?;
 
         let df = ctx
             .sql(&format!(
@@ -596,7 +597,7 @@ mod tests {
             Arc::clone(&schema),
             vec![Arc::new(Int32Array::from(ids))],
         )?;
-        ctx.register_batch("source_seq", batch)?;
+        ctx.register_batch("source_seq", batch).await?;
 
         let df = ctx
             .sql(&format!(

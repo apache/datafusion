@@ -1027,7 +1027,8 @@ async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
                 MemTable::try_new(Arc::new(table.schema.clone()), vec![vec![]])?
                     .with_constraints(table.constraints.clone()),
             ),
-        )?;
+        )
+        .await?;
     }
 
     // some queries have multiple statements

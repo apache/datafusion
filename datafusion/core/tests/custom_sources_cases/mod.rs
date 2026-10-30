@@ -288,6 +288,7 @@ async fn custom_source_dataframe() -> Result<()> {
 async fn optimizers_catch_all_statistics() {
     let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(CustomTableProvider))
+        .await
         .unwrap();
 
     let df = ctx

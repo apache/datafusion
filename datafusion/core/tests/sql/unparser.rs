@@ -259,55 +259,63 @@ JOIN (
 ) p USING (product_id)
 "#;
 
-fn issue_22961_context() -> Result<SessionContext> {
+async fn issue_22961_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
     let schema_provider = Arc::new(MemorySchemaProvider::new());
-    schema_provider.register_table(
-        "order_items".to_string(),
-        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
-            Field::new("item_id", DataType::Int32, false),
-            Field::new("order_id", DataType::Int32, true),
-            Field::new("product_id", DataType::Int32, true),
-            Field::new("quantity", DataType::Int32, true),
-            Field::new("unit_price", DataType::Decimal128(10, 2), true),
-        ])))),
-    )?;
-    schema_provider.register_table(
-        "orders".to_string(),
-        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
-            Field::new("order_id", DataType::Int32, false),
-            Field::new("customer_id", DataType::Int32, true),
-            Field::new("order_date", DataType::Date32, true),
-            Field::new("status", DataType::Utf8, true),
-            Field::new("channel", DataType::Utf8, true),
-            Field::new("discount_pct", DataType::Decimal128(5, 2), true),
-            Field::new("shipping_cost", DataType::Decimal128(8, 2), true),
-        ])))),
-    )?;
-    schema_provider.register_table(
-        "products".to_string(),
-        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
-            Field::new("product_id", DataType::Int32, false),
-            Field::new("category_id", DataType::Int32, true),
-            Field::new("sku", DataType::Utf8, true),
-            Field::new("name", DataType::Utf8, true),
-            Field::new("price", DataType::Decimal128(10, 2), true),
-            Field::new("cost", DataType::Decimal128(10, 2), true),
-            Field::new("weight_kg", DataType::Decimal128(6, 3), true),
-            Field::new("is_active", DataType::Boolean, true),
-            Field::new("stock_qty", DataType::Int32, true),
-        ])))),
-    )?;
-    schema_provider.register_table(
-        "categories".to_string(),
-        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
-            Field::new("category_id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
-            Field::new("parent_id", DataType::Int32, true),
-            Field::new("display_rank", DataType::Int32, true),
-        ])))),
-    )?;
+    schema_provider
+        .register_table(
+            "order_items".to_string(),
+            Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+                Field::new("item_id", DataType::Int32, false),
+                Field::new("order_id", DataType::Int32, true),
+                Field::new("product_id", DataType::Int32, true),
+                Field::new("quantity", DataType::Int32, true),
+                Field::new("unit_price", DataType::Decimal128(10, 2), true),
+            ])))),
+        )
+        .await?;
+    schema_provider
+        .register_table(
+            "orders".to_string(),
+            Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+                Field::new("order_id", DataType::Int32, false),
+                Field::new("customer_id", DataType::Int32, true),
+                Field::new("order_date", DataType::Date32, true),
+                Field::new("status", DataType::Utf8, true),
+                Field::new("channel", DataType::Utf8, true),
+                Field::new("discount_pct", DataType::Decimal128(5, 2), true),
+                Field::new("shipping_cost", DataType::Decimal128(8, 2), true),
+            ])))),
+        )
+        .await?;
+    schema_provider
+        .register_table(
+            "products".to_string(),
+            Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+                Field::new("product_id", DataType::Int32, false),
+                Field::new("category_id", DataType::Int32, true),
+                Field::new("sku", DataType::Utf8, true),
+                Field::new("name", DataType::Utf8, true),
+                Field::new("price", DataType::Decimal128(10, 2), true),
+                Field::new("cost", DataType::Decimal128(10, 2), true),
+                Field::new("weight_kg", DataType::Decimal128(6, 3), true),
+                Field::new("is_active", DataType::Boolean, true),
+                Field::new("stock_qty", DataType::Int32, true),
+            ])))),
+        )
+        .await?;
+    schema_provider
+        .register_table(
+            "categories".to_string(),
+            Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+                Field::new("category_id", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, true),
+                Field::new("parent_id", DataType::Int32, true),
+                Field::new("display_rank", DataType::Int32, true),
+            ])))),
+        )
+        .await?;
 
     let catalog = Arc::new(MemoryCatalogProvider::new());
     catalog.register_schema("main", schema_provider)?;
@@ -318,7 +326,7 @@ fn issue_22961_context() -> Result<SessionContext> {
 
 #[tokio::test]
 async fn optimized_duckdb_unparse_preserves_derived_table_scope() -> Result<()> {
-    let ctx = issue_22961_context()?;
+    let ctx = issue_22961_context().await?;
     let plan = ctx.sql(ISSUE_22961_QUERY).await?.into_optimized_plan()?;
     let dialect = DuckDBDialect::new();
     let unparser = Unparser::new(&dialect);
@@ -354,7 +362,7 @@ JOIN (
 
 #[tokio::test]
 async fn optimized_duckdb_unparse_qualifies_nested_passthrough_column() -> Result<()> {
-    let ctx = issue_22961_context()?;
+    let ctx = issue_22961_context().await?;
     let plan = ctx.sql(ISSUE_23138_QUERY).await?.into_optimized_plan()?;
     let dialect = DuckDBDialect::new();
     let unparser = Unparser::new(&dialect);
@@ -508,24 +516,28 @@ ORDER BY
     customers DESC
 "#;
 
-fn issue_23317_context() -> Result<SessionContext> {
+async fn issue_23317_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
     let schema_provider = Arc::new(MemorySchemaProvider::new());
-    schema_provider.register_table(
-        "customers".to_string(),
-        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
-            Field::new("customer_id", DataType::Int32, false),
-            Field::new("signup_date", DataType::Date32, true),
-        ])))),
-    )?;
-    schema_provider.register_table(
-        "sales".to_string(),
-        Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
-            Field::new("customer_id", DataType::Int32, false),
-            Field::new("total_revenue", DataType::Decimal128(12, 2), true),
-        ])))),
-    )?;
+    schema_provider
+        .register_table(
+            "customers".to_string(),
+            Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+                Field::new("customer_id", DataType::Int32, false),
+                Field::new("signup_date", DataType::Date32, true),
+            ])))),
+        )
+        .await?;
+    schema_provider
+        .register_table(
+            "sales".to_string(),
+            Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![
+                Field::new("customer_id", DataType::Int32, false),
+                Field::new("total_revenue", DataType::Decimal128(12, 2), true),
+            ])))),
+        )
+        .await?;
 
     let catalog = Arc::new(MemoryCatalogProvider::new());
     catalog.register_schema("main", schema_provider)?;
@@ -544,7 +556,7 @@ async fn assert_issue_23317_unparsed_sql_plans(
 
 #[tokio::test]
 async fn optimized_duckdb_unparse_preserves_nested_aggregate_scope() -> Result<()> {
-    let ctx = issue_23317_context()?;
+    let ctx = issue_23317_context().await?;
     let plan = ctx.sql(ISSUE_23317_QUERY).await?.into_optimized_plan()?;
     let dialect = DuckDBDialect::new();
     let unparser = Unparser::new(&dialect);
@@ -570,7 +582,7 @@ async fn optimized_duckdb_unparse_preserves_nested_aggregate_scope() -> Result<(
 
 #[tokio::test]
 async fn optimized_duckdb_unparse_unqualifies_aggregate_input_projection() -> Result<()> {
-    let ctx = issue_23317_context()?;
+    let ctx = issue_23317_context().await?;
     assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
 
     let plan = ctx.sql(ISSUE_23317_QUERY).await?.into_optimized_plan()?;
@@ -596,7 +608,7 @@ async fn optimized_duckdb_unparse_unqualifies_aggregate_input_projection() -> Re
 
 #[tokio::test]
 async fn optimized_duckdb_unparse_having_unqualifies_agg_input() -> Result<()> {
-    let ctx = issue_23317_context()?;
+    let ctx = issue_23317_context().await?;
     assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
 
     let plan = ctx
@@ -623,7 +635,7 @@ async fn optimized_duckdb_unparse_having_unqualifies_agg_input() -> Result<()> {
 
 #[tokio::test]
 async fn optimized_duckdb_unparse_qualify_unqualifies_agg_input() -> Result<()> {
-    let ctx = issue_23317_context()?;
+    let ctx = issue_23317_context().await?;
     assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
 
     let plan = ctx
@@ -654,7 +666,7 @@ async fn optimized_duckdb_unparse_qualify_unqualifies_agg_input() -> Result<()> 
 
 #[tokio::test]
 async fn optimized_duckdb_unparse_window_over_agg_unqualifies_input() -> Result<()> {
-    let ctx = issue_23317_context()?;
+    let ctx = issue_23317_context().await?;
     assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
 
     let plan = ctx
@@ -681,7 +693,7 @@ async fn optimized_duckdb_unparse_window_over_agg_unqualifies_input() -> Result<
 
 #[tokio::test]
 async fn optimized_duckdb_unparse_order_by_unqualifies_agg_input() -> Result<()> {
-    let ctx = issue_23317_context()?;
+    let ctx = issue_23317_context().await?;
     assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
 
     let plan = ctx
@@ -709,7 +721,7 @@ async fn optimized_duckdb_unparse_order_by_unqualifies_agg_input() -> Result<()>
 #[tokio::test]
 async fn optimized_duckdb_unparse_top_level_sort_over_agg_uses_select_alias() -> Result<()>
 {
-    let ctx = issue_23317_context()?;
+    let ctx = issue_23317_context().await?;
     assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
 
     let plan = ctx

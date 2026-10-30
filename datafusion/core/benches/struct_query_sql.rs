@@ -20,7 +20,7 @@ fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     black_box(rt.block_on(df.collect()).unwrap());
 }
 
-fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext> {
+async fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext> {
     // define a schema.
     let schema = Arc::new(Schema::new(vec![
         Field::new("f32", DataType::Float32, false),
@@ -45,7 +45,7 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext>
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![batches])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_table("t", Arc::new(provider)).await?;
 
     Ok(ctx)
 }
@@ -53,8 +53,8 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext>
 fn criterion_benchmark(c: &mut Criterion) {
     let array_len = 524_288; // 2^19
     let batch_size = 4096; // 2^12
-    let ctx = create_context(array_len, batch_size).unwrap();
     let rt = Runtime::new().unwrap();
+    let ctx = rt.block_on(create_context(array_len, batch_size)).unwrap();
 
     c.bench_function("struct", |b| {
         b.iter(|| query(&ctx, &rt, "select struct(f32, f64) from t"))

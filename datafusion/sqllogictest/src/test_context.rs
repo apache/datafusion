@@ -178,15 +178,15 @@ impl TestContext {
             }
             "information_schema_table_types.slt" => {
                 info!("Registering local temporary table");
-                register_temp_table(test_ctx.session_ctx());
+                register_temp_table(test_ctx.session_ctx()).await;
             }
             "information_schema_columns.slt" => {
                 info!("Registering table with many types");
-                register_table_with_many_types(test_ctx.session_ctx());
+                register_table_with_many_types(test_ctx.session_ctx()).await;
             }
             "map.slt" => {
                 info!("Registering table with map");
-                register_table_with_map(test_ctx.session_ctx());
+                register_table_with_map(test_ctx.session_ctx()).await;
             }
             "avro.slt" => {
                 #[cfg(feature = "avro")]
@@ -209,32 +209,32 @@ impl TestContext {
                 test_ctx.ctx.register_udf(example_udf);
                 register_partition_table(&mut test_ctx).await;
                 info!("Registering table with many types");
-                register_table_with_many_types(test_ctx.session_ctx());
+                register_table_with_many_types(test_ctx.session_ctx()).await;
             }
             "range_partitioning.slt" => {
                 info!("Registering range partitioned table");
-                register_range_partitioned_table(test_ctx.session_ctx());
+                register_range_partitioned_table(test_ctx.session_ctx()).await;
             }
             "range_sorted_time_bin_agg.slt" => {
                 info!("Registering range-sorted time-bin table");
-                register_range_sorted_time_bin_table(test_ctx.session_ctx());
+                register_range_sorted_time_bin_table(test_ctx.session_ctx()).await;
             }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");
-                register_metadata_tables(test_ctx.session_ctx());
-                register_conflicting_metadata_tables(test_ctx.session_ctx())
+                register_metadata_tables(test_ctx.session_ctx()).await;
+                register_conflicting_metadata_tables(test_ctx.session_ctx()).await
             }
             "union_function.slt" => {
                 info!("Registering table with union column");
-                register_union_table(test_ctx.session_ctx())
+                register_union_table(test_ctx.session_ctx()).await
             }
             "aggregate.slt" => {
                 info!("Registering table with union column for approx_distinct");
-                register_approx_distinct_union_table(test_ctx.session_ctx())
+                register_approx_distinct_union_table(test_ctx.session_ctx()).await
             }
             "dictionary_struct.slt" => {
                 info!("Registering table with dictionary-encoded struct column");
-                register_dictionary_struct_table(test_ctx.session_ctx());
+                register_dictionary_struct_table(test_ctx.session_ctx()).await;
             }
             "async_udf.slt" => {
                 info!("Registering dummy async udf");
@@ -511,7 +511,7 @@ async fn register_parquet_missing_bounds(test_ctx: &mut TestContext) {
 }
 
 // registers a LOCAL TEMPORARY table.
-pub fn register_temp_table(ctx: &SessionContext) {
+pub async fn register_temp_table(ctx: &SessionContext) {
     #[derive(Debug)]
     struct TestTable(TableType);
 
@@ -540,10 +540,11 @@ pub fn register_temp_table(ctx: &SessionContext) {
         "datafusion.public.temp",
         Arc::new(TestTable(TableType::Temporary)),
     )
+    .await
     .unwrap();
 }
 
-pub fn register_table_with_many_types(ctx: &SessionContext) {
+pub async fn register_table_with_many_types(ctx: &SessionContext) {
     let catalog = MemoryCatalogProvider::new();
     let schema = MemorySchemaProvider::new();
 
@@ -556,10 +557,11 @@ pub fn register_table_with_many_types(ctx: &SessionContext) {
         "my_catalog.my_schema.table_with_many_types",
         table_with_many_types(),
     )
+    .await
     .unwrap();
 }
 
-pub fn register_table_with_map(ctx: &SessionContext) {
+pub async fn register_table_with_map(ctx: &SessionContext) {
     let key = Field::new("key", DataType::Int64, false);
     let value = Field::new("value", DataType::Int64, true);
     let map_field =
@@ -573,6 +575,7 @@ pub fn register_table_with_map(ctx: &SessionContext) {
     let memory_table = MemTable::try_new(schema.into(), vec![vec![]]).unwrap();
 
     ctx.register_table("table_with_map", Arc::new(memory_table))
+        .await
         .unwrap();
 }
 
@@ -609,7 +612,7 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
 }
 
 /// Registers a table_with_metadata that contains both field level and Table level metadata
-pub fn register_metadata_tables(ctx: &SessionContext) {
+pub async fn register_metadata_tables(ctx: &SessionContext) {
     let id = Field::new("id", DataType::Int32, true).with_metadata(HashMap::from([(
         String::from("metadata_key"),
         String::from("the id field"),
@@ -665,7 +668,9 @@ pub fn register_metadata_tables(ctx: &SessionContext) {
     )
     .unwrap();
 
-    ctx.register_batch("table_with_metadata", batch).unwrap();
+    ctx.register_batch("table_with_metadata", batch)
+        .await
+        .unwrap();
 }
 
 /// Create a UDF function named "example". See the `sample_udf.rs` example
@@ -702,7 +707,7 @@ fn create_example_udf() -> ScalarUDF {
     )
 }
 
-fn register_union_table(ctx: &SessionContext) {
+async fn register_union_table(ctx: &SessionContext) {
     let union = UnionArray::try_new(
         UnionFields::try_new(
             // typeids: 3 for int, 1 for string
@@ -738,10 +743,10 @@ fn register_union_table(ctx: &SessionContext) {
     let batch =
         RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(union)]).unwrap();
 
-    ctx.register_batch("union_table", batch).unwrap();
+    ctx.register_batch("union_table", batch).await.unwrap();
 }
 
-fn register_approx_distinct_union_table(ctx: &SessionContext) {
+async fn register_approx_distinct_union_table(ctx: &SessionContext) {
     let union = UnionArray::try_new(
         UnionFields::try_new(
             vec![0, 1],
@@ -775,10 +780,11 @@ fn register_approx_distinct_union_table(ctx: &SessionContext) {
     let batch = RecordBatch::try_new(Arc::new(schema), vec![g, Arc::new(union)]).unwrap();
 
     ctx.register_batch("approx_distinct_union_test", batch)
+        .await
         .unwrap();
 }
 
-fn register_dictionary_struct_table(ctx: &SessionContext) {
+async fn register_dictionary_struct_table(ctx: &SessionContext) {
     // Build deduplicated struct values: 3 unique structs
     let names = Arc::new(StringArray::from(vec!["Alice", "Bob", "Carol"])) as ArrayRef;
     let ids = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
@@ -831,7 +837,9 @@ fn register_dictionary_struct_table(ctx: &SessionContext) {
     )
     .unwrap();
 
-    ctx.register_batch("dict_struct_table", batch).unwrap();
+    ctx.register_batch("dict_struct_table", batch)
+        .await
+        .unwrap();
 
     // Second table: null keys, null structs with valid children, and null children.
     let names_nullable =
@@ -868,6 +876,7 @@ fn register_dictionary_struct_table(ctx: &SessionContext) {
     )
     .unwrap();
     ctx.register_batch("dict_struct_nullable", batch_nullable)
+        .await
         .unwrap();
 }
 
@@ -912,7 +921,7 @@ fn register_async_abs_udf(ctx: &SessionContext) {
     ctx.register_udf(udf.into_scalar_udf());
 }
 
-fn register_conflicting_metadata_tables(ctx: &SessionContext) {
+async fn register_conflicting_metadata_tables(ctx: &SessionContext) {
     let schema_left =
         Schema::new(vec![Field::new("a", DataType::Int32, false)]).with_metadata(
             HashMap::from([(String::from("metadata_key"), String::from("left"))]),
@@ -922,7 +931,9 @@ fn register_conflicting_metadata_tables(ctx: &SessionContext) {
 
     let batch_left =
         RecordBatch::try_new(Arc::new(schema_left), vec![Arc::new(data_left)]).unwrap();
-    ctx.register_batch("larger_table", batch_left).unwrap();
+    ctx.register_batch("larger_table", batch_left)
+        .await
+        .unwrap();
 
     let schema_right =
         Schema::new(vec![Field::new("b", DataType::Int32, false)]).with_metadata(
@@ -932,7 +943,9 @@ fn register_conflicting_metadata_tables(ctx: &SessionContext) {
 
     let batch_right =
         RecordBatch::try_new(Arc::new(schema_right), vec![Arc::new(data_right)]).unwrap();
-    ctx.register_batch("smaller_table", batch_right).unwrap();
+    ctx.register_batch("smaller_table", batch_right)
+        .await
+        .unwrap();
 }
 
 #[cfg(test)]

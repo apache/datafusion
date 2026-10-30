@@ -41,14 +41,16 @@ pub struct FFI_SchemaProvider {
         provider: &Self,
         name: SString,
         table: FFI_TableProvider,
-    )
-        -> FFI_Result<FFI_Option<FFI_TableProvider>>,
+    ) -> FfiFuture<
+        FFI_Result<FFI_Option<FFI_TableProvider>>,
+    >,
 
-    pub deregister_table:
-        unsafe extern "C" fn(
-            provider: &Self,
-            name: SString,
-        ) -> FFI_Result<FFI_Option<FFI_TableProvider>>,
+    pub deregister_table: unsafe extern "C" fn(
+        provider: &Self,
+        name: SString,
+    ) -> FfiFuture<
+        FFI_Result<FFI_Option<FFI_TableProvider>>,
+    >,
 
     pub table_exist: unsafe extern "C" fn(provider: &Self, name: SString) -> bool,
 
@@ -135,38 +137,48 @@ unsafe extern "C" fn register_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: SString,
     table: FFI_TableProvider,
-) -> FFI_Result<FFI_Option<FFI_TableProvider>> {
+) -> FfiFuture<FFI_Result<FFI_Option<FFI_TableProvider>>> {
     unsafe {
         let runtime = provider.runtime();
         let logical_codec = provider.logical_codec.clone();
-        let provider = provider.inner();
+        let provider = Arc::clone(provider.inner());
 
         let table = Arc::new(ForeignTableProvider(table));
 
-        let returned_table = sresult_return!(provider.register_table(name.into(), table))
+        async move {
+            let returned_table = sresult_return!(
+                provider.register_table(name.into(), table).await
+            )
             .map(|t| {
                 FFI_TableProvider::new_with_ffi_codec(t, true, runtime, logical_codec)
             });
 
-        FFI_Result::Ok(returned_table.into())
+            FFI_Result::Ok(returned_table.into())
+        }
+        .into_ffi()
     }
 }
 
 unsafe extern "C" fn deregister_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: SString,
-) -> FFI_Result<FFI_Option<FFI_TableProvider>> {
+) -> FfiFuture<FFI_Result<FFI_Option<FFI_TableProvider>>> {
     unsafe {
         let runtime = provider.runtime();
         let logical_codec = provider.logical_codec.clone();
-        let provider = provider.inner();
+        let provider = Arc::clone(provider.inner());
 
-        let returned_table = sresult_return!(provider.deregister_table(name.as_str()))
+        async move {
+            let returned_table = sresult_return!(
+                provider.deregister_table(name.as_str()).await
+            )
             .map(|t| {
                 FFI_TableProvider::new_with_ffi_codec(t, true, runtime, logical_codec)
             });
 
-        FFI_Result::Ok(returned_table.into())
+            FFI_Result::Ok(returned_table.into())
+        }
+        .into_ffi()
     }
 }
 
@@ -327,7 +339,7 @@ impl SchemaProvider for ForeignSchemaProvider {
         }
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
@@ -343,18 +355,22 @@ impl SchemaProvider for ForeignSchemaProvider {
                 ),
             };
 
-            let returned_provider: Option<FFI_TableProvider> =
-                df_result!((self.0.register_table)(&self.0, name.into(), ffi_table))?
-                    .into();
+            let returned_provider: Option<FFI_TableProvider> = df_result!(
+                (self.0.register_table)(&self.0, name.into(), ffi_table).await
+            )?
+            .into();
 
             Ok(returned_provider
                 .map(|t| Arc::new(ForeignTableProvider(t)) as Arc<dyn TableProvider>))
         }
     }
 
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    async fn deregister_table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         let returned_provider: Option<FFI_TableProvider> = unsafe {
-            df_result!((self.0.deregister_table)(&self.0, name.into()))?.into()
+            df_result!((self.0.deregister_table)(&self.0, name.into()).await)?.into()
         };
 
         Ok(returned_provider
@@ -386,6 +402,7 @@ mod tests {
             schema_provider
                 .as_ref()
                 .register_table("prior_table".to_string(), empty_table())
+                .await
                 .unwrap()
                 .is_none()
         );
@@ -405,13 +422,15 @@ mod tests {
 
         // Replace an existing table with one of the same name generates an error
         let returned_schema = foreign_schema_provider
-            .register_table("prior_table".to_string(), empty_table());
+            .register_table("prior_table".to_string(), empty_table())
+            .await;
         assert!(returned_schema.is_err());
         assert_eq!(foreign_schema_provider.table_names().len(), 1);
 
         // Add a new table
         let returned_schema = foreign_schema_provider
             .register_table("second_table".to_string(), empty_table())
+            .await
             .expect("Unable to register table");
         assert!(returned_schema.is_none());
         assert_eq!(foreign_schema_provider.table_names().len(), 2);
@@ -419,6 +438,7 @@ mod tests {
         // Remove a table
         let returned_schema = foreign_schema_provider
             .deregister_table("prior_table")
+            .await
             .expect("Unable to deregister table");
         assert!(returned_schema.is_some());
         assert_eq!(foreign_schema_provider.table_names().len(), 1);
