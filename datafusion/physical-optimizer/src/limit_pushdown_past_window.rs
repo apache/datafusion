@@ -131,8 +131,11 @@ fn grow_limit(lookahead: Option<WindowLookahead>, ctx: &mut TraverseState) -> bo
     let Some(lookahead) = lookahead else {
         return false;
     };
-    if let Some(min_rows) = lookahead.min_rows {
-        ctx.limit = Some(ctx.limit.unwrap_or(0).max(min_rows));
+    // Only raise a limit we actually have. With nothing in hand there is no
+    // limit to raise, and inventing one truncates a sort that has no `LIMIT`
+    // above it at all.
+    if let (Some(min_rows), Some(cur)) = (lookahead.min_rows, ctx.limit) {
+        ctx.limit = Some(cur.max(min_rows));
     }
     ctx.max_lookahead(lookahead.frame_end);
     // Frame bounds come straight from the query and can be as large as
@@ -189,11 +192,16 @@ fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, FieldRef, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_expr::WindowFrame;
-    use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
-    use datafusion_functions_window::row_number::row_number_udwf;
+    use datafusion_expr::function::{PartitionEvaluatorArgs, WindowUDFFieldArgs};
+    use datafusion_expr::{
+        LimitEffect, PartitionEvaluator, Signature, WindowFrameBound, WindowFrameUnits,
+        WindowUDF, WindowUDFImpl,
+    };
+    use datafusion_functions_window::row_number::{RowNumber, row_number_udwf};
+    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::window::StandardWindowExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -292,6 +300,107 @@ mod tests {
         LocalLimitExec: fetch=100
           BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
             SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true]
+              PlaceholderRowExec
+        "#);
+    }
+
+    /// A `row_number` wrapper that claims it always needs at least 200 input rows.
+    /// No in-tree window function returns [`LimitEffect::Absolute`], so wrapping one
+    /// is the only way to reach that arm of `grow_limit`.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct AtLeast200(RowNumber);
+
+    impl WindowUDFImpl for AtLeast200 {
+        fn name(&self) -> &str {
+            "at_least_200"
+        }
+
+        fn signature(&self) -> &Signature {
+            self.0.signature()
+        }
+
+        fn partition_evaluator(
+            &self,
+            args: PartitionEvaluatorArgs,
+        ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+            self.0.partition_evaluator(args)
+        }
+
+        fn field(&self, args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
+            self.0.field(args)
+        }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Absolute(200)
+        }
+    }
+
+    /// Build `[GlobalLimitExec(100) →] BoundedWindowAggExec(at_least_200) → SortExec
+    /// → PlaceholderRowExec`. Without the limit there is no fetch anywhere in the plan.
+    fn build_absolute_plan(
+        with_limit: bool,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let s = schema();
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+
+        let ordering =
+            LexOrdering::new(vec![PhysicalSortExpr::new_default(col("a", &s)?).asc()])
+                .unwrap();
+
+        let sort: Arc<dyn ExecutionPlan> = Arc::new(
+            SortExec::new(ordering.clone(), input).with_preserve_partitioning(true),
+        );
+
+        let udwf = Arc::new(WindowUDF::from(AtLeast200(RowNumber::new())));
+        let window_expr = Arc::new(StandardWindowExpr::new(
+            create_udwf_window_expr(&udwf, &[], &s, "at_least_200".to_string(), false)?,
+            &[],
+            ordering.as_ref(),
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+        ));
+
+        let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
+            vec![window_expr],
+            sort,
+            InputOrderMode::Sorted,
+            true,
+        )?);
+
+        Ok(if with_limit {
+            Arc::new(GlobalLimitExec::new(window, 0, Some(100)))
+        } else {
+            window
+        })
+    }
+
+    /// With no limit in the plan there is nothing to raise, so the sort must stay a
+    /// full sort. Turning it into a TopK here would drop rows the query asked for.
+    #[test]
+    fn absolute_limit_effect_does_not_invent_a_limit() {
+        let plan = build_absolute_plan(false).unwrap();
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        BoundedWindowAggExec: wdw=[at_least_200: Field { "at_least_200": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+          SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+            PlaceholderRowExec
+        "#);
+    }
+
+    /// A limit that is in the plan is still raised to the window's floor: 100 rows
+    /// are asked for, the window needs 200, so the sort fetches 200.
+    #[test]
+    fn absolute_limit_effect_raises_an_existing_limit() {
+        let plan = build_absolute_plan(true).unwrap();
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        GlobalLimitExec: skip=0, fetch=100
+          BoundedWindowAggExec: wdw=[at_least_200: Field { "at_least_200": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            SortExec: TopK(fetch=200), expr=[a@0 ASC], preserve_partitioning=[true]
               PlaceholderRowExec
         "#);
     }
