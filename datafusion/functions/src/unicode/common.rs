@@ -44,7 +44,10 @@ pub(crate) fn pad_data_capacity(length_array: &Int64Array) -> usize {
     length_array
         .iter()
         .flatten()
-        .fold(0, |acc, len| acc.saturating_add(len as usize))
+        // Out-of-range lengths produce "", an error or null, so add no bytes
+        .filter(|len| (0..=i32::MAX as i64).contains(len))
+        .fold(0usize, |acc, len| acc.saturating_add(len as usize))
+        .min(i32::MAX as usize)
 }
 
 /// A trait for `left` and `right` byte slicing operations

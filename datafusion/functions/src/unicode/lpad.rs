@@ -81,10 +81,12 @@ mod tests {
     use crate::unicode::lpad::LPadFunc;
     use crate::utils::test::test_function;
 
-    use arrow::array::{Array, LargeStringArray, StringArray};
+    use std::sync::Arc;
+
+    use arrow::array::{Array, Int64Array, LargeStringArray, StringArray};
     use arrow::datatypes::DataType::{LargeUtf8, Utf8};
 
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, exec_err};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     macro_rules! test_lpad {
@@ -341,6 +343,51 @@ mod tests {
             internal_err!(
                 "function lpad requires compilation with feature flag: unicode_expressions."
             )
+        );
+
+        Ok(())
+    }
+
+    fn array_args(lengths: Vec<i64>) -> Vec<ColumnarValue> {
+        vec![
+            ColumnarValue::Array(Arc::new(StringArray::from(vec!["hi"; lengths.len()]))),
+            ColumnarValue::Array(Arc::new(Int64Array::from(lengths))),
+        ]
+    }
+
+    #[test]
+    fn test_array_length_out_of_range() -> Result<()> {
+        test_function!(
+            LPadFunc::new(),
+            array_args(vec![-1]),
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            LPadFunc::new(),
+            array_args(vec![1 << 62]),
+            exec_err!(
+                "lpad requested length {} too large, maximum allowed length is {}",
+                1i64 << 62,
+                i32::MAX
+            ),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            LPadFunc::new(),
+            array_args(vec![i64::MAX, i64::MAX]),
+            exec_err!(
+                "lpad requested length {} too large, maximum allowed length is {}",
+                i64::MAX,
+                i32::MAX
+            ),
+            &str,
+            Utf8,
+            StringArray
         );
 
         Ok(())
