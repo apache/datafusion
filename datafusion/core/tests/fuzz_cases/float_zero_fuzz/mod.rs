@@ -1,0 +1,184 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+//! Differential fuzz test for `-0.0`.
+//!
+//! DataFusion treats `-0.0` and `0.0` as equal, so changing a `-0.0` to
+//! `0.0` must not change any query result, apart from how `-0.0` prints. Each
+//! query runs on `raw`, a table with some `-0.0` values, and on `canon`, the
+//! same table with every `-0.0` replaced by `0.0`, under the same settings.
+//! The results must match once floats in the output are normalized. See
+//! <https://github.com/apache/datafusion/issues/26138>.
+//!
+//! - `data.rs` builds the two tables.
+//! - `queries.rs` holds the query templates and the known failures.
+//! - `settings.rs` holds the settings each query runs under.
+//!
+//! To reproduce a run of the random test, set `FLOAT_ZERO_FUZZ_SEED` to the
+//! seed it prints.
+
+use arrow::array::{ArrayRef, RecordBatch};
+use arrow::util::display::{ArrayFormatter, FormatOptions};
+use datafusion::prelude::SessionContext;
+use datafusion_common::ScalarValue;
+use datafusion_common::float_semantics::normalize_floats;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+
+use crate::fuzz_cases::aggregation_fuzzer::run_sql;
+
+mod data;
+mod queries;
+mod settings;
+
+use queries::{KnownFailure, TEMPLATES, Template};
+use settings::Setting;
+
+/// Number of rows in each round of the random test.
+const ROUND_SIZES: &[usize] = &[8, 16, 32, 64, 128];
+
+/// Every listed (template, setting) pair must fail on the fixed data and
+/// every other pair must pass.
+#[tokio::test(flavor = "multi_thread")]
+async fn float_zero_fixed() {
+    let data = data::fixed();
+    let mut errors = vec![];
+    for setting in Setting::all() {
+        let ctx = setting.context(&data).unwrap();
+        for template in TEMPLATES {
+            let raw_zero = if setting.negative_literals {
+                "-0.0"
+            } else {
+                "0.0"
+            };
+            let raw_sql = template.render("raw", || raw_zero);
+            let result = check(&ctx, template, &setting, &raw_sql).await;
+            match (result, KnownFailure::matches(template, &setting)) {
+                (Ok(()), None) | (Err(_), Some(_)) => {}
+                (Err(e), None) => errors.push(e),
+                (Ok(()), Some(known)) => errors.push(format!(
+                    "{} under {setting:?} now passes, remove it from KNOWN_FAILURES ({})",
+                    template.name, known.issue
+                )),
+            }
+        }
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n\n"));
+}
+
+/// Every pair that is not listed must pass on random data.
+#[tokio::test(flavor = "multi_thread")]
+async fn float_zero_fuzz() {
+    let seed = match std::env::var("FLOAT_ZERO_FUZZ_SEED") {
+        Ok(seed) => seed.parse().expect("FLOAT_ZERO_FUZZ_SEED must be a u64"),
+        Err(_) => rand::rng().random(),
+    };
+    println!("float_zero_fuzz seed: {seed}");
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    let mut errors = vec![];
+    for &num_rows in ROUND_SIZES {
+        let data = data::random(&mut rng, num_rows);
+        for setting in Setting::all() {
+            let ctx = setting.context(&data).unwrap();
+            for template in TEMPLATES {
+                if KnownFailure::matches(template, &setting).is_some() {
+                    continue;
+                }
+                let raw_sql = template.render("raw", || {
+                    if setting.negative_literals && rng.random_bool(0.5) {
+                        "-0.0"
+                    } else {
+                        "0.0"
+                    }
+                });
+                if let Err(e) = check(&ctx, template, &setting, &raw_sql).await {
+                    errors.push(format!("seed {seed}, {num_rows} rows: {e}"));
+                }
+            }
+        }
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n\n"));
+}
+
+/// The `{z}` literal must reach the plan as a Float64 `-0.0`, or the
+/// `negative_literals` setting tests nothing.
+#[tokio::test]
+async fn float_zero_negative_literal() {
+    let ctx = SessionContext::new();
+    let batches = run_sql("SELECT -0.0", &ctx).await.unwrap();
+    let value = ScalarValue::try_from_array(batches[0].column(0), 0).unwrap();
+    let ScalarValue::Float64(Some(v)) = value else {
+        panic!("expected a Float64, got {value:?}");
+    };
+    assert!(v == 0.0 && v.is_sign_negative(), "expected -0.0, got {v}");
+}
+
+/// Runs `template` on `canon` and `raw_sql` on `raw`, and compares the
+/// results with all floats normalized.
+async fn check(
+    ctx: &SessionContext,
+    template: &Template,
+    setting: &Setting,
+    raw_sql: &str,
+) -> Result<(), String> {
+    let canon_sql = template.render("canon", || "0.0");
+    let describe = || {
+        format!(
+            "{} under {setting:?}\n  raw:   {raw_sql}\n  canon: {canon_sql}",
+            template.name
+        )
+    };
+    let canon = run_sql(&canon_sql, ctx).await;
+    let raw = run_sql(raw_sql, ctx).await;
+    let (mut canon, mut raw) = match (canon, raw) {
+        (Ok(canon), Ok(raw)) => (format_rows(&canon), format_rows(&raw)),
+        (Err(canon), Err(raw)) => {
+            panic!(
+                "{}\nfails on both tables\n  raw:   {raw}\n  canon: {canon}",
+                describe()
+            )
+        }
+        (Ok(_), Err(e)) => return Err(format!("{}\nraw fails: {e}", describe())),
+        (Err(e), Ok(_)) => return Err(format!("{}\ncanon fails: {e}", describe())),
+    };
+    if !template.ordered {
+        canon.sort_unstable();
+        raw.sort_unstable();
+    }
+    if canon == raw {
+        return Ok(());
+    }
+    let diff = canon
+        .iter()
+        .zip(&raw)
+        .position(|(c, r)| c != r)
+        .map(|i| format!("row {i}: raw {}, canon {}", raw[i], canon[i]))
+        .unwrap_or_else(|| format!("raw {} rows, canon {} rows", raw.len(), canon.len()));
+    Err(format!("{}\n{diff}", describe()))
+}
+
+/// One string per row, with every float, also nested ones, normalized so
+/// that `-0.0` prints as `0.0`.
+fn format_rows(batches: &[RecordBatch]) -> Vec<String> {
+    let options = FormatOptions::default().with_null("NULL");
+    let mut rows = vec![];
+    for batch in batches {
+        let columns: Vec<ArrayRef> =
+            batch.columns().iter().map(normalize_floats).collect();
+        let formatters = columns
+            .iter()
+            .map(|c| ArrayFormatter::try_new(c.as_ref(), &options))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            let values: Vec<String> = formatters
+                .iter()
+                .map(|f| f.value(row).to_string())
+                .collect();
+            rows.push(values.join(" | "));
+        }
+    }
+    rows
+}
