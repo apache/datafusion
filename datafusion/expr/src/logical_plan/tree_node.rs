@@ -544,6 +544,9 @@ impl LogicalPlan {
     /// # Notes
     /// * Similar to [`TreeNode::map_children`] but for this node's expressions.
     /// * Visits only the top level expressions (Does not recurse into each expression)
+    /// * A `Projection` whose expressions were rewritten gets its schema derived
+    ///   again from the new expressions, so the new expressions must resolve
+    ///   against the current input.
     pub fn map_expressions<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
         self,
         mut f: F,
@@ -553,13 +556,25 @@ impl LogicalPlan {
                 expr,
                 input,
                 schema,
-            }) => expr.map_elements(f)?.update_data(|expr| {
-                LogicalPlan::Projection(Projection {
-                    expr,
-                    input,
-                    schema,
-                })
-            }),
+            }) => {
+                let expr = expr.map_elements(f)?;
+                if expr.transformed {
+                    // A projection's output fields are derived from its
+                    // expressions, so rewritten expressions need a freshly
+                    // derived schema.
+                    expr.map_data(|expr| {
+                        Projection::try_new(expr, input).map(LogicalPlan::Projection)
+                    })?
+                } else {
+                    expr.update_data(|expr| {
+                        LogicalPlan::Projection(Projection {
+                            expr,
+                            input,
+                            schema,
+                        })
+                    })
+                }
+            }
             LogicalPlan::Values(Values { schema, values }) => values
                 .map_elements(f)?
                 .update_data(|values| LogicalPlan::Values(Values { schema, values })),

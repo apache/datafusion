@@ -355,3 +355,18 @@ FROM cse_agg_filter
 
 statement ok
 DROP TABLE cse_agg_filter
+
+# A CASE guard split into common subexpressions loses its non-null proof, so
+# the projection schema has to follow the rewritten expressions.
+statement ok
+CREATE TABLE cse_coalesce(col1 INT) AS VALUES (1), (NULL), (3)
+
+query I rowsort
+SELECT DISTINCT COALESCE(+col1, col1, 2, col1) FROM cse_coalesce GROUP BY col1
+----
+1
+2
+3
+
+statement ok
+DROP TABLE cse_coalesce
