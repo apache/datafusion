@@ -1118,6 +1118,19 @@ fn splitmix64(x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
+/// `rows` paired with their `hashes`, sorted by hash.
+fn sort_by_hash(hashes: &[u64], rows: &[u32]) -> Vec<(u64, u32)> {
+    let mut sorted: Vec<(u64, u32)> =
+        hashes.iter().copied().zip(rows.iter().copied()).collect();
+    sorted.sort_unstable_by_key(|(hash, _)| *hash);
+    sorted
+}
+
+/// The groups of equal hashes in `sorted`, sorted by hash.
+fn count_groups(sorted: &[(u64, u32)]) -> usize {
+    sorted.chunk_by(|a, b| a.0 == b.0).count()
+}
+
 /// Whether `rows` probe rows in `groups` groups of equal hashes save work when
 /// each group is paired at once (see [`UnmarkedPairs::scope_matches`]).
 /// `matches_per_row` estimates the build rows of a hash.
@@ -1219,7 +1232,13 @@ where
     ///   Within a chunk every pair is sent, so only the later chunks can skip
     ///   the marked probe rows.
     ///
-    /// Otherwise the lookup per probe row goes on.
+    /// Otherwise the lookup per probe row goes on, until it wastes as many
+    /// matches again. The estimate takes the matches per probe row so far for
+    /// every group, so a few large groups among many small ones, such as a
+    /// hot scope among rare ones, can make it miss the work that groups save.
+    /// The matches wasted again pay for a sort as well, so the join then
+    /// sorts the rest of the probe rows by hash and pairs the groups, whatever
+    /// the estimate says.
     fn scope_matches(
         &mut self,
         scope_map: &dyn JoinHashMapType,
@@ -1279,34 +1298,36 @@ where
                 self.batch_size,
             )
         };
-        let rest_hashes = &hashes[group_from..];
         // Estimate the groups from a sample first, because a sort of all the
         // rest that finds no group worth it costs as much as the wasted
         // matches did.
-        let worth_sorting = saves_work(rest_hashes.len(), estimate_groups(rest_hashes));
-        let mut rest: Vec<(u64, u32)> = vec![];
-        let mut groups = vec![];
-        if worth_sorting {
-            rest = rest_hashes
-                .iter()
-                .copied()
-                .zip(probe_rows[group_from..].iter().copied())
-                .collect();
-            rest.sort_unstable_by_key(|(hash, _)| *hash);
-            groups = rest.chunk_by(|a, b| a.0 == b.0).collect();
+        let mut rest = vec![];
+        if saves_work(
+            probe_rows.len() - group_from,
+            estimate_groups(&hashes[group_from..]),
+        ) {
+            rest = sort_by_hash(&hashes[group_from..], &probe_rows[group_from..]);
         }
-        if !worth_sorting || !saves_work(rest.len(), groups.len()) {
-            self.lookup_each_row(
+        if rest.is_empty() || !saves_work(rest.len(), count_groups(&rest)) {
+            self.wasted_matches = 0;
+            let Some((offset, _)) = self.lookup_each_row(
                 scope_map,
                 hashes,
                 (!all_rows).then_some(probe_rows.as_slice()),
                 offset,
                 &to_build_row,
-                usize::MAX,
+                max_wasted_matches,
                 lookup,
-            )?;
-            return Ok(());
+            )?
+            else {
+                return Ok(());
+            };
+            let group_from = match offset {
+                AtRow { row } | MidChain { row, .. } => row,
+            };
+            rest = sort_by_hash(&hashes[group_from..], &probe_rows[group_from..]);
         }
+        let groups: Vec<_> = rest.chunk_by(|a, b| a.0 == b.0).collect();
 
         #[cfg(test)]
         {
@@ -1938,6 +1959,79 @@ mod tests {
             assert!(equal_scopes(mark_build_rows, 400, 1, 1)?.grouped);
         }
         Ok(())
+    }
+
+    /// A hot scope among rare ones: a batch of rare probe rows, then hot
+    /// ones, then rare ones again, as the review of
+    /// <https://github.com/apache/datafusion/pull/26214> found. The rare rows
+    /// keep the estimated groups small, but the hot group alone saves much
+    /// work, so the pairing must still switch to groups instead of walking the
+    /// hot scope once per probe row.
+    #[test]
+    fn hot_scope_among_rare_ones_is_grouped() -> Result<()> {
+        // With marks on the probe rows, the average group fills no chunk. With
+        // marks on the build rows, the groups hold fewer than two rows on
+        // average.
+        for (mark_build_rows, rare, hot) in [(false, 256, 7680), (true, 4096, 2048)] {
+            let stats = hot_scope_among_rare_ones(mark_build_rows, rare, hot, 7679)?;
+            assert!(stats.grouped, "marks on build rows: {mark_build_rows}");
+            // The matches of two rounds of lookups per probe row, each until
+            // it wastes enough matches to pay for a sort, and a few chunks of
+            // the hot scope. The lookups that skip the check of the build row
+            // marks count no wasted match, so a round can last a little
+            // longer. A lookup per probe row walks the hot scope for each of
+            // its probe rows, tens of millions of matches.
+            let bound = 3 * WASTED_MATCHES_PER_SORTED_ROW * (2 * rare + hot) + 4 * 8192;
+            assert!(
+                stats.looked_up_matches <= bound,
+                "marks on build rows: {mark_build_rows}: {} matches walked, bound {bound}",
+                stats.looked_up_matches
+            );
+        }
+        Ok(())
+    }
+
+    /// `rare` probe rows of their own scope each, `hot` probe rows of the hot
+    /// scope, and `rare` more of their own scope, in that order. Each rare
+    /// scope holds one build row, and the hot scope `hot_build`. Every pair
+    /// passes.
+    fn hot_scope_among_rare_ones(
+        mark_build_rows: bool,
+        rare: usize,
+        hot: usize,
+        hot_build: usize,
+    ) -> Result<Stats> {
+        let rare = rare as u64;
+        // Scope 0 is hot.
+        let build_keys: Vec<u64> = (1..=2 * rare)
+            .chain(std::iter::repeat_n(0, hot_build))
+            .collect();
+        let probe_keys: Vec<u64> = (1..=rare)
+            .chain(std::iter::repeat_n(0, hot))
+            .chain(rare + 1..=2 * rare)
+            .collect();
+        let num_marked = if mark_build_rows {
+            build_keys.len()
+        } else {
+            probe_keys.len()
+        };
+        let case = Case {
+            mark_build_rows,
+            through_scope_map: true,
+            batch_size: 8192,
+            hash_modulus: u64::MAX,
+            probe_rows: (0..probe_keys.len() as u32).collect(),
+            build_rows: (0..build_keys.len() as u64).collect(),
+            build_keys,
+            probe_keys,
+            marked_before: vec![false; num_marked],
+            filter_seed: 0,
+            filter_one_in: 1,
+            foreign_marks: false,
+        };
+        let (marks, stats) = case.run()?;
+        assert_eq!(marks, case.expected_marks());
+        Ok(stats)
     }
 
     /// One scope holds every row, and every pair passes. Returns the matches
