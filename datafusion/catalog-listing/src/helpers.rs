@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use datafusion_catalog::Session;
 use datafusion_common::{
-    HashMap, Result, ScalarValue, TableReference, assert_or_internal_err,
+    HashMap, Result, ScalarValue, TableReference, assert_or_internal_err, plan_err,
 };
 use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::{FileExtensions, ListingTableUrl};
@@ -354,14 +354,31 @@ fn try_into_partitioned_file(
     object_meta: ObjectMeta,
     partition_cols: &[(String, DataType)],
     table_path: &ListingTableUrl,
+    strict: bool,
 ) -> Result<Option<PartitionedFile>> {
     let cols = partition_cols.iter().map(|(name, _)| name.as_str());
     let parsed = parse_partitions_for_path(table_path, &object_meta.location, cols);
 
     let Some(parsed) = parsed else {
+        if strict {
+            return strict_partitions_err(
+                table_path,
+                &object_meta.location,
+                partition_cols,
+                "it is not under a directory for every partition column",
+            );
+        }
         // parse_partitions_for_path already logs a debug message
         return Ok(None);
     };
+
+    if strict {
+        check_no_undeclared_partitions(
+            table_path,
+            &object_meta.location,
+            partition_cols,
+        )?;
+    }
 
     let partition_values = parsed
         .into_iter()
@@ -390,6 +407,10 @@ pub async fn pruned_partition_list<'a>(
     file_extension: &'a str,
     partition_cols: &'a [(String, DataType)],
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
+    let strict = ctx
+        .config_options()
+        .execution
+        .listing_table_strict_partitions;
     let prefix = if !partition_cols.is_empty() {
         evaluate_partition_prefix(partition_cols, filters)
     } else {
@@ -410,11 +431,22 @@ pub async fn pruned_partition_list<'a>(
 
         // if no partition col => list all the files
         Ok(objects
-            .try_filter_map(|object_meta| {
-                futures::future::ready(object_meta_to_partitioned_file(
-                    object_meta,
-                    table_path.get_table_ref().as_ref(),
-                ))
+            .try_filter_map(move |object_meta| {
+                let checked = if strict {
+                    check_no_undeclared_partitions(
+                        table_path,
+                        &object_meta.location,
+                        partition_cols,
+                    )
+                } else {
+                    Ok(())
+                };
+                futures::future::ready(checked.and_then(|()| {
+                    object_meta_to_partitioned_file(
+                        object_meta,
+                        table_path.get_table_ref().as_ref(),
+                    )
+                }))
             })
             .boxed())
     } else {
@@ -427,11 +459,12 @@ pub async fn pruned_partition_list<'a>(
         )?;
 
         Ok(objects
-            .try_filter_map(|object_meta| {
+            .try_filter_map(move |object_meta| {
                 futures::future::ready(try_into_partitioned_file(
                     object_meta,
                     partition_cols,
                     table_path,
+                    strict,
                 ))
             })
             .try_filter_map(move |pf| {
@@ -439,6 +472,54 @@ pub async fn pruned_partition_list<'a>(
             })
             .boxed())
     }
+}
+
+/// Returns an error if `file_path` has a `key=value` directory below the declared
+/// partition directories, i.e. it is partitioned by more columns than declared.
+fn check_no_undeclared_partitions(
+    table_path: &ListingTableUrl,
+    file_path: &Path,
+    partition_cols: &[(String, DataType)],
+) -> Result<()> {
+    let Some(segments) = table_path.strip_prefix(file_path) else {
+        return strict_partitions_err(
+            table_path,
+            file_path,
+            partition_cols,
+            "it is not under the table path",
+        );
+    };
+    let mut dirs: Vec<&str> = segments.collect();
+    dirs.pop();
+    match dirs
+        .into_iter()
+        .skip(partition_cols.len())
+        .find(|d| d.contains('='))
+    {
+        Some(dir) => strict_partitions_err(
+            table_path,
+            file_path,
+            partition_cols,
+            &format!("directory '{dir}' is not a declared partition column"),
+        ),
+        None => Ok(()),
+    }
+}
+
+fn strict_partitions_err<T>(
+    table_path: &ListingTableUrl,
+    file_path: &Path,
+    partition_cols: &[(String, DataType)],
+    reason: &str,
+) -> Result<T> {
+    let cols: Vec<&str> = partition_cols
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    plan_err!(
+        "File '{file_path}' in table '{table_path}' does not match partition columns {cols:?}: {reason}. \
+        Set datafusion.execution.listing_table_strict_partitions = false to skip such files"
+    )
 }
 
 fn object_meta_to_partitioned_file(
@@ -673,7 +754,7 @@ mod tests {
         };
 
         let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+            try_into_partitioned_file(meta, &partition_cols, &table_path, false).unwrap();
         assert!(result.is_some());
         let pf = result.unwrap();
         assert_eq!(pf.partition_values.len(), 1);
@@ -699,7 +780,7 @@ mod tests {
         };
 
         let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+            try_into_partitioned_file(meta, &partition_cols, &table_path, false).unwrap();
         assert!(result.is_some());
         let pf = result.unwrap();
         assert_eq!(pf.partition_values.len(), 1);
@@ -725,7 +806,7 @@ mod tests {
         };
 
         let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+            try_into_partitioned_file(meta, &partition_cols, &table_path, false).unwrap();
         assert!(
             result.is_none(),
             "Files outside partition structure should be skipped"
@@ -746,7 +827,7 @@ mod tests {
         };
 
         let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+            try_into_partitioned_file(meta, &partition_cols, &table_path, false).unwrap();
         assert!(
             result.is_none(),
             "Files with wrong partition column name should be skipped"
@@ -769,7 +850,7 @@ mod tests {
         };
 
         let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+            try_into_partitioned_file(meta, &partition_cols, &table_path, false).unwrap();
         assert!(result.is_some());
         let pf = result.unwrap();
         assert_eq!(pf.partition_values.len(), 2);
@@ -800,7 +881,7 @@ mod tests {
         };
 
         let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+            try_into_partitioned_file(meta, &partition_cols, &table_path, false).unwrap();
         // File has year=2024 but no month= directory — parse_partitions_for_path
         // returns None because the path component "data.parquet" doesn't match
         // the expected "month=..." pattern.
@@ -808,6 +889,112 @@ mod tests {
             result.is_none(),
             "Files with incomplete partition structure should be skipped"
         );
+    }
+
+    fn strict_partitioned_file(
+        location: &str,
+        partition_cols: &[&str],
+    ) -> Result<Option<PartitionedFile>> {
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        let partition_cols: Vec<_> = partition_cols
+            .iter()
+            .map(|name| (name.to_string(), DataType::Utf8))
+            .collect();
+        let meta = ObjectMeta {
+            location: Path::from(location),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+        try_into_partitioned_file(meta, &partition_cols, &table_path, true)
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_strict_valid_partition() {
+        let pf = strict_partitioned_file(
+            "bucket/mytable/year=2024/month=01/data.parquet",
+            &["year", "month"],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            pf.partition_values,
+            vec![
+                ScalarValue::Utf8(Some("2024".to_string())),
+                ScalarValue::Utf8(Some("01".to_string()))
+            ]
+        );
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_strict_errors_instead_of_skipping() {
+        for (location, partition_cols, reason) in [
+            (
+                "bucket/mytable/data.parquet",
+                &["year_month"][..],
+                "not under a directory for every partition column",
+            ),
+            (
+                "bucket/mytable/wrong_col=2024-01/data.parquet",
+                &["year_month"][..],
+                "not under a directory for every partition column",
+            ),
+            (
+                "bucket/mytable/year=2024/data.parquet",
+                &["year", "month"][..],
+                "not under a directory for every partition column",
+            ),
+            (
+                "bucket/mytable/month=01/year=2024/data.parquet",
+                &["year", "month"][..],
+                "not under a directory for every partition column",
+            ),
+            (
+                "bucket/mytable/year=2024/month=01/data.parquet",
+                &["year"][..],
+                "directory 'month=01' is not a declared partition column",
+            ),
+        ] {
+            let err = strict_partitioned_file(location, partition_cols).unwrap_err();
+            let message = err.to_string();
+            assert!(message.contains(location), "{message}");
+            assert!(message.contains(reason), "{message}");
+            assert!(
+                message.contains("datafusion.execution.listing_table_strict_partitions"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_no_undeclared_partitions() {
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        let year = [("year".to_string(), DataType::Utf8)];
+        for (location, partition_cols, ok) in [
+            ("bucket/mytable/data.parquet", &[][..], true),
+            ("bucket/mytable/subdir/data.parquet", &[][..], true),
+            ("bucket/mytable/year=2024/data.parquet", &[][..], false),
+            ("bucket/mytable/year=2024/data.parquet", &year[..], true),
+            (
+                "bucket/mytable/year=2024/subdir/data.parquet",
+                &year[..],
+                true,
+            ),
+            (
+                "bucket/mytable/year=2024/month=01/data.parquet",
+                &year[..],
+                false,
+            ),
+            ("bucket/mytable/year=2024/a=b.parquet", &year[..], true),
+        ] {
+            let result = check_no_undeclared_partitions(
+                &table_path,
+                &Path::from(location),
+                partition_cols,
+            );
+            assert_eq!(result.is_ok(), ok, "{location}: {result:?}");
+        }
     }
 
     #[test]
