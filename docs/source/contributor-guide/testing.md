@@ -74,6 +74,26 @@ cargo nextest run
 [the book]: https://doc.rust-lang.org/book/
 [cargo-nextest]: https://nexte.st/
 
+### Code coverage
+
+The [Codecov] bot posts a coverage report on GitHub pull requests with:
+
+- `all-tests`: coverage from the workspace test suite.
+- `sqllogictests`: coverage from SQLLogicTests alone.
+
+We [prefer end-to-end tests](#choosing-what-kind-of-test-to-write) because they are
+easier to maintain and verify final results through the full query pipeline,
+including optimizer passes. The SLT report helps ensure good coverage from these
+tests alone.
+
+Coverage helps find missing tests; high coverage does not guarantee good tests:
+
+- **Do:** Enumerate edge cases to build comprehensive tests, then check the
+  coverage report for gaps.
+- **Don't:** Use Codecov to choose a minimal set of tests that covers a new feature.
+
+[codecov]: https://app.codecov.io/gh/apache/datafusion
+
 ## Choosing What Kind of Test to Write
 
 When adding tests, prefer tests that exercise **user-visible behavior** over
