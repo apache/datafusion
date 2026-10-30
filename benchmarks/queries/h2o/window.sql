@@ -246,3 +246,59 @@ SELECT pk, largest_v2 FROM (
            DENSE_RANK() OVER (PARTITION BY (id3 % 100000) ORDER BY v2 DESC) AS dr_v2
     FROM large WHERE v2 IS NOT NULL
 ) sub_query WHERE dr_v2 <= 2;
+
+-- Q30: ROW_NUMBER, 100 partition keys.
+SELECT pk, largest_v2 FROM (
+    SELECT id3 % 100 AS pk, v2 AS largest_v2,
+           ROW_NUMBER() OVER (PARTITION BY id3 % 100 ORDER BY v2 DESC) AS order_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE order_v2 = 1;
+
+-- Q31: ROW_NUMBER, 100000 partition keys.
+SELECT pk, largest_v2 FROM (
+    SELECT id3 % 100000 AS pk, v2 AS largest_v2,
+           ROW_NUMBER() OVER (PARTITION BY id3 % 100000 ORDER BY v2 DESC) AS order_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE order_v2 = 1;
+
+-- Q32: RANK, 100 partition keys.
+SELECT pk, largest_v2 FROM (
+    SELECT id3 % 100 AS pk, v2 AS largest_v2,
+           RANK() OVER (PARTITION BY id3 % 100 ORDER BY v2 DESC) AS rk_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE rk_v2 = 1;
+
+-- Q33: RANK, 1000 partition keys; 10-value ORDER BY tie axis.
+SELECT pkey, largest_v2 FROM (
+    SELECT id3 % 1000 AS pkey, v2 AS largest_v2,
+           RANK() OVER (PARTITION BY id3 % 1000 ORDER BY CAST(v2 AS BIGINT) % 10 DESC) AS rk_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE rk_v2 = 1;
+
+-- Q34: RANK, 100000 partition keys.
+SELECT pk, largest_v2 FROM (
+    SELECT id3 % 100000 AS pk, v2 AS largest_v2,
+           RANK() OVER (PARTITION BY id3 % 100000 ORDER BY v2 DESC) AS rk_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE rk_v2 = 1;
+
+-- Q35: DENSE_RANK, 100 partition keys.
+SELECT pk, largest_v2 FROM (
+    SELECT id3 % 100 AS pk, v2 AS largest_v2,
+           DENSE_RANK() OVER (PARTITION BY id3 % 100 ORDER BY v2 DESC) AS dr_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE dr_v2 = 1;
+
+-- Q36: DENSE_RANK, 1000 partition keys; 10-value ORDER BY tie axis.
+SELECT pkey, largest_v2 FROM (
+    SELECT id3 % 1000 AS pkey, v2 AS largest_v2,
+           DENSE_RANK() OVER (PARTITION BY id3 % 1000 ORDER BY CAST(v2 AS BIGINT) % 10 DESC) AS dr_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE dr_v2 = 1;
+
+-- Q37: DENSE_RANK, 100000 partition keys.
+SELECT pk, largest_v2 FROM (
+    SELECT id3 % 100000 AS pk, v2 AS largest_v2,
+           DENSE_RANK() OVER (PARTITION BY id3 % 100000 ORDER BY v2 DESC) AS dr_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE dr_v2 = 1;

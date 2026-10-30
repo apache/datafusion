@@ -921,6 +921,35 @@ For example, to run query 1 with the small data generated above:
 cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/window.sql --query 1
 ```
 
+#### Window Top-N equality benchmarks
+
+Queries Q30–Q37 in `queries/h2o/window.sql` and the SQL runner's `h2o`
+`window` subgroup cover `ROW_NUMBER`, `RANK`, and `DENSE_RANK` filtered by
+`= 1`. Each function has 100-key and 100,000-key variants; RANK and DENSE_RANK
+also have 1,000-key, heavy-tie variants using integer modulo for the order key.
+Existing Q13–Q29 retain their `<= 2` predicates as controls.
+
+Generate data with `./bench.sh data h2o_small_window` from this directory.
+Then, from the repository root, build and run both configurations:
+
+```bash
+cargo build --release -p datafusion-benchmarks --bin benchmark_runner
+for enabled in false true; do
+  for query in $(seq 30 37); do
+    DATAFUSION_OPTIMIZER_ENABLE_WINDOW_TOPN=$enabled \
+      target/release/benchmark_runner h2o --subgroup window --query "$query" \
+      --iterations 5 --output "/tmp/window-eq-${enabled}-${query}.json"
+  done
+done
+```
+
+Use a separate `--debug` run to inspect plans: enabled equality queries should
+use `PartitionedTopKExec` with `fetch=1`; disabled queries retain the window and
+filter. Run the same benchmark files on the PR parent for a before/after
+comparison. Debug plan/metrics collection affects timing, so omit it from
+measurement runs. High partition counts and ties can change the tradeoff;
+compare those cases rather than assuming the rewrite always wins.
+
 # Micro-Benchmarks
 
 ## ASOF Join
