@@ -84,3 +84,31 @@ FROM (
 );
 ----
 00010203040506070809000102030506 NULL
+
+# Extension types of Parquet columns are visible to expressions evaluated in the scan,
+# also when the scan replaces a constant column with a literal from the statistics
+statement ok
+COPY (
+    SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID) AS uuid_val
+)
+TO 'test_files/scratch/cast_extension_type_metadata/uuid.parquet'
+STORED AS PARQUET;
+
+statement ok
+SET datafusion.execution.parquet.skip_metadata = false;
+
+statement ok
+CREATE EXTERNAL TABLE uuid_parquet
+STORED AS PARQUET
+LOCATION 'test_files/scratch/cast_extension_type_metadata/uuid.parquet';
+
+query ?T
+SELECT uuid_val, arrow_metadata(uuid_val, 'ARROW:extension:name') FROM uuid_parquet;
+----
+00010203040506070809000102030506 arrow.uuid
+
+statement ok
+DROP TABLE uuid_parquet;
+
+statement ok
+RESET datafusion.execution.parquet.skip_metadata;
