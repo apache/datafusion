@@ -5,7 +5,6 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_physical_optimizer::{PhysicalOptimizerContext, PhysicalOptimizerRule};
@@ -293,8 +292,6 @@ impl Clone for FFI_PhysicalOptimizerRule {
         unsafe { (self.clone)(self) }
     }
 }
-
-#[async_trait]
 impl PhysicalOptimizerRule for ForeignPhysicalOptimizerRule {
     fn optimize(
         &self,

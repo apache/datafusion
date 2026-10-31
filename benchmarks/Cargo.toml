@@ -41,7 +41,6 @@ mimalloc_extended = ["libmimalloc-sys/extended"]
 
 [dependencies]
 arrow = { workspace = true }
-async-trait = "0.1"
 bytes = { workspace = true }
 clap = { version = "4.6.0", features = ["derive", "env", "string"] }
 criterion = { workspace = true, features = ["async_tokio", "html_reports"] }

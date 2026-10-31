@@ -5,6 +5,7 @@
 //! Functions that are query-able and searchable via the `\h` command
 
 use datafusion_common::instant::Instant;
+use futures::future::BoxFuture;
 use std::fmt;
 use std::fs::File;
 use std::str::FromStr;
@@ -28,7 +29,6 @@ use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 
-use async_trait::async_trait;
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use parquet::basic::ConvertedType;
 use parquet::data_type::{ByteArray, FixedLenByteArray};
@@ -218,8 +218,6 @@ struct ParquetMetadataTable {
     schema: SchemaRef,
     batch: RecordBatch,
 }
-
-#[async_trait]
 impl TableProvider for ParquetMetadataTable {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -229,18 +227,20 @@ impl TableProvider for ParquetMetadataTable {
         datafusion::logical_expr::TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(MemorySourceConfig::try_new_exec(
-            &[vec![self.batch.clone()]],
-            TableProvider::schema(self),
-            projection.map(|p| p.to_vec()),
-        )?)
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            Ok(MemorySourceConfig::try_new_exec(
+                &[vec![self.batch.clone()]],
+                TableProvider::schema(self),
+                projection.map(|p| p.to_vec()),
+            )? as Arc<dyn ExecutionPlan>)
+        })
     }
 }
 
@@ -642,8 +642,6 @@ struct MetadataCacheTable {
     schema: SchemaRef,
     batch: RecordBatch,
 }
-
-#[async_trait]
 impl TableProvider for MetadataCacheTable {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -653,18 +651,20 @@ impl TableProvider for MetadataCacheTable {
         datafusion::logical_expr::TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(MemorySourceConfig::try_new_exec(
-            &[vec![self.batch.clone()]],
-            TableProvider::schema(self),
-            projection.map(|p| p.to_vec()),
-        )?)
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            Ok(MemorySourceConfig::try_new_exec(
+                &[vec![self.batch.clone()]],
+                TableProvider::schema(self),
+                projection.map(|p| p.to_vec()),
+            )? as Arc<dyn ExecutionPlan>)
+        })
     }
 }
 
@@ -762,8 +762,6 @@ struct StatisticsCacheTable {
     schema: SchemaRef,
     batch: RecordBatch,
 }
-
-#[async_trait]
 impl TableProvider for StatisticsCacheTable {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -773,18 +771,20 @@ impl TableProvider for StatisticsCacheTable {
         datafusion::logical_expr::TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(MemorySourceConfig::try_new_exec(
-            &[vec![self.batch.clone()]],
-            TableProvider::schema(self),
-            projection.map(|p| p.to_vec()),
-        )?)
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            Ok(MemorySourceConfig::try_new_exec(
+                &[vec![self.batch.clone()]],
+                TableProvider::schema(self),
+                projection.map(|p| p.to_vec()),
+            )? as Arc<dyn ExecutionPlan>)
+        })
     }
 }
 
@@ -911,8 +911,6 @@ struct ListFilesCacheTable {
     schema: SchemaRef,
     batch: RecordBatch,
 }
-
-#[async_trait]
 impl TableProvider for ListFilesCacheTable {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -922,18 +920,20 @@ impl TableProvider for ListFilesCacheTable {
         datafusion::logical_expr::TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&[usize]>,
-        _filters: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _filters: &'a [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(MemorySourceConfig::try_new_exec(
-            &[vec![self.batch.clone()]],
-            TableProvider::schema(self),
-            projection.map(|p| p.to_vec()),
-        )?)
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            Ok(MemorySourceConfig::try_new_exec(
+                &[vec![self.batch.clone()]],
+                TableProvider::schema(self),
+                projection.map(|p| p.to_vec()),
+            )? as Arc<dyn ExecutionPlan>)
+        })
     }
 }
 

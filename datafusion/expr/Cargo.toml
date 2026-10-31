@@ -52,7 +52,7 @@ sql = ["sqlparser"]
 [dependencies]
 arrow = { workspace = true, features = ["canonical_extension_types"] }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
-async-trait = { workspace = true }
+futures = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = false }
 datafusion-doc = { workspace = true }

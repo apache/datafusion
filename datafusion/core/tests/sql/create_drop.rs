@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use async_trait::async_trait;
 use datafusion::catalog::{
     CatalogProvider, CatalogProviderFactory, MemoryCatalogProvider,
 };
@@ -11,23 +10,25 @@ use datafusion::logical_expr::CreateExternalCatalog;
 use datafusion::test_util::TestTableFactory;
 use datafusion_catalog::Session;
 use datafusion_common::exec_err;
+use futures::future::BoxFuture;
 
 use super::*;
 
 #[derive(Debug)]
 struct TestCatalogFactory {}
 
-#[async_trait]
 impl CatalogProviderFactory for TestCatalogFactory {
-    async fn create(
-        &self,
-        _state: &dyn Session,
-        cmd: &CreateExternalCatalog,
-    ) -> Result<Arc<dyn CatalogProvider>> {
-        if cmd.options.contains_key("fail") {
-            return exec_err!("catalog factory configured to fail");
-        }
-        Ok(Arc::new(MemoryCatalogProvider::new()))
+    fn create<'a>(
+        &'a self,
+        _state: &'a dyn Session,
+        cmd: &'a CreateExternalCatalog,
+    ) -> BoxFuture<'a, Result<Arc<dyn CatalogProvider>>> {
+        Box::pin(async move {
+            if cmd.options.contains_key("fail") {
+                return exec_err!("catalog factory configured to fail");
+            }
+            Ok(Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>)
+        })
     }
 }
 

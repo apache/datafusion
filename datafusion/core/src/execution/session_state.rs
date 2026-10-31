@@ -74,7 +74,6 @@ use datafusion_sql::{
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use itertools::Itertools;
@@ -271,8 +270,6 @@ impl Debug for SessionState {
             .finish()
     }
 }
-
-#[async_trait]
 impl Session for SessionState {
     fn session_id(&self) -> &str {
         self.session_id()
@@ -305,17 +302,10 @@ impl Session for SessionState {
         SessionState::statistics_registry(self)
     }
 
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn create_physical_plan<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        logical_plan: &'life1 LogicalPlan,
-    ) -> BoxFuture<'async_trait, datafusion_common::Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
+    fn create_physical_plan<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+    ) -> BoxFuture<'a, datafusion_common::Result<Arc<dyn ExecutionPlan>>> {
         self.create_physical_plan_boxed(logical_plan)
     }
 
@@ -2497,23 +2487,13 @@ impl From<&SessionState> for TaskContext {
 /// The query planner used if no user defined planner is provided
 #[derive(Debug)]
 struct DefaultQueryPlanner {}
-
-#[async_trait]
 impl QueryPlanner for DefaultQueryPlanner {
     /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn create_physical_plan<'life0, 'life1, 'life2, 'async_trait>(
-        &'life0 self,
-        logical_plan: &'life1 LogicalPlan,
-        session_state: &'life2 dyn Session,
-    ) -> BoxFuture<'async_trait, datafusion_common::Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
-    {
+    fn create_physical_plan<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session_state: &'a dyn Session,
+    ) -> BoxFuture<'a, datafusion_common::Result<Arc<dyn ExecutionPlan>>> {
         self.create_physical_plan_boxed(logical_plan, session_state)
     }
 }
