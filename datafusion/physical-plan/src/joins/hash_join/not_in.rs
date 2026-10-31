@@ -667,10 +667,12 @@ fn correlated_row_state(
 /// rows in their scope. So when the memory pool cannot hold it, the join
 /// pairs them with every build row instead, and compares their scope keys.
 /// That is the pairing of a join whose tuple elements are all value keys,
-/// which needs no map either.
+/// which needs no map either. The next probe batch with such rows tries to
+/// build the map again.
 pub(super) struct BuildScopeMap {
-    /// `None` when the memory pool could not hold the map.
-    map: OnceLock<Option<Box<dyn JoinHashMapType>>>,
+    /// Set once the memory pool holds the map. Until then each use tries to
+    /// reserve it again, as the pool may have freed memory since.
+    map: OnceLock<Box<dyn JoinHashMapType>>,
     /// Charged for the map once it is built. Its lock also makes the probe
     /// partitions build the map only once.
     reservation: Mutex<MemoryReservation>,
@@ -680,18 +682,18 @@ pub(super) struct BuildScopeMap {
 impl BuildScopeMap {
     /// Returns the map, building it on first use from `scope_values`, the
     /// build side's scope keys (`JoinLeftData::values()[value_keys..]`).
-    /// Returns `None` when the memory pool cannot hold it.
+    /// Returns `None` when the memory pool cannot hold it yet.
     fn get_or_try_init(
         &self,
         scope_values: &[ArrayRef],
         random_state: &RandomState,
     ) -> Result<Option<&dyn JoinHashMapType>> {
         if let Some(map) = self.map.get() {
-            return Ok(map.as_deref());
+            return Ok(Some(map.as_ref()));
         }
         let mut reservation = self.reservation.lock();
         if let Some(map) = self.map.get() {
-            return Ok(map.as_deref());
+            return Ok(Some(map.as_ref()));
         }
         // Scope-only NULL marking uses a HashMap (the primary join map may
         // use ArrayMap for full-key matches, but scope keys have arbitrary
@@ -699,9 +701,7 @@ impl BuildScopeMap {
         let num_rows = scope_values[0].len();
         let mut map = match new_join_hashmap(num_rows, &mut reservation, &self.metrics) {
             Ok(map) => map,
-            Err(DataFusionError::ResourcesExhausted(_)) => {
-                return Ok(self.map.get_or_init(|| None).as_deref());
-            }
+            Err(DataFusionError::ResourcesExhausted(_)) => return Ok(None),
             Err(e) => return Err(e),
         };
         let mut hashes_buffer = vec![0; num_rows];
@@ -717,7 +717,7 @@ impl BuildScopeMap {
             true,
             NullEquality::NullEqualsNothing,
         )?;
-        Ok(self.map.get_or_init(|| Some(map)).as_deref())
+        Ok(Some(self.map.get_or_init(|| map).as_ref()))
     }
 }
 
@@ -2067,19 +2067,49 @@ mod tests {
         Ok(())
     }
 
-    /// A hot scope among rare ones: a batch of rare probe rows, then hot
-    /// ones, then rare ones again, as the review of
-    /// <https://github.com/apache/datafusion/pull/26214> found. The rare rows
-    /// keep the estimated groups small, but the hot group alone saves much
-    /// work, so the pairing must still switch to groups instead of walking the
-    /// hot scope once per probe row.
+    /// A hot scope among rare ones: `rare` probe rows of their own scope
+    /// each, then `hot` probe rows of the hot scope, then `rare` more of their
+    /// own scope. Each rare scope holds one build row, and the hot scope 7,679.
+    /// The rare rows keep the estimated groups small, but the hot group alone
+    /// saves much work, so the pairing must still switch to groups instead of
+    /// walking the hot scope once per probe row.
     #[test]
     fn hot_scope_among_rare_ones_is_grouped() -> Result<()> {
         // With marks on the probe rows, the average group fills no chunk. With
         // marks on the build rows, the groups hold fewer than two rows on
         // average.
         for (mark_build_rows, rare, hot) in [(false, 256, 7680), (true, 4096, 2048)] {
-            let stats = hot_scope_among_rare_ones(mark_build_rows, rare, hot, 7679)?;
+            let rare_scopes = rare as u64;
+            // Scope 0 is hot.
+            let build_keys: Vec<u64> = (1..=2 * rare_scopes)
+                .chain(std::iter::repeat_n(0, 7679))
+                .collect();
+            let probe_keys: Vec<u64> = (1..=rare_scopes)
+                .chain(std::iter::repeat_n(0, hot))
+                .chain(rare_scopes + 1..=2 * rare_scopes)
+                .collect();
+            let num_marked = if mark_build_rows {
+                build_keys.len()
+            } else {
+                probe_keys.len()
+            };
+            // Every pair passes, and every scope is on both sides.
+            let case = Case {
+                mark_build_rows,
+                through_scope_map: true,
+                batch_size: 8192,
+                hash_modulus: u64::MAX,
+                probe_rows: (0..probe_keys.len() as u32).collect(),
+                build_rows: (0..build_keys.len() as u64).collect(),
+                build_keys,
+                probe_keys,
+                marked_before: vec![false; num_marked],
+                filter_seed: 0,
+                filter_one_in: 1,
+                foreign_marks: false,
+            };
+            let (marks, stats) = case.run()?;
+            assert!(marks.iter().all(|marked| *marked));
             assert!(stats.grouped, "marks on build rows: {mark_build_rows}");
             // The matches of two rounds of lookups per probe row, each until
             // it wastes enough matches to pay for a sort, and a few chunks of
@@ -2094,6 +2124,41 @@ mod tests {
                 stats.looked_up_matches
             );
         }
+        Ok(())
+    }
+
+    /// A scope map that the memory pool declines is built on a later use,
+    /// once the pool has room for it.
+    #[test]
+    fn declined_scope_map_is_built_once_memory_is_free() -> Result<()> {
+        use crate::metrics::ExecutionPlanMetricsSet;
+        use datafusion_execution::memory_pool::{
+            GreedyMemoryPool, MemoryConsumer, MemoryPool,
+        };
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
+        let other = MemoryConsumer::new("other").register(&pool);
+        other.try_grow(1 << 20)?;
+        let scope_map = BuildScopeMap {
+            map: OnceLock::new(),
+            reservation: Mutex::new(MemoryConsumer::new("scope map").register(&pool)),
+            metrics: BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new()),
+        };
+        let scope_values: Vec<ArrayRef> =
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))];
+        let random_state = RandomState::with_seed(0);
+        assert!(
+            scope_map
+                .get_or_try_init(&scope_values, &random_state)?
+                .is_none()
+        );
+        other.free();
+        assert!(
+            scope_map
+                .get_or_try_init(&scope_values, &random_state)?
+                .is_some()
+        );
+        assert!(scope_map.reservation.lock().size() > 0);
         Ok(())
     }
 
@@ -2149,49 +2214,6 @@ mod tests {
         assert!(marks.iter().all(|marked| *marked));
         assert_eq!((stats.sends, stats.sent_pairs), (1, batch_size));
         Ok(())
-    }
-
-    /// `rare` probe rows of their own scope each, `hot` probe rows of the hot
-    /// scope, and `rare` more of their own scope, in that order. Each rare
-    /// scope holds one build row, and the hot scope `hot_build`. Every pair
-    /// passes, and every scope is on both sides, so every row is marked.
-    fn hot_scope_among_rare_ones(
-        mark_build_rows: bool,
-        rare: usize,
-        hot: usize,
-        hot_build: usize,
-    ) -> Result<Stats> {
-        let rare = rare as u64;
-        // Scope 0 is hot.
-        let build_keys: Vec<u64> = (1..=2 * rare)
-            .chain(std::iter::repeat_n(0, hot_build))
-            .collect();
-        let probe_keys: Vec<u64> = (1..=rare)
-            .chain(std::iter::repeat_n(0, hot))
-            .chain(rare + 1..=2 * rare)
-            .collect();
-        let num_marked = if mark_build_rows {
-            build_keys.len()
-        } else {
-            probe_keys.len()
-        };
-        let case = Case {
-            mark_build_rows,
-            through_scope_map: true,
-            batch_size: 8192,
-            hash_modulus: u64::MAX,
-            probe_rows: (0..probe_keys.len() as u32).collect(),
-            build_rows: (0..build_keys.len() as u64).collect(),
-            build_keys,
-            probe_keys,
-            marked_before: vec![false; num_marked],
-            filter_seed: 0,
-            filter_one_in: 1,
-            foreign_marks: false,
-        };
-        let (marks, stats) = case.run()?;
-        assert!(marks.iter().all(|marked| *marked));
-        Ok(stats)
     }
 
     /// One scope holds every row, and every pair passes. Returns the matches
