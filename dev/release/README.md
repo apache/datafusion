@@ -79,28 +79,49 @@ We then publish the code in the approved artifacts to crates.io.
 
 First create a new release branch from `main` in the `apache` repository.
 
-For example, to create the `branch-55` branch for the `55.x.y` release series:
+For example, to create the `branch-56` branch for the `56.x.y` release series:
 
 ```shell
 git fetch apache             # make sure we are up to date
 git checkout apache/main     # checkout current latest development branch
-git checkout -b branch-55    # create local branch
-git push -u apache branch-55 # push branch to apache remote
+git checkout -b branch-56    # create local branch
+git push -u apache branch-56 # push branch to apache remote
 ```
+
+### 1b. Bump Version on main
+
+After creating a new major release branch, open a "version bump PR"
+against `main` that bumps the version to the next development version.
+
+For example, after creating `branch-56` from `main`, bump `main` to `57.0.0-dev`:
+
+```shell
+python3 dev/update_datafusion_versions.py 57.0.0-dev
+cargo update --workspace       # updates Cargo.lock
+./dev/update_config_docs.sh    # regenerates docs/source/user-guide/configs.md
+```
+
+Development versions are never published to crates.io, so the script leaves
+the user facing examples (such as `docs/source/download.md`) pointing at the
+latest released version.
 
 ### 2. Prepare PR to Update the Release Version
 
-Update the DataFusion version using the following Python script:
+On the release branch, update the DataFusion version using the following
+Python script:
 
 ```shell
-# replace NEW_VERSION before executing (e.g., 55.2.0)
+# replace NEW_VERSION before executing (e.g., 56.0.0)
 python3 dev/update_datafusion_versions.py NEW_VERSION
 ```
 
-This updates the DataFusion version across all files, including documentation. The only extra step required is to update the `Cargo.lock` file, using the following command:
+This updates the DataFusion version across all files, including documentation.
+The only extra steps required are to update the `Cargo.lock` file and
+regenerate the configuration docs, using the following commands:
 
 ```shell
 cargo update --workspace
+./dev/update_config_docs.sh    # regenerates docs/source/user-guide/configs.md
 ```
 
 Then commit the changes and create a PR targeting the release branch `branch-N`.
@@ -464,20 +485,37 @@ Caused by:
 Note: [`datafusion` formula](https://formulae.brew.sh/formula/datafusion) is [updated automatically](https://github.com/Homebrew/homebrew-core/pulls?q=is%3Apr+datafusion+is%3Aclosed),
 so no action is needed.
 
-### 11. Sync Changelog and Version to main
+### 11. Sync Changelog and Documentation to main
 
-To sync changelog version and create PR against `main`:
+The crate version is **not** synced back to `main`: `main` already carries the
+next development version (such as `57.0.0-dev`) from
+[Bump Version on main](#1b-bump-version-on-main), and the released version
+must never appear on `main`.
+
+Instead, create a PR against `main` that syncs the changelog and updates the
+user facing documentation to reference the new release:
 
 ```shell
-git fetch apache && git checkout -b sync_change_log_version
+git fetch apache && git checkout -b sync_change_log apache/main
 ```
 
-- Cherry-pick or patch the version updates from step 2
 - Cherry-pick or patch the changelog updates from step 5
-- Commit changes, `git commit -a -m 'Sync changelog and version to main'`
-- Push to `origin/sync_change_log_version`
+- Update the crate version in the user facing examples to the newly released
+  version, for example from `55.1.0` to `56.0.0`:
+
+  ```shell
+  sed -i '' 's/55\.1\.0/56.0.0/' docs/source/download.md docs/source/user-guide/{crate-configuration,example-usage}.md
+  ```
+
+- Do **not** change `Cargo.toml`, `Cargo.lock`, `docs/source/user-guide/configs.md`
+  or `ci/scripts/release_version_labeler.js`, which must keep the `-dev` version
+- Commit changes, `git commit -a -m 'Sync changelog and docs for 56.0.0 to main'`
+- Push to `origin/sync_change_log`
 - Create a PR against `main`.
 - Merge to `main`.
+
+The version picker for the published documentation is updated separately, see
+[Publish the versioned documentation](#publish-the-versioned-documentation).
 
 ### 12. Add the release to Apache Reporter
 

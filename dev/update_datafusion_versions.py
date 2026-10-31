@@ -49,21 +49,32 @@ def update_docs(path: str, new_version: str):
         fd.seek(0)
         content = re.sub(r'datafusion\s*=\s*"(.+?)"', f'datafusion = "{new_version}"', content)
         content = re.sub(r'datafusion\s*=\s*\{\s*version\s*=\s*"(.+?)"', f'datafusion = {{ version = "{new_version}"', content)
-        content = re.sub(r'datafusion version \d+\.\d+\.\d+', f'datafusion version {new_version}', content)
+        content = re.sub(r'datafusion version \d+\.\d+\.\d+(-\S+)?', f'datafusion version {new_version}', content)
         fd.truncate()
         fd.write(content)
 
 
+def is_prerelease(version: str) -> bool:
+    """Returns True for development versions such as `56.0.0-dev`"""
+    return '-' in version
+
+
+def release_version(version: str) -> str:
+    """Strips any pre-release suffix: `56.0.0-dev` --> `56.0.0`"""
+    return version.split('-')[0]
+
+
 def update_ci(new_version: str):
-    # release version script
+    # The release version labeler adds a label to merged PRs with the
+    # version they will be released in. On `main` the version is
+    # `N.0.0-dev` so the label is `vN.0.0`
     print("updating ci/scripts/release_version_labeler.js")
     with open("ci/scripts/release_version_labeler.js", 'r+') as fd:
-        new_major_version = int(new_version.split(".")[0])
-        next_version = f"v{new_major_version + 1}.0.0"
+        target_version = f"v{release_version(new_version)}"
         content = fd.read()
         fd.seek(0)
         content = re.sub(
-            r"const target_version = '.*?'", f"const target_version = '{next_version}'", content
+            r"const target_version = '.*?'", f"const target_version = '{target_version}'", content
         )
         fd.truncate()
         fd.write(content)
@@ -75,7 +86,7 @@ def main():
             'Update datafusion crate version and corresponding version pins '
             'in downstream crates.'
         ))
-    parser.add_argument('new_version', type=str, help='new datafusion version')
+    parser.add_argument('new_version', type=str, help='new datafusion version (e.g. `56.0.0` or `56.0.0-dev`)')
     args = parser.parse_args()
 
     new_version = args.new_version
@@ -84,12 +95,21 @@ def main():
     print(f'Updating workspace in {repo_root} to {new_version}')
     update_workspace_version(new_version)
 
-    update_docs("README.md", new_version)
-    update_docs("docs/source/download.md", new_version)
-    update_docs("docs/source/user-guide/example-usage.md", new_version)
-    update_docs("docs/source/user-guide/crate-configuration.md", new_version)
+    # The generated config docs embed the full crate version (for example
+    # `datafusion version 56.0.0-dev`) so they are always updated
     update_docs("docs/source/user-guide/configs.md", new_version)
-    
+
+    if is_prerelease(new_version):
+        # Development versions (e.g. `56.0.0-dev`) are never published to
+        # crates.io, so leave the user facing examples pointing at the
+        # latest released version
+        print(f'{new_version} is a development version, not updating docs examples')
+    else:
+        update_docs("README.md", new_version)
+        update_docs("docs/source/download.md", new_version)
+        update_docs("docs/source/user-guide/example-usage.md", new_version)
+        update_docs("docs/source/user-guide/crate-configuration.md", new_version)
+
     update_ci(new_version)
 
 
