@@ -660,6 +660,8 @@ async fn sort_spill_reservation() {
     let partition_size = scenario.partition_size();
 
     let base_config = SessionConfig::new()
+        // Keep separate runs so this test exercises merge reservations.
+        .with_batch_size(dict_batches()[0].num_rows())
         // do not allow the sort to use the 'concat in place' path
         .with_sort_in_place_threshold_bytes(10);
 

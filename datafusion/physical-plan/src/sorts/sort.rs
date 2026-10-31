@@ -560,7 +560,7 @@ impl ExternalSorter {
         let mut sorted_stream = self
             .in_mem_sort_stream(
                 false,
-                // No coalescing on the spill path: it raises per-run peak memory.
+                // No byte-sized coalescing on the spill path: it raises peak memory.
                 false,
             )
             .await?;
@@ -680,12 +680,13 @@ impl ExternalSorter {
     ///
     ///   in_mem_batches
     /// ```
-    /// `coalesce_runs` merges buffered batches into fewer, larger sorted runs to
-    /// reduce merge fan-in. Disabled on the spill path to keep peak memory low.
+    /// Small batches are concatenated into runs of at least `batch_size` rows,
+    /// except for the final run. `coalesce_large_runs` also allows larger,
+    /// byte-sized runs for single-column final output.
     async fn in_mem_sort_stream(
         &mut self,
         is_output_stream: bool,
-        coalesce_runs: bool,
+        coalesce_large_runs: bool,
     ) -> Result<SendableRecordBatchStream> {
         if self.in_mem_batches.is_empty() {
             let empty_stream =
@@ -731,15 +732,13 @@ impl ExternalSorter {
 
         // For single-column sorts, coalesce the buffered batches into fewer,
         // larger runs to cut the merge fan-in (where the cheap per-key compare is
-        // dominated by per-stream cursor/merge overhead). Multi-column sorts are
-        // left as one run per batch: the row-format merge of many small runs
-        // beats sorting a few large runs with the lexicographic comparator.
+        // dominated by per-stream cursor/merge overhead). All sorts also coalesce
+        // small batches to reach `batch_size`, including before spilling.
         let batches = std::mem::take(&mut self.in_mem_batches);
-        let runs = if coalesce_runs && self.expr.len() == 1 {
-            self.coalesce_in_mem_batches_into_runs(batches)?
-        } else {
-            batches
-        };
+        let runs = self.coalesce_in_mem_batches_into_runs(
+            batches,
+            coalesce_large_runs && self.expr.len() == 1,
+        )?;
 
         let concurrency = SortConcurrency::for_current_runtime(&self.sort_concurrency);
         let streams = if let Some(concurrency) = concurrency {
@@ -852,17 +851,27 @@ impl ExternalSorter {
         Box::pin(RecordBatchStreamAdapter::new(schema, batches))
     }
 
-    /// Concatenates `batches` into fewer, larger runs, each bounded by
-    /// `sort_in_place_threshold_bytes`, to reduce merge fan-in. `self.reservation`
+    /// Concatenates `batches` into fewer, larger runs, each reaching `batch_size`
+    /// rows except the final run. With `coalesce_large_runs`, runs also grow toward
+    /// `sort_in_place_threshold_bytes` to reduce merge fan-in. `self.reservation`
     /// is resized to the coalesced footprint so the caller's per-run splits stay
     /// exact.
     fn coalesce_in_mem_batches_into_runs(
         &mut self,
         batches: Vec<RecordBatch>,
+        coalesce_large_runs: bool,
     ) -> Result<Vec<RecordBatch>> {
+        if !coalesce_large_runs
+            && batches
+                .iter()
+                .all(|batch| batch.num_rows() >= self.batch_size)
+        {
+            return Ok(batches);
+        }
         let target = self.sort_in_place_threshold_bytes.max(1);
         let mut runs: Vec<RecordBatch> = Vec::new();
         let mut group: Vec<RecordBatch> = Vec::new();
+        let mut group_rows = 0usize;
         let mut group_bytes = 0usize;
         // Count the buffers the batches share as when they were buffered
         let mut counter = self.new_buffered_batches_counter();
@@ -886,10 +895,14 @@ impl ExternalSorter {
         for batch in batches {
             let bytes =
                 get_reserved_bytes_for_next_record_batch(&batch, counter.as_mut())?;
-            if !group.is_empty() && group_bytes.saturating_add(bytes) > target {
+            if group_rows >= self.batch_size
+                && (!coalesce_large_runs || group_bytes.saturating_add(bytes) > target)
+            {
                 flush(&mut group, &mut runs, &self.schema)?;
+                group_rows = 0;
                 group_bytes = 0;
             }
+            group_rows += batch.num_rows();
             group_bytes += bytes;
             group.push(batch);
         }
@@ -1291,6 +1304,9 @@ pub fn sort_batch_chunked(
 ///
 /// Support sorting datasets that are larger than the memory allotted
 /// by the memory manager, by spilling to disk.
+///
+/// Adjacent small batches are combined into runs of at least the configured
+/// batch size, except for the final run, including before spilling.
 ///
 /// On multithreaded Tokio runtimes, large inputs are sorted in batches on
 /// separate tasks before merging. All partitions share a task limit capped by
@@ -2911,6 +2927,47 @@ mod tests {
             "The sort should have returned all memory used back to the memory manager"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn coalesce_small_runs_preserves_rows_and_full_batches() -> Result<()> {
+        let batches = vec![
+            record_batch!(("a", Int32, [9, 8]), ("b", Int32, [0, 1]))?,
+            record_batch!(("a", Int32, [7, 6]), ("b", Int32, [2, 3]))?,
+            record_batch!(("a", Int32, [5, 4, 3, 2]), ("b", Int32, [4, 5, 6, 7]))?,
+            record_batch!(("a", Int32, [1]), ("b", Int32, [8]))?,
+        ];
+        let schema = batches[0].schema();
+        let expected = concat_batches(&schema, &batches)?;
+        let full_batch = batches[2].clone();
+        let mut sorter = ExternalSorter::new(
+            0,
+            Arc::clone(&schema),
+            [
+                PhysicalSortExpr::new_default(col("a", &schema)?),
+                PhysicalSortExpr::new_default(col("b", &schema)?),
+            ]
+            .into(),
+            4,
+            0,
+            0,
+            SpillCompression::Uncompressed,
+            &ExecutionPlanMetricsSet::new(),
+            Arc::new(RuntimeEnv::default()),
+        )?;
+        for batch in batches {
+            sorter.insert_batch(batch).await?;
+        }
+        let batches = std::mem::take(&mut sorter.in_mem_batches);
+        let runs = sorter.coalesce_in_mem_batches_into_runs(batches, false)?;
+        assert_eq!(
+            runs.iter().map(RecordBatch::num_rows).collect::<Vec<_>>(),
+            vec![4, 4, 1]
+        );
+        assert_eq!(concat_batches(&schema, &runs)?, expected);
+        // A full input batch remains a run without copying its arrays.
+        assert!(Arc::ptr_eq(runs[1].column(0), full_batch.column(0)));
         Ok(())
     }
 
