@@ -548,6 +548,18 @@ select arrow_metadata((select id from table_with_metadata where id = 1));
 ----
 {metadata_key: the id field}
 
+# A CASE whose WHEN is always false simplifies to NULL, which keeps the
+# extension type of the CASE
+query T
+select arrow_metadata(
+  case when 1 = 0 then with_metadata(name, 'ARROW:extension:name', 'a.type') end,
+  'ARROW:extension:name')
+from table_with_metadata;
+----
+a.type
+a.type
+a.type
+
 # coalesce, nvl, ifnull and nvl2: conflicting extension types are a planning error
 statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
 select coalesce(
