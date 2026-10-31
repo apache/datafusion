@@ -3894,7 +3894,7 @@ async fn roundtrip_join_null_aware() -> Result<()> {
         (
             "
             SELECT k
-            FROM (VALUES (1, 1, 2), (2, 3, 4)) AS t1(k, a, b)
+            FROM (VALUES (1, 1, 2), (2, 3, CAST(NULL AS INT))) AS t1(k, a, b)
             WHERE (a, b) NOT IN (
                 SELECT x, y
                 FROM (VALUES (1, CAST(NULL AS INT), 2)) AS t2(k, x, y)

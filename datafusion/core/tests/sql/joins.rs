@@ -688,3 +688,89 @@ async fn asof_join_unparser_preserves_right_preselection() -> Result<()> {
     }
     Ok(())
 }
+
+/// Registers `o(a, b)` and `i(x, y)` with the fields that
+/// `RecordBatch::try_from_iter` infers, which count only the null bits.
+fn hidden_null_context(b: ArrayRef, y: ArrayRef) -> Result<SessionContext> {
+    let outer = RecordBatch::try_from_iter(vec![
+        (
+            "a",
+            Arc::new(Int32Array::from(vec![Some(1), None])) as ArrayRef,
+        ),
+        ("b", b),
+    ])?;
+    let inner = RecordBatch::try_from_iter(vec![
+        ("x", Arc::new(Int32Array::from(vec![1])) as ArrayRef),
+        ("y", y),
+    ])?;
+    assert!(!outer.schema().field_with_name("b")?.is_nullable());
+    assert!(!inner.schema().field_with_name("y")?.is_nullable());
+    let ctx = SessionContext::new();
+    ctx.register_batch("o", outer)?;
+    ctx.register_batch("i", inner)?;
+    Ok(ctx)
+}
+
+/// A dictionary with keys `keys` into `values`.
+fn dictionary(keys: Vec<i32>, values: ArrayRef) -> Result<ArrayRef> {
+    Ok(Arc::new(DictionaryArray::<Int32Type>::try_new(
+        Int32Array::from(keys),
+        values,
+    )?))
+}
+
+const HIDDEN_NULL_PROJECTED: &str = "SELECT a, (a, b) NOT IN (SELECT x, y FROM i) AS r \
+     FROM o ORDER BY a NULLS LAST";
+const HIDDEN_NULL_FILTERED: &str =
+    "SELECT a FROM o WHERE (a, b) NOT IN (SELECT x, y FROM i)";
+
+/// A dictionary key can point to a NULL value without a null bit, so the
+/// field inferred for `b` is non-nullable although `b` holds a NULL. The
+/// multi-column `NOT IN` must still see that NULL: `(1, NULL) NOT IN ((1, 2))`
+/// is NULL, so a `WHERE` drops the row.
+#[tokio::test]
+async fn multi_column_not_in_sees_null_dictionary_values() -> Result<()> {
+    let ctx = hidden_null_context(
+        dictionary(vec![0, 1], Arc::new(Int32Array::from(vec![None, Some(3)])))?,
+        dictionary(vec![0], Arc::new(Int32Array::from(vec![2])))?,
+    )?;
+    let projected = ctx.sql(HIDDEN_NULL_PROJECTED).await?.collect().await?;
+    assert_batches_eq!(
+        [
+            "+---+------+",
+            "| a | r    |",
+            "+---+------+",
+            "| 1 |      |",
+            "|   | true |",
+            "+---+------+",
+        ],
+        &projected
+    );
+    let filtered = ctx.sql(HIDDEN_NULL_FILTERED).await?.collect().await?;
+    assert_batches_eq!(["+---+", "| a |", "+---+", "|   |", "+---+"], &filtered);
+    Ok(())
+}
+
+/// Every slot of a `Null` array is NULL without a null bit, so the inferred
+/// fields of `b` and `y` are non-nullable. Each row compares a NULL `b`, so
+/// `NOT IN` is NULL for both and a `WHERE` drops both.
+#[tokio::test]
+async fn multi_column_not_in_sees_null_type_values() -> Result<()> {
+    let ctx =
+        hidden_null_context(Arc::new(NullArray::new(2)), Arc::new(NullArray::new(1)))?;
+    let projected = ctx.sql(HIDDEN_NULL_PROJECTED).await?.collect().await?;
+    assert_batches_eq!(
+        [
+            "+---+---+",
+            "| a | r |",
+            "+---+---+",
+            "| 1 |   |",
+            "|   |   |",
+            "+---+---+",
+        ],
+        &projected
+    );
+    let filtered = ctx.sql(HIDDEN_NULL_FILTERED).await?.collect().await?;
+    assert_batches_eq!(["++", "++"], &filtered);
+    Ok(())
+}

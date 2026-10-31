@@ -20,7 +20,7 @@
 //! - [`NotInBuild::final_chunk`] on each chunk of build rows emitted after
 //!   the probe side is exhausted.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 
@@ -32,10 +32,11 @@ use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{filter, filter_record_batch, take};
 use arrow::util::bit_util;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
-use datafusion_common::{JoinSide, JoinType, NullEquality, Result, plan_err};
+use datafusion_common::{
+    DataFusionError, JoinSide, JoinType, NullEquality, Result, plan_err,
+};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_expr::{ColumnarValue, Operator};
-use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::datum::apply_cmp;
 
 use crate::joins::PartitionMode;
@@ -46,7 +47,7 @@ use crate::joins::join_hash_map::{JoinHashMapType, ProbeOffset};
 use crate::joins::probe_completion::ProbeSideSummary;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, JoinFilter, apply_join_filter_to_indices,
-    equal_rows_arr_with_normalized_left, matchable_join_keys, update_hash,
+    equal_rows_arr_with_normalized_left, matchable_join_keys, update_hash_from_values,
 };
 
 /// Which `NOT IN` a null-aware join computes, derived from
@@ -168,9 +169,9 @@ pub(super) enum NotInBuild {
         /// One bit per build row, set once its mark is UNKNOWN; shared by
         /// every probe partition, and never cleared.
         unknown: SharedBitmapBuilder,
-        /// Hash table over the scope keys (`on[value_keys..]`) of all build
-        /// rows, probed with NULL-valued probe rows. `None` without scope keys.
-        scope_map: Option<Box<dyn JoinHashMapType>>,
+        /// Hash table over the scope keys of all build rows, probed with
+        /// NULL-valued probe rows. `None` without scope keys.
+        scope_map: Option<BuildScopeMap>,
         /// The build rows with a NULL value key, `None` when there are none.
         null_value_rows: Option<NullValueBuildRows>,
     },
@@ -187,7 +188,7 @@ pub(super) enum NotInBuild {
     /// The fields are those of [`Self::BuildRowsCorrelated`].
     ProbeRowsCorrelated {
         value_keys: usize,
-        scope_map: Option<Box<dyn JoinHashMapType>>,
+        scope_map: Option<BuildScopeMap>,
         null_value_rows: Option<NullValueBuildRows>,
     },
     /// Uncorrelated [`NotIn::ProbeRows`].
@@ -201,10 +202,8 @@ impl NotInBuild {
     /// Builds the `NOT IN` state of a collected build side and charges it to
     /// `reservation`. `keys` are the build keys as evaluated, `normalized`
     /// with `-0.0` rewritten (see `JoinLeftData::values`).
-    #[expect(clippy::too_many_arguments)]
     pub(super) fn try_new(
         not_in: NotIn,
-        on_left: &[PhysicalExprRef],
         batch: &RecordBatch,
         keys: &[ArrayRef],
         normalized: &[ArrayRef],
@@ -215,8 +214,6 @@ impl NotInBuild {
         let num_rows = batch.num_rows();
         let correlated_row_state = |value_keys, reservation: &mut MemoryReservation| {
             correlated_row_state(
-                on_left,
-                batch,
                 keys,
                 normalized,
                 value_keys,
@@ -465,7 +462,7 @@ impl NotInProbe {
                     mark_null_candidates_for_probe_batch(
                         left_data,
                         UnknownMarks::Build(unknown),
-                        scope_map.as_deref(),
+                        scope_map.as_ref(),
                         null_value_rows.as_ref(),
                         probe_batch,
                         probe_values,
@@ -503,7 +500,7 @@ impl NotInProbe {
                     mark_null_candidates_for_probe_batch(
                         left_data,
                         UnknownMarks::Probe(&unknown),
-                        scope_map.as_deref(),
+                        scope_map.as_ref(),
                         null_value_rows.as_ref(),
                         probe_batch,
                         probe_values,
@@ -588,42 +585,22 @@ fn retain_probe_rows(
 }
 
 /// The scope map and NULL-valued build rows of a correlated `NOT IN`.
-#[expect(clippy::too_many_arguments, clippy::type_complexity)]
 fn correlated_row_state(
-    on_left: &[PhysicalExprRef],
-    batch: &RecordBatch,
     keys: &[ArrayRef],
     normalized: &[ArrayRef],
     value_keys: usize,
     random_state: &RandomState,
     reservation: &mut MemoryReservation,
     metrics: &BuildProbeJoinMetrics,
-) -> Result<(Option<Box<dyn JoinHashMapType>>, Option<NullValueBuildRows>)> {
-    let num_rows = batch.num_rows();
-    // `on_left[..V]` are the value keys and `on_left[V..]` the (possibly
-    // empty) correlation scope keys.
-    let scope_keys = &on_left[value_keys..];
-    let scope_map = if scope_keys.is_empty() {
-        None
-    } else {
-        // Scope-only NULL marking uses a HashMap (the primary join map may
-        // use ArrayMap for full-key matches, but scope keys have arbitrary
-        // shape).
-        let mut scope_map = new_join_hashmap(num_rows, reservation, metrics)?;
-        let mut hashes_buffer = vec![0; num_rows];
-        update_hash(
-            scope_keys,
-            batch,
-            &mut *scope_map,
-            0,
-            random_state,
-            &mut hashes_buffer,
-            0,
-            true,
-            NullEquality::NullEqualsNothing,
-        )?;
-        Some(scope_map)
-    };
+) -> Result<(Option<BuildScopeMap>, Option<NullValueBuildRows>)> {
+    // `keys[..V]` are the value keys and `keys[V..]` the (possibly empty)
+    // correlation scope keys.
+    let has_scope_keys = keys.len() > value_keys;
+    let scope_map = has_scope_keys.then(|| BuildScopeMap {
+        map: OnceLock::new(),
+        reservation: Mutex::new(reservation.new_empty()),
+        metrics: metrics.clone(),
+    });
 
     let Some(null_mask) = null_value_key_mask(&keys[..value_keys]) else {
         return Ok((scope_map, None));
@@ -636,27 +613,99 @@ fn correlated_row_state(
     reservation.try_grow(retained_size)?;
     metrics.build_mem_used.add(retained_size);
 
-    let null_scope_map = if scope_keys.is_empty() {
-        None
+    let scope = if !has_scope_keys {
+        NullValueScope::Unscoped
     } else {
-        let scope_values = normalized[value_keys..]
-            .iter()
-            .map(|values| Ok(filter(values.as_ref(), &null_mask)?))
-            .collect::<Result<Vec<_>>>()?;
         let null_rows = build_indices.len();
-        let mut map = new_join_hashmap(null_rows, reservation, metrics)?;
-        let mut hashes_buffer = vec![0; null_rows];
-        create_hashes(&scope_values, random_state, &mut hashes_buffer)?;
-        map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
-        Some(map)
+        match new_join_hashmap(null_rows, reservation, metrics) {
+            Ok(mut map) => {
+                let scope_values = normalized[value_keys..]
+                    .iter()
+                    .map(|values| Ok(filter(values.as_ref(), &null_mask)?))
+                    .collect::<Result<Vec<_>>>()?;
+                let mut hashes_buffer = vec![0; null_rows];
+                create_hashes(&scope_values, random_state, &mut hashes_buffer)?;
+                map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
+                NullValueScope::Map(map)
+            }
+            // The map only speeds up the pairing, so the join goes on without
+            // it rather than fail.
+            Err(DataFusionError::ResourcesExhausted(_)) => NullValueScope::Unindexed,
+            Err(e) => return Err(e),
+        }
     };
     Ok((
         scope_map,
         Some(NullValueBuildRows {
-            scope_map: null_scope_map,
+            scope,
             build_indices,
         }),
     ))
+}
+
+/// Hash table over the correlation scope keys (`on[value_keys..]`) of all
+/// build rows, used by correlated `NOT IN` (see [`NotInScope::Correlated`]).
+///
+/// Only the probe rows with a NULL value key look it up, so it is built on
+/// the first such probe row rather than with the build side: a probe side
+/// without NULLs never pays for a second hash table over the build side.
+///
+/// The map only speeds up the pairing of those probe rows with the build
+/// rows in their scope. So when the memory pool cannot hold it, the join
+/// pairs them with every build row instead, and compares their scope keys.
+/// That is the pairing of a join whose tuple elements are all value keys,
+/// which needs no map either. The next probe batch with such rows tries to
+/// build the map again.
+pub(super) struct BuildScopeMap {
+    /// Set once the memory pool holds the map. Until then each use tries to
+    /// reserve it again, as the pool may have freed memory since.
+    map: OnceLock<Box<dyn JoinHashMapType>>,
+    /// Charged for the map once it is built. Its lock also makes the probe
+    /// partitions build the map only once.
+    reservation: Mutex<MemoryReservation>,
+    metrics: BuildProbeJoinMetrics,
+}
+
+impl BuildScopeMap {
+    /// Returns the map, building it on first use from `scope_values`, the
+    /// build side's scope keys (`JoinLeftData::values()[value_keys..]`).
+    /// Returns `None` when the memory pool cannot hold it yet.
+    fn get_or_try_init(
+        &self,
+        scope_values: &[ArrayRef],
+        random_state: &RandomState,
+    ) -> Result<Option<&dyn JoinHashMapType>> {
+        if let Some(map) = self.map.get() {
+            return Ok(Some(map.as_ref()));
+        }
+        let mut reservation = self.reservation.lock();
+        if let Some(map) = self.map.get() {
+            return Ok(Some(map.as_ref()));
+        }
+        // Scope-only NULL marking uses a HashMap (the primary join map may
+        // use ArrayMap for full-key matches, but scope keys have arbitrary
+        // shape).
+        let num_rows = scope_values[0].len();
+        let mut map = match new_join_hashmap(num_rows, &mut reservation, &self.metrics) {
+            Ok(map) => map,
+            Err(DataFusionError::ResourcesExhausted(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut hashes_buffer = vec![0; num_rows];
+        // A build row whose scope keys hold a NULL is in no scope, so it is
+        // left out of the map.
+        update_hash_from_values(
+            scope_values,
+            &mut *map,
+            0,
+            random_state,
+            &mut hashes_buffer,
+            0,
+            true,
+            NullEquality::NullEqualsNothing,
+        )?;
+        Ok(Some(self.map.get_or_init(|| map).as_ref()))
+    }
 }
 
 /// The build rows with a NULL `NOT IN` value key (in any element of a
@@ -669,14 +718,24 @@ fn correlated_row_state(
 /// proportional to the number of NULLs instead of enumerating every scope
 /// match of every probe row.
 pub(super) struct NullValueBuildRows {
-    /// Hash table keyed by the correlation scope values of the NULL-valued
-    /// build rows. Stored positions index into `build_indices`, not the full
-    /// build batch. `None` when the join has no correlation scope keys, so
-    /// every probe row is in scope.
-    scope_map: Option<Box<dyn JoinHashMapType>>,
-    /// Maps positions in `scope_map` back to row indices in the full build
-    /// batch.
+    scope: NullValueScope,
+    /// The NULL-valued build rows. The positions stored in a
+    /// [`NullValueScope::Map`] index into it.
     build_indices: UInt64Array,
+}
+
+/// How the NULL-valued build rows find the probe rows in their correlation
+/// scope.
+enum NullValueScope {
+    /// The join has no correlation scope keys, so every probe row is in scope.
+    Unscoped,
+    /// Hash table keyed by the correlation scope values of the NULL-valued
+    /// build rows. Stored positions index into
+    /// [`NullValueBuildRows::build_indices`], not the full build batch.
+    Map(Box<dyn JoinHashMapType>),
+    /// The memory pool could not hold the map. Every probe row is paired, and
+    /// the scope keys of each pair are compared (see [`BuildScopeMap`]).
+    Unindexed,
 }
 
 /// Returns the rows where at least one of `value_keys` is NULL, or `None` when
@@ -750,7 +809,7 @@ impl<'a> UnknownMarks<'a> {
 fn mark_null_candidates_for_probe_batch(
     left_data: &JoinLeftData,
     marks: UnknownMarks<'_>,
-    scope_map: Option<&dyn JoinHashMapType>,
+    scope_map: Option<&BuildScopeMap>,
     null_value_build_rows: Option<&NullValueBuildRows>,
     probe_batch: &RecordBatch,
     probe_values: &[ArrayRef],
@@ -850,9 +909,9 @@ fn mark_null_candidates_for_probe_batch(
     // Case 1: NULL-valued build rows paired with the probe rows in their
     // correlation scope.
     if let Some(null_rows) = null_value_build_rows {
-        let probe_rows = (0..probe_batch.num_rows() as u32).filter(in_scope);
-        match &null_rows.scope_map {
-            Some(scope_map) => {
+        let probe_rows = || (0..probe_batch.num_rows() as u32).filter(in_scope);
+        match &null_rows.scope {
+            NullValueScope::Map(scope_map) => {
                 let mut pairs =
                     UnmarkedPairs::new(marks, batch_size, &mut mark_scope_matches);
                 // The map indexes only the NULL-valued build rows; translate
@@ -860,14 +919,23 @@ fn mark_null_candidates_for_probe_batch(
                 pairs.scope_matches(
                     scope_map.as_ref(),
                     |position| null_rows.build_indices.value(position as usize),
-                    probe_rows,
+                    probe_rows(),
                     hashes_buffer,
                     lookup,
                 )?;
                 pairs.finish()?;
             }
-            None => {
+            NullValueScope::Unscoped => {
                 let mut pairs = UnmarkedPairs::new(marks, batch_size, &mark);
+                pairs.cross_product(
+                    null_rows.build_indices.values().iter().copied(),
+                    probe_rows,
+                )?;
+                pairs.finish()?;
+            }
+            NullValueScope::Unindexed => {
+                let mut pairs =
+                    UnmarkedPairs::new(marks, batch_size, &mut mark_scope_matches);
                 pairs.cross_product(
                     null_rows.build_indices.values().iter().copied(),
                     probe_rows,
@@ -880,23 +948,36 @@ fn mark_null_candidates_for_probe_batch(
     // Case 2: NULL-valued probe rows paired with the build rows in their
     // correlation scope.
     if let Some(null_mask) = probe_null_value_mask {
-        let null_probe_rows = null_mask
-            .values()
-            .set_indices()
-            .map(|i| i as u32)
-            .filter(in_scope);
+        let null_probe_rows = || {
+            null_mask
+                .values()
+                .set_indices()
+                .map(|i| i as u32)
+                .filter(in_scope)
+        };
 
         match scope_map {
+            // No NULL-valued probe row is in any scope: nothing to look up,
+            // so the scope map need not be built.
+            Some(_) if null_probe_rows().next().is_none() => {}
             Some(scope_map) => {
                 let mut pairs =
                     UnmarkedPairs::new(marks, batch_size, &mut mark_scope_matches);
-                pairs.scope_matches(
-                    scope_map,
-                    |build_row| build_row,
-                    null_probe_rows,
-                    hashes_buffer,
-                    lookup,
-                )?;
+                match scope_map.get_or_try_init(build_scope_values, random_state)? {
+                    Some(scope_map) => pairs.scope_matches(
+                        scope_map,
+                        |build_row| build_row,
+                        null_probe_rows(),
+                        hashes_buffer,
+                        lookup,
+                    )?,
+                    // Without the map, every build row is paired, and the
+                    // scope keys of each pair are compared.
+                    None => pairs.cross_product(
+                        0..left_data.batch().num_rows() as u64,
+                        null_probe_rows,
+                    )?,
+                }
                 pairs.finish()?;
             }
             None => {
@@ -1013,6 +1094,9 @@ struct UnmarkedPairs<'a, F> {
     /// The lookups that checked the build row marks.
     #[cfg(test)]
     mark_checks: usize,
+    /// The most rows that one [`Self::pair_unmarked`] decided at once.
+    #[cfg(test)]
+    max_decided_rows: usize,
     f: F,
 }
 
@@ -1071,6 +1155,19 @@ fn splitmix64(x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
+/// `rows` paired with their `hashes`, sorted by hash.
+fn sort_by_hash(hashes: &[u64], rows: &[u32]) -> Vec<(u64, u32)> {
+    let mut sorted: Vec<(u64, u32)> =
+        hashes.iter().copied().zip(rows.iter().copied()).collect();
+    sorted.sort_unstable_by_key(|(hash, _)| *hash);
+    sorted
+}
+
+/// The groups of equal hashes in `sorted`, sorted by hash.
+fn hash_groups(sorted: &[(u64, u32)]) -> Vec<&[(u64, u32)]> {
+    sorted.chunk_by(|a, b| a.0 == b.0).collect()
+}
+
 /// Whether `rows` probe rows in `groups` groups of equal hashes save work when
 /// each group is paired at once (see [`UnmarkedPairs::scope_matches`]).
 /// `matches_per_row` estimates the build rows of a hash.
@@ -1123,25 +1220,56 @@ where
             build_lookups: 0,
             #[cfg(test)]
             mark_checks: 0,
+            #[cfg(test)]
+            max_decided_rows: 0,
             f,
         }
     }
 
-    /// Pairs each of `probe_rows` with each of `build_rows`. The pairing stops
-    /// when every row that the pairs decide is marked.
-    fn cross_product(
+    /// Pairs each of the rows that `probe_rows` yields with each of
+    /// `build_rows`. The pairing stops when every row that the pairs decide
+    /// is marked.
+    ///
+    /// When the pairs decide the build rows, the unmarked build rows are
+    /// paired in chunks of `batch_size` rows, and `probe_rows` is called
+    /// again for each chunk. Neither side is then held whole: a large build
+    /// side, as when this pairing stands in for a scope map that the memory
+    /// pool declined, or a probe batch larger than the batch size. A chunk is
+    /// filled with unmarked rows only, so a build side with few unmarked rows
+    /// left pairs them all at once, as a single chunk would.
+    fn cross_product<P: Iterator<Item = u32>>(
         &mut self,
         build_rows: impl Iterator<Item = u64>,
-        probe_rows: impl Iterator<Item = u32>,
+        probe_rows: impl Fn() -> P,
     ) -> Result<()> {
-        // Drop the rows that are already marked before the first pair.
-        self.needs_refresh = true;
         match self.marks {
-            UnknownMarks::Build(_) => {
-                self.pair_unmarked(&mut build_rows.collect(), probe_rows, |b, p| (b, p))
+            UnknownMarks::Build(bitmap) => {
+                if probe_rows().next().is_none() {
+                    return Ok(());
+                }
+                let mut build_rows = build_rows.peekable();
+                let mut chunk = Vec::with_capacity(self.batch_size);
+                while build_rows.peek().is_some() {
+                    chunk.clear();
+                    {
+                        let bitmap = bitmap.lock();
+                        chunk.extend(
+                            build_rows
+                                .by_ref()
+                                .filter(|row| !bitmap.get_bit(*row as usize))
+                                .take(self.batch_size),
+                        );
+                    }
+                    // The chunk holds no row marked so far.
+                    self.needs_refresh = false;
+                    self.pair_unmarked(&mut chunk, probe_rows(), |b, p| (b, p))?;
+                }
+                Ok(())
             }
             UnknownMarks::Probe(_) => {
-                self.pair_unmarked(&mut probe_rows.collect(), build_rows, |p, b| (b, p))
+                // Drop the rows that are already marked before the first pair.
+                self.needs_refresh = true;
+                self.pair_unmarked(&mut probe_rows().collect(), build_rows, |p, b| (b, p))
             }
         }
     }
@@ -1172,7 +1300,13 @@ where
     ///   Within a chunk every pair is sent, so only the later chunks can skip
     ///   the marked probe rows.
     ///
-    /// Otherwise the lookup per probe row goes on.
+    /// Otherwise the lookup per probe row goes on, until it wastes as many
+    /// matches again. The estimate takes the matches per probe row so far for
+    /// every group, so a few large groups among many small ones, such as a
+    /// hot scope among rare ones, can make it miss the work that groups save.
+    /// The matches wasted again pay for a sort as well, so the join then
+    /// sorts the rest of the probe rows by hash and pairs the groups, whatever
+    /// the estimate says.
     fn scope_matches(
         &mut self,
         scope_map: &dyn JoinHashMapType,
@@ -1232,33 +1366,46 @@ where
                 self.batch_size,
             )
         };
-        let rest_hashes = &hashes[group_from..];
         // Estimate the groups from a sample first, because a sort of all the
         // rest that finds no group worth it costs as much as the wasted
         // matches did.
-        let worth_sorting = saves_work(rest_hashes.len(), estimate_groups(rest_hashes));
-        let mut rest: Vec<(u64, u32)> = vec![];
-        let mut groups = vec![];
-        if worth_sorting {
-            rest = rest_hashes
-                .iter()
-                .copied()
-                .zip(probe_rows[group_from..].iter().copied())
-                .collect();
-            rest.sort_unstable_by_key(|(hash, _)| *hash);
-            groups = rest.chunk_by(|a, b| a.0 == b.0).collect();
+        let mut rest = vec![];
+        if saves_work(
+            probe_rows.len() - group_from,
+            estimate_groups(&hashes[group_from..]),
+        ) {
+            rest = sort_by_hash(&hashes[group_from..], &probe_rows[group_from..]);
         }
-        if !worth_sorting || !saves_work(rest.len(), groups.len()) {
-            self.lookup_each_row(
+        let mut groups = hash_groups(&rest);
+        if rest.is_empty() || !saves_work(rest.len(), groups.len()) {
+            self.wasted_matches = 0;
+            let Some((offset, _)) = self.lookup_each_row(
                 scope_map,
                 hashes,
                 (!all_rows).then_some(probe_rows.as_slice()),
                 offset,
                 &to_build_row,
-                usize::MAX,
+                max_wasted_matches,
                 lookup,
-            )?;
-            return Ok(());
+            )?
+            else {
+                return Ok(());
+            };
+            let group_from = match offset {
+                AtRow { row } | MidChain { row, .. } => row,
+            };
+            if rest.is_empty() {
+                rest = sort_by_hash(&hashes[group_from..], &probe_rows[group_from..]);
+            } else {
+                // `probe_rows` is increasing, so the rows from `group_from` on
+                // are those not below its row, and keeping them keeps the
+                // order by hash.
+                match probe_rows.get(group_from) {
+                    Some(&first) => rest.retain(|(_, row)| *row >= first),
+                    None => rest.clear(),
+                }
+            }
+            groups = hash_groups(&rest);
         }
 
         #[cfg(test)]
@@ -1529,6 +1676,10 @@ where
         other_rows: impl Iterator<Item = O>,
         to_pair: impl Fn(D, O) -> (u64, u32),
     ) -> Result<()> {
+        #[cfg(test)]
+        {
+            self.max_decided_rows = self.max_decided_rows.max(decided_rows.len());
+        }
         for other_row in other_rows {
             // Refresh only after a chunk was sent, so the cost of the refresh
             // stays proportional to the pairs already evaluated.
@@ -1721,8 +1872,11 @@ mod tests {
             let hash = |key: u64| key % self.hash_modulus;
 
             let mut foreign_marks = vec![];
+            let (mut sends, mut sent_pairs) = (0, 0);
             let mark = |build: UInt64Array, probe: UInt32Array| {
                 assert!(build.len() <= self.batch_size);
+                sends += 1;
+                sent_pairs += build.len();
                 if self.foreign_marks {
                     let row = (self.filter_seed as usize)
                         .wrapping_add(foreign_marks.len().wrapping_mul(0x9E37_79B9))
@@ -1769,14 +1923,14 @@ mod tests {
                     &mut LookupBuffers::default(),
                 )?;
             } else {
-                pairs.cross_product(
-                    self.build_rows.iter().copied(),
-                    self.probe_rows.iter().copied(),
-                )?;
+                pairs.cross_product(self.build_rows.iter().copied(), || {
+                    self.probe_rows.iter().copied()
+                })?;
             }
             let (considered_groups, grouped) = (pairs.considered_groups, pairs.grouped);
             let looked_up_matches = pairs.looked_up_matches;
             let (build_lookups, mark_checks) = (pairs.build_lookups, pairs.mark_checks);
+            let max_decided_rows = pairs.max_decided_rows;
             pairs.finish()?;
             let bitmap = bitmap.into_inner().finish();
             let marks = (0..bitmap.len()).map(|row| bitmap.value(row)).collect();
@@ -1788,6 +1942,9 @@ mod tests {
                     looked_up_matches,
                     build_lookups,
                     mark_checks,
+                    max_decided_rows,
+                    sends,
+                    sent_pairs,
                     foreign_marks,
                 },
             ))
@@ -1801,6 +1958,10 @@ mod tests {
         looked_up_matches: usize,
         build_lookups: usize,
         mark_checks: usize,
+        max_decided_rows: usize,
+        /// The chunks of pairs sent, and the pairs in them.
+        sends: usize,
+        sent_pairs: usize,
         /// The rows that `foreign_marks` marked.
         foreign_marks: Vec<usize>,
     }
@@ -1890,6 +2051,155 @@ mod tests {
         for mark_build_rows in [true, false] {
             assert!(equal_scopes(mark_build_rows, 400, 1, 1)?.grouped);
         }
+        Ok(())
+    }
+
+    /// A hot scope among rare ones: `rare` probe rows of their own scope
+    /// each, then `hot` probe rows of the hot scope, then `rare` more of their
+    /// own scope. Each rare scope holds one build row, and the hot scope 7,679.
+    /// The rare rows keep the estimated groups small, but the hot group alone
+    /// saves much work, so the pairing must still switch to groups instead of
+    /// walking the hot scope once per probe row.
+    #[test]
+    fn hot_scope_among_rare_ones_is_grouped() -> Result<()> {
+        // With marks on the probe rows, the average group fills no chunk. With
+        // marks on the build rows, the groups hold fewer than two rows on
+        // average.
+        for (mark_build_rows, rare, hot) in [(false, 256, 7680), (true, 4096, 2048)] {
+            let rare_scopes = rare as u64;
+            // Scope 0 is hot.
+            let build_keys: Vec<u64> = (1..=2 * rare_scopes)
+                .chain(std::iter::repeat_n(0, 7679))
+                .collect();
+            let probe_keys: Vec<u64> = (1..=rare_scopes)
+                .chain(std::iter::repeat_n(0, hot))
+                .chain(rare_scopes + 1..=2 * rare_scopes)
+                .collect();
+            let num_marked = if mark_build_rows {
+                build_keys.len()
+            } else {
+                probe_keys.len()
+            };
+            // Every pair passes, and every scope is on both sides.
+            let case = Case {
+                mark_build_rows,
+                through_scope_map: true,
+                batch_size: 8192,
+                hash_modulus: u64::MAX,
+                probe_rows: (0..probe_keys.len() as u32).collect(),
+                build_rows: (0..build_keys.len() as u64).collect(),
+                build_keys,
+                probe_keys,
+                marked_before: vec![false; num_marked],
+                filter_seed: 0,
+                filter_one_in: 1,
+                foreign_marks: false,
+            };
+            let (marks, stats) = case.run()?;
+            assert!(marks.iter().all(|marked| *marked));
+            assert!(stats.grouped, "marks on build rows: {mark_build_rows}");
+            // The matches of two rounds of lookups per probe row, each until
+            // it wastes enough matches to pay for a sort, and a few chunks of
+            // the hot scope. The lookups that skip the check of the build row
+            // marks count no wasted match, so a round can last a little
+            // longer. A lookup per probe row walks the hot scope for each of
+            // its probe rows, tens of millions of matches.
+            let bound = 3 * WASTED_MATCHES_PER_SORTED_ROW * (2 * rare + hot) + 4 * 8192;
+            assert!(
+                stats.looked_up_matches <= bound,
+                "marks on build rows: {mark_build_rows}: {} matches walked, bound {bound}",
+                stats.looked_up_matches
+            );
+        }
+        Ok(())
+    }
+
+    /// A scope map that the memory pool declines is built on a later use,
+    /// once the pool has room for it.
+    #[test]
+    fn declined_scope_map_is_built_once_memory_is_free() -> Result<()> {
+        use crate::metrics::ExecutionPlanMetricsSet;
+        use datafusion_execution::memory_pool::{
+            GreedyMemoryPool, MemoryConsumer, MemoryPool,
+        };
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
+        let other = MemoryConsumer::new("other").register(&pool);
+        other.try_grow(1 << 20)?;
+        let scope_map = BuildScopeMap {
+            map: OnceLock::new(),
+            reservation: Mutex::new(MemoryConsumer::new("scope map").register(&pool)),
+            metrics: BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new()),
+        };
+        let scope_values: Vec<ArrayRef> =
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))];
+        let random_state = RandomState::with_seed(0);
+        assert!(
+            scope_map
+                .get_or_try_init(&scope_values, &random_state)?
+                .is_none()
+        );
+        other.free();
+        assert!(
+            scope_map
+                .get_or_try_init(&scope_values, &random_state)?
+                .is_some()
+        );
+        assert!(scope_map.reservation.lock().size() > 0);
+        Ok(())
+    }
+
+    /// A cross product with marks on the build rows holds at most a batch of
+    /// build rows at once, however many build rows there are. No pair passes,
+    /// so no row is marked and every build row is paired.
+    #[test]
+    fn cross_product_chunks_the_build_rows() -> Result<()> {
+        let (num_build, batch_size) = (10_000, 64);
+        let case = Case {
+            mark_build_rows: true,
+            through_scope_map: false,
+            batch_size,
+            hash_modulus: 1,
+            build_keys: vec![0; num_build],
+            probe_keys: vec![0; 3],
+            probe_rows: (0..3).collect(),
+            build_rows: (0..num_build as u64).collect(),
+            marked_before: vec![false; num_build],
+            filter_seed: 0,
+            filter_one_in: u64::MAX,
+            foreign_marks: false,
+        };
+        let (marks, stats) = case.run()?;
+        assert!(!marks.contains(&true));
+        assert_eq!(stats.max_decided_rows, batch_size);
+        Ok(())
+    }
+
+    /// A cross product with marks on the build rows fills its chunks with
+    /// unmarked build rows. With one unmarked build row in each batch of build
+    /// rows, all of them fit one chunk, and the pairs of the first probe row
+    /// mark them all at once.
+    #[test]
+    fn cross_product_fills_chunks_with_unmarked_build_rows() -> Result<()> {
+        let (batch_size, num_probe) = (64, 64);
+        let num_build = batch_size * batch_size;
+        let case = Case {
+            mark_build_rows: true,
+            through_scope_map: false,
+            batch_size,
+            hash_modulus: 1,
+            build_keys: vec![0; num_build],
+            probe_keys: vec![0; num_probe],
+            probe_rows: (0..num_probe as u32).collect(),
+            build_rows: (0..num_build as u64).collect(),
+            marked_before: (0..num_build).map(|row| row % batch_size != 0).collect(),
+            filter_seed: 0,
+            filter_one_in: 1,
+            foreign_marks: false,
+        };
+        let (marks, stats) = case.run()?;
+        assert!(marks.iter().all(|marked| *marked));
+        assert_eq!((stats.sends, stats.sent_pairs), (1, batch_size));
         Ok(())
     }
 
