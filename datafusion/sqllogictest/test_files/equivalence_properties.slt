@@ -135,6 +135,30 @@ SELECT l.c, s.x FROM (SELECT c FROM t) l CROSS JOIN (SELECT x FROM small WHERE x
 2 1
 
 ###
+### Functions whose ordering cannot be derived from their input
+###
+
+# sqrt has no ordering that can be derived from c, because c may be negative.
+# The inner ORDER BY still makes the subquery sorted by sqrt(c), so the
+# window's ORDER BY sqrt(c) needs no second sort.
+query TT
+EXPLAIN SELECT c, row_number() OVER (ORDER BY sqrt(c)) FROM (SELECT c FROM t ORDER BY sqrt(c) LIMIT 5);
+----
+physical_plan
+01)BoundedWindowAggExec: wdw=[row_number() ORDER BY [sqrt(t.c) ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [sqrt(t.c) ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+02)--SortExec: TopK(fetch=5), expr=[sqrt(CAST(c@0 AS Float64)) ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+query II
+SELECT c, row_number() OVER (ORDER BY sqrt(c)) FROM (SELECT c FROM t ORDER BY sqrt(c) LIMIT 5);
+----
+0 1
+1 2
+2 3
+3 4
+4 5
+
+###
 ### Order-preserving repartition of an unbounded input
 ###
 

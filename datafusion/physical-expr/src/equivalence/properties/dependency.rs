@@ -594,23 +594,49 @@ mod tests {
 
     /// `sqrt(a)` has no ordering that can be derived from `a`, which may be
     /// negative, so its ordering function fails. A plan sorted on `sqrt(a)`
-    /// still satisfies a requirement on `sqrt(a)`.
+    /// still satisfies a requirement on `sqrt(a)` with the same sort options,
+    /// and nothing else makes `sqrt(a)` ordered.
     #[test]
     fn test_known_ordering_when_expr_properties_fail() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        let a = col("a", &schema)?;
         let sqrt_a: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
             datafusion_functions::math::sqrt(),
-            vec![col("a", &schema)?],
+            vec![Arc::clone(&a)],
             &schema,
             Arc::new(ConfigOptions::default()),
         )?);
-        let ordering: LexOrdering =
-            [PhysicalSortExpr::new_default(Arc::clone(&sqrt_a)).asc()].into();
-        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        eq_properties.add_ordering(ordering.clone());
 
-        assert!(eq_properties.ordering_satisfy(ordering)?);
+        // `sqrt(a)` is nullable, so both the direction and the NULLS position
+        // must match:
+        let all_options = [(false, false), (false, true), (true, false), (true, true)]
+            .map(|(descending, nulls_first)| SortOptions {
+                descending,
+                nulls_first,
+            });
+        for known in all_options {
+            let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+            eq_properties
+                .add_ordering([PhysicalSortExpr::new(Arc::clone(&sqrt_a), known)]);
+            for required in all_options {
+                let required_ordering =
+                    [PhysicalSortExpr::new(Arc::clone(&sqrt_a), required)];
+                assert_eq!(
+                    eq_properties.ordering_satisfy(required_ordering)?,
+                    known == required,
+                    "known {known:?}, required {required:?}"
+                );
+            }
+        }
+
+        // Without a known ordering on `sqrt(a)`, it is not ordered, even when
+        // `a` is:
+        let required_ordering = [PhysicalSortExpr::new_default(Arc::clone(&sqrt_a))];
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        assert!(!eq_properties.ordering_satisfy(required_ordering.clone())?);
+        eq_properties.add_ordering([PhysicalSortExpr::new_default(a)]);
+        assert!(!eq_properties.ordering_satisfy(required_ordering)?);
         Ok(())
     }
 
