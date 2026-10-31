@@ -22,12 +22,13 @@ use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 
-/// Largest result, in bytes, that `repeat` produces for `LargeUtf8`.
+/// Largest result, in bytes, that `repeat` produces for `LargeUtf8`, both for a
+/// single value and for the total of an array.
 ///
 /// `LargeUtf8` offsets would allow up to `i64::MAX` bytes, but the result is
 /// allocated up front, and an allocation larger than the address space aborts
 /// the process instead of returning an error. This cap matches DuckDB's string
-/// size limit and is twice the `Utf8` limit of `i32::MAX`.
+/// size limit and is about twice the `Utf8` limit of `i32::MAX`.
 const LARGE_UTF8_MAX_SIZE: usize = u32::MAX as usize;
 
 #[user_doc(
@@ -234,6 +235,15 @@ fn repeat(string_array: &ArrayRef, count_array: &ArrayRef) -> Result<ArrayRef> {
             let string_arr = string_array.as_string::<i64>();
             let (total_capacity, max_item_capacity) =
                 calculate_capacities(&string_arr, number_array, LARGE_UTF8_MAX_SIZE)?;
+            // The builder allocates the whole output up front, so the cap must
+            // also bound the total, not only each row.
+            if total_capacity > LARGE_UTF8_MAX_SIZE {
+                return exec_err!(
+                    "string size overflow on repeat, max size is {}, but got {}",
+                    LARGE_UTF8_MAX_SIZE,
+                    total_capacity
+                );
+            }
             let builder = GenericStringArrayBuilder::<i64>::with_capacity(
                 string_array.len(),
                 total_capacity,
@@ -546,6 +556,23 @@ mod tests {
     fn test_repeat_large_string_array_exceeds_max_size() {
         let strings: ArrayRef = Arc::new(LargeStringArray::from(vec![Some("a")]));
         let counts: ArrayRef = Arc::new(Int64Array::from(vec![Some(1 << 60)]));
+
+        let err = super::repeat(&strings, &counts).unwrap_err().to_string();
+        assert!(
+            err.contains("string size overflow on repeat"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_repeat_large_string_array_total_exceeds_max_size() {
+        // Each row is under the cap, but together they exceed it.
+        let strings: ArrayRef =
+            Arc::new(LargeStringArray::from(vec![Some("a"), Some("a")]));
+        let counts: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(3_000_000_000),
+            Some(3_000_000_000),
+        ]));
 
         let err = super::repeat(&strings, &counts).unwrap_err().to_string();
         assert!(
