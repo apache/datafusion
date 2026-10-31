@@ -1261,6 +1261,56 @@ fn coerce_frame_bound(
     }
 }
 
+/// Reject negative RANGE offsets. Numeric strings are checked only after a
+/// successful numeric coercion, before rounding can hide their original sign.
+/// Interval ordering alone is insufficient here:
+/// a positive month can mask a negative day in a lexicographic comparison.
+fn validate_range_frame_bound(bound: &WindowFrameBound) -> Result<()> {
+    let offset = match bound {
+        WindowFrameBound::Preceding(offset) | WindowFrameBound::Following(offset)
+            if !offset.is_null() =>
+        {
+            offset
+        }
+        _ => return Ok(()),
+    };
+
+    let negative = match offset {
+        ScalarValue::Utf8(Some(value)) => value
+            .trim_start()
+            .strip_prefix('-')
+            .is_some_and(|magnitude| {
+                // Ignore exponent digits: -0e10 is zero, but -1e-1000 is
+                // negative even if floating-point coercion underflows to -0.
+                magnitude
+                    .split(['e', 'E'])
+                    .next()
+                    .unwrap_or_default()
+                    .bytes()
+                    .any(|digit| matches!(digit, b'1'..=b'9'))
+            }),
+        ScalarValue::IntervalYearMonth(Some(months)) => *months < 0,
+        ScalarValue::IntervalDayTime(Some(interval)) => {
+            interval.days < 0 || interval.milliseconds < 0
+        }
+        ScalarValue::IntervalMonthDayNano(Some(interval)) => {
+            interval.months < 0 || interval.days < 0 || interval.nanoseconds < 0
+        }
+        ScalarValue::Float16(Some(value)) => value.to_f32() < 0.0,
+        ScalarValue::Float32(Some(value)) => *value < 0.0,
+        ScalarValue::Float64(Some(value)) => *value < 0.0,
+        _ => offset < &ScalarValue::new_zero(&offset.data_type())?,
+    };
+
+    if negative {
+        plan_err!(
+            "Invalid window frame: RANGE frame offsets must be non-negative: {bound}"
+        )
+    } else {
+        Ok(())
+    }
+}
+
 /// The type that RANGE frame offsets are coerced to for an ORDER BY column of
 /// `col_type`, or `None` if there is no offset type to coerce to (the column
 /// type has no arithmetic). `None` does not mean the type is unusable in a
@@ -1402,9 +1452,21 @@ fn coerce_window_frame(
         }
         WindowFrameUnits::Rows | WindowFrameUnits::Groups => DataType::UInt64,
     };
+    let original_start = window_frame.start_bound.clone();
+    let original_end = window_frame.end_bound.clone();
     window_frame.start_bound =
         coerce_frame_bound(&target_type, window_frame.start_bound)?;
     window_frame.end_bound = coerce_frame_bound(&target_type, window_frame.end_bound)?;
+    if window_frame.units == WindowFrameUnits::Range {
+        if target_type.is_numeric() {
+            // Coercion can turn negative offsets into zero or an unbounded
+            // bound. Validate the successfully parsed numeric input as well.
+            validate_range_frame_bound(&original_start)?;
+            validate_range_frame_bound(&original_end)?;
+        }
+        validate_range_frame_bound(&window_frame.start_bound)?;
+        validate_range_frame_bound(&window_frame.end_bound)?;
+    }
     Ok(window_frame)
 }
 
@@ -1824,10 +1886,12 @@ mod test {
 
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
+    use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano};
     use insta::assert_snapshot;
 
     use crate::analyzer::type_coercion::{
         TypeCoercion, TypeCoercionRewriter, coerce_case_expression,
+        validate_range_frame_bound,
     };
     use crate::analyzer::{Analyzer, AnalyzerRule};
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
@@ -1836,6 +1900,7 @@ mod test {
     use datafusion_common::{
         DFSchema, DFSchemaRef, Result, ScalarValue, Spans, TableReference,
     };
+    use datafusion_expr::WindowFrameBound;
     use datafusion_expr::expr::{
         self, InSubquery, Like, ScalarFunction, SetComparison, SetQuantifier,
     };
@@ -1848,6 +1913,59 @@ mod test {
         Volatility, cast, col, create_udaf, grouping_set, is_true, lit, placeholder,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
+
+    #[test]
+    fn test_validate_range_frame_bound() -> Result<()> {
+        let invalid = [
+            ScalarValue::Int64(Some(-1)),
+            ScalarValue::Float64(Some(-0.5)),
+            ScalarValue::IntervalYearMonth(Some(-1)),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTime::new(1, -1))),
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::new(1, -40, 0))),
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::new(1, 1, -1))),
+        ];
+        for offset in invalid {
+            for bound in [
+                WindowFrameBound::Preceding(offset.clone()),
+                WindowFrameBound::Following(offset),
+            ] {
+                let error = validate_range_frame_bound(&bound).unwrap_err();
+                assert!(error.to_string().contains("must be non-negative"));
+                assert!(error.to_string().contains(&bound.to_string()));
+            }
+        }
+
+        for offset in [
+            ScalarValue::Int64(Some(0)),
+            ScalarValue::Float64(Some(-0.0)),
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::new(1, 2, 3))),
+            ScalarValue::IntervalMonthDayNano(None),
+        ] {
+            validate_range_frame_bound(&WindowFrameBound::Preceding(offset))?;
+        }
+        validate_range_frame_bound(&WindowFrameBound::CurrentRow)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_original_numeric_range_offset() -> Result<()> {
+        for value in ["-129", "-0.001", "-1e-1000", "-0.001E10"] {
+            for bound in [
+                WindowFrameBound::Preceding(ScalarValue::Utf8(Some(value.into()))),
+                WindowFrameBound::Following(ScalarValue::Utf8(Some(value.into()))),
+            ] {
+                let error = validate_range_frame_bound(&bound).unwrap_err();
+                assert!(error.to_string().contains("must be non-negative"));
+                assert!(error.to_string().contains(&bound.to_string()));
+            }
+        }
+        for value in ["129", "0.001", "-0", "-0.0", "-0e10", "-0.0E-10"] {
+            validate_range_frame_bound(&WindowFrameBound::Preceding(ScalarValue::Utf8(
+                Some(value.into()),
+            )))?;
+        }
+        Ok(())
+    }
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
