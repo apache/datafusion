@@ -159,12 +159,14 @@ where
     T::Native: FloatSemantics,
 {
     let arr = array.as_primitive::<T>();
-    // Not `any()`: its early exit checks one value at a time, while a fold
-    // over every value vectorizes.
-    let needs_normalization = arr
-        .values()
-        .iter()
-        .fold(false, |acc, v| acc | v.needs_normalization());
+    // Not `any()` over the values: its early exit checks one value at a time.
+    // A fold over a chunk vectorizes, and stopping after the first chunk with
+    // a match keeps an early exit.
+    let needs_normalization = arr.values().chunks(1024).any(|chunk| {
+        chunk
+            .iter()
+            .fold(false, |acc, v| acc | v.needs_normalization())
+    });
     if !needs_normalization {
         return Arc::clone(array);
     }
@@ -278,6 +280,21 @@ mod tests {
 
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         assert!(Arc::ptr_eq(&normalize_floats(&array), &array));
+    }
+
+    #[test]
+    fn normalize_floats_finds_negative_zero_in_any_chunk() {
+        // The check runs over chunks of 1024 values, so cover chunk ends and
+        // a partial last chunk.
+        for pos in [0, 1023, 1024, 2047, 2048, 2499] {
+            let mut values = vec![1.5_f64; 2500];
+            values[pos] = -0.0;
+            let array: ArrayRef = Arc::new(Float64Array::from(values));
+            let normalized = normalize_floats(&array);
+            assert!(!Arc::ptr_eq(&normalized, &array), "pos {pos}");
+            let normalized = normalized.as_primitive::<Float64Type>();
+            assert_eq!(normalized.value(pos).to_bits(), 0.0_f64.to_bits());
+        }
     }
 
     #[test]
