@@ -726,6 +726,69 @@ FROM t1, LATERAL (
 ) AS sub
 ORDER BY t1.id;
 
+# HAVING count(*) > 1 is false on an empty group, so it is not pulled up and
+# stays above the aggregate. The inner lateral join must drop t1.id=2 (cnt=1)
+# and t1.id=3 (cnt=0), so until that is supported the query errors instead
+# of returning them with a NULL cnt.
+# Expected result once supported: only t1.id=1 (cnt=2).
+statement error OuterReferenceColumn
+SELECT t1.id, sub.cnt
+FROM t1, LATERAL (
+    SELECT count(*) AS cnt FROM t2 WHERE t2.t1_id = t1.id HAVING count(*) > 1
+) AS sub
+ORDER BY t1.id;
+
+# The same with a HAVING on another aggregate than the one returned.
+statement error OuterReferenceColumn
+SELECT t1.id, sub.cnt
+FROM t1, LATERAL (
+    SELECT count(*) AS cnt FROM t2 WHERE t2.t1_id = t1.id HAVING max(t2.id) > 15
+) AS sub
+ORDER BY t1.id;
+
+# A left lateral join keeps the outer rows the HAVING removes, with NULLs, so
+# it is still decorrelated when the HAVING does not read an outer column.
+query II
+SELECT t1.id, sub.cnt
+FROM t1 LEFT JOIN LATERAL (
+    SELECT count(*) AS cnt FROM t2 WHERE t2.t1_id = t1.id HAVING count(*) > 1
+) AS sub ON true
+ORDER BY t1.id;
+----
+1 2
+2 NULL
+3 NULL
+
+# A HAVING that reads an outer column is moved into the join condition, where
+# rows it rejects became a count of 0, for an inner and a left lateral join.
+# Expected result once supported: only t1.id=1 (cnt=2) for the inner join, and
+# (1, 2), (2, NULL), (3, NULL) for the left join.
+statement error OuterReferenceColumn
+SELECT t1.id, sub.cnt
+FROM t1, LATERAL (
+    SELECT count(*) AS cnt FROM t2 WHERE t2.t1_id = t1.id HAVING count(*) > t1.id
+) AS sub
+ORDER BY t1.id;
+
+statement error OuterReferenceColumn
+SELECT t1.id, sub.cnt
+FROM t1 LEFT JOIN LATERAL (
+    SELECT count(*) AS cnt FROM t2 WHERE t2.t1_id = t1.id HAVING count(*) > t1.id
+) AS sub ON true
+ORDER BY t1.id;
+
+# With GROUP BY, a group the HAVING removes has no row at all, so an inner
+# lateral join is still decorrelated.
+query III
+SELECT t1.id, sub.t1_id, sub.cnt
+FROM t1, LATERAL (
+    SELECT t2.t1_id, count(*) AS cnt FROM t2 WHERE t2.t1_id = t1.id
+    GROUP BY t2.t1_id HAVING count(*) > 1
+) AS sub
+ORDER BY t1.id;
+----
+1 1 2
+
 # --- Correlated filter on the nullable side of an outer join ---
 # https://github.com/apache/datafusion/issues/25507
 # Pulling `t2.t1_id = t1.id` above the LEFT JOIN would drop the t3 rows that
