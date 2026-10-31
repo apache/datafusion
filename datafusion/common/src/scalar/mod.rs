@@ -2782,6 +2782,22 @@ impl ScalarValue {
         }
     }
 
+    /// Whether this is a float `0.0` or `-0.0`, including one inside a
+    /// dictionary. The two zeros are equal but sort apart (see
+    /// [`compare_floats`]), so a sort boundary at a zero has to account for
+    /// both.
+    ///
+    /// [`compare_floats`]: crate::float_semantics::compare_floats
+    pub fn is_float_zero(&self) -> bool {
+        match self {
+            ScalarValue::Float16(Some(v)) => f32::from(*v) == 0.0,
+            ScalarValue::Float32(Some(v)) => *v == 0.0,
+            ScalarValue::Float64(Some(v)) => *v == 0.0,
+            ScalarValue::Dictionary(_, inner) => inner.is_float_zero(),
+            _ => false,
+        }
+    }
+
     /// whether this value is null or not.
     pub fn is_null(&self) -> bool {
         match self {
@@ -12075,6 +12091,30 @@ mod tests {
         assert_eq!(arr.len(), 1);
         assert_eq!(arr.null_count(), 0);
         assert_eq!(arr.num_columns(), 0);
+    }
+
+    #[test]
+    fn is_float_zero_matches_both_zeros() {
+        for v in [
+            ScalarValue::Float64(Some(0.0)),
+            ScalarValue::Float64(Some(-0.0)),
+            ScalarValue::Float32(Some(-0.0)),
+            ScalarValue::Float16(Some(f16::NEG_ZERO)),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Float64(Some(-0.0))),
+            ),
+        ] {
+            assert!(v.is_float_zero(), "{v:?}");
+        }
+        for v in [
+            ScalarValue::Float64(None),
+            ScalarValue::Float64(Some(f64::MIN_POSITIVE)),
+            ScalarValue::Float32(Some(f32::NAN)),
+            ScalarValue::Int32(Some(0)),
+        ] {
+            assert!(!v.is_float_zero(), "{v:?}");
+        }
     }
 
     #[test]

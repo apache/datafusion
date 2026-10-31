@@ -630,13 +630,21 @@ impl TopK {
                 break;
             }
 
+            // The heap orders `-0.0` before `0.0`, but comparisons treat them as
+            // equal (#22835), so `col < 0.0 OR (col = 0.0 AND ...)` would drop
+            // `-0.0` rows that belong in the TopK. For a zero threshold, use a
+            // non-strict bound that keeps both zeros and do not filter on any
+            // later key.
+            let float_zero = value.is_float_zero();
+
             // Create the appropriate operator based on sort order
-            let op = if sort_expr.options.descending {
+            let op = match (sort_expr.options.descending, float_zero) {
                 // For descending sort, we want col > threshold (exclude smaller values)
-                Operator::Gt
-            } else {
+                (true, false) => Operator::Gt,
+                (true, true) => Operator::GtEq,
                 // For ascending sort, we want col < threshold (exclude larger values)
-                Operator::Lt
+                (false, false) => Operator::Lt,
+                (false, true) => Operator::LtEq,
             };
 
             let value_null = value.is_null();
@@ -694,6 +702,10 @@ impl TopK {
                     prev_sort_expr =
                         Some(Arc::new(BinaryExpr::new(p, Operator::And, eq_expr)));
                 }
+            }
+
+            if float_zero {
+                break;
             }
         }
 
