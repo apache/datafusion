@@ -290,11 +290,18 @@ impl JoinHashMapType for JoinHashMapU32 {
                     match_indices,
                 )
             }
-            KeyRows::Grouped { groups } => get_grouped_matched_indices(
-                &self.map,
+            KeyRows::Grouped { groups } => grouped_matched_indices(
                 groups,
-                hash_values,
-                valid_keys,
+                hash_values.len(),
+                |row| {
+                    // NULL keys cannot match any build row
+                    if valid_keys.is_some_and(|valid| valid.is_null(row)) {
+                        return None;
+                    }
+                    let hash = hash_values[row];
+                    let (_, pos) = self.map.find(hash, |(h, _)| hash == *h)?;
+                    Some(group_rows_range(groups, pos.as_usize()))
+                },
                 limit,
                 offset,
                 input_indices,
@@ -405,11 +412,18 @@ impl JoinHashMapType for JoinHashMapU64 {
                     match_indices,
                 )
             }
-            KeyRows::Grouped { groups } => get_grouped_matched_indices(
-                &self.map,
+            KeyRows::Grouped { groups } => grouped_matched_indices(
                 groups,
-                hash_values,
-                valid_keys,
+                hash_values.len(),
+                |row| {
+                    // NULL keys cannot match any build row
+                    if valid_keys.is_some_and(|valid| valid.is_null(row)) {
+                        return None;
+                    }
+                    let hash = hash_values[row];
+                    let (_, pos) = self.map.find(hash, |(h, _)| hash == *h)?;
+                    Some(group_rows_range(groups, pos.as_usize()))
+                },
                 limit,
                 offset,
                 input_indices,
@@ -435,7 +449,7 @@ impl JoinHashMapType for JoinHashMapU64 {
     }
 }
 
-use crate::joins::chain::{emit_grouped_rows, traverse_chain};
+use crate::joins::chain::{grouped_matched_indices, traverse_chain};
 use crate::joins::join_hash_map::ProbeOffset::{AtRow, MidChain};
 
 /// See [`JoinHashMapType::group_rows`].
@@ -469,6 +483,16 @@ where
     reservation.shrink(freed);
     mem_used.sub(freed);
     true
+}
+
+/// Returns the range in `groups` of the rows of the group at `pos`, which
+/// starts with their number.
+#[inline]
+pub(crate) fn group_rows_range<T: ArrowNativeType>(
+    groups: &[T],
+    pos: usize,
+) -> (usize, usize) {
+    (pos + 1, pos + 1 + groups[pos].as_usize())
 }
 
 /// Returns the length of the groups of the `map_len` hash values whose chains
@@ -799,88 +823,6 @@ where
                 next_chain,
                 row_idx,
                 idx,
-                &mut remaining_output,
-                input_indices,
-                match_indices,
-                is_last,
-            ) {
-                return Some(next_offset);
-            }
-        }
-    }
-    None
-}
-
-/// [`get_matched_indices_with_limit_offset`] for the rows grouped by
-/// [`JoinHashMapType::group_rows`]: the matches of a probe row are the rows of
-/// its group.
-#[expect(clippy::too_many_arguments)]
-fn get_grouped_matched_indices<T>(
-    map: &HashTable<(u64, T)>,
-    groups: &[T],
-    hash_values: &[u64],
-    valid_keys: Option<&NullBuffer>,
-    limit: usize,
-    offset: ProbeOffset,
-    input_indices: &mut Vec<u32>,
-    match_indices: &mut Vec<u64>,
-) -> Option<ProbeOffset>
-where
-    T: Copy + Into<u64>,
-{
-    // Clear the buffer before producing new results
-    input_indices.clear();
-    match_indices.clear();
-    let mut remaining_output = limit;
-
-    // The position of the group of `hash`, and the end of its rows
-    let find_group = |hash: u64| {
-        map.find(hash, |(h, _)| hash == *h).map(|(_, pos)| {
-            let pos: u64 = (*pos).into();
-            let pos = pos as usize;
-            let len: u64 = groups[pos].into();
-            (pos, pos + 1 + len as usize)
-        })
-    };
-    let hash_values_len = hash_values.len();
-
-    let to_skip = match offset {
-        AtRow { row: idx } => idx,
-        // Resume at position `next` of the group of probe row `idx`
-        MidChain {
-            row: idx,
-            next: next_pos,
-        } => {
-            let (_, end) = find_group(hash_values[idx])
-                .expect("a probe row resumed mid-group has a group");
-            let is_last = idx == hash_values_len - 1;
-            if let Some(next_offset) = emit_grouped_rows(
-                &groups[..end],
-                next_pos as usize,
-                idx,
-                &mut remaining_output,
-                input_indices,
-                match_indices,
-                is_last,
-            ) {
-                return Some(next_offset);
-            }
-            idx + 1
-        }
-    };
-
-    for (i, &hash) in hash_values[to_skip..].iter().enumerate() {
-        let row_idx = to_skip + i;
-        // NULL keys cannot match any build row
-        if valid_keys.is_some_and(|valid| valid.is_null(row_idx)) {
-            continue;
-        }
-        if let Some((pos, end)) = find_group(hash) {
-            let is_last = row_idx == hash_values_len - 1;
-            if let Some(next_offset) = emit_grouped_rows(
-                &groups[..end],
-                pos + 1,
-                row_idx,
                 &mut remaining_output,
                 input_indices,
                 match_indices,

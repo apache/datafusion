@@ -3222,7 +3222,7 @@ fn build_in_memory(
         let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
 
         array_map_created_count.add(1);
-        if array_map.is_grouped() {
+        if array_map.is_sorted() {
             grouped_map_count.add(1);
         }
         metrics.build_mem_used.add(array_map.size());
@@ -3334,9 +3334,17 @@ fn build_in_memory(
     // Grouping the rows of repeated keys is optional: it keeps the chain if
     // the memory for the groups is not available. Doing it after every
     // reservation the build needs keeps it from making one of them fail.
-    if let Map::HashMap(hashmap) = &mut join_hash_map
-        && hashmap.group_rows(&reservation, &metrics.build_mem_used)
-    {
+    let grouped = match &mut join_hash_map {
+        Map::HashMap(hashmap) => {
+            hashmap.group_rows(&reservation, &metrics.build_mem_used)
+        }
+        Map::ArrayMap(array_map) => array_map.group_rows(
+            &left_values[0],
+            &reservation,
+            &metrics.build_mem_used,
+        )?,
+    };
+    if grouped {
         grouped_map_count.add(1);
     }
 
