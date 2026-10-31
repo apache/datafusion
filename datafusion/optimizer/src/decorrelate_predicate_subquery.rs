@@ -634,29 +634,62 @@ impl InValue {
     }
 
     /// Can either side hold a NULL that its schema does not show? See
-    /// [`type_may_hide_null`].
+    /// [`type_may_hide_null`]. `left` is the outer plan, `subquery` the plan
+    /// that `output_expr` reads, and `right_schema` the schema of the aliased
+    /// subquery.
+    ///
+    /// Each side checks the type of its key and of every column the key
+    /// reads. A cast or a function over a column that hides a NULL can turn
+    /// it into a real NULL under a type that hides none, and the schema still
+    /// declares the result non-nullable.
     fn may_hide_null(
         &self,
-        left_schema: &DFSchema,
+        left: &LogicalPlan,
+        subquery: &LogicalPlan,
         right_schema: &DFSchema,
     ) -> Result<bool> {
-        Ok(type_may_hide_null(&self.value.get_type(left_schema)?)
-            || type_may_hide_null(&self.subquery_column.get_type(right_schema)?))
+        Ok(type_may_hide_null(&self.value.get_type(left.schema())?)
+            || type_may_hide_null(&self.subquery_column.get_type(right_schema)?)
+            || reads_column_that_may_hide_null(&self.value, left)?
+            || reads_column_that_may_hide_null(&self.output_expr, subquery)?)
     }
+}
+
+/// Does `expr` read a column of `plan` whose type may hide a NULL (see
+/// [`type_may_hide_null`])? A column is looked up in the schemas of `plan`
+/// and its inputs. A column found in none of them is assumed to hide one,
+/// which only keeps its element a value key.
+fn reads_column_that_may_hide_null(expr: &Expr, plan: &LogicalPlan) -> Result<bool> {
+    for column in expr.column_refs() {
+        let mut found = false;
+        let mut hides_null = false;
+        plan.apply(|node| {
+            if let Ok((_, field)) = node.schema().qualified_field_from_column(column) {
+                found = true;
+                hides_null |= type_may_hide_null(field.data_type());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        if hides_null || !found {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Can an array of this type hold a NULL in a field declared non-nullable?
 ///
 /// An array of these types can be logically NULL at a slot without a null
-/// bit: a dictionary key that points to a NULL value, a run of NULLs, or a
-/// NULL in the selected union child. The null count covers only the null
-/// bits, so a field inferred from such an array, as
-/// `RecordBatch::try_from_iter` does, is non-nullable although the array
+/// bit: every slot of a `Null` array, a dictionary key that points to a NULL
+/// value, a run of NULLs, or a NULL in the selected union child. The null
+/// count covers only the null bits, so a field inferred from such an array,
+/// as `RecordBatch::try_from_iter` does, is non-nullable although the array
 /// holds NULLs.
 fn type_may_hide_null(data_type: &DataType) -> bool {
     matches!(
         data_type,
-        DataType::Dictionary(_, _)
+        DataType::Null
+            | DataType::Dictionary(_, _)
             | DataType::RunEndEncoded(_, _)
             | DataType::Union(_, _)
     )
@@ -1101,24 +1134,26 @@ fn build_join(
     // would put its row outside every scope, which makes the comparison FALSE
     // instead of UNKNOWN; a value key still sees it.
     let null_aware_value_keys = if null_aware && in_values.len() > 1 {
-        let keeps_value_key = in_values
-            .iter()
+        let mut keyed = in_values
+            .into_iter()
             .zip(elements_may_be_null)
             .map(|(in_value, may_be_null)| {
-                Ok(may_be_null
-                    || in_value.may_hide_null(left.schema(), sub_query_alias.schema())?)
+                let keeps_value_key = may_be_null
+                    || in_value.may_hide_null(
+                        left,
+                        subquery,
+                        sub_query_alias.schema(),
+                    )?;
+                Ok((keeps_value_key, in_value))
             })
             .collect::<Result<Vec<_>>>()?;
-        let (nullable, non_nullable): (Vec<_>, Vec<_>) = in_values
-            .into_iter()
-            .zip(keeps_value_key)
-            .partition(|(_, keeps_value_key)| *keeps_value_key);
-        let null_aware_value_keys = nullable.len();
-        in_values = nullable
-            .into_iter()
-            .chain(non_nullable)
-            .map(|(in_value, _)| in_value)
-            .collect();
+        // A stable sort keeps the order within each group.
+        keyed.sort_by_key(|(keeps_value_key, _)| !keeps_value_key);
+        let null_aware_value_keys = keyed
+            .iter()
+            .take_while(|(keeps_value_key, _)| *keeps_value_key)
+            .count();
+        in_values = keyed.into_iter().map(|(_, in_value)| in_value).collect();
         null_aware_value_keys
     } else {
         in_values.len().max(1)
