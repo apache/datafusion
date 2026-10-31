@@ -205,6 +205,49 @@ statement ok
 DROP TABLE t_double;
 
 ###
+### Equalities
+###
+
+statement ok
+CREATE TABLE eq_t (a BIGINT, b BIGINT, c BIGINT) AS VALUES (1, 1, 2), (3, 3, 4), (5, 5, 0), (2, 2, 3);
+
+# The filter puts a and b in one class, and c and a + 1 in another. The inner
+# ORDER BY a + 1 LIMIT 100 sorts by a member of the second class, so the outer
+# ORDER BY a + 1 is already satisfied and the plan has no second sort.
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM eq_t ORDER BY a + 1 LIMIT 100) WHERE a = b AND c = a + 1 ORDER BY a + 1;
+----
+physical_plan
+01)FilterExec: b@1 = a@0 AND c@2 = a@0 + 1
+02)--SortExec: TopK(fetch=100), expr=[a@0 + 1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query III
+SELECT * FROM (SELECT * FROM eq_t ORDER BY a + 1 LIMIT 100) WHERE a = b AND c = a + 1 ORDER BY a + 1;
+----
+1 1 2
+2 2 3
+3 3 4
+
+statement ok
+DROP TABLE eq_t;
+
+# The two IN lists hold the same values in a different order, so they compare
+# equal but are kept as two members of the class of b. Planning must still
+# finish.
+statement ok
+CREATE TABLE eq_in (a INT, b BOOLEAN) AS VALUES (1, true), (9, false);
+
+query IB rowsort
+SELECT * FROM eq_in WHERE (a IN (1, 2, 3, 4)) = b AND (a IN (4, 3, 2, 1)) = b;
+----
+1 true
+9 false
+
+statement ok
+DROP TABLE eq_in;
+
+###
 ### Order-preserving repartition of an unbounded input
 ###
 

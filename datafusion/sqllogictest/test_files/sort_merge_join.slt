@@ -1129,6 +1129,20 @@ DROP TABLE smj_key_r;
 statement ok
 RESET datafusion.execution.batch_size;
 
+# Regression test for #26623: a filter that equates an expression with one of
+# its own sub-expressions must not make the sort below the join fail the
+# sanity check
+statement ok
+CREATE TABLE smj_self_eq (a INT, b INT) AS VALUES (1, 0), (2, 3);
+
+query IIII
+SELECT * FROM smj_self_eq x JOIN smj_self_eq y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.a;
+----
+1 0 1 0
+
+statement ok
+DROP TABLE smj_self_eq;
+
 # Config reset
 statement ok
 RESET datafusion.optimizer.prefer_hash_join;

@@ -204,6 +204,34 @@ impl EquivalenceClass {
         self.exprs.insert(expr);
     }
 
+    /// Makes sure the canonical expression does not contain another expression
+    /// of this class. Otherwise, with `a + b` as the canonical expression of a
+    /// class that also holds `a`, normalization would replace the `a` inside
+    /// `a + b` and turn `a + b` into `(a + b) + b`.
+    fn promote_sub_expressions(&mut self) {
+        // Each promoted expression is inside the previous canonical
+        // expression, so there are at most as many rounds as members.
+        for _ in 0..self.exprs.len() {
+            let Some(canonical) = self.exprs.first() else {
+                return;
+            };
+            let children = canonical.children();
+            let Some(idx) = self.exprs.iter().skip(1).position(|expr| {
+                // Only the children are searched: an expression equal to the
+                // canonical expression itself is not inside it. The unwrap is
+                // safe because the closure always returns `Ok`.
+                children
+                    .iter()
+                    .any(|child| child.exists(|node| Ok(node == expr)).unwrap())
+            }) else {
+                return;
+            };
+            // `idx` skips the canonical expression, so the expression to
+            // promote is at `idx + 1`.
+            self.exprs.move_index(idx + 1, 0);
+        }
+    }
+
     /// Inserts all the expressions from other into this class.
     pub fn extend(&mut self, other: Self) {
         self.exprs.extend(other.exprs);
@@ -426,21 +454,25 @@ impl EquivalenceGroup {
                 // Update the lookup table for the second class:
                 Self::update_lookup_table(&mut self.map, &other_class, first_idx);
                 self.classes[first_idx].extend(other_class);
+                self.classes[first_idx].promote_sub_expressions();
             }
             (Some(group_idx), None) => {
                 // Right side is new, extend left side's class:
                 self.map.insert(Arc::clone(&right), group_idx);
                 self.classes[group_idx].push(right);
+                self.classes[group_idx].promote_sub_expressions();
             }
             (None, Some(group_idx)) => {
                 // Left side is new, extend right side's class:
                 self.map.insert(Arc::clone(&left), group_idx);
                 self.classes[group_idx].push(left);
+                self.classes[group_idx].promote_sub_expressions();
             }
             (None, None) => {
                 // None of the expressions is among existing classes.
                 // Create a new equivalence class and extend the group.
-                let class = EquivalenceClass::new([left, right]);
+                let mut class = EquivalenceClass::new([left, right]);
+                class.promote_sub_expressions();
                 Self::update_lookup_table(&mut self.map, &class, self.classes.len());
                 self.classes.push(class);
                 return true;
