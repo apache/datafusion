@@ -154,7 +154,10 @@ impl Above {
 enum Step {
     /// A limit node: its bound is folded in and the node removed.
     Limit(RowBound),
-    /// Passes the bound to every child.
+    /// Passes the bound to every child, and drops it here. Below a node with
+    /// several output partitions the bound applies to each partition, so this
+    /// keeps the same rows only when each output partition is one input
+    /// partition (`UnionExec`, `ProjectionExec`).
     Pass,
     /// Combines partitions, so it sees every row and can enforce the whole
     /// bound itself.
@@ -166,11 +169,31 @@ enum Step {
 fn step(plan: &Arc<dyn ExecutionPlan>) -> Step {
     match plan.limit_behavior() {
         LimitBehavior::Limit { skip, fetch } => Step::Limit(RowBound { skip, fetch }),
+        // Below a node whose children have more partitions than it outputs,
+        // the bound would apply to each of them and keep too many rows. The
+        // node takes the bound like a merge: it stays above, and each child
+        // gets a copy.
+        LimitBehavior::CopyToChildren | LimitBehavior::MoveToInput
+            if combines_partitions(plan) =>
+        {
+            Step::Merge
+        }
         LimitBehavior::CopyToChildren | LimitBehavior::MoveToInput => Step::Pass,
         LimitBehavior::Merge => Step::Merge,
         // LimitPushPastWindows handles windows.
         LimitBehavior::Stops | LimitBehavior::Window(_) => Step::Stop,
     }
+}
+
+/// Whether the children of `plan` have more partitions in total than it
+/// outputs.
+fn combines_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let input_partitions: usize = plan
+        .children()
+        .iter()
+        .map(|child| child.output_partitioning().partition_count())
+        .sum();
+    input_partitions > plan.output_partitioning().partition_count()
 }
 
 /// Pushes the bounds of all limit nodes in `plan` down as far as they pass,

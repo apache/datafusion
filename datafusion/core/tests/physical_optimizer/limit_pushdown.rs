@@ -547,6 +547,67 @@ fn merge_without_fetch_gets_offset_rows_below() -> Result<()> {
 }
 
 #[test]
+fn copy_node_with_several_children_and_one_output_partition_keeps_limit_above()
+-> Result<()> {
+    let schema = create_schema();
+    let left = filter_exec(Arc::clone(&schema), stream_exec(&schema))?;
+    let right = filter_exec(Arc::clone(&schema), stream_exec(&schema))?;
+    let combine: Arc<dyn ExecutionPlan> = Arc::new(CombineExec::new(
+        vec![left, right],
+        LimitBehavior::CopyToChildren,
+    ));
+    let global_limit = global_limit_exec(combine, 0, Some(5));
+
+    let after_optimize =
+        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    // Moved below, the limit would keep 5 rows of each child: 10 in total.
+    let optimized = format_plan(&after_optimize);
+    insta::assert_snapshot!(
+        optimized,
+        @r"
+    GlobalLimitExec: skip=0, fetch=5
+      CombineExec: CopyToChildren
+        FilterExec: c3@2 > 0, fetch=5
+          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
+        FilterExec: c3@2 > 0, fetch=5
+          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn move_node_that_merges_partitions_keeps_limit_above() -> Result<()> {
+    let schema = create_schema();
+    let streaming_table = stream_exec(&schema);
+    let repartition = repartition_exec(streaming_table)?;
+    let filter = filter_exec(schema, repartition)?;
+    let combine: Arc<dyn ExecutionPlan> =
+        Arc::new(CombineExec::new(vec![filter], LimitBehavior::MoveToInput));
+    let global_limit = global_limit_exec(combine, 0, Some(5));
+
+    let after_optimize =
+        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    // Moved below, the limit would keep 5 rows of each of the 8 partitions.
+    let optimized = format_plan(&after_optimize);
+    insta::assert_snapshot!(
+        optimized,
+        @r"
+    GlobalLimitExec: skip=0, fetch=5
+      CombineExec: MoveToInput
+        FilterExec: c3@2 > 0, fetch=5
+          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
 fn merges_local_limit_with_local_limit() -> Result<()> {
     let schema = create_schema();
     let empty_exec = empty_exec(schema);
