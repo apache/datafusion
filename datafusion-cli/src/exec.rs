@@ -253,6 +253,7 @@ impl StatementExecutor {
         let physical_plan = df.create_physical_plan().await?;
         let task_ctx = ctx.task_ctx();
         let options = task_ctx.session_config().options();
+        let print_options = adjusted.into_inner();
 
         // Track memory usage for the query result if it's bounded
         let reservation =
@@ -272,14 +273,15 @@ impl StatementExecutor {
                 .print_stream(stream, now, &options.format)
                 .await?;
         } else {
-            // Bounded stream; collected results size is limited by the maxrows option
+            // Non-table formats write every row, so only limit collection when the
+            // selected output format applies the maxrows option.
             let schema = physical_plan.schema();
             let mut stream = execute_stream(physical_plan, task_ctx.clone())?;
             let mut results = vec![];
             let mut row_count = 0_usize;
-            let max_rows = match print_options.maxrows {
-                MaxRows::Unlimited => usize::MAX,
-                MaxRows::Limited(n) => n,
+            let max_rows = match (print_options.format, print_options.maxrows) {
+                (PrintFormat::Table, MaxRows::Limited(n)) => n,
+                _ => usize::MAX,
             };
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
@@ -293,7 +295,7 @@ impl StatementExecutor {
                 }
                 row_count += curr_num_rows;
             }
-            adjusted.into_inner().print_batches(
+            print_options.print_batches(
                 schema,
                 &results,
                 now,
