@@ -32,12 +32,13 @@ use arrow::compute::take_record_batch;
 use arrow::{
     array::{Array, ArrayRef, RecordBatchOptions, UInt32Array, UInt32Builder},
     compute::{concat, concat_batches, sort_to_indices, take_arrays},
-    datatypes::SchemaRef,
+    datatypes::{DataType, SchemaRef},
     record_batch::RecordBatch,
 };
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::utils::memory::RecordBatchMemoryTracker;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
@@ -45,6 +46,7 @@ use datafusion_common::{
     HashMap, Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, exec_err,
 };
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_physical_expr::window::{
@@ -506,6 +508,9 @@ impl ExecutionPlan for BoundedWindowAggExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let reservation =
+            MemoryConsumer::new(format!("BoundedWindowAggStream[{partition}]"))
+                .register(context.memory_pool());
         let input = self.input.execute(partition, context)?;
         let search_mode = self.get_search_algo()?;
         let stream = Box::pin(BoundedWindowAggStream::new(
@@ -516,6 +521,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             search_mode,
             partition,
             self.state_observer.clone(),
+            reservation,
         )?);
         Ok(stream)
     }
@@ -660,23 +666,44 @@ trait PartitionSearcher: Send {
     /// cannot receive any more values.
     fn mark_partition_end(&self, partition_buffers: &mut PartitionBatches);
 
-    /// Updates `input_buffer` and `partition_buffers` with the new `record_batch`.
+    /// Updates `input_buffer` and `partition_buffers` with the new `record_batch`,
+    /// counting the batches they start and stop holding in `batch_memory`, or
+    /// in `owned_memory` for the batches that only one partition holds.
     fn update_partition_batch(
         &mut self,
         input_buffer: &mut RecordBatch,
         record_batch: RecordBatch,
         window_expr: &[Arc<dyn WindowExpr>],
         partition_buffers: &mut PartitionBatches,
+        batch_memory: &mut RecordBatchMemoryTracker,
+        owned_memory: &mut usize,
     ) -> Result<()> {
         if record_batch.num_rows() == 0 {
             return Ok(());
         }
+        let concat_copies = self
+            .input_schema()
+            .fields()
+            .iter()
+            .all(|field| concat_copies_buffers(field.data_type()));
         let partition_batches =
             self.evaluate_partition_batches(&record_batch, window_expr)?;
         for (partition_row, partition_batch) in partition_batches {
             if let Some(partition_batch_state) = partition_buffers.get_mut(&partition_row)
             {
-                partition_batch_state.extend(&partition_batch)?
+                // `extend` replaces the partition's batch with a new one
+                uncount_partition_batch(
+                    &partition_batch_state.record_batch,
+                    batch_memory,
+                    owned_memory,
+                );
+                partition_batch_state.extend(&partition_batch)?;
+                let batch = &partition_batch_state.record_batch;
+                if concat_copies {
+                    *owned_memory += owned_batch_memory_size(batch);
+                } else {
+                    batch_memory.count_batch(batch);
+                }
             } else {
                 let options = RecordBatchOptions::new()
                     .with_row_count(Some(partition_batch.num_rows()));
@@ -689,6 +716,7 @@ trait PartitionSearcher: Send {
                     partition_batch.columns().to_vec(),
                     &options,
                 )?;
+                batch_memory.count_batch(&partition_batch);
                 let partition_batch_state =
                     PartitionBatchState::new_with_batch(partition_batch);
                 partition_buffers.insert(partition_row, partition_batch_state);
@@ -697,16 +725,62 @@ trait PartitionSearcher: Send {
 
         self.mark_partition_end(partition_buffers);
 
-        *input_buffer = if input_buffer.num_rows() == 0 {
+        let new_input_buffer = if input_buffer.num_rows() == 0 {
             record_batch
         } else {
             concat_batches(self.input_schema(), [input_buffer, &record_batch])?
         };
+        batch_memory.count_batch(&new_input_buffer);
+        batch_memory.uncount_batch(input_buffer);
+        *input_buffer = new_input_buffer;
 
         Ok(())
     }
 
     fn input_schema(&self) -> &SchemaRef;
+}
+
+/// Whether `concat` copies every buffer of `data_type` into new buffers.
+/// It keeps the data buffers of view types and can keep the values of
+/// dictionary and run-end encoded types, which nested types can hold too, so
+/// batches of those types are counted in a [`RecordBatchMemoryTracker`].
+fn concat_copies_buffers(data_type: &DataType) -> bool {
+    data_type.is_primitive()
+        || matches!(
+            data_type,
+            DataType::Null
+                | DataType::Boolean
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::FixedSizeBinary(_)
+        )
+}
+
+/// Stops counting a partition batch that is replaced or dropped: a batch
+/// that can share buffers is counted in `batch_memory`, and a batch that
+/// [`PartitionBatchState::extend`] copied into new buffers in `owned_memory`.
+fn uncount_partition_batch(
+    batch: &RecordBatch,
+    batch_memory: &mut RecordBatchMemoryTracker,
+    owned_memory: &mut usize,
+) {
+    if batch_memory.is_counted(batch) {
+        batch_memory.uncount_batch(batch);
+    } else {
+        *owned_memory -= owned_batch_memory_size(batch);
+    }
+}
+
+/// Memory of the buffers of `batch`, which shares none of them with other
+/// batches, so they need no deduplication
+fn owned_batch_memory_size(batch: &RecordBatch) -> usize {
+    batch
+        .columns()
+        .iter()
+        .map(|array| array.get_buffer_memory_size())
+        .sum()
 }
 
 /// This object encapsulates the algorithm state for a simple linear scan
@@ -1216,6 +1290,18 @@ pub struct BoundedWindowAggStream {
     /// finalized per-window-expression state for every partition key that is
     /// about to be dropped.
     state_observer: Option<Arc<dyn WindowStateObserver>>,
+    /// Counts the buffers held by `input_buffer` and by the partitions whose
+    /// batches can share buffers. A new partition's rows are a slice of an
+    /// input batch, and pruning keeps slices of the same buffers, so each
+    /// buffer is counted once and only replacing or dropping a batch changes
+    /// the count.
+    batch_memory: RecordBatchMemoryTracker,
+    /// Memory of the partition batches that [`PartitionBatchState::extend`]
+    /// copied into new buffers, which no other batch holds, so they are
+    /// counted without the per-buffer bookkeeping of `batch_memory`
+    owned_memory: usize,
+    /// Reserves `batch_memory` and `owned_memory`
+    reservation: MemoryReservation,
 }
 
 impl BoundedWindowAggStream {
@@ -1285,6 +1371,7 @@ impl Stream for BoundedWindowAggStream {
 
 impl BoundedWindowAggStream {
     /// Create a new BoundedWindowAggStream
+    #[expect(clippy::too_many_arguments)]
     fn new(
         schema: SchemaRef,
         window_expr: Vec<Arc<dyn WindowExpr>>,
@@ -1293,6 +1380,7 @@ impl BoundedWindowAggStream {
         search_mode: Box<dyn PartitionSearcher>,
         partition_idx: usize,
         state_observer: Option<Arc<dyn WindowStateObserver>>,
+        reservation: MemoryReservation,
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::default()).collect();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
@@ -1309,6 +1397,9 @@ impl BoundedWindowAggStream {
             most_recent_row: None,
             partition_idx,
             state_observer,
+            batch_memory: RecordBatchMemoryTracker::new(),
+            owned_memory: 0,
+            reservation,
         })
     }
 
@@ -1383,8 +1474,13 @@ impl BoundedWindowAggStream {
                     batch,
                     &self.window_expr,
                     &mut self.partition_buffers,
+                    &mut self.batch_memory,
+                    &mut self.owned_memory,
                 )?;
-                if let Some(batch) = self.compute_aggregates()? {
+                let output = self.compute_aggregates()?;
+                self.reservation
+                    .try_resize(self.batch_memory.memory_usage() + self.owned_memory)?;
+                if let Some(batch) = output {
                     return Poll::Ready(Some(Ok(batch)));
                 }
                 self.poll_next_inner(cx)
@@ -1401,7 +1497,10 @@ impl BoundedWindowAggStream {
                 for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
                     partition_batch_state.is_end = true;
                 }
-                if let Some(batch) = self.compute_aggregates()? {
+                let output = self.compute_aggregates()?;
+                self.reservation
+                    .try_resize(self.batch_memory.memory_usage() + self.owned_memory)?;
+                if let Some(batch) = output {
                     return Poll::Ready(Some(Ok(batch)));
                 }
                 Poll::Ready(None)
@@ -1427,8 +1526,18 @@ impl BoundedWindowAggStream {
         // Remove partitions which we know already ended (is_end flag is true).
         // Since the retain method preserves insertion order, we still have
         // ordering in between partitions after removal.
-        self.partition_buffers
-            .retain(|_, partition_batch_state| !partition_batch_state.is_end);
+        let batch_memory = &mut self.batch_memory;
+        let owned_memory = &mut self.owned_memory;
+        self.partition_buffers.retain(|_, partition_batch_state| {
+            if partition_batch_state.is_end {
+                uncount_partition_batch(
+                    &partition_batch_state.record_batch,
+                    batch_memory,
+                    owned_memory,
+                );
+            }
+            !partition_batch_state.is_end
+        });
         // Likewise, drop per-window-expression state for ended partitions.
         for window_agg_state in self.window_agg_states.iter_mut() {
             window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);

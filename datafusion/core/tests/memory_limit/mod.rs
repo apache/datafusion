@@ -588,7 +588,7 @@ async fn window_agg_exec_reserves_input_concatenation() -> Result<()> {
 /// limit, returning the number of output rows. The batch size keeps the scan
 /// from splitting the input batches.
 async fn run_with_memory_limit(
-    table: MemTable,
+    table: impl TableProvider + 'static,
     sql: &str,
     memory_limit: usize,
 ) -> Result<usize> {
@@ -603,6 +603,119 @@ async fn run_with_memory_limit(
 
     let batches = ctx.sql(sql).await?.collect().await?;
     Ok(batches.iter().map(|b| b.num_rows()).sum())
+}
+
+/// 200,000 rows in 8,192-row batches, sorted by `k`. `sorted_key = k / 10`
+/// is sorted too, and `mixed_key = k % 1000` is not. `v` is a 24-byte string
+/// per row, kept in the data buffers of a view array.
+fn window_partitions_batches() -> Result<(SchemaRef, Vec<RecordBatch>)> {
+    let num_rows = 200_000;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("sorted_key", DataType::Int64, false),
+        Field::new("mixed_key", DataType::Int64, false),
+        Field::new("k", DataType::Int64, false),
+        Field::new("v", DataType::Utf8View, false),
+    ]));
+    let batches = (0..num_rows)
+        .step_by(8192)
+        .map(|start| {
+            let rows = start..(start + 8192).min(num_rows);
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from_iter_values(rows.clone().map(|k| k / 10))),
+                    Arc::new(Int64Array::from_iter_values(
+                        rows.clone().map(|k| k % 1000),
+                    )),
+                    Arc::new(Int64Array::from_iter_values(rows.clone())),
+                    Arc::new(StringViewArray::from_iter_values(
+                        rows.map(|k| format!("a string for row {k:07}")),
+                    )),
+                ],
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((schema, batches))
+}
+
+fn window_partitions_table() -> Result<MemTable> {
+    let (schema, batches) = window_partitions_batches()?;
+    let sorted_key = datafusion_expr::col("sorted_key").sort(true, false);
+    let k = datafusion_expr::col("k").sort(true, false);
+    Ok(MemTable::try_new(schema, vec![batches])?
+        .with_sort_order(vec![vec![sorted_key, k.clone()], vec![k]]))
+}
+
+/// The frame reaches past the end of the input, so `BoundedWindowAggExec`
+/// holds every row until the input ends
+#[tokio::test]
+async fn oom_bounded_window_agg_exec() -> Result<()> {
+    let err = run_with_memory_limit(
+        window_partitions_table()?,
+        "SELECT sum(k) OVER (ORDER BY k ROWS BETWEEN CURRENT ROW AND 1000000 FOLLOWING) FROM t",
+        2_000_000,
+    )
+    .await
+    .unwrap_err();
+    assert_contains!(err.to_string(), "Resources exhausted");
+    assert_contains!(err.to_string(), "BoundedWindowAggStream");
+    Ok(())
+}
+
+/// `BoundedWindowAggExec` holds part of its input in these queries, so they
+/// fit in the memory limit only if it releases the partitions that end and
+/// reserves buffers shared by several partitions once.
+#[tokio::test]
+async fn bounded_window_agg_exec_reserves_held_buffers() -> Result<()> {
+    // Each 10-row partition is held until it ends. Not releasing the ended
+    // partitions grows the reservation to the whole input
+    let rows = run_with_memory_limit(
+        window_partitions_table()?,
+        "SELECT sum(k) OVER (PARTITION BY sorted_key ORDER BY k \
+         ROWS BETWEEN CURRENT ROW AND 1000000 FOLLOWING) FROM t",
+        2_000_000,
+    )
+    .await?;
+    assert_eq!(rows, 200_000);
+
+    // In `Linear` mode, the 1,000 partitions start as slices of one batch
+    // and none ends before the input does. Reserving that batch once per
+    // slice needs ~130 MB
+    let rows = run_with_memory_limit(
+        linear_table()?,
+        "SELECT sum(k) OVER (PARTITION BY mixed_key ORDER BY k \
+         ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t",
+        2_000_000,
+    )
+    .await?;
+    assert_eq!(rows, 200_000);
+
+    // Extending a partition copies its rows into new buffers, except the
+    // data buffers of `v`, which every partition shares. A partition keeps
+    // the data buffers of each batch it received rows from, so the window
+    // holds the ~6 MB of `v`'s data buffers until the input ends, and
+    // reserving them once per partition needs ~6 GB
+    let rows = run_with_memory_limit(
+        linear_table()?,
+        "SELECT v, sum(k) OVER (PARTITION BY mixed_key ORDER BY k \
+         ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t",
+        16_000_000,
+    )
+    .await?;
+    assert_eq!(rows, 200_000);
+    Ok(())
+}
+
+/// The window input as an unbounded table sorted by `k`, which makes a window
+/// partitioned by `mixed_key` run in `Linear` mode
+fn linear_table() -> Result<StreamingTable> {
+    let (schema, batches) = window_partitions_batches()?;
+    Ok(StreamingTable::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(DummyStreamPartition { schema, batches })],
+    )?
+    .with_infinite_table(true)
+    .with_sort_order(vec![datafusion_expr::col("k").sort(true, false)]))
 }
 
 #[tokio::test]

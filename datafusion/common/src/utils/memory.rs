@@ -361,6 +361,21 @@ impl RecordBatchMemoryTracker {
         self.memory_usage
     }
 
+    /// Whether `batch` is counted, judged by its first buffer that holds
+    /// memory, so a batch with no allocated buffer is never counted. Only
+    /// meaningful for a batch that was counted whole or shares no buffer with
+    /// a counted batch, such as one whose buffers were all newly allocated.
+    pub fn is_counted(&self, batch: &RecordBatch) -> bool {
+        let mut first_buffer = FirstBuffer(None);
+        for array in batch.columns() {
+            visit_array_buffers(array.as_ref(), &mut first_buffer);
+            if let Some(buffer_id) = first_buffer.0 {
+                return self.counted_buffers.contains(buffer_id);
+            }
+        }
+        false
+    }
+
     fn count_array_memory_size(&mut self, array: &dyn Array) {
         visit_array_buffers(array, self);
     }
@@ -386,6 +401,19 @@ impl BufferVisitor for Uncount<'_> {
     fn visit(&mut self, buffer: &Buffer) {
         if self.0.counted_buffers.decrement(buffer.data_ptr().addr()) {
             self.0.memory_usage -= buffer.capacity();
+        }
+    }
+}
+
+/// Finds the first buffer that holds memory, for
+/// [`RecordBatchMemoryTracker::is_counted`]. Empty buffers can share a
+/// placeholder address, so they do not identify a batch.
+struct FirstBuffer(Option<NonZero<usize>>);
+
+impl BufferVisitor for FirstBuffer {
+    fn visit(&mut self, buffer: &Buffer) {
+        if self.0.is_none() && buffer.capacity() > 0 {
+            self.0 = Some(buffer.data_ptr().addr());
         }
     }
 }
@@ -720,6 +748,14 @@ impl BufferIdMap {
         overflow.insert(buffer_id, 1);
         self.overflow = Some(overflow);
         true
+    }
+
+    /// Whether `buffer_id` is tracked.
+    fn contains(&self, buffer_id: NonZero<usize>) -> bool {
+        match &self.overflow {
+            Some(overflow) => overflow.contains_key(&buffer_id),
+            None => self.ids[..self.len].contains(&Some(buffer_id)),
+        }
     }
 
     /// Decrement the reference count for `buffer_id`. Returns `true` when the
@@ -1454,6 +1490,31 @@ mod record_batch_tests {
         let released: usize = arrays.iter().rev().map(|a| tracker.uncount_array(a)).sum();
         assert_eq!(released, counted);
         assert_eq!(tracker.memory_usage(), 0);
+    }
+
+    #[test]
+    fn test_is_counted() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, true)]));
+        let batch = |array: Int32Array| {
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
+        };
+        let counted = batch(Int32Array::from(vec![Some(1), None, Some(3)]));
+        let other = batch(Int32Array::from(vec![4, 5]));
+        let empty = batch(Int32Array::from(Vec::<i32>::new()));
+
+        let mut tracker = RecordBatchMemoryTracker::new();
+        tracker.count_batch(&counted);
+        tracker.count_batch(&empty);
+        assert!(tracker.is_counted(&counted));
+        assert!(tracker.is_counted(&counted.slice(1, 1)));
+        assert!(!tracker.is_counted(&other));
+        // Empty buffers do not identify a batch
+        assert!(!tracker.is_counted(&empty));
+        assert!(!tracker.is_counted(&batch(Int32Array::from(Vec::<i32>::new()))));
+
+        tracker.uncount_batch(&counted);
+        assert!(!tracker.is_counted(&counted));
     }
 
     #[test]
