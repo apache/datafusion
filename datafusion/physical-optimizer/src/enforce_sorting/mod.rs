@@ -704,13 +704,9 @@ fn remove_bottleneck_in_subplan_impl(
     // coalesce below one is also load-bearing — but nothing puts a coalesce there:
     // `ensure_distribution` satisfies a hash requirement with a `RepartitionExec`, never a
     // `CoalescePartitionsExec`. Widening the check would be dead code today.
-    let dist_reqs = plan.input_distribution_requirements();
+    let dist_reqs = plan.required_input_distribution();
     let removable = |idx: usize| {
-        is_root
-            || !matches!(
-                dist_reqs.child_distribution(idx),
-                Some(Distribution::SinglePartition)
-            )
+        is_root || !matches!(dist_reqs.get(idx), Some(Distribution::SinglePartition))
     };
     let remove_from_first_child = requirements
         .children

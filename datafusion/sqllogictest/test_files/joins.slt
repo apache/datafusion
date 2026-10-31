@@ -5574,7 +5574,7 @@ reset datafusion.execution.batch_size;
 
 # Regression test: a `CollectLeft` `HashJoinExec` requires `SinglePartition` on its build
 # (left) child, and the `CoalescePartitionsExec` that satisfies it must survive the
-# sort-parallelization phase of `EnsureRequirements`. It used to be removed positionally
+# sort-parallelization phase of `EnforceSorting`. It used to be removed positionally
 # (the traversal descends into the join because the *probe* side is linked to a coalesce),
 # leaving a multi-partition build side that `SanityCheckPlan` rejects with
 # "does not satisfy distribution requirements: SinglePartition".
