@@ -156,22 +156,24 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// If the stream at the given index is not exhausted, and the last cursor for the
     /// stream is finished, poll the stream for the next RecordBatch and create a new
     /// cursor for the stream from the returned result
+    /// Returns the number of rows read, or zero when no new batch was read.
     fn maybe_poll_stream(
         &mut self,
         cx: &mut Context<'_>,
         idx: usize,
-    ) -> Poll<Result<()>> {
+    ) -> Poll<Result<usize>> {
         if self.cursors[idx].is_some() {
             // Cursor is not finished - don't need a new RecordBatch yet
-            return Poll::Ready(Ok(()));
+            return Poll::Ready(Ok(0));
         }
 
         match futures::ready!(self.streams.poll_next(cx, idx)) {
-            None => Poll::Ready(Ok(())),
+            None => Poll::Ready(Ok(0)),
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
+                let rows = batch.num_rows();
                 self.cursors[idx] = Some(Cursor::new(cursor));
-                Poll::Ready(self.in_progress.push_batch(idx, batch))
+                Poll::Ready(self.in_progress.push_batch(idx, batch).map(|_| rows))
             }
         }
     }
@@ -218,10 +220,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 let mut uninitiated_partitions =
                     (0..self.streams.partitions()).collect::<Vec<_>>();
 
-                poll_fn(|cx| {
-                    self.initialize_all_partitions(&mut uninitiated_partitions, cx)
-                })
-                .await?;
+                self.initialize_all_partitions(&mut uninitiated_partitions)
+                    .await?;
 
                 assert_eq!(uninitiated_partitions.len(), 0);
             }
@@ -299,57 +299,63 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         self.cursors[winner].is_none()
     }
 
-    /// Initialize all partitions, return `Poll::Pending` if any partition returns `Poll::Pending`
-    ///
-    /// This DOES NOT return `Poll::Pending` as soon as the first uninitiated partition returns `Poll::Pending`
-    /// so we can continue to initialize the remaining partitions
-    fn initialize_all_partitions(
+    async fn initialize_all_partitions(
         &mut self,
         uninitiated_partitions: &mut Vec<usize>,
-        cx: &mut Context,
-    ) -> Poll<Result<()>> {
+    ) -> Result<()> {
         assert_eq!(
             self.loser_tree.len(),
             0,
             "loser tree must be empty when initializing"
         );
+        let mut next_partition = 0;
+        // Initializing many ready inputs can monopolize a worker. Use the batch
+        // target as a simple work budget for both row and field cursors.
+        let mut initialized_rows = 0usize;
+        while !uninitiated_partitions.is_empty() {
+            let rows = poll_fn(|cx| {
+                self.initialize_next_partition(
+                    uninitiated_partitions,
+                    &mut next_partition,
+                    cx,
+                )
+            })
+            .await?;
+            initialized_rows = initialized_rows.saturating_add(rows);
+            if initialized_rows >= self.batch_size && !uninitiated_partitions.is_empty() {
+                tokio::task::yield_now().await;
+                initialized_rows = 0;
+            }
+        }
+        Ok(())
+    }
 
-        // Manual indexing since we're iterating over the vector and shrinking it in the loop
-        let mut idx = 0;
-        while idx < uninitiated_partitions.len() {
-            let partition_idx = uninitiated_partitions[idx];
+    /// Initializes one ready input, polling every remaining input before waiting.
+    /// The scan position survives voluntary yields, avoiding repeated prefix scans.
+    fn initialize_next_partition(
+        &mut self,
+        uninitiated_partitions: &mut Vec<usize>,
+        next_partition: &mut usize,
+        cx: &mut Context,
+    ) -> Poll<Result<usize>> {
+        for _ in 0..uninitiated_partitions.len() {
+            *next_partition %= uninitiated_partitions.len();
+            let partition_idx = uninitiated_partitions[*next_partition];
             match self.maybe_poll_stream(cx, partition_idx) {
                 Poll::Ready(Err(e)) => {
                     return Poll::Ready(Err(e));
                 }
                 Poll::Pending => {
-                    // The polled stream is pending which means we're already set up to
-                    // be woken when necessary
-                    // Try the next stream
-                    idx += 1;
+                    *next_partition += 1;
                 }
-                _ => {
-                    // The polled stream is ready
-                    // Remove it from uninitiated_partitions
-                    // Don't bump idx here, since a new element will have taken its
-                    // place which we'll try in the next loop iteration
-                    // swap_remove will change the partition poll order, but that shouldn't
-                    // make a difference since we're waiting for all streams to be ready.
-                    uninitiated_partitions.swap_remove(idx);
+                Poll::Ready(Ok(rows)) => {
+                    uninitiated_partitions.swap_remove(*next_partition);
+                    return Poll::Ready(Ok(rows));
                 }
             }
         }
 
-        if uninitiated_partitions.is_empty() {
-            Poll::Ready(Ok(()))
-        } else {
-            // There are still uninitiated partitions so return pending.
-            // We only get here if we've polled all uninitiated streams and at least one of them
-            // returned pending itself. That means we will be woken as soon as one of the
-            // streams would like to be polled again.
-            // There is no need to reschedule ourselves eagerly.
-            Poll::Pending
-        }
+        Poll::Pending
     }
 
     /// Returns the poll count of `partition_idx` for the current tie-breaker

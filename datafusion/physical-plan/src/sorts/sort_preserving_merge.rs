@@ -857,7 +857,7 @@ mod tests {
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::TestMemoryExec;
     use crate::test::exec::{
-        BlockingExec, StatisticsExec, assert_strong_count_converges_to_zero,
+        BlockingExec, StatisticsExec, TestStream, assert_strong_count_converges_to_zero,
     };
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
@@ -880,9 +880,114 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
-    use futures::{FutureExt, Stream, StreamExt};
+    use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
     use insta::assert_snapshot;
     use tokio::time::timeout;
+
+    fn initialization_test_merge(
+        streams: Vec<SendableRecordBatchStream>,
+        schema: SchemaRef,
+        row_conversion: bool,
+    ) -> Result<SendableRecordBatchStream> {
+        let task_ctx = TaskContext::default();
+        let mut expressions = vec![PhysicalSortExpr::new_default(col("a", &schema)?)];
+        if row_conversion {
+            expressions.push(PhysicalSortExpr::new_default(col("b", &schema)?));
+        }
+        let ordering = LexOrdering::new(expressions).expect("at least one sort key");
+        StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_schema(schema)
+            .with_expressions(&ordering)
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            .with_batch_size(4)
+            .with_reservation(
+                MemoryConsumer::new("initialization test")
+                    .register(&task_ctx.runtime_env().memory_pool),
+            )
+            .build()
+    }
+
+    #[tokio::test]
+    async fn merge_initialization_yields_after_batch_size_rows() -> Result<()> {
+        let batch = arrow::array::record_batch!(
+            ("a", Int32, [0, 1, 2, 3, 4, 5]),
+            ("b", Int32, [0, 0, 0, 0, 0, 0])
+        )?;
+        for row_conversion in [false, true] {
+            let inputs = (0..3)
+                .map(|i| TestStream::new(vec![batch.slice(i * 2, 2)]))
+                .collect::<Vec<_>>();
+            let indexes = inputs.iter().map(TestStream::index).collect::<Vec<_>>();
+            let streams = inputs
+                .into_iter()
+                .map(|input| Box::pin(input) as SendableRecordBatchStream)
+                .collect();
+            let mut merge =
+                initialization_test_merge(streams, batch.schema(), row_conversion)?;
+            let mut first_poll = true;
+            let checked = futures::stream::poll_fn(move |cx| {
+                let next = merge.poll_next_unpin(cx);
+                if first_poll {
+                    first_poll = false;
+                    assert!(next.is_pending());
+                    // Two inputs reach the four-row budget before the third is read.
+                    assert_eq!(
+                        indexes.iter().map(|index| index.value()).sum::<usize>(),
+                        2
+                    );
+                }
+                next
+            });
+            // The timeout must not repoll the merge and rescue a missing wakeup.
+            let task = SpawnedTask::spawn(checked.try_collect::<Vec<_>>());
+            let output = timeout(Duration::from_secs(3), task)
+                .await
+                .expect("initialization did not wake")
+                .expect("merge task panicked")?;
+            assert_eq!(
+                arrow::compute::concat_batches(&batch.schema(), &output)?,
+                batch
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn merge_initialization_repolls_pending_inputs_after_yield() -> Result<()> {
+        let batch = arrow::array::record_batch!(
+            ("a", Int32, [0, 1, 2, 3, 4, 5, 6, 7]),
+            ("b", Int32, [0, 0, 0, 0, 0, 0, 0, 0])
+        )?;
+        let delayed = RecordBatchReceiverStream::builder(batch.schema(), 1);
+        let sender = delayed.tx();
+        let ready = TestStream::new(vec![batch.slice(4, 4)]);
+        let ready_index = ready.index();
+        let merge = initialization_test_merge(
+            vec![delayed.build(), Box::pin(ready)],
+            batch.schema(),
+            true,
+        )?;
+        let first = batch.slice(0, 4);
+        let task = SpawnedTask::spawn(async move {
+            let (output, ()) = tokio::join!(biased; common::collect(merge), async move {
+                // Let the merge yield, then park on input zero before waking it.
+                tokio::task::yield_now().await;
+                assert_eq!(ready_index.value(), 1);
+                sender.send(Ok(first)).await.unwrap();
+            });
+            output
+        });
+        let output = timeout(Duration::from_secs(3), task)
+            .await
+            .expect("initialization lost a pending input's wakeup")
+            .expect("merge task panicked")?;
+        assert_eq!(
+            arrow::compute::concat_batches(&batch.schema(), &output)?,
+            batch
+        );
+        Ok(())
+    }
 
     // The number in the function is highly related to the memory limit we are testing
     // any change of the constant should be aware of
