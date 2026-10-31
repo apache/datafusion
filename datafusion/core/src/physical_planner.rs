@@ -94,7 +94,6 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
-use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::output_requirements::RemoveOutputRequirements;
 use datafusion_physical_optimizer::sanity_checker::{
     check_plan_tree_sanity, input_requirements_hold,
@@ -3535,6 +3534,7 @@ impl DefaultPhysicalPlanner {
                 e,
                 &new_plan,
                 plan,
+                analyzers,
                 optimizers,
                 &optimizer_context,
             ));
@@ -3750,16 +3750,17 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 
 /// Adds context to an error from the final [`check_plan_tree_sanity`].
 ///
-/// `EnsureRequirements` makes the order and distribution requirements hold,
-/// and every rule after it must keep them. When they do not hold for
+/// The analyzer phase makes the order and distribution requirements hold,
+/// and every optimizer rule must keep them. When they do not hold for
 /// `final_plan`, the context names the rule that broke this contract: either
-/// `EnsureRequirements` itself, or the rule after which the requirements
-/// stopped holding. To find it, `optimizers` run again from `input_plan`, so
-/// planning that succeeds keeps no intermediate plans.
+/// the last analyzer rule, or the optimizer rule after which the requirements
+/// stopped holding. To find it, `analyzers` and `optimizers` run again from
+/// `input_plan`, so planning that succeeds keeps no intermediate plans.
 fn sanity_check_error(
     error: DataFusionError,
     final_plan: &Arc<dyn ExecutionPlan>,
     input_plan: Arc<dyn ExecutionPlan>,
+    analyzers: &[Arc<dyn PhysicalAnalyzerRule + Send + Sync>],
     optimizers: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
     optimizer_context: &dyn PhysicalOptimizerContext,
 ) -> DataFusionError {
@@ -3771,41 +3772,39 @@ fn sanity_check_error(
         return plain_error(error);
     }
 
-    let ensure_requirements = EnsureRequirements::new();
-    let enforced = optimizers.iter().rposition(|rule| {
-        rule.name() == PhysicalAnalyzerRule::name(&ensure_requirements)
-    });
-    // Plans before `EnsureRequirements` need not satisfy the requirements, so
-    // only plans from its last run onwards are checked. Without it, every
-    // plan is checked, starting with the input plan.
-    let first_checked = enforced.unwrap_or(0);
-    let mut held = enforced.is_none() && input_requirements_hold(&input_plan);
-    let mut broken_by = None;
+    // Plans inside the analyzer phase need not satisfy the requirements, so
+    // only its output and the plans after it are checked.
     let mut plan = input_plan;
-    for (idx, rule) in optimizers.iter().enumerate() {
-        plan = match rule.optimize_with_context(plan, optimizer_context) {
+    for rule in analyzers {
+        plan = match rule.analyze_with_context(plan, optimizer_context) {
             Ok(plan) => plan,
             // The rules did not run as they did before, so no rule is named.
             Err(_) => return plain_error(error),
         };
-        if idx >= first_checked {
-            let holds = input_requirements_hold(&plan);
-            if held && !holds {
-                broken_by = Some(rule);
-            }
-            held = holds;
-        }
     }
-    let context = match (broken_by, enforced) {
+    let mut held = input_requirements_hold(&plan);
+    let mut broken_by = None;
+    for rule in optimizers {
+        plan = match rule.optimize_with_context(plan, optimizer_context) {
+            Ok(plan) => plan,
+            Err(_) => return plain_error(error),
+        };
+        let holds = input_requirements_hold(&plan);
+        if held && !holds {
+            broken_by = Some(rule);
+        }
+        held = holds;
+    }
+    let context = match (broken_by, analyzers.last()) {
         (Some(rule), _) => format!(
             "{SANITY_CHECK}: order and distribution requirements stopped holding \
              after physical optimizer rule '{}'",
             rule.name()
         ),
-        (None, Some(_)) => format!(
-            "{SANITY_CHECK}: the plan produced by physical optimizer rule '{}' \
+        (None, Some(rule)) => format!(
+            "{SANITY_CHECK}: the plan produced by physical analyzer rule '{}' \
              does not satisfy the order and distribution requirements",
-            PhysicalAnalyzerRule::name(&ensure_requirements)
+            rule.name()
         ),
         (None, None) => format!(
             "{SANITY_CHECK}: no physical optimizer rule produced a plan that \
