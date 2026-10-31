@@ -1298,7 +1298,8 @@ impl EquivalenceProperties {
     /// # Returns
     ///
     /// Returns an [`ExprProperties`] object containing the ordering and range
-    /// information for the given expression.
+    /// information for the given expression. If its ordering is unknown, falls
+    /// back to the sort properties of an equivalent expression.
     pub fn get_expr_properties(&self, expr: Arc<dyn PhysicalExpr>) -> ExprProperties {
         SortKeyWalk::new(self).expr_properties(expr)
     }

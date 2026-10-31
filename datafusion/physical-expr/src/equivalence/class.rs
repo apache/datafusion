@@ -17,7 +17,9 @@ use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequire
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result, ScalarValue};
 use datafusion_expr::sort_properties::SortProperties;
-use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use datafusion_physical_expr_common::physical_expr::{
+    format_physical_expr_list, is_volatile,
+};
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -740,6 +742,7 @@ impl EquivalenceGroup {
         let mut new_constants = vec![];
         let mut new_classes =
             IndexMap::<_, EquivalenceClass>::with_capacity(mapping.len());
+        let mut augmented = None;
         for (source, targets) in mapping.iter() {
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and
@@ -750,6 +753,15 @@ impl EquivalenceGroup {
             let cls = new_classes.entry(normalized_expr).or_default();
             for (target, _) in targets.iter() {
                 cls.push(Arc::clone(target));
+            }
+            // Retain deterministic expressions as equalities so orderings derived
+            // through strict functions can be inferred after a merge clears orderings.
+            if !source.children().is_empty() && !is_volatile(source) {
+                let augmented = augmented
+                    .get_or_insert_with(|| self.augment_projection_mapping(mapping));
+                if let Some(projected) = Self::project_expr_indirect(augmented, source) {
+                    cls.push(projected);
+                }
             }
             // Save new constants arising from the projection:
             if let Some(across) = self.is_expr_constant(source) {
