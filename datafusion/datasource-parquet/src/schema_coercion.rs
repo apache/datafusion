@@ -209,11 +209,10 @@ fn coerce_data_type(
             coerce_map_entries(table_entries, file_entries)
                 .map(|entries| Map(entries, *sorted))
         }
-        // Promote a plain file column to the dictionary type the table expects.
-        (Dictionary(_, _), _)
-            if enable_rle && can_promote_to_dictionary_type(file_type, table_type) =>
-        {
-            Some(table_type.clone())
+        // Preserve the file's offset width when promoting it to a dictionary.
+        // The projection can cast the much smaller dictionary values afterwards.
+        (Dictionary(_, _), _) if enable_rle => {
+            dictionary_reader_type(file_type, table_type)
         }
         _ => None,
     }
@@ -327,25 +326,28 @@ fn common_dictionary_key_type(a: &DataType, b: &DataType) -> Option<DataType> {
     })
 }
 
-fn can_promote_to_dictionary_type(
+fn dictionary_reader_type(
     file_field_type: &DataType,
     table_dictionary_type: &DataType,
-) -> bool {
+) -> Option<DataType> {
     let DataType::Dictionary(table_key, table_value) = table_dictionary_type else {
-        return false;
+        return None;
     };
-    if common_dictionary_value_type(file_field_type, table_value)
-        .is_none_or(|common| &common != table_value.as_ref())
-    {
-        return false;
+    let value_type = common_dictionary_value_type(file_field_type, table_value)?;
+    let file_key = match file_field_type {
+        DataType::Dictionary(file_key, _) => file_key.as_ref(),
+        // A plain column can have any number of distinct values, so narrow keys are unsafe.
+        _ => &DataType::Int32,
+    };
+    let key_type = common_dictionary_key_type(file_key, table_key)?;
+    if &key_type != table_key.as_ref() {
+        return None;
     }
-    if let DataType::Dictionary(file_key, _) = file_field_type {
-        return common_dictionary_key_type(file_key, table_key)
-            .is_some_and(|common| &common == table_key.as_ref());
-    }
-    // A plain column can have any number of distinct values, so narrow keys are unsafe.
-    common_dictionary_key_type(&DataType::Int32, table_key)
-        .is_some_and(|common| &common == table_key.as_ref())
+
+    Some(DataType::Dictionary(
+        Box::new(key_type),
+        Box::new(value_type),
+    ))
 }
 
 /// Normalize per-file schemas so a column remains `Dictionary` only when every
@@ -1905,8 +1907,8 @@ mod tests {
 
     #[test]
     fn rle_schema_coercion_respects_dictionary_value_type() {
-        // Scan-time schema coercion can only use dictionary types already chosen by
-        // schema inference, and must leave incompatible file fields unchanged.
+        // Scan-time schema coercion preserves wider file offsets so the parquet reader
+        // can decode dictionary keys directly and cast only the dictionary values.
         let cases = vec![
             (
                 "utf8",
@@ -1921,10 +1923,10 @@ mod tests {
                 dict(DataType::LargeUtf8),
             ),
             (
-                "large_utf8_to_utf8_dict_not_safe",
+                "large_utf8_to_utf8_dict_preserves_offsets",
                 dict(DataType::Utf8),
                 DataType::LargeUtf8,
-                DataType::LargeUtf8,
+                dict(DataType::LargeUtf8),
             ),
             (
                 "utf8_to_large_utf8_dict",
@@ -1945,10 +1947,10 @@ mod tests {
                 dict(DataType::LargeBinary),
             ),
             (
-                "large_binary_to_binary_dict_not_safe",
+                "large_binary_to_binary_dict_preserves_offsets",
                 dict(DataType::Binary),
                 DataType::LargeBinary,
-                DataType::LargeBinary,
+                dict(DataType::LargeBinary),
             ),
             (
                 "binary_to_large_binary_dict",
