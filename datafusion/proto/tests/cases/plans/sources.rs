@@ -387,7 +387,9 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
     let file_source = Arc::new(
-        JsonSource::new(TableSchema::from(&file_schema)).with_newline_delimited(false),
+        JsonSource::new(TableSchema::from(&file_schema))
+            .with_newline_delimited(false)
+            .with_coerce_primitive(true),
     );
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
@@ -416,14 +418,16 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
         .downcast_ref::<JsonSource>()
         .ok_or_else(|| internal_datafusion_err!("Expected JsonSource"))?;
     assert!(!json_source.is_newline_delimited());
+    assert!(json_source.coerce_primitive());
     assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
 
     // Payloads written before these fields existed must keep their historical
-    // defaults: newline-delimited JSON without compression.
+    // defaults: newline-delimited JSON without compression or primitive coercion.
     let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
     match node.physical_plan_type.as_mut() {
         Some(protobuf::physical_plan_node::PhysicalPlanType::JsonScan(scan)) => {
             scan.newline_delimited = None;
+            scan.coerce_primitive = None;
             scan.base_conf
                 .as_mut()
                 .expect("JSON scan has a base config")
@@ -441,6 +445,7 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
         .downcast_ref::<JsonSource>()
         .ok_or_else(|| internal_datafusion_err!("Expected JsonSource"))?;
     assert!(json_source.is_newline_delimited());
+    assert!(!json_source.coerce_primitive());
     assert_eq!(
         file_scan.file_compression_type,
         FileCompressionType::UNCOMPRESSED
