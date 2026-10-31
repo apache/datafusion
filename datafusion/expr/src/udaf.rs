@@ -1210,6 +1210,7 @@ pub fn udaf_default_human_display<F: AggregateUDFImpl + ?Sized>(
 /// #     partition_by: vec![col("y")],
 /// #     order_by: vec![],
 /// #     window_frame: WindowFrame::new(None),
+/// #     window_frame_explicit: false,
 /// #     filter: None,
 /// #     null_treatment: None,
 /// #     distinct: false,
@@ -1247,6 +1248,7 @@ impl<'a> UdafWindowFunctionSchemaNameBuilder<'a> {
             filter,
             null_treatment,
             distinct,
+            ..
         } = params;
 
         let mut schema_name = String::new();
@@ -1401,6 +1403,7 @@ pub fn udaf_default_display_name<F: AggregateUDFImpl + ?Sized>(
 /// #     partition_by: vec![col("y")],
 /// #     order_by: vec![],
 /// #     window_frame: WindowFrame::new(None),
+/// #     window_frame_explicit: false,
 /// #     filter: None,
 /// #     null_treatment: None,
 /// #     distinct: false,
@@ -1438,6 +1441,7 @@ impl<'a> UdafWindowFunctionDisplayNameBuilder<'a> {
             filter,
             null_treatment,
             distinct,
+            ..
         } = params;
 
         let mut display_name = String::new();
