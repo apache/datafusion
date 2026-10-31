@@ -55,6 +55,7 @@ use datafusion_proto::physical_plan::{
 };
 use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::PhysicalPlanNode;
+use datafusion_proto::protobuf::file_source_node::FileSourceType;
 use prost::Message;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -139,11 +140,9 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         )?;
         #[cfg(feature = "json")]
         let roundtripped = super::roundtrip_test_json_and_return(roundtripped, &ctx)?;
-        let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
-        let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
-            node.physical_plan_type
-        else {
-            return internal_err!("Expected ParquetScan node");
+        let mut node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
+        let (_, FileSourceType::Parquet(scan)) = file_scan_parts(&mut node)? else {
+            return internal_err!("Expected Parquet source");
         };
         assert_eq!(
             scan.metadata_size_hint,
@@ -192,15 +191,7 @@ fn file_scan_rejects_zero_batch_size() -> Result<()> {
         DataSourceExec::from_data_source(scan_config),
         &codec,
     )?;
-    let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
-        node.physical_plan_type.as_mut()
-    else {
-        return internal_err!("Expected ParquetScan node");
-    };
-    scan.base_conf
-        .as_mut()
-        .expect("Parquet scan has a base config")
-        .batch_size = Some(0);
+    file_scan_parts(&mut node)?.0.batch_size = Some(0);
 
     let ctx = SessionContext::new();
     let err = node
@@ -364,11 +355,11 @@ fn arrow_scan_without_format_field_decodes_as_file_format() -> Result<()> {
     let mut node = PhysicalPlanNode::decode(bytes.as_ref()).map_err(|e| {
         internal_datafusion_err!("Failed to decode PhysicalPlanNode: {e}")
     })?;
-    match node.physical_plan_type.as_mut() {
-        Some(protobuf::physical_plan_node::PhysicalPlanType::ArrowScan(scan)) => {
-            scan.format = protobuf::ArrowIpcFormat::File as i32;
+    match file_scan_parts(&mut node)? {
+        (_, FileSourceType::Arrow(source)) => {
+            source.format = protobuf::ArrowIpcFormat::File as i32;
         }
-        other => return internal_err!("Expected ArrowScan node, got {other:?}"),
+        other => return internal_err!("Expected Arrow source, got {other:?}"),
     }
 
     let ctx = SessionContext::new();
@@ -421,15 +412,12 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
     // Payloads written before these fields existed must keep their historical
     // defaults: newline-delimited JSON without compression.
     let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
-    match node.physical_plan_type.as_mut() {
-        Some(protobuf::physical_plan_node::PhysicalPlanType::JsonScan(scan)) => {
-            scan.newline_delimited = None;
-            scan.base_conf
-                .as_mut()
-                .expect("JSON scan has a base config")
-                .file_compression_type = None;
+    match file_scan_parts(&mut node)? {
+        (base, FileSourceType::Json(source)) => {
+            source.newline_delimited = None;
+            base.file_compression_type = None;
         }
-        other => return internal_err!("Expected JsonScan node, got {other:?}"),
+        other => return internal_err!("Expected Json source, got {other:?}"),
     }
     let decoded = node.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
     let file_scan = decoded
@@ -573,13 +561,13 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
         assert_eq!(csv_source.escape(), Some(b'\\'));
         assert_eq!(csv_source.comment(), Some(b'#'));
         assert_eq!(csv_source.terminator(), Some(0xff));
-        let node =
+        let mut node =
             PhysicalPlanNode::try_from_physical_plan(Arc::clone(&roundtripped), &codec)?;
-        match node.physical_plan_type {
-            Some(protobuf::physical_plan_node::PhysicalPlanType::CsvScan(scan)) => {
+        match file_scan_parts(&mut node)? {
+            (_, FileSourceType::Csv(scan)) => {
                 assert_eq!(scan.newlines_in_values, newlines_in_values.unwrap_or(false));
             }
-            other => return internal_err!("Expected CsvScan node, got {other:?}"),
+            other => return internal_err!("Expected Csv source, got {other:?}"),
         }
         assert!(csv_source.truncate_rows());
         assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
@@ -591,11 +579,11 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
         for invalid_terminator in [vec![], vec![b'\r', b'\n']] {
             let mut node =
                 PhysicalPlanNode::try_from_physical_plan(Arc::clone(&plan), &codec)?;
-            match node.physical_plan_type.as_mut() {
-                Some(protobuf::physical_plan_node::PhysicalPlanType::CsvScan(scan)) => {
+            match file_scan_parts(&mut node)? {
+                (_, FileSourceType::Csv(scan)) => {
                     scan.terminator = Some(invalid_terminator);
                 }
-                other => return internal_err!("Expected CsvScan node, got {other:?}"),
+                other => return internal_err!("Expected Csv source, got {other:?}"),
             }
             let err = node
                 .try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)
@@ -1211,4 +1199,29 @@ fn roundtrip_parquet_exec_range_output_partitioning_utf8view_split_points() -> R
     );
 
     Ok(())
+}
+
+/// Split an encoded file-scan `DataSourceExec` into its base config and source.
+pub(crate) fn file_scan_parts(
+    node: &mut PhysicalPlanNode,
+) -> Result<(&mut protobuf::FileScanExecConf, &mut FileSourceType)> {
+    use protobuf::data_source_node::SourceType;
+    match node.physical_plan_type.as_mut() {
+        Some(protobuf::physical_plan_node::PhysicalPlanType::DataSource(
+            protobuf::DataSourceExecNode {
+                source:
+                    Some(protobuf::DataSourceNode {
+                        source_type:
+                            Some(SourceType::File(protobuf::FileScanNode {
+                                base: Some(base),
+                                source:
+                                    Some(protobuf::FileSourceNode {
+                                        file_source_type: Some(source),
+                                    }),
+                            })),
+                    }),
+            },
+        )) => Ok((base, source)),
+        other => internal_err!("Expected a file scan DataSource node, got {other:?}"),
+    }
 }

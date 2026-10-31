@@ -34,6 +34,7 @@
 
 pub mod from_proto;
 pub mod generated;
+pub mod physical_plan_compat;
 pub mod registry;
 pub mod to_proto;
 

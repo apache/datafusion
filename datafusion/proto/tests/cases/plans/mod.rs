@@ -21,6 +21,7 @@ use datafusion_proto::physical_plan::{
 use std::sync::Arc;
 
 mod aggregates;
+mod deprecated_data_source_proto_serialization;
 mod dispatch;
 mod dynamic_filters;
 mod expr_registry;

@@ -1068,18 +1068,17 @@ impl FileSource for ParquetSource {
         )
     }
 
-    /// Emit a `ParquetScan` node wrapping the shared base config plus the
-    /// Parquet-specific pushdown predicate and `TableParquetOptions`.
+    /// Emit a `ParquetSourceNode` carrying the Parquet-specific pushdown
+    /// predicate and `TableParquetOptions`.
     #[cfg(feature = "proto")]
-    fn try_to_proto(
+    fn try_to_proto_file_source(
         &self,
-        base: &FileScanConfig,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> datafusion_common::Result<
-        Option<datafusion_proto_models::protobuf::PhysicalPlanNode>,
+        Option<datafusion_proto_models::protobuf::FileSourceNode>,
     > {
         use datafusion_proto_models::protobuf;
-        use protobuf::physical_plan_node::PhysicalPlanType;
+        use protobuf::file_source_node::FileSourceType;
 
         let Self {
             table_parquet_options,
@@ -1127,37 +1126,29 @@ impl FileSource for ParquetSource {
             .map(|hint| usize_to_wire(hint, "ParquetSource", "metadata_size_hint"))
             .transpose()?;
 
-        let node = protobuf::ParquetScanExecNode {
-            base_conf: Some(base.try_to_proto(ctx)?),
+        let node = protobuf::ParquetSourceNode {
             predicate,
             parquet_options: Some(table_parquet_options.try_into()?),
             sort_order_for_reorder,
             reverse_row_groups: *reverse_row_groups,
             metadata_size_hint,
         };
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::ParquetScan(node)),
+        Ok(Some(protobuf::FileSourceNode {
+            file_source_type: Some(FileSourceType::Parquet(node)),
         }))
     }
 }
 
 #[cfg(feature = "proto")]
 impl ParquetSource {
-    /// Reconstructs a `DataSourceExec` from a protobuf `ParquetScan`.
-    ///
-    /// Rebuilds the reader factory from the decode context because it is not serialized.
-    /// Encryption factories and crypto options are not serialized or restored;
-    /// plans that rely on them require custom handling.
+    /// Reconstructs a `DataSourceExec` from a legacy protobuf `ParquetScan`.
+    #[deprecated(since = "56.0.0", note = "use `try_from_proto_file_source` instead")]
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> datafusion_common::Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
-        use crate::CachedParquetFileReaderFactory;
-        use arrow::datatypes::Schema;
-        use datafusion_common::config::TableParquetOptions;
         use datafusion_datasource::file_scan_config::FileScanConfig;
         use datafusion_datasource::source::DataSourceExec;
-        use datafusion_execution::object_store::ObjectStoreUrl;
         use datafusion_proto_models::protobuf;
 
         let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
@@ -1167,21 +1158,43 @@ impl ParquetSource {
                 "PhysicalPlanNode is not a ParquetScan"
             );
         };
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ParquetScanExecNode is missing required field 'base_conf'"
+            )
+        })?;
+        let source_node = protobuf::ParquetSourceNode::from(scan);
+        let source = Self::try_from_proto_file_source(&source_node, base_conf, ctx)?;
+        let base_config = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
+        Ok(DataSourceExec::from_data_source(base_config))
+    }
 
-        let protobuf::ParquetScanExecNode {
-            base_conf,
+    /// Reconstructs a `ParquetSource` from its protobuf representation.
+    /// `base` is the enclosing scan's shared config, used for the table
+    /// schema, the predicate's schema and the object store.
+    ///
+    /// Rebuilds the reader factory from the decode context because it is not serialized.
+    /// Encryption factories and crypto options are not serialized or restored;
+    /// plans that rely on them require custom handling.
+    pub fn try_from_proto_file_source(
+        node: &datafusion_proto_models::protobuf::ParquetSourceNode,
+        base_conf: &datafusion_proto_models::protobuf::FileScanExecConf,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
+        use crate::CachedParquetFileReaderFactory;
+        use arrow::datatypes::Schema;
+        use datafusion_common::config::TableParquetOptions;
+        use datafusion_datasource::file_scan_config::FileScanConfig;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_proto_models::protobuf;
+
+        let protobuf::ParquetSourceNode {
             predicate,
             parquet_options,
             sort_order_for_reorder,
             reverse_row_groups,
             metadata_size_hint,
-        } = scan;
-
-        let base_conf = base_conf.as_ref().ok_or_else(|| {
-            datafusion_common::internal_datafusion_err!(
-                "ParquetScanExecNode is missing required field 'base_conf'"
-            )
-        })?;
+        } = node;
 
         let schema: Arc<Schema> = Arc::new(
             base_conf
@@ -1259,9 +1272,7 @@ impl ParquetSource {
         if let Some(predicate) = predicate {
             source = source.with_predicate(predicate);
         }
-        let base_config =
-            FileScanConfig::try_from_proto(base_conf, ctx, Arc::new(source))?;
-        Ok(DataSourceExec::from_data_source(base_config))
+        Ok(Arc::new(source))
     }
 }
 

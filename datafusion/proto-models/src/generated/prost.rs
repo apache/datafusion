@@ -1396,7 +1396,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1404,8 +1404,10 @@ pub struct PhysicalPlanNode {
 pub mod physical_plan_node {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum PhysicalPlanType {
+        /// Deprecated: encoders emit `data_source`; decoders still accept this.
         #[prost(message, tag = "1")]
         ParquetScan(super::ParquetScanExecNode),
+        /// Deprecated: encoders emit `data_source`; decoders still accept this.
         #[prost(message, tag = "2")]
         CsvScan(super::CsvScanExecNode),
         #[prost(message, tag = "3")]
@@ -1434,6 +1436,7 @@ pub mod physical_plan_node {
         Window(::prost::alloc::boxed::Box<super::WindowAggExecNode>),
         #[prost(message, tag = "16")]
         CrossJoin(::prost::alloc::boxed::Box<super::CrossJoinExecNode>),
+        /// Deprecated: encoders emit `data_source`; decoders still accept this.
         #[prost(message, tag = "17")]
         AvroScan(super::AvroScanExecNode),
         #[prost(message, tag = "18")]
@@ -1450,6 +1453,7 @@ pub mod physical_plan_node {
         NestedLoopJoin(::prost::alloc::boxed::Box<super::NestedLoopJoinExecNode>),
         #[prost(message, tag = "23")]
         Analyze(::prost::alloc::boxed::Box<super::AnalyzeExecNode>),
+        /// Deprecated: encoders emit `data_sink`; decoders still accept this.
         #[prost(message, tag = "24")]
         JsonSink(::prost::alloc::boxed::Box<super::JsonSinkExecNode>),
         #[prost(message, tag = "25")]
@@ -1458,12 +1462,15 @@ pub mod physical_plan_node {
         Interleave(super::InterleaveExecNode),
         #[prost(message, tag = "27")]
         PlaceholderRow(super::PlaceholderRowExecNode),
+        /// Deprecated: encoders emit `data_sink`; decoders still accept this.
         #[prost(message, tag = "28")]
         CsvSink(::prost::alloc::boxed::Box<super::CsvSinkExecNode>),
+        /// Deprecated: encoders emit `data_sink`; decoders still accept this.
         #[prost(message, tag = "29")]
         ParquetSink(::prost::alloc::boxed::Box<super::ParquetSinkExecNode>),
         #[prost(message, tag = "30")]
         Unnest(::prost::alloc::boxed::Box<super::UnnestExecNode>),
+        /// Deprecated: encoders emit `data_source`; decoders still accept this.
         #[prost(message, tag = "31")]
         JsonScan(super::JsonScanExecNode),
         #[prost(message, tag = "32")]
@@ -1472,12 +1479,14 @@ pub mod physical_plan_node {
         GenerateSeries(super::GenerateSeriesNode),
         #[prost(message, tag = "34")]
         SortMergeJoin(::prost::alloc::boxed::Box<super::SortMergeJoinExecNode>),
+        /// Deprecated: encoders emit `data_source`; decoders still accept this.
         #[prost(message, tag = "35")]
         MemoryScan(super::MemoryScanExecNode),
         #[prost(message, tag = "36")]
         AsyncFunc(::prost::alloc::boxed::Box<super::AsyncFuncExecNode>),
         #[prost(message, tag = "37")]
         Buffer(::prost::alloc::boxed::Box<super::BufferExecNode>),
+        /// Deprecated: encoders emit `data_source`; decoders still accept this.
         #[prost(message, tag = "38")]
         ArrowScan(super::ArrowScanExecNode),
         #[prost(message, tag = "39")]
@@ -1488,6 +1497,10 @@ pub mod physical_plan_node {
         ),
         #[prost(message, tag = "41")]
         AsOfJoin(::prost::alloc::boxed::Box<super::AsOfJoinExecNode>),
+        #[prost(message, tag = "42")]
+        DataSource(super::DataSourceExecNode),
+        #[prost(message, tag = "43")]
+        DataSink(::prost::alloc::boxed::Box<super::DataSinkExecNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2834,6 +2847,176 @@ pub struct PhysicalScalarSubqueryExprNode {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
+}
+/// A `DataSourceExec`: the plan-level wrapper around a `DataSource`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataSourceExecNode {
+    #[prost(message, optional, tag = "1")]
+    pub source: ::core::option::Option<DataSourceNode>,
+}
+/// A `DataSource` implementation.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataSourceNode {
+    #[prost(oneof = "data_source_node::SourceType", tags = "1, 2, 15")]
+    pub source_type: ::core::option::Option<data_source_node::SourceType>,
+}
+/// Nested message and enum types in `DataSourceNode`.
+pub mod data_source_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum SourceType {
+        #[prost(message, tag = "1")]
+        File(super::FileScanNode),
+        #[prost(message, tag = "2")]
+        Memory(super::MemoryScanExecNode),
+        #[prost(message, tag = "15")]
+        Extension(super::ExtensionDataSourceNode),
+    }
+}
+/// A `FileScanConfig`: the format-agnostic base plus its `FileSource`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileScanNode {
+    #[prost(message, optional, tag = "1")]
+    pub base: ::core::option::Option<FileScanExecConf>,
+    #[prost(message, optional, tag = "2")]
+    pub source: ::core::option::Option<FileSourceNode>,
+}
+/// A `FileSource` implementation.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileSourceNode {
+    #[prost(oneof = "file_source_node::FileSourceType", tags = "1, 2, 3, 4, 5, 15")]
+    pub file_source_type: ::core::option::Option<file_source_node::FileSourceType>,
+}
+/// Nested message and enum types in `FileSourceNode`.
+pub mod file_source_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum FileSourceType {
+        #[prost(message, tag = "1")]
+        Parquet(super::ParquetSourceNode),
+        #[prost(message, tag = "2")]
+        Csv(super::CsvSourceNode),
+        #[prost(message, tag = "3")]
+        Json(super::JsonSourceNode),
+        #[prost(message, tag = "4")]
+        Avro(super::AvroSourceNode),
+        #[prost(message, tag = "5")]
+        Arrow(super::ArrowSourceNode),
+        #[prost(message, tag = "15")]
+        Extension(super::ExtensionFileSourceNode),
+    }
+}
+/// Field tags mirror `ParquetScanExecNode` (minus `base_conf`).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetSourceNode {
+    #[prost(message, optional, tag = "3")]
+    pub predicate: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "4")]
+    pub parquet_options: ::core::option::Option<
+        super::datafusion_common::TableParquetOptions,
+    >,
+    #[prost(message, optional, tag = "5")]
+    pub sort_order_for_reorder: ::core::option::Option<PhysicalSortExprNodeCollection>,
+    #[prost(bool, tag = "6")]
+    pub reverse_row_groups: bool,
+    #[prost(uint64, optional, tag = "7")]
+    pub metadata_size_hint: ::core::option::Option<u64>,
+}
+/// Field tags mirror `CsvScanExecNode` (minus `base_conf`).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CsvSourceNode {
+    #[prost(bool, tag = "2")]
+    pub has_header: bool,
+    #[prost(string, tag = "3")]
+    pub delimiter: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub quote: ::prost::alloc::string::String,
+    #[prost(bool, tag = "7")]
+    pub newlines_in_values: bool,
+    #[prost(bool, tag = "8")]
+    pub truncate_rows: bool,
+    #[prost(bytes = "vec", optional, tag = "9")]
+    pub terminator: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(oneof = "csv_source_node::OptionalEscape", tags = "5")]
+    pub optional_escape: ::core::option::Option<csv_source_node::OptionalEscape>,
+    #[prost(oneof = "csv_source_node::OptionalComment", tags = "6")]
+    pub optional_comment: ::core::option::Option<csv_source_node::OptionalComment>,
+}
+/// Nested message and enum types in `CsvSourceNode`.
+pub mod csv_source_node {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum OptionalEscape {
+        #[prost(string, tag = "5")]
+        Escape(::prost::alloc::string::String),
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum OptionalComment {
+        #[prost(string, tag = "6")]
+        Comment(::prost::alloc::string::String),
+    }
+}
+/// Field tags mirror `JsonScanExecNode` (minus `base_conf`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct JsonSourceNode {
+    #[prost(bool, optional, tag = "2")]
+    pub newline_delimited: ::core::option::Option<bool>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AvroSourceNode {}
+/// Field tags mirror `ArrowScanExecNode` (minus `base_conf`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ArrowSourceNode {
+    #[prost(enumeration = "ArrowIpcFormat", tag = "2")]
+    pub format: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExtensionDataSourceNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "2")]
+    pub payload: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExtensionFileSourceNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "2")]
+    pub payload: ::prost::alloc::vec::Vec<u8>,
+}
+/// A `DataSinkExec`: the plan-level wrapper around a `DataSink`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataSinkExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub sink: ::core::option::Option<DataSinkNode>,
+    #[prost(message, optional, tag = "3")]
+    pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
+}
+/// A `DataSink` implementation.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataSinkNode {
+    #[prost(oneof = "data_sink_node::SinkType", tags = "1, 2, 3, 15")]
+    pub sink_type: ::core::option::Option<data_sink_node::SinkType>,
+}
+/// Nested message and enum types in `DataSinkNode`.
+pub mod data_sink_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum SinkType {
+        #[prost(message, tag = "1")]
+        Json(super::JsonSink),
+        #[prost(message, tag = "2")]
+        Csv(super::CsvSink),
+        #[prost(message, tag = "3")]
+        Parquet(super::ParquetSink),
+        #[prost(message, tag = "15")]
+        Extension(super::ExtensionDataSinkNode),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExtensionDataSinkNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "2")]
+    pub payload: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
