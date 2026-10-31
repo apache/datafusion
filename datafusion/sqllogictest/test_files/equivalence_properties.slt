@@ -158,6 +158,33 @@ SELECT c, row_number() OVER (ORDER BY sqrt(c)) FROM (SELECT c FROM t ORDER BY sq
 3 4
 4 5
 
+# On a table sorted by (a, b), the filter a = sqrt(b) would make it sorted by
+# b alone too, if sqrt(b) were known to be increasing in b. That cannot be
+# derived, because b may be negative, so no new ordering is found and the
+# query runs.
+statement ok
+CREATE EXTERNAL TABLE t_double (a0 DOUBLE, a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT a, b FROM t_double WHERE a = sqrt(b);
+----
+physical_plan
+01)FilterExec: a@0 = sqrt(b@1)
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+query I
+SELECT count(*) FROM t_double WHERE a = sqrt(b);
+----
+25
+
+statement ok
+DROP TABLE t_double;
+
 ###
 ### Order-preserving repartition of an unbounded input
 ###
