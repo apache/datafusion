@@ -35,7 +35,8 @@ use datafusion_expr::expr_rewriter::{
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
+    conjunction, expr_as_column_expr, expr_to_columns, find_aggregate_exprs,
+    find_window_exprs, split_conjunction_owned,
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
@@ -192,9 +193,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .collect::<Result<Vec<Expr>>>()?;
 
-        // Optionally the HAVING expression. A predicate that references a
-        // volatile alias is deferred to `having_post_projection` and planned
-        // above the final projection (see [`references_volatile_alias`]).
+        // Optionally the HAVING expression. Conjuncts that reference a
+        // volatile alias are deferred to `having_post_projection` and planned
+        // above the final projection (see [`references_volatile_alias`]); the
+        // remaining conjuncts take the normal path below the projection.
         let mut having_post_projection: Option<Expr> = None;
         let having_expr_opt = select
             .having
@@ -206,6 +208,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &combined_schema,
                     planner_context,
                 )?;
+                // HAVING is evaluated before window functions are computed, so
+                // they may not appear there (checked on a fully dereferenced
+                // copy so that an alias of a window function is rejected too)
+                reject_window_functions(
+                    &resolve_aliases_to_exprs(having_expr.clone(), &alias_map)?,
+                    "HAVING",
+                    QUALIFY_HELP,
+                    window_span,
+                )?;
+                let mut deferred_conjuncts = vec![];
+                let mut normal_conjuncts = vec![];
+                for conjunct in split_conjunction_owned(having_expr) {
+                    if references_volatile_alias(&conjunct, &alias_map)? {
+                        deferred_conjuncts.push(conjunct);
+                    } else {
+                        normal_conjuncts.push(conjunct);
+                    }
+                }
+                // Volatile aliases are never dereferenced; see
+                // [`references_volatile_alias`] for why.
+                having_post_projection = match conjunction(deferred_conjuncts) {
+                    Some(expr) => {
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Some(expr)
+                    }
+                    None => None,
+                };
                 // This step "dereferences" any aliases in the HAVING clause.
                 //
                 // This is how we support queries with HAVING expressions that
@@ -219,33 +249,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
-                // Volatile aliases are never dereferenced; see
-                // [`references_volatile_alias`] for why.
-                let volatile_alias = references_volatile_alias(&having_expr, &alias_map)?;
-                let dereferenced_expr =
-                    resolve_aliases_to_exprs(having_expr.clone(), &alias_map)?;
-                // HAVING is evaluated before window functions are computed, so
-                // they may not appear there (checked after alias resolution so
-                // that an alias of a window function is rejected too)
-                reject_window_functions(
-                    &dereferenced_expr,
-                    "HAVING",
-                    QUALIFY_HELP,
-                    window_span,
-                )?;
-                let having_expr = if volatile_alias {
-                    having_expr
-                } else {
-                    dereferenced_expr
-                };
-                let having_expr = normalize_col(having_expr, &projected_plan)?;
-                let (having_expr, _) =
-                    having_expr.infer_placeholder_types(&combined_schema)?;
-                if volatile_alias {
-                    having_post_projection = Some(having_expr);
-                    Ok(None)
-                } else {
-                    Ok(Some(having_expr))
+                match conjunction(normal_conjuncts) {
+                    Some(expr) => {
+                        let expr = resolve_aliases_to_exprs(expr, &alias_map)?;
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Ok(Some(expr))
+                    }
+                    None => Ok(None),
                 }
             })
             .transpose()?
@@ -303,8 +314,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .collect()
         };
 
-        // Optionally the QUALIFY expression. Like HAVING, a predicate that
-        // references a volatile alias is deferred to
+        // Optionally the QUALIFY expression. Like HAVING, conjuncts that
+        // reference a volatile alias are deferred to
         // `qualify_post_projection` and planned above the final projection.
         let mut qualify_post_projection: Option<Expr> = None;
         let qualify_expr_opt = select
@@ -315,6 +326,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &combined_schema,
                     planner_context,
                 )?;
+                let mut deferred_conjuncts = vec![];
+                let mut normal_conjuncts = vec![];
+                for conjunct in split_conjunction_owned(qualify_expr) {
+                    if references_volatile_alias(&conjunct, &alias_map)? {
+                        deferred_conjuncts.push(conjunct);
+                    } else {
+                        normal_conjuncts.push(conjunct);
+                    }
+                }
+                // Volatile aliases are never dereferenced; see
+                // [`references_volatile_alias`] for why.
+                qualify_post_projection = match conjunction(deferred_conjuncts) {
+                    Some(expr) => {
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Some(expr)
+                    }
+                    None => None,
+                };
                 // This step "dereferences" any aliases in the QUALIFY clause.
                 //
                 // This is how we support queries with QUALIFY expressions that
@@ -328,23 +358,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //
                 //   select row_number() over (PARTITION BY id) as rk from users qualify row_number() over (PARTITION BY id) > 1;
                 //
-                // Volatile aliases are never dereferenced; see
-                // [`references_volatile_alias`] for why.
-                let volatile_alias =
-                    references_volatile_alias(&qualify_expr, &alias_map)?;
-                let qualify_expr = if volatile_alias {
-                    qualify_expr
-                } else {
-                    resolve_aliases_to_exprs(qualify_expr, &alias_map)?
-                };
-                let qualify_expr = normalize_col(qualify_expr, &projected_plan)?;
-                let (qualify_expr, _) =
-                    qualify_expr.infer_placeholder_types(&combined_schema)?;
-                if volatile_alias {
-                    qualify_post_projection = Some(qualify_expr);
-                    Ok(None)
-                } else {
-                    Ok(Some(qualify_expr))
+                match conjunction(normal_conjuncts) {
+                    Some(expr) => {
+                        let expr = resolve_aliases_to_exprs(expr, &alias_map)?;
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Ok(Some(expr))
+                    }
+                    None => Ok(None),
                 }
             })
             .transpose()?

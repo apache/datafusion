@@ -9232,15 +9232,46 @@ select count(*) from (select v1, max(v2) as m, random() as r from having_test gr
 ----
 3
 
-# an aggregate that is not in the SELECT list cannot be combined with a
-# volatile alias reference
-query error DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions\. Add the function to the SELECT list and reference it by alias, or use a subquery
-select v1, random() as r from having_test group by v1 having r > 0.5 and max(v2) > 0
+# conjuncts are planned independently: an aggregate conjunct filters below
+# the projection as usual, a volatile-alias conjunct filters above it
+query TT
+EXPLAIN select v1, random() as r from having_test group by v1 having r > 0.5 and max(v2) > 0
+----
+logical_plan
+01)Filter: r > Float64(0.5)
+02)--Projection: having_test.v1, random() AS r
+03)----Filter: max(having_test.v2) > Int32(0)
+04)------Aggregate: groupBy=[[having_test.v1]], aggr=[[max(having_test.v2)]]
+05)--------TableScan: having_test projection=[v1, v2]
+physical_plan
+01)FilterExec: r@1 > 0.5
+02)--ProjectionExec: expr=[v1@0 as v1, random() as r]
+03)----FilterExec: max(having_test.v2)@1 > 0, projection=[v1@0]
+04)------AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1], aggr=[max(having_test.v2)]
+05)--------RepartitionExec: partitioning=Hash([v1@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[v1@0 as v1], aggr=[max(having_test.v2)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
-# a column that is not in the SELECT list cannot be combined with a volatile
-# alias reference
+# a volatile alias and an aggregate in the same conjunct cannot be split
+query error DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions\. Add the function to the SELECT list and reference it by alias, or use a subquery
+select v1, random() as r from having_test group by v1 having r > max(v2)
+
+# an OR predicate is planned as one filter. The volatile alias forces that
+# filter above the projection, but max(v2) is not available there
+query error DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions\. Add the function to the SELECT list and reference it by alias, or use a subquery
+select v1, random() as r from having_test group by v1 having r > 0.5 or max(v2) > 0
+
+# a group-by column conjunct splits off and plans below the projection even
+# when it is not in the SELECT list
+query I
+select count(*) from (select v1, random() as r from having_test group by v1, v2 having r >= 0 and v2 > 0)
+----
+3
+
+# a column that is not in the SELECT list cannot appear in the same conjunct
+# as a volatile alias reference
 query error DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression can only reference columns from the SELECT list, but having_test\.v2 is not in the SELECT list\. Use a subquery instead
-select v1, random() as r from having_test group by v1, v2 having r > 0.5 and v2 > 0
+select v1, random() as r from having_test group by v1, v2 having r > 0.5 or v2 > 0
 
 # volatile alias in HAVING still requires aggregation
 query error DataFusion error: Error during planning: HAVING clause references: r > Float64\(0\.5\) must appear in the GROUP BY clause or be used in an aggregate function
