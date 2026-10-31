@@ -1243,16 +1243,16 @@ impl EquivalenceProperties {
                 break;
             }
             // Remove indices that have an ordering from `search_indices`, and
-            // pin the ordered expressions for the next iterations, if any. We
-            // can do this because the "next" key only matters in a
-            // lexicographical ordering when the keys to its left have the same
-            // values.
+            // pin the ordered expressions (in normal form, as the walk sees
+            // the orderings) for the next iterations, if any. We can do this
+            // because the "next" key only matters in a lexicographical
+            // ordering when the keys to its left have the same values.
             for (_, idx) in &ordered_exprs {
                 search_indices.shift_remove(idx);
             }
             if !search_indices.is_empty() {
                 for (PhysicalSortExpr { expr, .. }, _) in &ordered_exprs {
-                    walk.pin(Arc::clone(expr))?;
+                    walk.pin(self.eq_group.normalize_expr(Arc::clone(expr)))?;
                 }
             }
             // Add new ordered section to the state.

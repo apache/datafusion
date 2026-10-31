@@ -286,12 +286,13 @@ mod tests {
     use std::sync::Arc;
 
     use crate::EquivalenceProperties;
-    use crate::expressions::{CastExpr, col};
+    use crate::expressions::{BinaryExpr, CastExpr, col};
     use crate::{PhysicalExpr, PhysicalSortExpr};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::Result;
+    use datafusion_expr::Operator;
 
     /// Pinning a key can move the head of an ordering to an expression that
     /// is equal to a function of the expressions after it, which implies a
@@ -389,6 +390,41 @@ mod tests {
         ]);
 
         assert!(properties.ordering_satisfy([sort(&k, false), sort(&a, false)])?);
+        Ok(())
+    }
+
+    /// `find_longest_permutation` pins what it finds in normal form. With
+    /// `b = c` and ordering `[a + b, d]`, finding either `a + b` or `a + c`
+    /// pins the head of the ordering, whichever of `b` and `c` the class
+    /// normalizes to, so `d` is found next.
+    #[test]
+    fn find_longest_permutation_pins_normal_form() -> Result<()> {
+        let schema = Arc::new(Schema::new(
+            ["a", "b", "c", "d"]
+                .map(|name| Field::new(name, DataType::Int32, true))
+                .to_vec(),
+        ));
+        let [a, b, c, d] = ["a", "b", "c", "d"].map(|name| col(name, &schema).unwrap());
+        let plus = |right: &Arc<dyn PhysicalExpr>| {
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&a),
+                Operator::Plus,
+                Arc::clone(right),
+            )) as Arc<dyn PhysicalExpr>
+        };
+
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_equal_conditions(Arc::clone(&b), Arc::clone(&c))?;
+        properties.add_ordering([
+            PhysicalSortExpr::new_default(plus(&b)),
+            PhysicalSortExpr::new_default(Arc::clone(&d)),
+        ]);
+
+        for right in [&b, &c] {
+            let (_, indices) =
+                properties.find_longest_permutation(&[plus(right), Arc::clone(&d)])?;
+            assert_eq!(indices, vec![0, 1], "a + {right}");
+        }
         Ok(())
     }
 }
