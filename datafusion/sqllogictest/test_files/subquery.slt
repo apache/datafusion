@@ -1294,6 +1294,42 @@ SELECT t1_id, (
 33 NULL
 44 NULL
 
+# A HAVING that is true on empty input over an aggregate that is NULL on empty
+# input. https://github.com/apache/datafusion/issues/26505
+# Errors rather than returning wrong rows. Expected `(1, NULL), (2, NULL)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT x.a, (SELECT sum(y.b) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING sum(y.b) IS NULL) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+
+# Errors rather than returning wrong rows. Expected `(1, NULL), (2, NULL)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT x.a, (SELECT max(y.b) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING max(y.b) IS NULL) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+
+# Errors rather than returning wrong rows. Expected `(1, NULL), (2, NULL)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT x.a, (SELECT sum(y.b) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING count(*) = 0) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+
+# Still decorrelated: the HAVING is applied to `count(*)`.
+query II
+SELECT x.a, (SELECT count(*) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING count(*) = 0) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+----
+1 NULL
+2 0
+
+# Still decorrelated: the HAVING reads an aggregate that is NULL on empty input,
+# but the subquery returns `count(*)`, which the HAVING is applied to.
+query II
+SELECT x.a, (SELECT count(*) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING sum(y.b) IS NULL) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+----
+1 NULL
+2 0
+
+# Still decorrelated: a HAVING that is false on empty input is not pulled up.
+query II
+SELECT x.a, (SELECT sum(y.b) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING sum(y.b) > 5) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+----
+1 10
+2 NULL
+
 #correlated_scalar_subquery_count_agg_in_case_when
 query TT
 explain
