@@ -32,15 +32,19 @@ use datafusion_execution::cache::cache_manager::{
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
+use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
     Expr, Partitioning as LogicalPartitioning, TableProviderFilterPushDown, TableType,
 };
-use datafusion_physical_expr::{create_lex_ordering, create_physical_partitioning};
+use datafusion_physical_expr::{
+    Partitioning, create_lex_ordering, create_physical_expr, create_physical_partitioning,
+};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::limit::GlobalLimitExec;
+use datafusion_pruning::{PruningPredicateBuilder, RangePruningStatistics};
 use futures::future::BoxFuture;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
@@ -634,10 +638,17 @@ impl ListingTable {
 
         // If the filters can be resolved using only partition cols, there is no need to
         // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
-        let (partition_filters, filters): (Vec<_>, Vec<_>) =
-            filters.iter().cloned().partition(|filter| {
-                can_be_evaluated_for_partition_pruning(&table_partition_col_names, filter)
-            });
+        let scan_filters = filters;
+        let filters = scan_filters
+            .iter()
+            .filter(|filter| {
+                !can_be_evaluated_for_partition_pruning(
+                    &table_partition_col_names,
+                    filter,
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
 
         let declared_output_partitioning = self.options.output_partitioning.as_ref();
 
@@ -659,7 +670,7 @@ impl ListingTable {
             grouped_by_partition: partitioned_by_file_group,
             partition_split_points,
         } = self
-            .list_files_for_scan(state, &partition_filters, statistic_file_limit)
+            .list_files_for_scan(state, &scan_filters, statistic_file_limit)
             .await?;
 
         // if no files need to be read, return an `EmptyExec`
@@ -905,22 +916,41 @@ impl ListingTable {
     /// be distributed to different threads / executors.
     ///
     /// If [`ListingOptions::output_partitioning`] is set, returns one file
-    /// group per declared partition, including empty trailing groups.
+    /// group per declared partition, including empty trailing groups. Filters
+    /// known not to match declared ranges leave empty groups at those indices.
     pub async fn list_files_for_scan<'a>(
         &'a self,
         ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> datafusion_common::Result<ListFilesResult> {
+        let partition_column_names = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        let partition_filters = filters
+            .iter()
+            .filter(|filter| {
+                can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         if let Some(output_partitioning) = self.options.output_partitioning.as_ref() {
             self.list_files_for_declared_output_partitioning(
                 ctx,
                 output_partitioning,
+                &partition_filters,
                 filters,
             )
             .await
         } else {
-            self.list_files_for_regular_scan(ctx, filters, limit).await
+            let file_limit = (partition_filters.len() == filters.len())
+                .then_some(limit)
+                .flatten();
+            self.list_files_for_regular_scan(ctx, &partition_filters, file_limit)
+                .await
         }
     }
 
@@ -1043,6 +1073,7 @@ impl ListingTable {
         ctx: &'a dyn Session,
         output_partitioning: &LogicalPartitioning,
         filters: &'a [Expr],
+        range_filters: &[Expr],
     ) -> datafusion_common::Result<ListFilesResult> {
         let Some(file_group_count) = output_partitioning.partition_count() else {
             return datafusion_common::not_impl_err!(
@@ -1071,10 +1102,67 @@ impl ListingTable {
         if !file_groups.is_empty() {
             file_groups.resize_with(file_group_count, || FileGroup::new(vec![]));
         }
-        let file_groups =
+        let mut file_groups =
             self.filter_declared_file_groups_by_partition_filters(file_groups, filters)?;
 
+        if matches!(output_partitioning, LogicalPartitioning::Range(_)) {
+            self.prune_range_file_groups(
+                ctx,
+                output_partitioning,
+                &mut file_groups,
+                range_filters,
+            )?;
+        }
+
         self.list_files_result_from_groups(ctx, file_groups, inexact_stats, false, vec![])
+    }
+
+    fn prune_range_file_groups(
+        &self,
+        ctx: &dyn Session,
+        output_partitioning: &LogicalPartitioning,
+        file_groups: &mut [FileGroup],
+        filters: &[Expr],
+    ) -> datafusion_common::Result<()> {
+        // Do not invoke volatile expressions while planning. Unsupported
+        // expressions and pruning evaluation errors must keep the partitions.
+        let Some(filter) =
+            conjunction(filters.iter().filter(|f| !f.is_volatile()).cloned())
+        else {
+            return Ok(());
+        };
+        let schema = DFSchema::try_from(Arc::clone(&self.table_schema))?;
+        let planning_ctx = PhysicalPlanningContext::default();
+        let Partitioning::Range(range) = create_physical_partitioning(
+            output_partitioning,
+            &schema,
+            ctx.execution_props(),
+            &planning_ctx,
+        )?
+        else {
+            return Ok(());
+        };
+        let retained =
+            create_physical_expr(&filter, &schema, ctx.execution_props(), &planning_ctx)
+                .and_then(|expr| {
+                    PruningPredicateBuilder::new()
+                        .with_file_schema(Arc::clone(&self.table_schema))
+                        .try_build(expr)
+                })
+                .and_then(|predicate| {
+                    predicate.prune(&RangePruningStatistics::new(&range))
+                });
+        match retained {
+            Ok(retained) => {
+                for (group, keep) in file_groups.iter_mut().zip(retained) {
+                    if !keep {
+                        *group = FileGroup::new(vec![]);
+                    }
+                }
+            }
+            Err(error) => log::debug!("Skipping range partition pruning: {error}"),
+        }
+        Ok(())
     }
 
     fn filter_declared_file_groups_by_partition_filters(
