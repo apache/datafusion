@@ -452,6 +452,17 @@ impl AggregateUDFImpl for Regr {
         }
     }
 
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        let arg_types: Vec<_> =
+            arg_fields.iter().map(|f| f.data_type()).cloned().collect();
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.return_type(&arg_types)?,
+            self.regr_type != RegrType::Count,
+        )))
+    }
+
+    // Keep the deprecated method consistent with `return_field` until it is removed
     fn is_nullable(&self) -> bool {
         self.regr_type != RegrType::Count
     }

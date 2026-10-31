@@ -5,15 +5,19 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
+use arrow::array::{
+    ArrayRef, AsArray, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
+    UInt32Array,
+};
 use arrow::compute::{SortColumn, SortOptions, lexsort_to_indices, take_record_batch};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Int32Type, Schema, SchemaRef};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{Result, exec_err, internal_datafusion_err, plan_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Operator, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_physical_expr::equivalence::{
     EquivalenceClass, ProjectionMapping, convert_to_orderings,
@@ -21,7 +25,7 @@ use datafusion_physical_expr::equivalence::{
 use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_plan::expressions::{BinaryExpr, Column, col};
+use datafusion_physical_plan::expressions::{BinaryExpr, CastExpr, Column, col};
 
 use itertools::izip;
 use rand::prelude::*;
@@ -70,8 +74,21 @@ pub fn create_test_schema_2() -> Result<SchemaRef> {
 /// where
 /// Column [a=f] (e.g they are aliases).
 /// Column e is constant.
-pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperties)> {
-    let test_schema = create_test_schema_2()?;
+///
+/// Columns are declared nullable only when `null_pct > 0.0`, so the schema
+/// tells `ordering_satisfy` whether `nulls_first` can matter for the data.
+pub fn create_random_schema(
+    seed: u64,
+    null_pct: f64,
+) -> Result<(SchemaRef, EquivalenceProperties)> {
+    let nullable = null_pct > 0.0;
+    let test_schema = Arc::new(Schema::new(
+        create_test_schema_2()?
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone().with_nullable(nullable))
+            .collect::<Vec<_>>(),
+    ));
     let col_a = &col("a", &test_schema)?;
     let col_b = &col("b", &test_schema)?;
     let col_c = &col("c", &test_schema)?;
@@ -90,11 +107,6 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
     let mut rng = StdRng::seed_from_u64(seed);
     let mut remaining_exprs = col_exprs[0..4].to_vec(); // only a, b, c, d are sorted
 
-    let options_asc = SortOptions {
-        descending: false,
-        nulls_first: false,
-    };
-
     while !remaining_exprs.is_empty() {
         let n_sort_expr = rng.random_range(1..remaining_exprs.len() + 1);
         remaining_exprs.shuffle(&mut rng);
@@ -104,13 +116,21 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
                 .drain(0..n_sort_expr)
                 .map(|expr| PhysicalSortExpr {
                     expr: Arc::clone(expr),
-                    options: options_asc,
+                    options: random_sort_options(&mut rng),
                 });
 
         eq_properties.add_ordering(ordering);
     }
 
     Ok((test_schema, eq_properties))
+}
+
+/// Picks the direction and NULL placement of one sort key.
+pub fn random_sort_options(rng: &mut StdRng) -> SortOptions {
+    SortOptions {
+        descending: rng.random(),
+        nulls_first: rng.random(),
+    }
 }
 
 // Apply projection to the input_data, return projected equivalence properties and record batch
@@ -197,15 +217,29 @@ fn add_equal_conditions_test() -> Result<()> {
     Ok(())
 }
 
-/// Returns `true` if `expr` contains a `+` or `-` anywhere in its tree.
+/// Returns `true` if `expr` contains, anywhere in its tree, an operator whose
+/// ordering rule is deliberately conservative.
 ///
-/// The equivalence framework conservatively discards orderings derived from
-/// `+`/`-` expressions, because wrapping overflow can break them over the
-/// type's full domain even when a finite batch happens to remain sorted.
-pub fn contains_overflowable_arithmetic(expr: &Arc<dyn PhysicalExpr>) -> bool {
+/// The equivalence framework discards orderings in cases where a finite batch
+/// can still happen to be sorted, so a rejection is not conclusive:
+/// - `+`/`-`: wrapping overflow can break the ordering over the type's full
+///   domain.
+/// - comparisons, `AND`, `OR`: the rules keep an ordering only for specific
+///   NULL placements, without checking whether the operands can be NULL.
+pub fn contains_conservative_ordering_op(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.exists(|e| {
         Ok(e.downcast_ref::<BinaryExpr>().is_some_and(|binary| {
-            matches!(binary.op(), Operator::Plus | Operator::Minus)
+            matches!(
+                binary.op(),
+                Operator::Plus
+                    | Operator::Minus
+                    | Operator::Gt
+                    | Operator::GtEq
+                    | Operator::Lt
+                    | Operator::LtEq
+                    | Operator::And
+                    | Operator::Or
+            )
         }))
     })
     .unwrap()
@@ -273,6 +307,34 @@ pub fn is_table_same_after_sort(
     let original_indices = UInt32Array::from_iter_values(0..n_row as u32);
 
     Ok(sorted_indices == original_indices)
+}
+
+/// Sorts `exprs` with random [`SortOptions`] and asserts that `eq_properties`
+/// never claims an ordering that `batch` does not have.
+///
+/// Only this direction is checked: a single batch cannot tell an underivable
+/// ordering from one that is sorted by coincidence, e.g. when NULLs of
+/// independently sorted columns end up in the same rows.
+pub fn assert_random_ordering_satisfy_is_sound(
+    eq_properties: &EquivalenceProperties,
+    exprs: &[&Arc<dyn PhysicalExpr>],
+    batch: &RecordBatch,
+    rng: &mut StdRng,
+    context: &str,
+) -> Result<()> {
+    let sort_exprs = exprs
+        .iter()
+        .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), random_sort_options(rng)));
+    let Some(ordering) = LexOrdering::new(sort_exprs) else {
+        unreachable!("Test should always produce non-degenerate orderings");
+    };
+    if eq_properties.ordering_satisfy(ordering.clone())? {
+        assert!(
+            is_table_same_after_sort(ordering.clone(), batch)?,
+            "{context}, random requirement: {ordering:?}, eq_properties: {eq_properties}"
+        );
+    }
+    Ok(())
 }
 
 // If we already generated a random result for one of the
@@ -356,6 +418,7 @@ pub fn generate_table_for_eq_properties(
     eq_properties: &EquivalenceProperties,
     n_elem: usize,
     n_distinct: usize,
+    null_pct: f64,
 ) -> Result<RecordBatch> {
     let mut rng = StdRng::seed_from_u64(23);
 
@@ -364,10 +427,7 @@ pub fn generate_table_for_eq_properties(
 
     // Utility closure to generate random array
     let mut generate_random_array = |num_elems: usize, max_val: usize| -> ArrayRef {
-        let values: Vec<f64> = (0..num_elems)
-            .map(|_| rng.random_range(0..max_val) as f64 / 2.0)
-            .collect();
-        Arc::new(Float64Array::from_iter_values(values))
+        generate_random_f64_array(num_elems, max_val, null_pct, &mut rng)
     };
 
     // Fill constant columns
@@ -437,6 +497,7 @@ pub fn generate_table_for_orderings(
     schema: SchemaRef,
     n_elem: usize,
     n_distinct: usize,
+    null_pct: f64,
 ) -> Result<RecordBatch> {
     let mut rng = StdRng::seed_from_u64(23);
 
@@ -450,7 +511,7 @@ pub fn generate_table_for_orderings(
         .map(|field| {
             (
                 field.name(),
-                generate_random_f64_array(n_elem, n_distinct, &mut rng),
+                generate_random_f64_array(n_elem, n_distinct, null_pct, &mut rng),
             )
         })
         .collect::<Vec<_>>();
@@ -490,16 +551,257 @@ pub fn generate_table_for_orderings(
     Ok(batch)
 }
 
+/// A table, equivalence properties that hold on it, and sort keys to check
+/// against both. See [`create_random_table_with_casts_and_windows`].
+pub struct TableWithProperties {
+    pub eq_properties: EquivalenceProperties,
+    pub batch: RecordBatch,
+    /// Candidate sort keys, each with the direction it is sorted in, if any.
+    pub keys: Vec<(Arc<dyn PhysicalExpr>, Option<SortOptions>)>,
+    /// Orderings that follow from the declared properties, which
+    /// `ordering_satisfy` should therefore prove.
+    pub provable_orderings: Vec<LexOrdering>,
+    /// Sets of expressions that `find_longest_permutation` should find in
+    /// full.
+    pub provable_permutations: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+}
+
+/// Builds a random table, then declares on it only properties that hold,
+/// including two kinds that [`create_random_schema`] does not generate:
+/// equalities with casts, and the orderings that a window over a whole
+/// partition adds.
+///
+/// - `k`, `a` and `b` are sorted by `[k, a, b]` in random directions.
+/// - `t` and `x` are `a` and `b` cast to `BIGINT`, and are declared equal to
+///   these casts. `a` is a `DOUBLE`, so `t` keeps the order of `a` but not
+///   its ties. The declared ordering is `[k, a, b]` or, at random,
+///   `[k, t, a, b]`, from which `[k, a, b]` follows. The candidate keys also
+///   cast `a` to `INT`, which loses its ties too.
+/// - `w` has one value per `k`, like `SUM(..) OVER (PARTITION BY k)`, which
+///   is declared as `[k, w]` in all four directions of `w`.
+/// - `c` and `d` are sorted by `[c, d]`, independently of the rest.
+/// - `e` is constant.
+///
+/// The orderings are declared in random order.
+pub fn create_random_table_with_casts_and_windows(
+    seed: u64,
+    null_pct: f64,
+    n_elem: usize,
+    n_distinct: usize,
+) -> Result<TableWithProperties> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let [opts_k, opts_a, opts_b, opts_c, opts_d] =
+        std::array::from_fn(|_| random_sort_options(&mut rng));
+
+    let k = generate_random_i32_array(n_elem, n_distinct, null_pct, &mut rng);
+    let a = generate_random_f64_array(n_elem, n_distinct, null_pct, &mut rng);
+    let b = generate_random_i32_array(n_elem, n_distinct, null_pct, &mut rng);
+    let [k, a, b] = lexsort_columns([(k, opts_k), (a, opts_a), (b, opts_b)])?;
+    let t = arrow::compute::cast(&a, &DataType::Int64)?;
+    let x = arrow::compute::cast(&b, &DataType::Int64)?;
+    // `k` is sorted, so rows with the same `k` are adjacent:
+    let mut w = Vec::with_capacity(n_elem);
+    let mut previous_k = None;
+    for value in k.as_primitive::<Int32Type>().iter() {
+        if previous_k != Some(value) {
+            previous_k = Some(value);
+            w.push(random_value(n_distinct, null_pct, &mut rng).map(i64::from));
+        } else {
+            w.push(*w.last().unwrap());
+        }
+    }
+    let w = Arc::new(Int64Array::from(w)) as ArrayRef;
+    let c = generate_random_i32_array(n_elem, n_distinct, null_pct, &mut rng);
+    let d = generate_random_i32_array(n_elem, n_distinct, null_pct, &mut rng);
+    let [c, d] = lexsort_columns([(c, opts_c), (d, opts_d)])?;
+    let e = Arc::new(Int32Array::from(vec![1; n_elem])) as ArrayRef;
+
+    let columns = [
+        ("k", k),
+        ("a", a),
+        ("b", b),
+        ("t", t),
+        ("x", x),
+        ("w", w),
+        ("c", c),
+        ("d", d),
+        ("e", e),
+    ];
+    let schema = Arc::new(Schema::new(
+        columns
+            .iter()
+            .map(|(name, array)| {
+                Field::new(*name, array.data_type().clone(), null_pct > 0.0)
+            })
+            .collect::<Vec<_>>(),
+    ));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        columns.into_iter().map(|(_, array)| array).collect(),
+    )?;
+
+    let [k, a, b, t, x, w, c, d, e] = ["k", "a", "b", "t", "x", "w", "c", "d", "e"]
+        .map(|name| col(name, &schema).unwrap());
+    let cast = |expr: &Arc<dyn PhysicalExpr>, data_type| {
+        Arc::new(CastExpr::new(Arc::clone(expr), data_type, None))
+            as Arc<dyn PhysicalExpr>
+    };
+    let cast_k = cast(&k, DataType::Int64);
+    let cast_a = cast(&a, DataType::Int64);
+    // In no equivalence class, unlike `CAST(a AS BIGINT)`:
+    let cast_a_int = cast(&a, DataType::Int32);
+    let cast_b = cast(&b, DataType::Int64);
+    let cast_w = cast(&w, DataType::Float64);
+    let sort = |expr: &Arc<dyn PhysicalExpr>, options| {
+        PhysicalSortExpr::new(Arc::clone(expr), options)
+    };
+
+    let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+    eq_properties.add_equal_conditions(Arc::clone(&t), Arc::clone(&cast_a))?;
+    eq_properties.add_equal_conditions(Arc::clone(&x), Arc::clone(&cast_b))?;
+    eq_properties.add_constants([ConstExpr::from(Arc::clone(&e))])?;
+    let mut main_ordering = vec![sort(&k, opts_k), sort(&a, opts_a), sort(&b, opts_b)];
+    if rng.random_bool(0.5) {
+        main_ordering.insert(1, sort(&t, opts_a));
+    }
+    let mut orderings = vec![main_ordering, vec![sort(&c, opts_c), sort(&d, opts_d)]];
+    orderings.extend(
+        ALL_SORT_OPTIONS.map(|options| vec![sort(&k, opts_k), sort(&w, options)]),
+    );
+    orderings.shuffle(&mut rng);
+    eq_properties.add_orderings(orderings);
+
+    let keys = vec![
+        (Arc::clone(&k), Some(opts_k)),
+        (Arc::clone(&a), Some(opts_a)),
+        (Arc::clone(&b), Some(opts_b)),
+        (Arc::clone(&t), Some(opts_a)),
+        (Arc::clone(&x), Some(opts_b)),
+        (Arc::clone(&w), None),
+        (Arc::clone(&c), Some(opts_c)),
+        (Arc::clone(&d), Some(opts_d)),
+        (Arc::clone(&e), None),
+        (Arc::clone(&cast_k), Some(opts_k)),
+        (Arc::clone(&cast_a), Some(opts_a)),
+        (Arc::clone(&cast_a_int), Some(opts_a)),
+        (Arc::clone(&cast_b), Some(opts_b)),
+        (Arc::clone(&cast_w), None),
+    ];
+    // `x` and `CAST(b AS BIGINT)` both normalize to the member that
+    // represents their class, which no ordering leads, so neither is proven
+    // to be ordered after `[k, a]`. The same holds for `t` and
+    // `CAST(a AS BIGINT)` when the declared ordering is `[k, a, b]`. They are
+    // still checked as candidate keys.
+    let provable_orderings = [
+        vec![sort(&k, opts_k), sort(&a, opts_a), sort(&b, opts_b)],
+        vec![sort(&cast_k, opts_k), sort(&a, opts_a)],
+        vec![sort(&e, opts_c), sort(&c, opts_c), sort(&d, opts_d)],
+    ]
+    .into_iter()
+    .chain(ALL_SORT_OPTIONS.into_iter().flat_map(|options| {
+        [
+            vec![
+                sort(&k, opts_k),
+                sort(&w, options),
+                sort(&a, opts_a),
+                sort(&b, opts_b),
+            ],
+            vec![sort(&k, opts_k), sort(&cast_w, options), sort(&a, opts_a)],
+        ]
+    }))
+    .map(|ordering| LexOrdering::new(ordering).unwrap())
+    .collect::<Vec<_>>();
+    let provable_permutations = vec![
+        vec![
+            Arc::clone(&w),
+            Arc::clone(&b),
+            Arc::clone(&a),
+            Arc::clone(&k),
+        ],
+        vec![cast_w, b, a, k],
+    ];
+
+    Ok(TableWithProperties {
+        eq_properties,
+        batch,
+        keys,
+        provable_orderings,
+        provable_permutations,
+    })
+}
+
+/// Sorts `columns` together, the first one first, each in its direction.
+fn lexsort_columns<const N: usize>(
+    columns: [(ArrayRef, SortOptions); N],
+) -> Result<[ArrayRef; N]> {
+    let sort_columns = columns.map(|(values, options)| SortColumn {
+        values,
+        options: Some(options),
+    });
+    let sorted = arrow::compute::lexsort(&sort_columns, None)?;
+    Ok(sorted.try_into().unwrap())
+}
+
+/// The four directions of a sort key.
+pub const ALL_SORT_OPTIONS: [SortOptions; 4] = [
+    SortOptions {
+        descending: false,
+        nulls_first: false,
+    },
+    SortOptions {
+        descending: false,
+        nulls_first: true,
+    },
+    SortOptions {
+        descending: true,
+        nulls_first: false,
+    },
+    SortOptions {
+        descending: true,
+        nulls_first: true,
+    },
+];
+
+pub const NULL_PCTS: &[f64] = &[0.0, 0.1, 0.5];
+
+/// A value in `0..n_distinct`, or `None` with probability `null_pct`.
+fn random_value(n_distinct: usize, null_pct: f64, rng: &mut StdRng) -> Option<i32> {
+    if rng.random::<f64>() < null_pct {
+        None
+    } else {
+        Some(rng.random_range(0..n_distinct as i32))
+    }
+}
+
+fn generate_random_i32_array(
+    n_elems: usize,
+    n_distinct: usize,
+    null_pct: f64,
+    rng: &mut StdRng,
+) -> ArrayRef {
+    let values = (0..n_elems)
+        .map(|_| random_value(n_distinct, null_pct, rng))
+        .collect::<Int32Array>();
+    Arc::new(values)
+}
+
 // Utility function to generate random f64 array
 fn generate_random_f64_array(
     n_elems: usize,
     n_distinct: usize,
+    null_pct: f64,
     rng: &mut StdRng,
 ) -> ArrayRef {
-    let values: Vec<f64> = (0..n_elems)
-        .map(|_| rng.random_range(0..n_distinct) as f64 / 2.0)
-        .collect();
-    Arc::new(Float64Array::from_iter_values(values))
+    let values = (0..n_elems)
+        .map(|_| {
+            if rng.random::<f64>() < null_pct {
+                None
+            } else {
+                Some(rng.random_range(0..n_distinct) as f64 / 2.0)
+            }
+        })
+        .collect::<Float64Array>();
+    Arc::new(values)
 }
 
 // Helper function to get sort columns from a batch
@@ -547,6 +849,17 @@ impl ScalarUDFImpl for TestScalarUDF {
             DataType::Float32 => Ok(DataType::Float32),
             _ => Ok(DataType::Float64),
         }
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_field = &args.arg_fields[0];
+        let return_type = self.return_type(&[arg_field.data_type().clone()])?;
+        // floor maps NULL to NULL and never produces NULL otherwise.
+        Ok(Arc::new(Field::new(
+            self.name(),
+            return_type,
+            arg_field.is_nullable(),
+        )))
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {

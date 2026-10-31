@@ -288,7 +288,6 @@ impl AggregateExprBuilder {
         if let Some(output_metadata) = output_metadata {
             return_field = output_metadata.add_to_field_ref(return_field);
         }
-        let is_nullable = fun.is_nullable();
         let Some(name) = alias else {
             return internal_err!(
                 "AggregateExprBuilder::alias must be provided prior to calling build"
@@ -317,7 +316,6 @@ impl AggregateExprBuilder {
             is_distinct,
             input_fields: input_exprs_fields,
             is_reversed,
-            is_nullable,
         })
     }
 
@@ -667,7 +665,6 @@ pub struct AggregateFunctionExpr {
     is_distinct: bool,
     is_reversed: bool,
     input_fields: Vec<FieldRef>,
-    is_nullable: bool,
 }
 
 impl AggregateFunctionExpr {
@@ -728,7 +725,7 @@ impl AggregateFunctionExpr {
 
     /// Return if the aggregation is nullable
     pub fn is_nullable(&self) -> bool {
-        self.is_nullable
+        self.return_field.is_nullable()
     }
 
     /// the field of the final result of this aggregation.
@@ -1091,7 +1088,6 @@ impl AggregateFunctionExpr {
             is_distinct: self.is_distinct,
             is_reversed: false,
             input_fields: self.input_fields.clone(),
-            is_nullable: self.is_nullable,
         })
     }
 

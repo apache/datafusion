@@ -69,7 +69,7 @@ The following configuration settings are available:
 | datafusion.catalog.default_catalog                                      | datafusion                | The default catalog name - this impacts what SQL queries use if not specified                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | datafusion.catalog.default_schema                                       | public                    | The default schema name - this impacts what SQL queries use if not specified                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | datafusion.catalog.information_schema                                   | false                     | Should DataFusion provide access to `information_schema` virtual tables for displaying schema information                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| datafusion.catalog.system_catalog                                       | NULL                      | The system catalog name - when set together with `information_schema`, the `information_schema` for each catalog will only describe objects contained in the catalog itself. The global, cross-catalog `information_schema` is available under the virtual catalog named by this option.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| datafusion.catalog.partition_information_schema                         | false                     | When set together with `information_schema`, the `information_schema` of each catalog only describes the objects in that catalog. When not set, the `information_schema` of each catalog describes all catalogs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | datafusion.catalog.location                                             | NULL                      | Location scanned to load tables for `default` schema                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | datafusion.catalog.format                                               | NULL                      | Type of `TableProvider` to use when loading `default` schema                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | datafusion.catalog.has_header                                           | true                      | Default value for `format.has_header` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -259,12 +259,14 @@ The following runtime configuration settings are available:
 
 # Tuning Guide
 
-## Short Queries
+## Short Queries and Point Lookups
 
 By default DataFusion will attempt to maximize parallelism and use all cores --
 For example, if you have 32 cores, each plan will split the data into 32
-partitions. However, if your data is small, the overhead of splitting the data
-to enable parallelization can dominate the actual computation.
+partitions. However, if your data is small, or the query only reads a few rows
+(for example, a point lookup such as `SELECT * FROM t WHERE id = 42`), the
+overhead of planning, opening files, and splitting the data to enable
+parallelization can dominate the actual computation.
 
 You can find out how many cores are being used via the [`EXPLAIN`] command and look
 at the number of partitions in the plan.
@@ -277,13 +279,48 @@ does not apply to user defined data sources and only works when DataFusion has a
 
 If you know your data is small, you can set the `datafusion.execution.target_partitions`
 option to a smaller number to reduce the overhead of repartitioning. For very small datasets (e.g. less
-than 1MB), we recommend setting `target_partitions` to 1 to avoid repartitioning altogether.
+than 1MB) or point lookups, we recommend setting `target_partitions` to 1 to avoid repartitioning altogether.
 
 ```sql
 SET datafusion.execution.target_partitions = '1';
 ```
 
 [`listingtable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
+
+For point lookups, the following techniques also help:
+
+- Sort the data by the lookup key so the data that is fetched is physically nearby (clustered).
+  This makes techniques such as Parquet min/max metadata pruning more effective.
+- Write Parquet files with smaller row groups and data pages than the default
+  so that less data needs to be read and decoded for each lookup.
+- Enable `datafusion.execution.parquet.pushdown_filters` so filters are
+  evaluated while decoding Parquet.
+- Set the Parquet metadata cache size via
+  `datafusion.runtime.metadata_cache_limit` so it is large enough to hold all the metadata for the
+  files you query repeatedly.
+- Reuse physical plans to avoid re-planning each query.
+
+Here is an example of how to write Parquet files with smaller row groups and
+data pages:
+
+```sql
+COPY (SELECT * FROM t) TO 't.parquet'
+OPTIONS (
+  MAX_ROW_GROUP_SIZE 131072,
+  DATA_PAGE_ROW_COUNT_LIMIT 2048
+);
+```
+
+Here is how to enable pushdown filters:
+
+```sql
+SET datafusion.execution.parquet.pushdown_filters = true;
+```
+
+See the [Best Practices for Single Row Lookups (Point Queries)] blog post for
+more details.
+
+[best practices for single row lookups (point queries)]: https://datafusion.apache.org/blog/2026/10/24/point-queries/
 
 ## Memory-limited Queries
 

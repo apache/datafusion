@@ -2048,13 +2048,6 @@ impl ExecutionPlan for HashJoinExec {
         Ok(result)
     }
 
-    fn supports_limit_pushdown(&self) -> bool {
-        // Hash join execution plan does not support pushing limit down through to children
-        // because the children don't know about the join condition and can't
-        // determine how many rows to produce
-        false
-    }
-
     fn fetch(&self) -> Option<usize> {
         self.fetch
     }

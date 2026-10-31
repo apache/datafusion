@@ -286,6 +286,19 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
             + self.buffer.group_indices.allocated_size()
     }
 
+    /// Releases the capacity that the buffer holds beyond its stored groups,
+    /// such as hash table slots, the per-batch `group_indices` scratch and
+    /// per-batch accumulator scratch, so that [`Self::memory_size`] reflects
+    /// the remaining groups.
+    pub(in crate::aggregates) fn shrink_to_fit(&mut self) {
+        self.buffer.group_values.shrink_to_fit();
+        self.buffer.group_indices.clear();
+        self.buffer.group_indices.shrink_to_fit();
+        for acc in &mut self.buffer.accumulators {
+            acc.shrink_to_fit();
+        }
+    }
+
     pub(in crate::aggregates) fn metrics(&self) -> ClusteredAggregateTableMetrics {
         ClusteredAggregateTableMetrics {
             group_by: self.group_by_metrics.clone(),
@@ -326,12 +339,16 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
         debug_assert!(batch.num_rows() > 0);
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
-        // key/index buffers too so the memory reservation can be released
-        // before the batch is passed downstream or sorted for spilling.
+        // key/index buffers and accumulator scratch too so the memory
+        // reservation can be released before the batch is passed downstream or
+        // sorted for spilling.
         self.buffer.group_values.clear_shrink(0);
         self.buffer.group_indices.clear();
         self.buffer.group_indices.shrink_to_fit();
         self.buffer.group_clustering.reset();
+        for acc in &mut self.buffer.accumulators {
+            acc.shrink_to_fit();
+        }
 
         Ok(Some(batch))
     }

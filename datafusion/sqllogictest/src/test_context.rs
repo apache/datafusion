@@ -16,8 +16,7 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaRef, TimeUnit, UInt32Type,
-    UnionFields,
+    DataType, Field, Fields, Schema, SchemaRef, TimeUnit, UInt32Type, UnionFields,
 };
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
@@ -28,11 +27,11 @@ use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
-use datafusion::logical_expr::planner::TypePlanner;
 use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
 };
+use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::{
@@ -43,7 +42,8 @@ use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
 use range_partitioning::{
-    register_range_partitioned_table, register_range_sorted_time_bin_table,
+    register_range_partitioned_table, register_range_sorted_day_bin_table,
+    register_range_sorted_time_bin_table,
 };
 
 use async_trait::async_trait;
@@ -57,9 +57,9 @@ use datafusion::physical_plan::operator_statistics::{
 };
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use log::info;
-use sqlparser::ast;
 use tempfile::TempDir;
 
+mod custom_sort_pushdown;
 mod range_partitioning;
 
 /// Context for running tests
@@ -68,22 +68,6 @@ pub struct TestContext {
     ctx: SessionContext,
     /// Temporary directory created and cleared at the end of the test
     test_dir: Option<TempDir>,
-}
-
-#[derive(Debug)]
-struct SqlLogicTestTypePlanner;
-
-impl TypePlanner for SqlLogicTestTypePlanner {
-    fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
-        match sql_type {
-            ast::DataType::Uuid => Ok(Some(Arc::new(
-                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
-                ),
-            ))),
-            _ => Ok(None),
-        }
-    }
 }
 
 impl TestContext {
@@ -100,9 +84,16 @@ impl TestContext {
     /// If `None` is returned (e.g. because some needed feature is not
     /// enabled), the file should be skipped
     pub async fn try_new_for_test_file(relative_path: &Path) -> Option<Self> {
+        let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
-            .with_target_partitions(4);
+            .with_target_partitions(4)
+            // The default `created_by` embeds the DataFusion version, which
+            // changes the size of written parquet files (and thus metrics such
+            // as `scan_efficiency_ratio` in EXPLAIN ANALYZE output) whenever
+            // the version string length changes. Pin it so test output is
+            // independent of the version.
+            .set_str("datafusion.execution.parquet.created_by", "datafusion");
         let pool = crate::memory_drift::wrap_pool(
             Arc::new(UnboundedMemoryPool::default()),
             &relative_path.display().to_string(),
@@ -122,14 +113,6 @@ impl TestContext {
             if let Some(config) = state_builder.config() {
                 config.options_mut().sql_parser.dialect = Dialect::Spark;
             }
-        }
-
-        if matches!(
-            relative_path.file_name().and_then(|name| name.to_str()),
-            Some("cast_extension_type_metadata.slt")
-        ) {
-            state_builder =
-                state_builder.with_type_planner(Arc::new(SqlLogicTestTypePlanner));
         }
 
         if matches!(
@@ -163,12 +146,30 @@ impl TestContext {
             state_builder = state_builder.with_statistics_registry(registry);
         }
 
+        if file_name == "sort_pushdown.slt" {
+            let mut rules = PhysicalOptimizer::new().rules;
+            let ensure_requirements = rules
+                .iter()
+                .position(|rule| rule.name() == "EnsureRequirements")
+                .expect("default optimizer includes EnsureRequirements");
+            rules.insert(
+                ensure_requirements,
+                Arc::new(custom_sort_pushdown::CustomLimitRule),
+            );
+            state_builder = state_builder.with_physical_optimizer_rules(rules);
+        }
+
         let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
 
-        let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
+            "sort_pushdown.slt" => {
+                custom_sort_pushdown::register_custom_sort_pushdown(
+                    test_ctx.session_ctx(),
+                )
+                .expect("register custom projection table");
+            }
             "parquet_missing_bounds.slt" => {
                 register_parquet_missing_bounds(&mut test_ctx).await;
             }
@@ -218,6 +219,7 @@ impl TestContext {
             "range_sorted_time_bin_agg.slt" => {
                 info!("Registering range-sorted time-bin table");
                 register_range_sorted_time_bin_table(test_ctx.session_ctx());
+                register_range_sorted_day_bin_table(test_ctx.session_ctx());
             }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");
