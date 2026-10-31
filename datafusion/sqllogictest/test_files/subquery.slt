@@ -779,6 +779,75 @@ SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT * FROM t2 WHERE t2_id =
 ----
 22
 
+#exists_subquery_with_limit_below_having
+#not de-correlated, the limit decides the count the HAVING reads: count(*) over
+#the one row LIMIT 1 keeps can never exceed 1, so the subquery is always empty.
+#Dropping the limit counted the whole scan and this returned 33.
+#https://github.com/apache/datafusion/issues/26629
+query TT
+explain SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT t2_id FROM t2 WHERE t2_int = t1_int LIMIT 1) s HAVING count(*) > 1)
+----
+logical_plan
+01)Projection: t1.t1_id
+02)--Filter: EXISTS (<subquery>)
+03)----Subquery:
+04)------Projection: Int64(1)
+05)--------Filter: count(Int64(1)) > Int64(1)
+06)----------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+07)------------SubqueryAlias: s
+08)--------------Projection: t2.t2_id
+09)----------------Limit: skip=0, fetch=1
+10)------------------Filter: t2.t2_int = outer_ref(t1.t1_int)
+11)--------------------TableScan: t2
+12)----TableScan: t1 projection=[t1_id, t1_int]
+
+# errors rather than returning wrong rows
+query error Physical plan does not support logical expression Exists
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT t2_id FROM t2 WHERE t2_int = t1_int LIMIT 1) s HAVING count(*) > 1)
+
+# same for NOT EXISTS, which returned 11, 22, 44 instead of every row
+query error Physical plan does not support logical expression Exists
+SELECT t1_id FROM t1 WHERE NOT EXISTS (SELECT 1 FROM (SELECT t2_id FROM t2 WHERE t2_int = t1_int LIMIT 1) s HAVING count(*) > 1)
+
+#exists_subquery_with_limit_below_filter
+#not de-correlated, the rows the limit keeps decide the filter above it
+query error Physical plan does not support logical expression Exists
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT t2_id, t2_int FROM t2 WHERE t2_id = t1_id LIMIT 1) s WHERE s.t2_int > 2)
+
+#exists_subquery_with_limit_below_aggregate
+#de-correlated, an aggregate without a grouping always returns its one row, so
+#the rows the limit held back cannot change whether the subquery is empty
+query TT
+explain SELECT t1_id FROM t1 WHERE EXISTS (SELECT count(*) FROM (SELECT t2_id FROM t2 WHERE t2_id = t1_id LIMIT 1) s)
+----
+logical_plan TableScan: t1 projection=[t1_id]
+
+query I rowsort
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT count(*) FROM (SELECT t2_id FROM t2 WHERE t2_id = t1_id LIMIT 1) s)
+----
+11
+22
+33
+44
+
+#exists_subquery_with_limit_below_distinct
+#de-correlated, a DISTINCT has rows exactly when its input has rows
+query I rowsort
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT DISTINCT s.t2_id FROM (SELECT t2_id FROM t2 WHERE t2_id = t1_id LIMIT 1) s)
+----
+11
+22
+44
+
+#exists_subquery_with_limit_below_group_by
+#de-correlated, a grouping has rows exactly when its input has rows
+query I rowsort
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT s.t2_id FROM (SELECT t2_id FROM t2 WHERE t2_id = t1_id LIMIT 1) s GROUP BY s.t2_id)
+----
+11
+22
+44
+
 #in_correlated_subquery_with_limit
 #not de-correlated
 query TT
