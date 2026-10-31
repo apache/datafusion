@@ -78,10 +78,12 @@ impl ScalarUDFImpl for RPadFunc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
+    use std::sync::Arc;
+
+    use arrow::array::{Array, Int64Array, StringArray};
     use arrow::datatypes::DataType::Utf8;
 
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, exec_err};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use crate::unicode::rpad::RPadFunc;
@@ -284,6 +286,39 @@ mod tests {
             ],
             internal_err!(
                 "function rpad requires compilation with feature flag: unicode_expressions."
+            ),
+            &str,
+            Utf8,
+            StringArray
+        );
+
+        Ok(())
+    }
+
+    fn array_args(lengths: Vec<i64>) -> Vec<ColumnarValue> {
+        vec![
+            ColumnarValue::Array(Arc::new(StringArray::from(vec!["hi"; lengths.len()]))),
+            ColumnarValue::Array(Arc::new(Int64Array::from(lengths))),
+        ]
+    }
+
+    #[test]
+    fn test_array_length_out_of_range() -> Result<()> {
+        test_function!(
+            RPadFunc::new(),
+            array_args(vec![-1]),
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            RPadFunc::new(),
+            array_args(vec![i64::MAX]),
+            exec_err!(
+                "rpad requested length {} too large, maximum allowed length is {}",
+                i64::MAX,
+                i32::MAX
             ),
             &str,
             Utf8,
