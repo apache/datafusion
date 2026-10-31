@@ -13,13 +13,32 @@ use datafusion_sql::{
     parser::{DFParser, DFParserBuilder, Statement as DFStatement},
     planner::{ParserOptions, SqlToRel},
     sqlparser::{
-        ast::{Expr as SQLExpr, visit_expressions_mut},
+        ast::{Expr as SQLExpr, Statement, visit_expressions_mut},
         tokenizer::Span as SQLParserSpan,
     },
 };
 use regex::Regex;
 
 use crate::{MockContextProvider, MockSessionState};
+
+/// Plans `sql`, returning the outcome together with the warnings collected.
+fn plan_query(sql: &str) -> (Result<()>, Vec<Diagnostic>) {
+    let statement = DFParserBuilder::new(sql)
+        .build()
+        .expect("unable to create parser")
+        .parse_statement()
+        .expect("unable to parse query");
+    let options = ParserOptions {
+        collect_spans: true,
+        ..ParserOptions::default()
+    };
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new_with_options(&context, options);
+    let result = sql_to_rel.statement_to_plan(statement).map(|_| ());
+    (result, sql_to_rel.take_warnings())
+}
 
 fn do_query(sql: &'static str) -> Diagnostic {
     let statement = DFParserBuilder::new(sql)
@@ -68,6 +87,20 @@ fn do_statement_warnings(statement: DFStatement) -> Vec<Diagnostic> {
     sql_to_rel.take_warnings()
 }
 
+fn do_statement_error(statement: DFStatement) -> Diagnostic {
+    let options = ParserOptions {
+        collect_spans: true,
+        ..ParserOptions::default()
+    };
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new_with_options(&context, options);
+    let err = sql_to_rel
+        .statement_to_plan(statement)
+        .expect_err("expected planning to fail");
+    err.diagnostic().expect("expected diagnostic").clone()
+}
+
 fn clear_value_spans(statement: &mut DFStatement) {
     let DFStatement::Statement(statement) = statement else {
         panic!("expected sqlparser statement");
@@ -78,6 +111,22 @@ fn clear_value_spans(statement: &mut DFStatement) {
         }
         ControlFlow::<()>::Continue(())
     });
+}
+
+/// Empties the span of every CTE name, as if the statement was built by hand.
+fn clear_cte_name_spans(statement: &mut DFStatement) {
+    let DFStatement::Statement(statement) = statement else {
+        panic!("expected sqlparser statement");
+    };
+    let Statement::Query(query) = statement.as_mut() else {
+        panic!("expected a query");
+    };
+    let Some(with) = &mut query.with else {
+        panic!("expected a WITH clause");
+    };
+    for cte in &mut with.cte_tables {
+        cte.alias.name.span = SQLParserSpan::empty();
+    }
 }
 
 /// Given a query that contains tag delimited spans, returns a mapping from the
@@ -777,4 +826,273 @@ fn test_window_function_alias_in_having() -> Result<()> {
     assert_snapshot!(diag.message, @"Window function calls are not allowed in HAVING");
     assert_eq!(diag.span, Some(spans["a"]));
     Ok(())
+}
+
+#[test]
+fn test_duplicate_cte_name() -> Result<()> {
+    let query = "WITH /*a*/cte/*a*/ AS (SELECT 1 AS col), /*b*/cte/*b*/ AS (SELECT 2 AS col) SELECT 1";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @r#"WITH query name "cte" specified more than once"#);
+    assert_eq!(diag.span, Some(spans["b"]));
+    assert_eq!(diag.notes.len(), 1);
+    assert_snapshot!(diag.notes[0].message, @"previously defined here");
+    assert_eq!(diag.notes[0].span, Some(spans["a"]));
+    Ok(())
+}
+
+#[test]
+fn test_duplicate_cte_name_without_spans() {
+    let query = "WITH cte AS (SELECT 1 AS col), cte AS (SELECT 2 AS col) SELECT 1";
+    let mut statement = DFParserBuilder::new(query)
+        .build()
+        .expect("unable to create parser")
+        .parse_statement()
+        .expect("unable to parse query");
+    clear_cte_name_spans(&mut statement);
+
+    let diag = do_statement_error(statement);
+    assert_eq!(diag.kind, DiagnosticKind::Error);
+    assert_snapshot!(diag.message, @r#"WITH query name "cte" specified more than once"#);
+    assert_eq!(diag.span, None);
+    assert!(diag.notes.is_empty());
+}
+
+#[test]
+fn test_duplicate_table_name_spans() {
+    // The duplicated name in each query is marked `a` at its first occurrence
+    // and `b` at the repeated one.
+    // Whether each case plans or fails is covered in join.slt.part; here only
+    // the diagnostics are checked.
+    let cases: &[(&str, &str, &str)] = &[
+        // (label, query, duplicated name)
+        (
+            "comma_basic_alias",
+            "SELECT * FROM person /*a*/a/*a*/, person /*b*/a/*b*/",
+            "a",
+        ),
+        (
+            "comma_alias_not_first",
+            "SELECT * FROM person a, test_decimal /*a*/b/*a*/, person /*b*/b/*b*/",
+            "b",
+        ),
+        (
+            "comma_bare_table",
+            "SELECT * FROM /*a*/person/*a*/, /*b*/person/*b*/",
+            "person",
+        ),
+        (
+            "comma_non_overlapping_columns",
+            "SELECT * FROM j1 AS /*a*/t/*a*/, j2 AS /*b*/t/*b*/",
+            "t",
+        ),
+        (
+            "comma_non_overlapping_three_tables",
+            "SELECT * FROM j1 AS x, j2 AS /*a*/t/*a*/, j3 AS y, j1 AS /*b*/t/*b*/",
+            "t",
+        ),
+        (
+            "comma_derived_subquery",
+            "SELECT * FROM (SELECT 1) AS /*a*/t/*a*/, (SELECT 2) AS /*b*/t/*b*/",
+            "t",
+        ),
+        (
+            "comma_table_and_derived",
+            "SELECT * FROM person AS /*a*/t/*a*/, (SELECT 1) AS /*b*/t/*b*/",
+            "t",
+        ),
+        (
+            "comma_derived_and_table",
+            "SELECT * FROM (SELECT 1) AS /*a*/t/*a*/, person AS /*b*/t/*b*/",
+            "t",
+        ),
+        (
+            "comma_nested_join",
+            "SELECT * FROM (person CROSS JOIN j1) AS /*a*/t/*a*/, (person CROSS JOIN j2) AS /*b*/t/*b*/",
+            "t",
+        ),
+        (
+            "explicit_join_alias",
+            "SELECT 1 FROM j1 AS /*a*/t/*a*/ JOIN j2 AS /*b*/t/*b*/ ON true",
+            "t",
+        ),
+        (
+            "explicit_join_derived",
+            "SELECT 1 FROM (SELECT 1 AS a) AS /*a*/t/*a*/ JOIN (SELECT 2 AS b) AS /*b*/t/*b*/ ON true",
+            "t",
+        ),
+        (
+            "comma_and_explicit_join",
+            "SELECT 1 FROM j1 AS /*a*/t/*a*/, j2 JOIN j3 AS /*b*/t/*b*/ ON true",
+            "t",
+        ),
+        (
+            "explicit_join_bare_table",
+            "SELECT 1 FROM /*a*/person/*a*/ JOIN /*b*/person/*b*/ ON true",
+            "person",
+        ),
+        (
+            "explicit_cross_join",
+            "SELECT 1 FROM j1 AS /*a*/t/*a*/ CROSS JOIN j2 AS /*b*/t/*b*/",
+            "t",
+        ),
+        (
+            "explicit_left_semi_join",
+            "SELECT 1 FROM j1 AS /*a*/t/*a*/ LEFT SEMI JOIN j2 AS /*b*/t/*b*/ ON true",
+            "t",
+        ),
+        (
+            "explicit_left_join",
+            "SELECT 1 FROM j1 AS /*a*/t/*a*/ LEFT JOIN j2 AS /*b*/t/*b*/ ON true",
+            "t",
+        ),
+        (
+            "explicit_three_way_join",
+            "SELECT 1 FROM j1 AS /*a*/x/*a*/ JOIN j2 AS y ON true JOIN j3 AS /*b*/x/*b*/ ON true",
+            "x",
+        ),
+        (
+            "explicit_between_joins",
+            "SELECT 1 FROM j1 AS x JOIN j2 AS /*a*/y/*a*/ ON true JOIN j3 AS /*b*/y/*b*/ ON true",
+            "y",
+        ),
+        (
+            "explicit_nested_join",
+            "SELECT 1 FROM (j1 CROSS JOIN j2) AS /*a*/t/*a*/ JOIN j3 AS /*b*/t/*b*/ ON true",
+            "t",
+        ),
+        (
+            "inside_nested_join",
+            "SELECT 1 FROM (j1 AS /*a*/t/*a*/ CROSS JOIN j2 AS /*b*/t/*b*/) AS n",
+            "t",
+        ),
+        (
+            "cross_entry_joins",
+            "SELECT 1 FROM j1 JOIN j2 AS /*a*/t/*a*/ ON true, j3 JOIN person AS /*b*/t/*b*/ ON true",
+            "t",
+        ),
+        (
+            "case_insensitive",
+            "SELECT 1 FROM j1 AS /*a*/T/*a*/ JOIN j2 AS /*b*/t/*b*/ ON true",
+            "t",
+        ),
+        (
+            "comma_unaliased_nested_join",
+            "SELECT 1 FROM (j1 AS /*a*/t/*a*/ CROSS JOIN j2), j3 AS /*b*/t/*b*/",
+            "t",
+        ),
+        (
+            "explicit_join_unaliased_nested_join",
+            "SELECT 1 FROM j3 AS /*a*/t/*a*/ JOIN (j1 AS /*b*/t/*b*/ CROSS JOIN j2) ON true",
+            "t",
+        ),
+    ];
+
+    for &(label, query, name) in cases {
+        let spans = get_spans(query);
+        let (result, warnings) = plan_query(query);
+        let message = format!("table name {name:?} specified more than once");
+        let check = |diag: &Diagnostic, kind: DiagnosticKind| {
+            assert_eq!(diag.kind, kind, "kind mismatch in {label}");
+            assert_eq!(diag.message, message, "message mismatch in {label}");
+            assert_eq!(diag.span, Some(spans["b"]), "span mismatch in {label}");
+            assert_eq!(diag.notes.len(), 1, "expected 1 note in {label}");
+            assert_eq!(
+                diag.notes[0].message, "first defined here",
+                "note mismatch in {label}"
+            );
+            assert_eq!(
+                diag.notes[0].span,
+                Some(spans["a"]),
+                "note span mismatch in {label}"
+            );
+        };
+
+        // Exactly one warning is always reported.
+        assert_eq!(warnings.len(), 1, "expected 1 warning in {label}");
+        check(&warnings[0], DiagnosticKind::Warning);
+
+        // A planning failure carries the same diagnostic as an error.
+        if let Err(err) = result {
+            check(
+                err.diagnostic().expect("expected diagnostic"),
+                DiagnosticKind::Error,
+            );
+        }
+    }
+}
+
+#[test]
+fn test_duplicate_table_name_inner_scope_diagnostic_not_shadowed() {
+    // `x` is repeated in both scopes. Planning fails in the inner one
+    // (`a`/`b`), so an outer duplicate (`c`/`d`) must not replace its diagnostic.
+    const QUERIES: &[&str] = &[
+        "SELECT * FROM (SELECT * FROM person AS /*a*/x/*a*/, person AS /*b*/x/*b*/) AS n, j1 AS /*c*/x/*c*/, j2 AS /*d*/x/*d*/",
+        // aliased parenthesized JOIN as the failing inner scope
+        "SELECT * FROM (person AS /*a*/x/*a*/ CROSS JOIN person AS /*b*/x/*b*/) AS n, j1 AS /*c*/x/*c*/, j2 AS /*d*/x/*d*/",
+    ];
+    for query in QUERIES {
+        let spans = get_spans(query);
+        let diag = do_query(query);
+        assert_eq!(diag.span, Some(spans["b"]), "span mismatch in {query}");
+        assert_eq!(diag.notes.len(), 1, "expected 1 note in {query}");
+        assert_eq!(
+            diag.notes[0].span,
+            Some(spans["a"]),
+            "note mismatch in {query}"
+        );
+    }
+}
+
+#[test]
+fn test_duplicate_table_name_single_warning_in_multi_entry_from() {
+    // Only `t` is repeated; `x` and `y` are not.
+    let query = "SELECT * FROM j1 AS x, j2 AS /*a*/t/*a*/, j3 AS y JOIN j1 AS /*b*/t/*b*/ ON true";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].span, Some(spans["b"]));
+    assert_eq!(warnings[0].notes[0].span, Some(spans["a"]));
+}
+
+#[test]
+fn test_duplicate_table_name_three_copies_each_point_to_first() {
+    // Assert the warnings comes in order: first for "b", second for "c"
+    let query = "SELECT 1 FROM j1 AS /*a*/t/*a*/, j2 AS /*b*/t/*b*/ JOIN j3 AS /*c*/t/*c*/ ON true";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 2);
+    assert_eq!(warnings[0].span, Some(spans["b"]));
+    assert_eq!(warnings[1].span, Some(spans["c"]));
+    assert_eq!(warnings[0].notes[0].span, Some(spans["a"]));
+    assert_eq!(warnings[1].notes[0].span, Some(spans["a"]));
+}
+
+#[test]
+fn test_same_table_name_in_different_scopes() {
+    // Same table name, different schemas
+    assert!(do_query_warnings("SELECT * FROM schema1.person, schema2.person").is_empty());
+    // A subquery has its own FROM scope
+    assert!(
+        do_query_warnings("SELECT 1 FROM j1 AS t, (SELECT 1 FROM j2 AS t) AS s")
+            .is_empty()
+    );
+}
+
+#[test]
+fn test_aliased_nested_join_hides_its_names() {
+    // The alias `n` seals the inside, so `j1`'s t is not visible outside.
+    assert!(
+        do_query_warnings("SELECT 1 FROM (j1 AS t CROSS JOIN j2) AS n, j3 AS t")
+            .is_empty()
+    );
+}
+
+#[test]
+fn test_unaliased_nested_join_reports_inner_duplicate_once() {
+    let query = "SELECT 1 FROM (j1 AS /*a*/t/*a*/ CROSS JOIN j2 AS /*b*/t/*b*/), j3";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].span, Some(spans["b"]));
 }

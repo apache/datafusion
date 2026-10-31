@@ -1240,6 +1240,172 @@ on t1.v1 > 0;
 query error DataFusion error: Schema error: Schema contains duplicate qualified field name t1\.v1
 select t1.v1 from t1 join t1 using(v1) cross join (select struct('foo' as v1) as t1);
 
+## A quoted alias containing a dot is not the same relation as a schema-qualified table
+statement ok
+create schema dup_s;
+
+statement ok
+create table dup_s.t1(v1 int) as values(1);
+
+query I
+select count(*) from t1 as "dup_s.t1", dup_s.t1;
+----
+1
+
+statement ok
+drop table dup_s.t1;
+
+## Unaliased table function is not a duplicate of a table with the same name
+statement ok
+create table generate_series(v1 int) as values(1);
+
+query I
+select count(*) from generate_series, generate_series(1, 2);
+----
+2
+
+statement ok
+drop table generate_series;
+
+## Duplicate table names (planning outcome only; spans are tested in diagnostic.rs)
+## d1 and d4 share the column `a`, so repeating a qualifier over them fails.
+statement ok
+create table d1(a int) as values (1);
+
+statement ok
+create table d2(b int) as values (2);
+
+statement ok
+create table d3(c int) as values (3);
+
+statement ok
+create table d4(a int) as values (4);
+
+# Repeated qualifier with overlapping columns fails planning
+query error DataFusion error: Schema error: Schema contains duplicate qualified field name t\.a
+select * from d1 as t, d1 as t;
+
+query error DataFusion error: Schema error: Schema contains duplicate qualified field name t\.a
+select * from d3 as x, d1 as t, d4 as t;
+
+query error DataFusion error: Schema error: Schema contains duplicate qualified field name d1\.a
+select * from d1, d1;
+
+query error DataFusion error: Schema error: Schema contains duplicate qualified field name t\.a
+select * from (d1 cross join d2) as t, (d1 cross join d3) as t;
+
+query error DataFusion error: Schema error: Schema contains duplicate qualified field name d1\.a
+select 1 from d1 join d1 on true;
+
+# Repeated qualifier without overlapping columns still plans
+query I
+select count(*) from d1 as t, d2 as t;
+----
+1
+
+query I
+select count(*) from d1 as x, d2 as t, d3 as y, d4 as t;
+----
+1
+
+query I
+select count(*) from (select 1 as a) as t, (select 2 as b) as t;
+----
+1
+
+query I
+select count(*) from d1 as t, (select 1 as b) as t;
+----
+1
+
+query I
+select count(*) from (select 1 as b) as t, d1 as t;
+----
+1
+
+query I
+select count(*) from d1 as t join d2 as t on true;
+----
+1
+
+query I
+select count(*) from (select 1 as a) as t join (select 2 as b) as t on true;
+----
+1
+
+query I
+select count(*) from d1 as t, d2 join d3 as t on true;
+----
+1
+
+query I
+select count(*) from d1 as t cross join d2 as t;
+----
+1
+
+query I
+select count(*) from d1 as t left semi join d2 as t on true;
+----
+1
+
+query I
+select count(*) from d1 as t left join d2 as t on true;
+----
+1
+
+query I
+select count(*) from d1 as x join d2 as y on true join d3 as x on true;
+----
+1
+
+query I
+select count(*) from d1 as x join d2 as y on true join d3 as y on true;
+----
+1
+
+query I
+select count(*) from (d1 cross join d2) as t join d3 as t on true;
+----
+1
+
+query I
+select count(*) from (d1 as t cross join d2 as t) as n;
+----
+1
+
+query I
+select count(*) from d1 join d2 as t on true, d3 join d4 as t on true;
+----
+1
+
+# Qualifier comparison is case-insensitive
+query I
+select count(*) from d1 as T join d2 as t on true;
+----
+1
+
+query I
+select count(*) from (d1 as t cross join d2), d3 as t;
+----
+1
+
+query I
+select count(*) from d3 as t join (d1 as t cross join d2) on true;
+----
+1
+
+statement ok
+drop table d1;
+
+statement ok
+drop table d2;
+
+statement ok
+drop table d3;
+
+statement ok
+drop table d4;
+
 statement ok
 drop table t1;
 
