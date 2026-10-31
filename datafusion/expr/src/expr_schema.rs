@@ -5,7 +5,7 @@
 use super::{Between, Expr, Like, predicate_bounds};
 use crate::ValueOrLambda;
 use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
+    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Case, Cast, InList,
     InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams, in_subquery_tuple_values,
 };
@@ -22,9 +22,10 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
-    not_impl_err, plan_datafusion_err, plan_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -123,6 +124,185 @@ fn scalar_argument_for_field(expr: &Expr, arg_field: &FieldRef) -> Option<Scalar
         ),
         _ => None,
     }
+}
+
+fn binary_output_field(
+    binary: &BinaryExpr,
+    left: &Field,
+    right: &Field,
+    name: &str,
+) -> Result<FieldRef> {
+    let mut coercer =
+        BinaryTypeCoercer::new(left.data_type(), &binary.op, right.data_type());
+    coercer.set_lhs_spans(binary.left.spans().cloned().unwrap_or_default());
+    coercer.set_rhs_spans(binary.right.spans().cloned().unwrap_or_default());
+    let nullable = match binary.op {
+        Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => false,
+        _ => left.is_nullable() || right.is_nullable(),
+    };
+    Ok(Arc::new(Field::new(
+        name,
+        coercer.get_result_type()?,
+        nullable,
+    )))
+}
+
+// Resolve nested CASE, binary expressions and forwarding wrappers bottom-up,
+// without repeatedly inferring every CASE suffix. Other expressions use native
+// field inference; an unmarked result cannot erase sibling metadata.
+fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef> {
+    enum Work<'a> {
+        Visit(&'a Expr),
+        FinishCase(&'a Case),
+        FinishCast(&'a FieldRef, bool),
+        FinishAlias(Option<&'a FieldMetadata>),
+        FinishBinary(&'a BinaryExpr),
+    }
+
+    struct BranchField {
+        field: FieldRef,
+        certainly_null: bool,
+    }
+
+    fn schedule_case<'a>(case: &'a Case, work: &mut Vec<Work<'a>>) {
+        work.push(Work::FinishCase(case));
+        work.extend(case.else_expr.iter().map(|expr| Work::Visit(expr)));
+        work.extend(
+            case.when_then_expr
+                .iter()
+                .rev()
+                .map(|(_, then_expr)| Work::Visit(then_expr)),
+        );
+    }
+
+    let mut work = Vec::new();
+    let mut fields: Vec<BranchField> = Vec::new();
+    schedule_case(case, &mut work);
+    while let Some(item) = work.pop() {
+        match item {
+            Work::Visit(expr) => match expr {
+                Expr::Case(nested) => schedule_case(nested, &mut work),
+                Expr::Cast(cast) => {
+                    work.push(Work::FinishCast(&cast.field, false));
+                    work.push(Work::Visit(&cast.expr));
+                }
+                Expr::TryCast(cast) => {
+                    work.push(Work::FinishCast(&cast.field, true));
+                    work.push(Work::Visit(&cast.expr));
+                }
+                Expr::Alias(alias) => {
+                    work.push(Work::FinishAlias(alias.metadata.as_ref()));
+                    work.push(Work::Visit(&alias.expr));
+                }
+                Expr::Negative(inner) => work.push(Work::Visit(inner)),
+                Expr::BinaryExpr(binary) => {
+                    work.push(Work::FinishBinary(binary));
+                    work.push(Work::Visit(&binary.right));
+                    work.push(Work::Visit(&binary.left));
+                }
+                _ => fields.push(BranchField {
+                    field: expr.to_field(schema)?.1,
+                    certainly_null: matches!(
+                        expr,
+                        Expr::Literal(value, _) if value.is_null()
+                    ),
+                }),
+            },
+            Work::FinishCast(target, force_nullable) => {
+                let Some(source) = fields.pop() else {
+                    return internal_err!("Missing CASE cast input field");
+                };
+                fields.push(BranchField {
+                    field: cast_output_field(&source.field, target, force_nullable),
+                    certainly_null: source.certainly_null,
+                });
+            }
+            Work::FinishAlias(metadata) => {
+                let Some(source) = fields.pop() else {
+                    return internal_err!("Missing CASE alias input field");
+                };
+                let mut combined = source.field.metadata().clone();
+                if let Some(metadata) = metadata {
+                    combined.extend(metadata.to_hashmap());
+                }
+                fields.push(BranchField {
+                    field: Arc::new(
+                        source.field.as_ref().clone().with_metadata(combined),
+                    ),
+                    certainly_null: source.certainly_null,
+                });
+            }
+            Work::FinishBinary(binary) => {
+                let Some(right) = fields.pop() else {
+                    return internal_err!("Missing CASE binary right field");
+                };
+                let Some(left) = fields.pop() else {
+                    return internal_err!("Missing CASE binary left field");
+                };
+                fields.push(BranchField {
+                    field: binary_output_field(binary, &left.field, &right.field, "")?,
+                    certainly_null: false,
+                });
+            }
+            Work::FinishCase(case) => {
+                let count =
+                    case.when_then_expr.len() + usize::from(case.else_expr.is_some());
+                if fields.len() < count {
+                    return internal_err!("Missing CASE result fields");
+                }
+                let start = fields.len() - count;
+                let metadata = coerced_fields_metadata(
+                    fields[start..].iter().map(|branch| branch.field.as_ref()),
+                )?;
+                let mut then_type = DataType::Null;
+                let mut else_type = DataType::Null;
+                let mut branch_type = None;
+                let mut type_conflict = false;
+                let mut certainly_null = true;
+                for (index, branch) in fields.drain(start..).enumerate() {
+                    let data_type = branch.field.data_type();
+                    if index < case.when_then_expr.len() {
+                        if then_type.is_null() && !data_type.is_null() {
+                            then_type = data_type.clone();
+                        }
+                    } else {
+                        else_type = data_type.clone();
+                    }
+                    certainly_null &= branch.certainly_null;
+                    if data_type.is_null()
+                        || (branch.certainly_null && branch.field.metadata().is_empty())
+                    {
+                        continue;
+                    }
+                    if branch_type.as_ref().is_some_and(|other| other != data_type) {
+                        type_conflict = true;
+                    }
+                    branch_type.get_or_insert_with(|| data_type.clone());
+                }
+                let data_type = if then_type.is_null() {
+                    else_type
+                } else {
+                    then_type
+                };
+                let field = Field::new("", data_type, true);
+                let field = if !type_conflict
+                    && branch_type.as_ref() == Some(field.data_type())
+                {
+                    metadata.add_to_field(field)
+                } else {
+                    field
+                };
+                fields.push(BranchField {
+                    field: Arc::new(field),
+                    certainly_null,
+                });
+            }
+        }
+    }
+    let Some(result) = fields.pop() else {
+        return internal_err!("Missing CASE output field");
+    };
+    Ok(result.field)
 }
 
 impl ExprSchemable for Expr {
@@ -575,26 +755,12 @@ impl ExprSchemable for Expr {
                         .with_nullable(scalar_subquery_nullable(subquery)),
                 ))
             }
-            Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
-                let (left_field, right_field) =
-                    (left.to_field(schema)?.1, right.to_field(schema)?.1);
-
-                let (lhs_type, lhs_nullable) =
-                    (left_field.data_type(), left_field.is_nullable());
-                let (rhs_type, rhs_nullable) =
-                    (right_field.data_type(), right_field.is_nullable());
-                let mut coercer = BinaryTypeCoercer::new(lhs_type, op, rhs_type);
-                coercer.set_lhs_spans(left.spans().cloned().unwrap_or_default());
-                coercer.set_rhs_spans(right.spans().cloned().unwrap_or_default());
-                let nullable = match op {
-                    Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => false,
-                    _ => lhs_nullable || rhs_nullable,
-                };
-                Ok(Arc::new(Field::new(
-                    &schema_name,
-                    coercer.get_result_type()?,
-                    nullable,
-                )))
+            Expr::BinaryExpr(binary) => {
+                let (left_field, right_field) = (
+                    binary.left.to_field(schema)?.1,
+                    binary.right.to_field(schema)?.1,
+                );
+                binary_output_field(binary, &left_field, &right_field, &schema_name)
             }
             Expr::WindowFunction(window_function) => {
                 let WindowFunction {
@@ -664,6 +830,70 @@ impl ExprSchemable for Expr {
             Expr::LambdaVariable(LambdaVariable {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
+            Expr::Case(case) => {
+                let data_type = self.get_type(schema)?;
+                let mut all_plain = true;
+                let mut nullable_then = false;
+                let mut nullable_else = false;
+                for (index, result) in case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, result)| result.as_ref())
+                    .chain(case.else_expr.iter().map(|result| result.as_ref()))
+                    .enumerate()
+                {
+                    let (has_metadata, nullable) = match result {
+                        Expr::Column(column) => {
+                            // Defer later nullability checks to Expr::nullable, which can short-circuit.
+                            let (field, nullable) = if nullable_then {
+                                (schema.field_from_column(column)?, false)
+                            } else {
+                                schema.field_and_nullable(column)?
+                            };
+                            (!field.metadata().is_empty(), nullable)
+                        }
+                        Expr::Literal(value, metadata) => (
+                            metadata
+                                .as_ref()
+                                .is_some_and(|metadata| !metadata.is_empty()),
+                            value.is_null(),
+                        ),
+                        _ => {
+                            all_plain = false;
+                            break;
+                        }
+                    };
+                    if has_metadata {
+                        all_plain = false;
+                        break;
+                    }
+                    if index < case.when_then_expr.len() {
+                        nullable_then |= nullable;
+                    } else {
+                        nullable_else = nullable;
+                    }
+                }
+                let nullable = if all_plain && !nullable_then {
+                    case.else_expr.is_none() || nullable_else
+                } else {
+                    self.nullable(schema)?
+                };
+                if all_plain {
+                    return Ok((
+                        relation,
+                        Arc::new(Field::new(&schema_name, data_type, nullable)),
+                    ));
+                }
+                let branch_field = case_field_metadata(case, schema)?;
+                let metadata = if branch_field.data_type() == &data_type {
+                    branch_field.metadata().clone()
+                } else {
+                    Default::default()
+                };
+                Ok(Arc::new(
+                    Field::new(&schema_name, data_type, nullable).with_metadata(metadata),
+                ))
+            }
             Expr::Unnest(Unnest { expr, .. }) => {
                 let nullable = self.nullable(schema)?;
                 match expr.get_type(schema)? {
@@ -689,7 +919,6 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::Between(_)
-            | Expr::Case(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)
@@ -1071,6 +1300,13 @@ mod tests {
         assert_not_nullable(&e, &nullable_schema);
         assert_not_nullable(&e, &not_nullable_schema);
 
+        let varchar_schema = MockExprSchema::new()
+            .with_data_type(DataType::Utf8)
+            .with_nullable(true);
+        let try_cast = Expr::TryCast(TryCast::new(Box::new(col("x")), DataType::Int32));
+        let e = when(col("x").is_not_null(), try_cast).otherwise(lit(0))?;
+        assert_nullable(&e, &varchar_schema);
+
         // CASE WHEN NOT x IS NULL THEN x ELSE 0
         let e = when(not(col("x").is_null()), col("x")).otherwise(lit(0))?;
         assert_not_nullable(&e, &nullable_schema);
@@ -1261,6 +1497,516 @@ mod tests {
             Column::from_name("foo"),
         );
         assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
+    }
+
+    #[test]
+    fn test_case_field_metadata_explicit_fields() -> Result<()> {
+        // SQL behavior is covered in metadata.slt; these fields are attached
+        // directly through the expression API, before analyzer coercion.
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct MarkedIdentity {
+            signature: crate::Signature,
+        }
+
+        impl crate::ScalarUDFImpl for MarkedIdentity {
+            fn name(&self) -> &str {
+                "marked_identity"
+            }
+
+            fn signature(&self) -> &crate::Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Int32)
+            }
+
+            fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+                let input = &args.arg_fields[0];
+                Ok(Arc::new(
+                    Field::new("marked_identity", DataType::Int32, input.is_nullable())
+                        .with_metadata(input.metadata().clone()),
+                ))
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: crate::ScalarFunctionArgs,
+            ) -> Result<crate::ColumnarValue> {
+                Ok(crate::ColumnarValue::Scalar(ScalarValue::Int32(Some(0))))
+            }
+        }
+
+        let shared = HashMap::from([("type".to_string(), "structured".to_string())]);
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("a", DataType::Int32, false).with_metadata(shared.clone()),
+                Field::new("b", DataType::Int32, false).with_metadata(shared.clone()),
+                Field::new("d", DataType::Int32, false),
+            ]
+            .into(),
+            HashMap::new(),
+        )?;
+
+        let marked_literal = Expr::Literal(
+            ScalarValue::Int32(Some(1)),
+            Some(FieldMetadata::from(shared.clone())),
+        );
+        let literal_case = when(lit(true), marked_literal).otherwise(col("b"))?;
+        assert_eq!(literal_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let Expr::Alias(empty_metadata_alias) = lit(ScalarValue::Null)
+            .cast_to(&DataType::Int32, &schema)?
+            .alias("empty_metadata")
+        else {
+            unreachable!();
+        };
+        let empty_metadata_alias = Expr::Alias(
+            empty_metadata_alias.with_metadata(Some(FieldMetadata::default())),
+        );
+        let aliased_null_else =
+            when(lit(true), col("a")).otherwise(empty_metadata_alias)?;
+        assert_eq!(aliased_null_else.to_field(&schema)?.1.metadata(), &shared);
+
+        let try_cast_null_else = when(lit(true), col("a")).otherwise(Expr::TryCast(
+            TryCast::new(Box::new(lit(ScalarValue::Null)), DataType::Int32),
+        ))?;
+        assert_eq!(try_cast_null_else.to_field(&schema)?.1.metadata(), &shared);
+
+        let typed_null = Expr::Cast(Cast::new_from_field(
+            Box::new(lit(ScalarValue::Null)),
+            Arc::new(Field::new("", DataType::Int32, true).with_metadata(shared.clone())),
+        ));
+        let all_typed_null = when(lit(true), typed_null.clone()).otherwise(typed_null)?;
+        assert_eq!(all_typed_null.to_field(&schema)?.1.metadata(), &shared);
+
+        let binary_metadata = HashMap::from([(
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "geoarrow.wkb".to_string(),
+        )]);
+        let binary_schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("binary", DataType::LargeBinary, false)
+                    .with_metadata(binary_metadata.clone()),
+            ]
+            .into(),
+            HashMap::new(),
+        )?;
+        let target_field: FieldRef = Arc::new(
+            Field::new("", DataType::Binary, true).with_metadata(binary_metadata.clone()),
+        );
+        for marked_null in [
+            Expr::Cast(Cast::new_from_field(
+                Box::new(lit(ScalarValue::Null)),
+                Arc::clone(&target_field),
+            )),
+            Expr::TryCast(TryCast::new_from_field(
+                Box::new(lit(ScalarValue::Null)),
+                Arc::clone(&target_field),
+            )),
+        ] {
+            let nested_all_null =
+                when(lit(true), marked_null).otherwise(lit(ScalarValue::Null))?;
+            let type_only_cast =
+                Expr::Cast(Cast::new(Box::new(nested_all_null), DataType::LargeBinary));
+            let outer = when(lit(true), type_only_cast).otherwise(col("binary"))?;
+            assert_eq!(
+                outer.to_field(&binary_schema)?.1.metadata(),
+                &binary_metadata
+            );
+        }
+
+        let marked = Arc::new(crate::ScalarUDF::from(MarkedIdentity {
+            signature: crate::Signature::uniform(
+                1,
+                vec![DataType::Int32],
+                crate::Volatility::Immutable,
+            ),
+        }));
+        let marked_call = |arg| {
+            Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&marked), vec![arg]))
+        };
+        let mut deep_function = col("a");
+        for _ in 0..9 {
+            deep_function = marked_call(deep_function);
+        }
+        let deep_function_case = when(lit(true), deep_function).otherwise(col("b"))?;
+        assert_eq!(deep_function_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let mut deep_nested_arg = when(lit(true), col("a")).otherwise(col("b"))?;
+        for _ in 0..8 {
+            deep_nested_arg = deep_nested_arg.alias("nested");
+        }
+        let deep_nested_call =
+            when(lit(true), marked_call(deep_nested_arg)).otherwise(col("b"))?;
+        assert_eq!(deep_nested_call.to_field(&schema)?.1.metadata(), &shared);
+
+        let binary = col("d") + lit(1);
+        let Expr::Alias(alias) = binary.clone().alias("marked") else {
+            unreachable!();
+        };
+        let marked_alias =
+            Expr::Alias(alias.with_metadata(Some(FieldMetadata::from(shared.clone()))));
+        let aliased_case = when(lit(true), marked_alias).otherwise(col("b"))?;
+        assert_eq!(aliased_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let marked_cast = Expr::Cast(Cast::new_from_field(
+            Box::new(binary.clone()),
+            Arc::new(Field::new("", DataType::Int32, true).with_metadata(shared.clone())),
+        ));
+        let cast_case = when(lit(true), marked_cast).otherwise(col("b"))?;
+        assert_eq!(cast_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let marked_try_cast = Expr::TryCast(TryCast::new_from_field(
+            Box::new(binary),
+            Arc::new(Field::new("", DataType::Int32, true).with_metadata(shared.clone())),
+        ));
+        let try_cast_case = when(lit(true), marked_try_cast).otherwise(col("b"))?;
+        assert_eq!(try_cast_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let mut deep_alias = col("a");
+        for _ in 0..10 {
+            deep_alias = deep_alias.alias("nested");
+        }
+        let deep_udf_case =
+            when(lit(true), marked_call(deep_alias.clone())).otherwise(col("b"))?;
+        assert_eq!(deep_udf_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let Expr::Alias(alias) = deep_alias.alias("marked") else {
+            unreachable!();
+        };
+        let deep_marked_alias =
+            Expr::Alias(alias.with_metadata(Some(FieldMetadata::from(shared.clone()))));
+        let deep_alias_case = when(lit(true), deep_marked_alias).otherwise(col("b"))?;
+        assert_eq!(deep_alias_case.to_field(&schema)?.1.metadata(), &shared);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_case_field_metadata_preserves_aliased_null_cast_metadata() -> Result<()> {
+        let schema = DFSchema::empty();
+        let inner =
+            FieldMetadata::from(HashMap::from([("inner".to_owned(), "x".to_owned())]));
+        let outer =
+            FieldMetadata::from(HashMap::from([("outer".to_owned(), "y".to_owned())]));
+        let expected = HashMap::from([
+            ("inner".to_owned(), "x".to_owned()),
+            ("outer".to_owned(), "y".to_owned()),
+        ]);
+        let null = Expr::Literal(ScalarValue::Null, Some(inner));
+        for cast in [
+            Expr::Cast(Cast::new(Box::new(null.clone()), DataType::Int32)),
+            Expr::TryCast(TryCast::new(Box::new(null), DataType::Int32)),
+        ] {
+            let Expr::Alias(alias) = cast.alias("null_value") else {
+                unreachable!();
+            };
+            let aliased = Expr::Alias(alias.with_metadata(Some(outer.clone())));
+            assert_eq!(aliased.to_field(&schema)?.1.metadata(), &expected);
+            let case = when(lit(true), aliased).otherwise(lit(0_i32))?;
+            assert_eq!(case.to_field(&schema)?.1.metadata(), &expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_case_field_inference_is_linear() -> Result<()> {
+        #[derive(Debug)]
+        struct CountingSchema {
+            field: FieldRef,
+            calls: std::cell::Cell<usize>,
+        }
+
+        impl CountingSchema {
+            fn visit(&self) -> Result<()> {
+                let calls = self.calls.get() + 1;
+                self.calls.set(calls);
+                assert_or_internal_err!(calls <= 4096, "Repeated CASE field inference");
+                Ok(())
+            }
+        }
+
+        impl ExprSchema for CountingSchema {
+            fn nullable(&self, _column: &Column) -> Result<bool> {
+                self.visit()?;
+                Ok(false)
+            }
+
+            fn field_from_column(&self, _column: &Column) -> Result<&FieldRef> {
+                self.visit()?;
+                Ok(&self.field)
+            }
+        }
+
+        let metadata = HashMap::from([("source".to_owned(), "marked".to_owned())]);
+        let empty = HashMap::new();
+        for binary_branch in [false, true] {
+            for depth in [8, 32, 128] {
+                let schema = CountingSchema {
+                    field: Arc::new(
+                        Field::new("value", DataType::Int32, false)
+                            .with_metadata(metadata.clone()),
+                    ),
+                    calls: std::cell::Cell::new(0),
+                };
+                let mut expression = col("value");
+                for _ in 0..depth {
+                    expression = if binary_branch {
+                        when(lit(true), expression + col("value"))
+                            .otherwise(lit(0_i32))?
+                    } else {
+                        let branch = Expr::Cast(Cast::new(
+                            Box::new(expression.alias("nested")),
+                            DataType::Int32,
+                        ));
+                        when(lit(true), col("value")).otherwise(branch)?
+                    };
+                }
+                let field = expression.to_field(&schema)?.1;
+                assert_eq!(field.data_type(), &DataType::Int32);
+                assert_eq!(
+                    field.metadata(),
+                    if binary_branch { &empty } else { &metadata }
+                );
+                assert!(!field.is_nullable());
+                assert!(
+                    schema.calls.get() <= 6 * depth + 8,
+                    "binary {binary_branch}, depth {depth}: {} schema lookups",
+                    schema.calls.get()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_plain_case_field_nullability() -> Result<()> {
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("required", DataType::Int32, false),
+                Field::new("optional", DataType::Int32, true),
+            ]
+            .into(),
+            HashMap::new(),
+        )?;
+
+        let no_else = when(lit(true), col("required")).end()?;
+        assert!(no_else.to_field(&schema)?.1.is_nullable());
+
+        let required_else =
+            when(lit(true), col("required")).otherwise(col("required"))?;
+        assert!(!required_else.to_field(&schema)?.1.is_nullable());
+
+        let optional_else =
+            when(lit(true), col("required")).otherwise(col("optional"))?;
+        assert!(optional_else.to_field(&schema)?.1.is_nullable());
+
+        let optional_then =
+            when(lit(true), col("optional")).otherwise(col("required"))?;
+        assert!(optional_then.to_field(&schema)?.1.is_nullable());
+
+        let guarded_optional = when(col("optional").is_not_null(), col("optional"))
+            .otherwise(col("required"))?;
+        assert!(!guarded_optional.to_field(&schema)?.1.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_plain_case_preserves_custom_nullability() -> Result<()> {
+        #[derive(Debug)]
+        struct CustomNullableSchema {
+            field: FieldRef,
+            nullable: bool,
+        }
+
+        impl ExprSchema for CustomNullableSchema {
+            fn nullable(&self, _column: &Column) -> Result<bool> {
+                Ok(self.nullable)
+            }
+
+            fn field_from_column(&self, _column: &Column) -> Result<&FieldRef> {
+                Ok(&self.field)
+            }
+        }
+
+        for nullable in [false, true] {
+            let schema = CustomNullableSchema {
+                field: Arc::new(Field::new("x", DataType::Int32, !nullable)),
+                nullable,
+            };
+            let (field, column_nullable) =
+                schema.field_and_nullable(&Column::from_name("x"))?;
+            assert_eq!(field.is_nullable(), !nullable);
+            assert_eq!(column_nullable, nullable);
+
+            for expression in [
+                when(lit(true), col("x")).otherwise(lit(0_i32))?,
+                when(lit(true), lit(0_i32)).otherwise(col("x"))?,
+            ] {
+                assert_eq!(expression.nullable(&schema)?, nullable);
+                assert_eq!(expression.to_field(&schema)?.1.is_nullable(), nullable);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_plain_case_preserves_custom_nullable_error() -> Result<()> {
+        let schema = MockExprSchema::new()
+            .with_data_type(DataType::Int32)
+            .with_nullable(false)
+            .with_error_on_nullable(true);
+        let expression = when(lit(true), col("x")).otherwise(lit(0_i32))?;
+        let error = expression.to_field(&schema).unwrap_err();
+        assert!(error.to_string().contains("nullable error"), "{error}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_plain_case_preserves_nullable_short_circuit() -> Result<()> {
+        #[derive(Debug)]
+        struct ShortCircuitSchema {
+            field: FieldRef,
+        }
+
+        impl ExprSchema for ShortCircuitSchema {
+            fn nullable(&self, column: &Column) -> Result<bool> {
+                if column.name == "later" {
+                    return internal_err!("later nullable call");
+                }
+                Ok(true)
+            }
+
+            fn field_from_column(&self, _column: &Column) -> Result<&FieldRef> {
+                Ok(&self.field)
+            }
+        }
+
+        let schema = ShortCircuitSchema {
+            field: Arc::new(Field::new("value", DataType::Int32, true)),
+        };
+        let expression = when(lit(true), col("first"))
+            .when(lit(false), col("later"))
+            .otherwise(lit(0_i32))?;
+        assert!(expression.to_field(&schema)?.1.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_case_field_metadata_native_branch_fields() -> Result<()> {
+        let metadata = HashMap::from([("type".to_string(), "structured".to_string())]);
+        let field = Arc::new(
+            Field::new("value", DataType::Int32, false).with_metadata(metadata.clone()),
+        );
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("value", DataType::Int32, false)
+                    .with_metadata(metadata.clone()),
+            ]
+            .into(),
+            HashMap::new(),
+        )?;
+
+        let branches = [
+            Expr::OuterReferenceColumn(Arc::clone(&field), Column::from_name("outer")),
+            Expr::ScalarVariable(Arc::clone(&field), vec!["value".to_string()]),
+            Expr::Placeholder(Placeholder::new_with_field(
+                "$1".to_string(),
+                Some(Arc::clone(&field)),
+            )),
+            Expr::LambdaVariable(LambdaVariable::new("arg".into(), Some(field))),
+            col("value") + lit(1),
+        ];
+        for branch in branches {
+            let case = when(lit(true), col("value")).otherwise(branch)?;
+            assert_eq!(case.to_field(&schema)?.1.metadata(), &metadata);
+        }
+
+        let wrong_type = when(lit(true), col("value")).otherwise(Expr::Literal(
+            ScalarValue::Boolean(Some(false)),
+            Some(FieldMetadata::from(metadata)),
+        ))?;
+        assert!(wrong_type.to_field(&schema)?.1.metadata().is_empty());
+        let wrong_null_type =
+            when(lit(true), col("value")).otherwise(Expr::Not(Box::new(Expr::Cast(
+                Cast::new(Box::new(lit(ScalarValue::Null)), DataType::Boolean),
+            ))))?;
+        assert!(wrong_null_type.to_field(&schema)?.1.metadata().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_case_field_metadata_higher_order_function() -> Result<()> {
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct MetadataPassthrough {
+            signature: crate::HigherOrderSignature,
+        }
+
+        impl crate::HigherOrderUDFImpl for MetadataPassthrough {
+            fn name(&self) -> &str {
+                "metadata_passthrough"
+            }
+
+            fn signature(&self) -> &crate::HigherOrderSignature {
+                &self.signature
+            }
+
+            fn lambda_parameters(
+                &self,
+                _step: usize,
+                _fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+            ) -> Result<crate::LambdaParametersProgress> {
+                Ok(crate::LambdaParametersProgress::Complete(vec![]))
+            }
+
+            fn return_field_from_args(
+                &self,
+                args: HigherOrderReturnFieldArgs,
+            ) -> Result<FieldRef> {
+                let ValueOrLambda::Value(field) = &args.arg_fields[0] else {
+                    unreachable!();
+                };
+                Ok(Arc::clone(field))
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: crate::HigherOrderFunctionArgs,
+            ) -> Result<crate::ColumnarValue> {
+                unreachable!()
+            }
+        }
+
+        let metadata = HashMap::from([("kind".to_string(), "marked".to_string())]);
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("a", DataType::Int32, false).with_metadata(metadata.clone()),
+                Field::new("b", DataType::Int32, false).with_metadata(metadata.clone()),
+            ]
+            .into(),
+            HashMap::new(),
+        )?;
+        let udf = Arc::new(crate::HigherOrderUDF::new_from_impl(MetadataPassthrough {
+            signature: crate::HigherOrderSignature::any(1, crate::Volatility::Immutable),
+        }));
+        let call = |arg| {
+            Expr::HigherOrderFunction(crate::expr::HigherOrderFunction::new(
+                Arc::clone(&udf),
+                vec![arg],
+            ))
+        };
+
+        let shallow = when(lit(true), call(col("a"))).otherwise(col("b"))?;
+        assert_eq!(shallow.to_field(&schema)?.1.metadata(), &metadata);
+
+        let mut deep = col("a");
+        for _ in 0..9 {
+            deep = call(deep);
+        }
+        let deep_case = when(lit(true), deep).otherwise(col("b"))?;
+        assert_eq!(deep_case.to_field(&schema)?.1.metadata(), &metadata);
+        Ok(())
     }
 
     #[test]
