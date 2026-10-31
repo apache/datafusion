@@ -924,7 +924,7 @@ fn mark_null_candidates_for_probe_batch(
     // Case 1: NULL-valued build rows paired with the probe rows in their
     // correlation scope.
     if let Some(null_rows) = null_value_build_rows {
-        let probe_rows = (0..probe_batch.num_rows() as u32).filter(in_scope);
+        let probe_rows = || (0..probe_batch.num_rows() as u32).filter(in_scope);
         match &null_rows.scope {
             NullValueScope::Map(scope_map) => {
                 let mut pairs =
@@ -934,7 +934,7 @@ fn mark_null_candidates_for_probe_batch(
                 pairs.scope_matches(
                     scope_map.as_ref(),
                     |position| null_rows.build_indices.value(position as usize),
-                    probe_rows,
+                    probe_rows(),
                     hashes_buffer,
                     lookup,
                 )?;
@@ -963,17 +963,18 @@ fn mark_null_candidates_for_probe_batch(
     // Case 2: NULL-valued probe rows paired with the build rows in their
     // correlation scope.
     if let Some(null_mask) = probe_null_value_mask {
-        let mut null_probe_rows = null_mask
-            .values()
-            .set_indices()
-            .map(|i| i as u32)
-            .filter(in_scope)
-            .peekable();
+        let null_probe_rows = || {
+            null_mask
+                .values()
+                .set_indices()
+                .map(|i| i as u32)
+                .filter(in_scope)
+        };
 
         match scope_map {
             // No NULL-valued probe row is in any scope: nothing to look up,
             // so the scope map need not be built.
-            Some(_) if null_probe_rows.peek().is_none() => {}
+            Some(_) if null_probe_rows().next().is_none() => {}
             Some(scope_map) => {
                 let mut pairs =
                     UnmarkedPairs::new(marks, batch_size, &mut mark_scope_matches);
@@ -981,7 +982,7 @@ fn mark_null_candidates_for_probe_batch(
                     Some(scope_map) => pairs.scope_matches(
                         scope_map,
                         |build_row| build_row,
-                        null_probe_rows,
+                        null_probe_rows(),
                         hashes_buffer,
                         lookup,
                     )?,
@@ -1240,45 +1241,50 @@ where
         }
     }
 
-    /// Pairs each of `probe_rows` with each of `build_rows`. The pairing stops
-    /// when every row that the pairs decide is marked.
+    /// Pairs each of the rows that `probe_rows` yields with each of
+    /// `build_rows`. The pairing stops when every row that the pairs decide
+    /// is marked.
     ///
-    /// When the pairs decide the build rows, the build rows are paired in
-    /// chunks of at most `batch_size` rows. The rows held at once then stay
-    /// bounded by the batch size rather than by the build side, which matters
-    /// when this pairing stands in for a scope map that the memory pool
-    /// declined.
-    fn cross_product(
+    /// When the pairs decide the build rows, the unmarked build rows are
+    /// paired in chunks of `batch_size` rows, and `probe_rows` is called
+    /// again for each chunk. Neither side is then held whole: a large build
+    /// side, as when this pairing stands in for a scope map that the memory
+    /// pool declined, or a probe batch larger than the batch size. A chunk is
+    /// filled with unmarked rows only, so a build side with few unmarked rows
+    /// left pairs them all at once, as a single chunk would.
+    fn cross_product<P: Iterator<Item = u32>>(
         &mut self,
         build_rows: impl Iterator<Item = u64>,
-        probe_rows: impl Iterator<Item = u32>,
+        probe_rows: impl Fn() -> P,
     ) -> Result<()> {
         match self.marks {
-            UnknownMarks::Build(_) => {
-                let probe_rows: Vec<u32> = probe_rows.collect();
-                if probe_rows.is_empty() {
+            UnknownMarks::Build(bitmap) => {
+                if probe_rows().next().is_none() {
                     return Ok(());
                 }
                 let mut build_rows = build_rows.peekable();
                 let mut chunk = Vec::with_capacity(self.batch_size);
                 while build_rows.peek().is_some() {
                     chunk.clear();
-                    chunk.extend(build_rows.by_ref().take(self.batch_size));
-                    // Drop the rows that are already marked before the first
-                    // pair of the chunk.
-                    self.needs_refresh = true;
-                    self.pair_unmarked(
-                        &mut chunk,
-                        probe_rows.iter().copied(),
-                        |b, p| (b, p),
-                    )?;
+                    {
+                        let bitmap = bitmap.lock();
+                        chunk.extend(
+                            build_rows
+                                .by_ref()
+                                .filter(|row| !bitmap.get_bit(*row as usize))
+                                .take(self.batch_size),
+                        );
+                    }
+                    // The chunk holds no row marked so far.
+                    self.needs_refresh = false;
+                    self.pair_unmarked(&mut chunk, probe_rows(), |b, p| (b, p))?;
                 }
                 Ok(())
             }
             UnknownMarks::Probe(_) => {
                 // Drop the rows that are already marked before the first pair.
                 self.needs_refresh = true;
-                self.pair_unmarked(&mut probe_rows.collect(), build_rows, |p, b| (b, p))
+                self.pair_unmarked(&mut probe_rows().collect(), build_rows, |p, b| (b, p))
             }
         }
     }
@@ -1870,8 +1876,11 @@ mod tests {
             let hash = |key: u64| key % self.hash_modulus;
 
             let mut foreign_marks = vec![];
+            let (mut sends, mut sent_pairs) = (0, 0);
             let mark = |build: UInt64Array, probe: UInt32Array| {
                 assert!(build.len() <= self.batch_size);
+                sends += 1;
+                sent_pairs += build.len();
                 if self.foreign_marks {
                     let row = (self.filter_seed as usize)
                         .wrapping_add(foreign_marks.len().wrapping_mul(0x9E37_79B9))
@@ -1918,10 +1927,9 @@ mod tests {
                     &mut LookupBuffers::default(),
                 )?;
             } else {
-                pairs.cross_product(
-                    self.build_rows.iter().copied(),
-                    self.probe_rows.iter().copied(),
-                )?;
+                pairs.cross_product(self.build_rows.iter().copied(), || {
+                    self.probe_rows.iter().copied()
+                })?;
             }
             let (considered_groups, grouped) = (pairs.considered_groups, pairs.grouped);
             let looked_up_matches = pairs.looked_up_matches;
@@ -1939,6 +1947,8 @@ mod tests {
                     build_lookups,
                     mark_checks,
                     max_decided_rows,
+                    sends,
+                    sent_pairs,
                     foreign_marks,
                 },
             ))
@@ -1953,6 +1963,9 @@ mod tests {
         build_lookups: usize,
         mark_checks: usize,
         max_decided_rows: usize,
+        /// The chunks of pairs sent, and the pairs in them.
+        sends: usize,
+        sent_pairs: usize,
         /// The rows that `foreign_marks` marked.
         foreign_marks: Vec<usize>,
     }
@@ -2098,6 +2111,34 @@ mod tests {
         let (marks, stats) = case.run()?;
         assert!(!marks.contains(&true));
         assert_eq!(stats.max_decided_rows, batch_size);
+        Ok(())
+    }
+
+    /// A cross product with marks on the build rows fills its chunks with
+    /// unmarked build rows. With one unmarked build row in each batch of build
+    /// rows, all of them fit one chunk, and the pairs of the first probe row
+    /// mark them all at once.
+    #[test]
+    fn cross_product_fills_chunks_with_unmarked_build_rows() -> Result<()> {
+        let (batch_size, num_probe) = (64, 64);
+        let num_build = batch_size * batch_size;
+        let case = Case {
+            mark_build_rows: true,
+            through_scope_map: false,
+            batch_size,
+            hash_modulus: 1,
+            build_keys: vec![0; num_build],
+            probe_keys: vec![0; num_probe],
+            probe_rows: (0..num_probe as u32).collect(),
+            build_rows: (0..num_build as u64).collect(),
+            marked_before: (0..num_build).map(|row| row % batch_size != 0).collect(),
+            filter_seed: 0,
+            filter_one_in: 1,
+            foreign_marks: false,
+        };
+        let (marks, stats) = case.run()?;
+        assert!(marks.iter().all(|marked| *marked));
+        assert_eq!((stats.sends, stats.sent_pairs), (1, batch_size));
         Ok(())
     }
 
