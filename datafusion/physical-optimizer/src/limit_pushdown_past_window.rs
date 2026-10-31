@@ -52,10 +52,6 @@ impl TraverseState {
         self.lookahead = 0;
         self.phase = Phase::FindOrGrow;
     }
-
-    pub fn max_lookahead(&mut self, new_val: usize) {
-        self.lookahead = self.lookahead.max(new_val);
-    }
 }
 
 impl PhysicalOptimizerRule for LimitPushPastWindows {
@@ -145,11 +141,17 @@ fn grow_limit(lookahead: Option<WindowLookahead>, ctx: &mut TraverseState) -> bo
     if let (Some(min_rows), Some(cur)) = (lookahead.min_rows, ctx.limit) {
         ctx.limit = Some(cur.max(min_rows));
     }
-    ctx.max_lookahead(lookahead.frame_end);
+    // A window reads ahead of every row the windows above it need, so stacked
+    // windows add their lookaheads. Expressions within one window share theirs,
+    // which `WindowLookahead` has already taken the maximum over.
+    //
     // Frame bounds come straight from the query and can be as large as
     // `u64::MAX`, so saturate instead of overflowing. A saturated lookahead
     // makes the `checked_add` in `apply_limit` fail, which skips the pushdown.
-    ctx.max_lookahead(ctx.lookahead.saturating_add(lookahead.relative));
+    ctx.lookahead = ctx
+        .lookahead
+        .saturating_add(lookahead.frame_end)
+        .saturating_add(lookahead.relative);
     true
 }
 
