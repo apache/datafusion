@@ -68,6 +68,14 @@ pub struct PullUpCorrelatedExpr {
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
     /// pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
+    /// Outer-reference conditions from a `Filter` that sits directly above a
+    /// count-bug `Aggregate`: a `HAVING` clause (or an outer-only filter)
+    /// that filters the aggregate *output*. Unlike `join_filters`, these do
+    /// not merely correlate the two sides: an unmatched LEFT JOIN row may
+    /// mean one of them rejected the group rather than that no group
+    /// matched, and a scalar subquery must yield NULL for a rejected group.
+    /// `build_join` uses them to reject such queries up front.
+    pub having_like_join_filters: Vec<Expr>,
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
     ///
@@ -118,6 +126,7 @@ impl PullUpCorrelatedExpr {
             need_handle_count_bug: false,
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
+            having_like_join_filters: Vec::new(),
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
             column_refs_above: Vec::new(),
@@ -390,6 +399,22 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 if let Some(in_predicate) = &self.in_predicate_opt {
                     // in_predicate may be already included in the join filters, remove it from the join filters first.
                     join_filters = remove_duplicated_filter(join_filters, in_predicate)?;
+                }
+                // A `Filter` directly above a count-bug `Aggregate` is a
+                // HAVING clause (or an outer-only filter above the aggregate):
+                // its outer-reference conditions filter the aggregate *output*,
+                // so a LEFT JOIN row can be unmatched either because the
+                // correlation matched no group or because one of them rejected
+                // the group. Record them so the scalar rewrite can tell the
+                // two apart; where the output needs count-bug compensation it
+                // rejects the query instead of guessing. A `Filter` below the
+                // aggregate only prunes input rows and is left out.
+                if self
+                    .collected_count_expr_map
+                    .contains_key(&*plan_filter.input)
+                {
+                    self.having_like_join_filters
+                        .extend(join_filters.iter().cloned());
                 }
                 let correlated_subquery_cols =
                     collect_subquery_cols(&join_filters, subquery_schema)?;

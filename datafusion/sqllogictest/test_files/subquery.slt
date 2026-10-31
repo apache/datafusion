@@ -2150,6 +2150,71 @@ WHERE t1_int + 2 NOT IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id)
 query error Physical plan does not support logical expression InSubquery
 SELECT t1_id, t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) FROM t1
 
+# https://github.com/apache/datafusion/issues/26503
+# A correlated scalar subquery whose HAVING reads an outer column is rejected:
+# left in the join ON it returns the empty-input 0 where NULL is correct.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT x.a, x.d,
+       (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING count(*) >= x.a) AS v
+FROM (VALUES (1, 1), (2, 1), (1, 9)) AS x(a, d)
+ORDER BY x.d, x.a
+
+# Same shape with the predicate in a filter above the aggregate rather than in
+# HAVING: the filter references only an outer column, so it is rejected too.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT (SELECT n FROM (SELECT count(*) AS n FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) WHERE x.a > 1) AS v
+FROM (VALUES (1, 1)) AS x(a, d)
+
+# A local HAVING that holds on the empty-input default still yields the
+# default (0), not NULL, when no inner row matches the correlation. Only
+# conditions that read outer columns are rejected.
+query I
+SELECT (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING count(*) >= 0) AS v
+FROM (VALUES (1, 9)) AS x(a, d)
+----
+0
+
+# A local HAVING that fails on the empty-input default yields NULL.
+query I
+SELECT (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING count(*) > 0) AS v
+FROM (VALUES (1, 9)) AS x(a, d)
+----
+NULL
+
+# A stacked filter above the aggregate that reads an outer column is rejected
+# for the same reason, whether or not a HAVING keyword is written.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT x.n, x.d,
+       (SELECT s.n FROM (SELECT count(*) AS n FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS s
+        WHERE s.n < x.n) AS v
+FROM (VALUES (5, 9), (0, 9), (5, 1)) AS x(n, d)
+ORDER BY x.d, x.n
+
+# A group the HAVING rejects would fall back to the empty-input default when
+# the condition stays in the ON, so this shape is rejected as well.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT x.a, x.d,
+       (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING count(*) < x.a) AS v
+FROM (VALUES (1, 1), (2, 1), (1, 9)) AS x(a, d)
+ORDER BY x.d, x.a
+
+# max appears only in the HAVING, but the subquery outputs count(*), so the
+# output still needs compensation and the query is rejected.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT x.a, x.d,
+       (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING max(y.c) < x.a) AS v
+FROM (VALUES (1, 1), (2, 1), (1, 9)) AS x(a, d)
+ORDER BY x.d, x.a
+
+# The same shape, but here the HAVING does hold on the empty input
+# (max(y.c) IS NULL). The join cannot tell which side decides the unmatched
+# row, so this one is rejected too.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT x.a, x.d,
+       (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING max(y.c) IS NULL OR count(*) < x.a) AS v
+FROM (VALUES (1, 1), (2, 1), (1, 9)) AS x(a, d)
+ORDER BY x.d, x.a
+
 statement ok
 DROP TABLE limit_zero_outer;
 
