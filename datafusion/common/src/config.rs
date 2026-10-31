@@ -1095,6 +1095,15 @@ config_namespace! {
         /// inferred and will be represented in the table schema).
         pub listing_table_factory_infer_partitions: bool, default = true
 
+        /// Should a `ListingTable` return an error, rather than skip the file, when a
+        /// listed file's directories do not match the table's partition columns.
+        /// When true, every file must be under one `key=value` directory per partition
+        /// column, in the declared order, with no further `key=value` directories below
+        /// them (this also applies to tables without partition columns). Defaults to
+        /// false (non-matching files are skipped). Only files listed for a query are
+        /// checked, so partition filters that narrow the listing prefix narrow the check.
+        pub listing_table_strict_partitions: bool, default = false
+
         /// Should DataFusion support recursive CTEs
         pub enable_recursive_ctes: bool, default = true
 
