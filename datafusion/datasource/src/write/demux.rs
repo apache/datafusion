@@ -33,7 +33,8 @@ use datafusion_common_runtime::SpawnedTask;
 use chrono::NaiveDate;
 use datafusion_execution::TaskContext;
 use futures::StreamExt;
-use object_store::path::Path;
+use object_store::path::{Path, PathPart};
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use rand::distr::SampleString;
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
@@ -611,6 +612,40 @@ fn remove_partition_by_columns(
     Ok(final_batch_to_send)
 }
 
+/// Characters escaped in Hive partition values: Hive's `escapePathName` set,
+/// plus space (as pyarrow, DuckDB and Polars do) and the characters
+/// `object_store` has always encoded in path segments. Control characters and
+/// non-ASCII bytes are covered by `CONTROLS`.
+const PARTITION_VALUE_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'\'')
+    .add(b'*')
+    .add(b'/')
+    .add(b':')
+    .add(b'<')
+    .add(b'=')
+    .add(b'>')
+    .add(b'?')
+    .add(b'[')
+    .add(b'\\')
+    .add(b']')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}')
+    .add(b'~');
+
+/// Percent-encodes a partition value for use in a Hive-style directory name
+/// (`col=value`). Used on the write side and when building listing prefixes,
+/// so both agree on the on-disk spelling.
+pub fn encode_hive_partition_value(value: &str) -> Cow<'_, str> {
+    utf8_percent_encode(value, PARTITION_VALUE_ENCODE_SET).into()
+}
+
 fn compute_hive_style_file_path(
     part_key: &[String],
     partition_by: &[(String, DataType)],
@@ -620,7 +655,16 @@ fn compute_hive_style_file_path(
 ) -> Path {
     let mut file_path = base_output_path.prefix().clone();
     for j in 0..part_key.len() {
-        file_path = file_path.join(format!("{}={}", partition_by[j].0, part_key[j]));
+        let segment = format!(
+            "{}={}",
+            partition_by[j].0,
+            encode_hive_partition_value(&part_key[j])
+        );
+        // The value is already percent-encoded. `PathPart::from` would encode
+        // the `%` again, so use `parse`, which keeps the segment as is.
+        let part = PathPart::parse(&segment)
+            .unwrap_or_else(|_| PathPart::from(segment.as_str()));
+        file_path = file_path.join(part);
     }
 
     file_path.join(format!("{write_id}.{file_extension}"))
@@ -631,6 +675,30 @@ mod tests {
     use super::*;
     use arrow::array::{Array, ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::Int32Type;
+
+    #[test]
+    fn hive_style_file_path_escapes_partition_values() {
+        let base = ListingTableUrl::parse("file:///tmp/out/").unwrap();
+        let partition_by = vec![("p0".to_string(), DataType::Utf8)];
+        for (value, expected) in [
+            ("abc", "tmp/out/p0=abc/f.parquet"),
+            ("x=y", "tmp/out/p0=x%3Dy/f.parquet"),
+            ("a b", "tmp/out/p0=a%20b/f.parquet"),
+            ("a/b", "tmp/out/p0=a%2Fb/f.parquet"),
+            ("é", "tmp/out/p0=%C3%A9/f.parquet"),
+            ("100%", "tmp/out/p0=100%25/f.parquet"),
+            ("a:b", "tmp/out/p0=a%3Ab/f.parquet"),
+        ] {
+            let path = compute_hive_style_file_path(
+                &[value.to_string()],
+                &partition_by,
+                "f",
+                "parquet",
+                &base,
+            );
+            assert_eq!(path.as_ref(), expected, "value {value:?}");
+        }
+    }
 
     fn partition_batch(column: ArrayRef) -> RecordBatch {
         RecordBatch::try_from_iter_with_nullable([("p", column, true)]).unwrap()
