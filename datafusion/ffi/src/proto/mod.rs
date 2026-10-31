@@ -4,3 +4,4 @@
 
 pub mod logical_extension_codec;
 pub mod physical_extension_codec;
+pub mod scalar_subquery_results;
