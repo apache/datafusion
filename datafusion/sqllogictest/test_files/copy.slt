@@ -51,6 +51,49 @@ SELECT id, p FROM validate_non_null_partition;
 ----
 2 0
 
+# Partition values with special characters are Hive-escaped in the directory
+# names (p=x%3Dy, p=a%20b) and decoded again when read back.
+# https://github.com/apache/datafusion/issues/26492
+query I
+COPY (VALUES (1, 'x=y'), (2, 'a b'), (3, 'a/b'), (4, 'é'), (5, '100%'), (6, 'abc')) TO 'test_files/scratch/copy/escaped_partition/' STORED AS PARQUET PARTITIONED BY (column2);
+----
+6
+
+statement ok
+CREATE EXTERNAL TABLE validate_escaped_partition (column1 INT, column2 VARCHAR)
+STORED AS PARQUET LOCATION 'test_files/scratch/copy/escaped_partition/' PARTITIONED BY (column2);
+
+query IT
+SELECT column1, column2 FROM validate_escaped_partition ORDER BY column1;
+----
+1 x=y
+2 a b
+3 a/b
+4 é
+5 100%
+6 abc
+
+# Filters on escaped partition values must still find the escaped directories
+query I
+SELECT column1 FROM validate_escaped_partition WHERE column2 = 'x=y';
+----
+1
+
+query I
+SELECT column1 FROM validate_escaped_partition WHERE column2 = 'a b';
+----
+2
+
+# The directory names themselves must be escaped (one level, no double encoding)
+statement ok
+CREATE EXTERNAL TABLE validate_escaped_partition_dir STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/escaped_partition/column2=x%3Dy/';
+
+query I
+SELECT column1 FROM validate_escaped_partition_dir;
+----
+1
+
 # validate partition paths were actually generated
 statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet_bar STORED AS PARQUET

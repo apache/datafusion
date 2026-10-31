@@ -12,6 +12,7 @@ use datafusion_common::{
     HashMap, Result, ScalarValue, TableReference, assert_or_internal_err,
 };
 use datafusion_datasource::PartitionedFile;
+use datafusion_datasource::write::demux::encode_hive_partition_value;
 use datafusion_datasource::{FileExtensions, ListingTableUrl};
 use datafusion_expr::{BinaryExpr, Operator, lit, utils};
 
@@ -32,10 +33,7 @@ use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
-use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
-
-const PARTITION_VALUE_ENCODE_SET: &AsciiSet =
-    &CONTROLS.add(b' ').add(b'%').add(b'/').add(b'?').add(b'#');
+use percent_encoding::percent_decode_str;
 
 /// Check whether the given expression can be resolved using only the columns `col_names`.
 /// This means that if this function returns true:
@@ -265,7 +263,7 @@ pub fn evaluate_partition_prefix<'a>(
             Some(PartitionValue::Single(val)) => {
                 // if a partition only has a single literal value, then it can be added to the
                 // prefix
-                let encoded = encode_partition_value(val);
+                let encoded = encode_hive_partition_value(val);
                 if encoded != val.as_str() {
                     // The same decoded value can be represented by both raw and
                     // percent-encoded partition directories. Prefix pruning is
@@ -289,10 +287,6 @@ pub fn evaluate_partition_prefix<'a>(
     } else {
         Some(Path::from_iter(parts))
     }
-}
-
-fn encode_partition_value(value: &str) -> Cow<'_, str> {
-    utf8_percent_encode(value, PARTITION_VALUE_ENCODE_SET).into()
 }
 
 pub fn filter_partitioned_file(
