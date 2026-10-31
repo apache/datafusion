@@ -4,11 +4,11 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Float32Array, Float64Array, RecordBatch};
-use arrow::compute::{cast, max, min};
+use arrow::array::{Array, Float32Array, Float64Array, ArrayRef, MapArray, RecordBatch, StructArray};
 use arrow::datatypes::{DataType, Schema};
+use arrow::compute::{cast, max, min};
 use datafusion_common::{
-    Result, ScalarValue, downcast_value, exec_datafusion_err, exec_err,
+    Result, ScalarValue, DataFusionError,downcast_value, exec_datafusion_err, exec_err,
     internal_datafusion_err, internal_err, plan_err,
 };
 use datafusion_expr::ColumnarValue;
@@ -59,6 +59,40 @@ fn check_percentile_range(percentile: f64) -> Result<f64> {
     Ok(percentile)
 }
 
+/// Splits row `row` of `map_array` into its key and value scalars.
+pub(crate) fn map_row_to_scalars(
+    map_array: &MapArray,
+    row: usize,
+) -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
+    let offsets = map_array.value_offsets();
+    let keys = map_array.keys();
+    let values = map_array.values();
+
+    let start = offsets[row] as usize;
+    let end = offsets[row + 1] as usize;
+    let mut row_keys = Vec::with_capacity(end - start);
+    let mut row_values = Vec::with_capacity(end - start);
+    for idx in start..end {
+        row_keys.push(ScalarValue::try_from_array(keys, idx)?);
+        row_values.push(ScalarValue::try_from_array(values, idx)?);
+    }
+    Ok((row_keys, row_values))
+}
+
+/// Converts each row of `struct_array` into the scalars of its columns.
+pub(crate) fn struct_to_rows(
+    struct_array: &StructArray,
+) -> Result<Vec<Vec<ScalarValue>>> {
+    (0..struct_array.len())
+        .map(|row| {
+            struct_array
+                .columns()
+                .iter()
+                .map(|column| ScalarValue::try_from_array(column, row))
+                .collect()
+        })
+        .collect()
+}
 /// State of the PercentileParam resolution.
 /// Either already resolved or still requiring a non-empty record batch.
 #[derive(Debug, Clone)]
@@ -240,7 +274,7 @@ impl PercentileParam {
     ) -> Result<f64> {
         match current {
             Some(current) if current == value => Ok(current),
-            Some(current) => {
+          Some(current) => {
                 let agg_fn_name = &self.aggregate_fn_name;
                 exec_err!(
                     "Percentile value for '{agg_fn_name}' must be constant across the aggregation, found differing values {} and {}",
