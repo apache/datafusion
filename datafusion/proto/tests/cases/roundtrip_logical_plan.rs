@@ -2908,21 +2908,23 @@ fn roundtrip_ilike() {
 
 #[test]
 fn roundtrip_similar_to() {
-    fn similar_to(negated: bool, escape_char: Option<char>) {
+    fn similar_to(negated: bool, escape_char: Option<char>, case_insensitive: bool) {
         let test_expr = Expr::SimilarTo(Like::new(
             negated,
             Box::new(col("col")),
             Box::new(lit("[0-9]+")),
             escape_char,
-            false,
+            case_insensitive,
         ));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
     }
-    similar_to(true, Some('X'));
-    similar_to(false, Some('\\'));
-    similar_to(true, None);
-    similar_to(false, None);
+    similar_to(true, Some('X'), false);
+    similar_to(false, Some('\\'), false);
+    similar_to(true, None, false);
+    similar_to(false, None, false);
+    similar_to(false, None, true);
+    similar_to(true, Some('X'), true);
 }
 
 #[test]
