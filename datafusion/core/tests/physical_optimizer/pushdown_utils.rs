@@ -14,7 +14,7 @@ use datafusion_datasource::{
 };
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{PhysicalAnalyzerRule, PhysicalOptimizerRule};
 use datafusion_physical_plan::filter::batch_filter;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
 use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
@@ -358,6 +358,7 @@ pub struct OptimizationTest {
 }
 
 impl OptimizationTest {
+    /// Run the optimizer rule `opt` on `input_plan`.
     #[expect(clippy::needless_pass_by_value)]
     pub fn new<O>(
         input_plan: Arc<dyn ExecutionPlan>,
@@ -367,6 +368,41 @@ impl OptimizationTest {
     where
         O: PhysicalOptimizerRule,
     {
+        Self::run(
+            input_plan,
+            opt.schema_check(),
+            allow_pushdown_filters,
+            |plan, config| opt.optimize(plan, config),
+        )
+    }
+
+    /// Run the analyzer rule `rule` on `input_plan`.
+    #[expect(clippy::needless_pass_by_value)]
+    pub fn new_analyzer<A>(
+        input_plan: Arc<dyn ExecutionPlan>,
+        rule: A,
+        allow_pushdown_filters: bool,
+    ) -> Self
+    where
+        A: PhysicalAnalyzerRule,
+    {
+        Self::run(
+            input_plan,
+            rule.schema_check(),
+            allow_pushdown_filters,
+            |plan, config| rule.analyze(plan, config),
+        )
+    }
+
+    fn run(
+        input_plan: Arc<dyn ExecutionPlan>,
+        schema_check: bool,
+        allow_pushdown_filters: bool,
+        rewrite: impl FnOnce(
+            Arc<dyn ExecutionPlan>,
+            &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
         let mut parquet_pushdown_config = ConfigOptions::default();
         parquet_pushdown_config.execution.parquet.pushdown_filters =
             allow_pushdown_filters;
@@ -374,10 +410,9 @@ impl OptimizationTest {
         let input = format_execution_plan(&input_plan);
         let input_schema = input_plan.schema();
 
-        let output_result = opt.optimize(input_plan, &parquet_pushdown_config);
-        let output = output_result
+        let output = rewrite(input_plan, &parquet_pushdown_config)
             .and_then(|plan| {
-                if opt.schema_check() && (plan.schema() != input_schema) {
+                if schema_check && (plan.schema() != input_schema) {
                     internal_err!(
                         "Schema mismatch:\n\nBefore:\n{:?}\n\nAfter:\n{:?}",
                         input_schema,

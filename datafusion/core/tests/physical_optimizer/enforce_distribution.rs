@@ -50,7 +50,6 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
 use datafusion_physical_optimizer::PhysicalOptimizerContext;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
@@ -58,6 +57,7 @@ use datafusion_physical_optimizer::output_requirements::{
     AddOutputRequirements, RemoveOutputRequirements,
 };
 use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
+use datafusion_physical_optimizer::{PhysicalAnalyzerRule, PhysicalOptimizerRule};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -766,8 +766,8 @@ impl TestConfig {
         optimizers_to_run: &[Run],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Add the ancillary output requirements operator at the start:
-        let optimizer = AddOutputRequirements::new();
-        let mut optimized = optimizer.optimize(plan.clone(), &self.config)?;
+        let mut optimized =
+            AddOutputRequirements::new().analyze(plan.clone(), &self.config)?;
 
         // This file has 2 rules that use tree node, apply these rules to original plan consecutively
         // After these operations tree nodes should be in a consistent state.
@@ -819,12 +819,12 @@ impl TestConfig {
         // assertions (which encode legacy run orders) remain stable.
         for _run in optimizers_to_run {
             let optimizer = EnsureRequirements::new();
-            optimized = optimizer.optimize(optimized, &self.config)?;
+            optimized = optimizer.analyze(optimized, &self.config)?;
         }
 
         // Remove the ancillary output requirements operator when done:
-        let optimizer = RemoveOutputRequirements::new();
-        let optimized = optimizer.optimize(optimized, &self.config)?;
+        let optimized =
+            RemoveOutputRequirements::new().optimize(optimized, &self.config)?;
 
         Ok(optimized)
     }
@@ -1054,7 +1054,7 @@ async fn aligned_hour_groups_avoid_shuffle_through_partial_aggregate() -> Result
     let config = TestConfig::default()
         .with_query_execution_partitions(2)
         .config;
-    let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+    let optimized = EnsureRequirements::new().analyze(aggregate, &config)?;
     check_plan_tree_sanity(&optimized, &config.optimizer)?;
 
     assert_plan!(
@@ -1090,7 +1090,7 @@ async fn crossing_day_groups_keep_shuffle_through_partial_aggregate() -> Result<
     let config = TestConfig::default()
         .with_query_execution_partitions(2)
         .config;
-    let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+    let optimized = EnsureRequirements::new().analyze(aggregate, &config)?;
     check_plan_tree_sanity(&optimized, &config.optimizer)?;
 
     assert_plan!(
@@ -1127,10 +1127,10 @@ fn range_transform_aggregate_optimization_is_idempotent() -> Result<()> {
     for precision in ["hour", "day"] {
         let input = timestamp_range_input(hour)?;
         let aggregate = partial_final_date_trunc_count(input, precision)?;
-        let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+        let optimized = EnsureRequirements::new().analyze(aggregate, &config)?;
         check_plan_tree_sanity(&optimized, &config.optimizer)?;
         let reoptimized =
-            EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
+            EnsureRequirements::new().analyze(Arc::clone(&optimized), &config)?;
         check_plan_tree_sanity(&reoptimized, &config.optimizer)?;
         assert_plan!(optimized, reoptimized);
     }
@@ -1156,7 +1156,7 @@ async fn range_transform_locality_does_not_satisfy_join_distribution() -> Result
     let config = TestConfig::default()
         .with_query_execution_partitions(2)
         .config;
-    let optimized = EnsureRequirements::new().optimize(join, &config)?;
+    let optimized = EnsureRequirements::new().analyze(join, &config)?;
     check_plan_tree_sanity(&optimized, &config.optimizer)?;
     assert_plan!(
         optimized,
@@ -4240,7 +4240,7 @@ fn interleave_broken_by_later_rewrite_is_repaired_on_next_pass() -> Result<()> {
         aggregate_exec_with_alias(parquet_exec(), alias),
     ]);
     let config = TestConfig::default().config;
-    let pass1 = EnsureRequirements::new().optimize(union, &config)?;
+    let pass1 = EnsureRequirements::new().analyze(union, &config)?;
     assert!(pass1.is::<InterleaveExec>());
 
     // Stand-in for the later rewrite: one child loses its hash partitioning.
@@ -4260,7 +4260,7 @@ fn interleave_broken_by_later_rewrite_is_repaired_on_next_pass() -> Result<()> {
     assert!(check_plan_tree_sanity(&rewritten, &config.optimizer).is_err());
 
     // The next distribution pass restores a valid interleave.
-    let pass2 = EnsureRequirements::new().optimize(rewritten, &config)?;
+    let pass2 = EnsureRequirements::new().analyze(rewritten, &config)?;
     check_plan_tree_sanity(&pass2, &config.optimizer)?;
     assert_plan!(pass2,
         @r"
@@ -4320,12 +4320,12 @@ fn issue_21826_join_selection_after_distribution_pass() -> Result<()> {
     ]);
     let config = TestConfig::default().config;
 
-    let pass1 = EnsureRequirements::new().optimize(union, &config)?;
+    let pass1 = EnsureRequirements::new().analyze(union, &config)?;
     assert!(pass1.is::<InterleaveExec>());
 
     // Rebuilding the interleave over the swapped join used to fail here with
     // "Can not create InterleaveExec: new children can not be interleaved".
-    let reordered = JoinSelection::new().optimize(pass1, &config)?;
+    let reordered = JoinSelection::new().analyze(pass1, &config)?;
     assert!(matches!(
         reordered.output_partitioning(),
         Partitioning::UnknownPartitioning(10)
@@ -4335,7 +4335,7 @@ fn issue_21826_join_selection_after_distribution_pass() -> Result<()> {
 
     // The second distribution pass repairs it. The two joins no longer share
     // a partitioning, so the result is a plain union.
-    let pass2 = EnsureRequirements::new().optimize(reordered, &config)?;
+    let pass2 = EnsureRequirements::new().analyze(reordered, &config)?;
     check_plan_tree_sanity(&pass2, &config.optimizer)?;
     assert_plan!(pass2,
         @r"
@@ -5916,7 +5916,7 @@ fn do_not_put_sort_when_input_is_invalid() -> Result<()> {
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
-    let dist_plan = EnsureRequirements::new().optimize(physical_plan, &config)?;
+    let dist_plan = EnsureRequirements::new().analyze(physical_plan, &config)?;
     // Since at the start of the rule ordering requirement is not satisfied
     // EnforceDistribution rule doesn't satisfy this requirement either.
     assert_plan!(dist_plan, @r"
@@ -5953,7 +5953,7 @@ fn put_sort_when_input_is_valid() -> Result<()> {
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
-    let dist_plan = EnsureRequirements::new().optimize(physical_plan, &config)?;
+    let dist_plan = EnsureRequirements::new().analyze(physical_plan, &config)?;
     // Since at the start of the rule ordering requirement is satisfied
     // EnforceDistribution rule satisfy this requirement also.
     assert_plan!(dist_plan, @r"
@@ -6231,7 +6231,7 @@ fn preserve_fetch_when_reoptimizing_ordered_merge() -> Result<()> {
         Arc::new(SortPreservingMergeExec::new(sort_key, input).with_fetch(Some(5)));
 
     let optimized =
-        EnsureRequirements::new().optimize(plan, &test_suite_default_config_options())?;
+        EnsureRequirements::new().analyze(plan, &test_suite_default_config_options())?;
     let plan = displayable(optimized.as_ref()).indent(true).to_string();
 
     assert!(
@@ -6249,7 +6249,7 @@ fn preserve_fetch_when_reoptimizing_coalesce_partitions() -> Result<()> {
         Arc::new(CoalescePartitionsExec::new(input).with_fetch(Some(5)));
 
     let optimized =
-        EnsureRequirements::new().optimize(plan, &test_suite_default_config_options())?;
+        EnsureRequirements::new().analyze(plan, &test_suite_default_config_options())?;
 
     assert_eq!(optimized.fetch(), Some(5));
     optimized
@@ -6360,7 +6360,7 @@ async fn preserve_fetch_when_parallelizing_sort_above_filter() -> Result<()> {
     config.optimizer.repartition_sorts = true;
     for iteration in 0..3 {
         if iteration > 0 {
-            plan = EnsureRequirements::new().optimize(plan, &config)?;
+            plan = EnsureRequirements::new().analyze(plan, &config)?;
         }
         // Either input batch can arrive first. Both contain three positive
         // rows, so keeping the limit below the filter always returns three.
@@ -6432,7 +6432,7 @@ async fn assert_reoptimized_fetch_values(
                         })?
                         .data;
                 check_integrity(distribution)?;
-                optimized = EnsureRequirements::new().optimize(optimized, &config)?;
+                optimized = EnsureRequirements::new().analyze(optimized, &config)?;
             }
             assert_eq!(
                 fetch_test_values(Arc::clone(&optimized)).await?,
@@ -6513,7 +6513,7 @@ async fn check_fetch_below_filter(
                 })?
                 .data;
             check_integrity(distribution)?;
-            plan = EnsureRequirements::new().optimize(plan, &config)?;
+            plan = EnsureRequirements::new().analyze(plan, &config)?;
         }
         let input = Arc::clone(plan.children()[0]);
         let batches = collect(input, Arc::clone(&task_context)).await?;
@@ -6818,7 +6818,7 @@ fn ensure_distribution_shares_statistics_cache() -> Result<()> {
     /// Leaf statistics computations performed by the real rule.
     fn via_rule(depth: usize) -> Result<usize> {
         let calls = Arc::new(AtomicUsize::new(0));
-        EnsureRequirements::new().optimize(deep_plan(depth, &calls), &config())?;
+        EnsureRequirements::new().analyze(deep_plan(depth, &calls), &config())?;
         Ok(calls.load(Ordering::Relaxed))
     }
 
@@ -6882,7 +6882,7 @@ fn ensure_distribution_uses_context_statistics_registry() -> Result<()> {
         .use_row_number_estimates_to_optimize_partitioning = true;
 
     // Default context: no registry, so the scan's real (tiny) statistics apply.
-    let plan_default = EnsureRequirements::new().optimize(plan.clone(), &config)?;
+    let plan_default = EnsureRequirements::new().analyze(plan.clone(), &config)?;
 
     // A provider that reports the scan as large.
     let mut registry = StatisticsRegistry::new();
@@ -6909,7 +6909,7 @@ fn ensure_distribution_uses_context_statistics_registry() -> Result<()> {
     }
 
     let plan_registry = EnsureRequirements::new()
-        .optimize_with_context(plan, &ContextWithRegistry { config, registry })?;
+        .analyze_with_context(plan, &ContextWithRegistry { config, registry })?;
 
     let s_default = displayable(plan_default.as_ref()).indent(true).to_string();
     let s_registry = displayable(plan_registry.as_ref()).indent(true).to_string();

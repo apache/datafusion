@@ -31,7 +31,7 @@ use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
 };
-use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
+use datafusion::physical_optimizer::analyzer::PhysicalAnalyzer;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::{
@@ -147,16 +147,16 @@ impl TestContext {
         }
 
         if file_name == "sort_pushdown.slt" {
-            let mut rules = PhysicalOptimizer::new().rules;
+            let mut rules = PhysicalAnalyzer::new().rules;
             let ensure_requirements = rules
                 .iter()
                 .position(|rule| rule.name() == "EnsureRequirements")
-                .expect("default optimizer includes EnsureRequirements");
+                .expect("default analyzer includes EnsureRequirements");
             rules.insert(
                 ensure_requirements,
                 Arc::new(custom_sort_pushdown::CustomLimitRule),
             );
-            state_builder = state_builder.with_physical_optimizer_rules(rules);
+            state_builder = state_builder.with_physical_analyzer_rules(rules);
         }
 
         let state = state_builder.build();

@@ -19,7 +19,7 @@ use datafusion_physical_plan::udaf::{
 use datafusion_physical_plan::{ExecutionPlan, expressions};
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 
 /// Optimizer that uses available statistics for aggregate functions
@@ -33,17 +33,17 @@ impl AggregateStatistics {
     }
 }
 
-impl PhysicalOptimizerRule for AggregateStatistics {
-    fn optimize(
+impl PhysicalAnalyzerRule for AggregateStatistics {
+    fn analyze(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+        self.analyze_with_context(plan, &ConfigOnlyContext::new(config))
     }
 
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
-    fn optimize_with_context(
+    fn analyze_with_context(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         context: &dyn PhysicalOptimizerContext,
@@ -86,14 +86,14 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 )?))
             } else {
                 plan.map_children(|child| {
-                    self.optimize_with_context(child, context)
+                    self.analyze_with_context(child, context)
                         .map(Transformed::yes)
                 })
                 .data()
             }
         } else {
             plan.map_children(|child| {
-                self.optimize_with_context(child, context)
+                self.analyze_with_context(child, context)
                     .map(Transformed::yes)
             })
             .data()

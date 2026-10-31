@@ -25,7 +25,7 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, col, lit};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::PhysicalAnalyzerRule;
 use datafusion_physical_optimizer::window_topn::WindowTopN;
 use datafusion_physical_plan::collect;
 use datafusion_physical_plan::displayable;
@@ -56,13 +56,13 @@ fn plan_str(plan: &dyn ExecutionPlan) -> String {
 fn optimize(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     let mut config = ConfigOptions::new();
     config.optimizer.enable_window_topn = true;
-    WindowTopN::new().optimize(plan, &config)
+    WindowTopN::new().analyze(plan, &config)
 }
 
 fn optimize_disabled(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     let mut config = ConfigOptions::new();
     config.optimizer.enable_window_topn = false;
-    WindowTopN::new().optimize(plan, &config)
+    WindowTopN::new().analyze(plan, &config)
 }
 
 /// Build: FilterExec(rn <= limit) → BoundedWindowAggExec(ROW_NUMBER PBY pk OBY val)

@@ -17,7 +17,7 @@ use datafusion::logical_expr::{Expr, Operator, TableType};
 use datafusion::physical_expr::expressions::{binary, col, lit, negative};
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_optimizer::PhysicalAnalyzerRule;
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -120,8 +120,8 @@ pub(super) fn register_custom_sort_pushdown(ctx: &SessionContext) -> Result<()> 
 #[derive(Debug)]
 pub(super) struct CustomLimitRule;
 
-impl PhysicalOptimizerRule for CustomLimitRule {
-    fn optimize(
+impl PhysicalAnalyzerRule for CustomLimitRule {
+    fn analyze(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         _: &ConfigOptions,

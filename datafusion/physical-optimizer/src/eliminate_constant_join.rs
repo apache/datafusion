@@ -20,7 +20,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 
 /// Rewrites an inner [`NestedLoopJoinExec`] or a [`CrossJoinExec`] whose input
 /// provably produces one row of literals into a [`FilterExec`] over the other
@@ -51,8 +51,8 @@ impl EliminateConstantJoin {
     }
 }
 
-impl PhysicalOptimizerRule for EliminateConstantJoin {
-    fn optimize(
+impl PhysicalAnalyzerRule for EliminateConstantJoin {
+    fn analyze(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,

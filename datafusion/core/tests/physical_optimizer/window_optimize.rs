@@ -18,7 +18,7 @@ mod test {
     use datafusion_physical_expr::expressions::{Column, col};
     use datafusion_physical_expr::window::{PlainAggregateWindowExpr, WindowExpr};
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
-    use datafusion_physical_optimizer::PhysicalOptimizerRule;
+    use datafusion_physical_optimizer::PhysicalAnalyzerRule;
     use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
     use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
     use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
@@ -134,7 +134,7 @@ mod test {
 
         // Used to fail with an internal error from `ProjectionMapping::try_new`.
         let optimized = EnsureRequirements::new()
-            .optimize(Arc::clone(&plan), &ConfigOptions::new())?;
+            .analyze(Arc::clone(&plan), &ConfigOptions::new())?;
 
         let names = |plan: &Arc<dyn ExecutionPlan>| {
             plan.schema()

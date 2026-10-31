@@ -39,7 +39,7 @@
 
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -307,8 +307,8 @@ impl WindowTopN {
     }
 }
 
-impl PhysicalOptimizerRule for WindowTopN {
-    fn optimize(
+impl PhysicalAnalyzerRule for WindowTopN {
+    fn analyze(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,

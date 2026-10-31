@@ -21,6 +21,7 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 
 use datafusion_common::{Result, assert_eq_or_internal_err, config::ConfigOptions};
 use datafusion_physical_expr::PhysicalExpr;
@@ -418,8 +419,8 @@ impl PhysicalOptimizerRule for DynamicFilterPushdown {
     }
 }
 
-impl PhysicalOptimizerRule for FilterPushdown {
-    fn optimize(
+impl PhysicalAnalyzerRule for FilterPushdown {
+    fn analyze(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,

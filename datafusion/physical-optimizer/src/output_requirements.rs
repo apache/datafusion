@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
@@ -55,7 +56,9 @@ impl AddOutputRequirements {
 
 /// Removes the [`OutputRequirementExec`]s that [`AddOutputRequirements`]
 /// added, once the rules that need the output requirement have run. The
-/// marker is not executable, so it must not reach the final plan.
+/// marker is not executable, so it must not reach the final plan: the planner
+/// also runs this rule after the optimizer rules, for custom optimizer lists
+/// that leave it out.
 #[derive(Debug, Default)]
 pub struct RemoveOutputRequirements {}
 
@@ -322,8 +325,8 @@ impl ExecutionPlan for OutputRequirementExec {
     }
 }
 
-impl PhysicalOptimizerRule for AddOutputRequirements {
-    fn optimize(
+impl PhysicalAnalyzerRule for AddOutputRequirements {
+    fn analyze(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,

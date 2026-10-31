@@ -10,7 +10,7 @@
 //! pipeline-friendly ones. To achieve the second goal, it selects the proper
 //! `PartitionMode` and the build side using the available statistics for hash joins.
 
-use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
@@ -120,16 +120,16 @@ fn supports_collect_by_thresholds(
     }
 }
 
-impl PhysicalOptimizerRule for JoinSelection {
-    fn optimize(
+impl PhysicalAnalyzerRule for JoinSelection {
+    fn analyze(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+        self.analyze_with_context(plan, &ConfigOnlyContext::new(config))
     }
 
-    fn optimize_with_context(
+    fn analyze_with_context(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         context: &dyn PhysicalOptimizerContext,

@@ -13,7 +13,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::PhysicalAnalyzerRule;
+use datafusion_physical_optimizer::analyzer::PhysicalAnalyzer;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::output_requirements::AddOutputRequirements;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
@@ -73,11 +74,11 @@ fn assert_add_output_requirements_idempotent(plan: Arc<dyn ExecutionPlan>) {
     let rule = AddOutputRequirements::new();
 
     let once = rule
-        .optimize(plan, &config)
-        .expect("first optimize pass should succeed");
+        .analyze(plan, &config)
+        .expect("first analyze pass should succeed");
     let twice = rule
-        .optimize(Arc::clone(&once), &config)
-        .expect("second optimize pass should succeed");
+        .analyze(Arc::clone(&once), &config)
+        .expect("second analyze pass should succeed");
 
     assert_eq!(
         get_plan_string(&once),
@@ -109,8 +110,8 @@ fn require_top_ordering_descends_through_scalar_subquery() {
     )) as Arc<dyn ExecutionPlan>;
 
     let optimized = AddOutputRequirements::new()
-        .optimize(plan, &ConfigOptions::new())
-        .expect("optimize should succeed");
+        .analyze(plan, &ConfigOptions::new())
+        .expect("analyze should succeed");
 
     insta::assert_snapshot!(
         displayable(optimized.as_ref()).indent(true).to_string(),
@@ -167,10 +168,16 @@ async fn scalar_subquery_root_preserves_global_ordering_end_to_end() {
         ScalarSubqueryResults::new(1),
     )) as Arc<dyn ExecutionPlan>;
 
-    // Run the full default physical optimizer pipeline.
+    // Run the full default physical pipeline: the analyzer rules, then the
+    // optimizer rules.
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 4;
     let mut optimized = plan;
+    for rule in PhysicalAnalyzer::new().rules {
+        optimized = rule
+            .analyze(optimized, &config)
+            .unwrap_or_else(|e| panic!("analyzer rule {} failed: {e}", rule.name()));
+    }
     for rule in PhysicalOptimizer::new().rules {
         optimized = rule
             .optimize(optimized, &config)
