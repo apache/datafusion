@@ -247,6 +247,57 @@ FROM (
 ----
 8192 8192
 
+# --- Case I: byte array keys in compressed spill files ---
+# Compressed spill files store `Utf8`, `LargeUtf8`, `Binary` and `LargeBinary`
+# columns as lengths. The keys are cast because `varchar` maps to `Utf8View`.
+statement ok
+CREATE VIEW byte_keys AS
+SELECT
+  arrow_cast(CASE WHEN v % 10 = 0 THEN NULL ELSE concat('k', (v * 7) % 100000) END, 'Utf8') AS s,
+  arrow_cast(concat('k', (v * 7) % 100000), 'LargeUtf8') AS ls,
+  arrow_cast(concat('k', (v * 7) % 100000), 'Binary') AS b,
+  arrow_cast(concat('k', (v * 7) % 100000), 'LargeBinary') AS lb
+FROM generate_series(1, 100000) AS t(v)
+
+statement ok
+SET datafusion.execution.spill_compression = 'zstd'
+
+query IITTII
+SELECT count(*), count(s), min(s), max(ls), sum(length(s)), count(*) FILTER (
+  WHERE arrow_cast(b, 'LargeUtf8') = ls AND arrow_cast(lb, 'LargeUtf8') = ls
+    AND (s IS NULL OR s = ls)
+)
+FROM (SELECT s, ls, b, lb FROM byte_keys GROUP BY s, ls, b, lb)
+----
+100000 90000 k1 k99999 530001 100000
+
+statement ok
+SET datafusion.execution.spill_compression = 'lz4_frame'
+
+query IITTII
+SELECT count(*), count(s), min(s), max(ls), sum(length(s)), count(*) FILTER (
+  WHERE arrow_cast(b, 'LargeUtf8') = ls AND arrow_cast(lb, 'LargeUtf8') = ls
+    AND (s IS NULL OR s = ls)
+)
+FROM (SELECT s, ls, b, lb FROM byte_keys GROUP BY s, ls, b, lb)
+----
+100000 90000 k1 k99999 530001 100000
+
+# Assert spill happened
+query TT
+EXPLAIN ANALYZE
+SELECT count(*) FROM (SELECT s, ls, b, lb FROM byte_keys GROUP BY s, ls, b, lb)
+----
+<slt:ignore>
+04)------AggregateExec: mode=Single, gby=[s@0 as s, ls@1 as ls, b@2 as b, lb@3 as lb], aggr=[], metrics=[<slt:ignore>spill_count=<slt:ignore>, spilled_bytes=<slt:ignore>, spilled_rows=<slt:ignore> K,<slt:ignore>]
+<slt:ignore>
+
+statement ok
+RESET datafusion.execution.spill_compression
+
+statement ok
+DROP VIEW byte_keys
+
 statement ok
 SET datafusion.execution.target_partitions = 4
 
