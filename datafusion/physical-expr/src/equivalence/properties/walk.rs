@@ -285,13 +285,13 @@ impl<'a> SortKeyWalk<'a> {
 mod tests {
     use std::sync::Arc;
 
-    use crate::EquivalenceProperties;
-    use crate::expressions::{BinaryExpr, CastExpr, col};
+    use crate::expressions::{BinaryExpr, CastExpr, col, lit};
+    use crate::{AcrossPartitions, ConstExpr, EquivalenceProperties};
     use crate::{PhysicalExpr, PhysicalSortExpr};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-    use datafusion_common::Result;
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Operator;
 
     /// Pinning a key can move the head of an ordering to an expression that
@@ -393,6 +393,48 @@ mod tests {
         Ok(())
     }
 
+    /// A window over a whole partition, such as `SUM(..) OVER (PARTITION BY
+    /// k)`, adds `[k, x]` in all four directions of `x`. Pinning `k` leaves `x`
+    /// heading orderings in opposite directions, so `x` has one value, and so
+    /// does `CAST(x AS BIGINT)`: `[k, CAST(x AS BIGINT)]` holds in every
+    /// direction. Without the partial constant check, `x` would only be
+    /// ordered in the direction of the first ordering it heads.
+    #[test]
+    fn partial_constant_after_pinning() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("x", DataType::Int32, true),
+        ]));
+        let [k, x] = ["k", "x"].map(|name| col(name, &schema).unwrap());
+        let cast_x = Arc::new(CastExpr::new_with_target_field(
+            Arc::clone(&x),
+            Arc::new(Field::new("x", DataType::Int64, true)),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+        let directions = [(false, false), (false, true), (true, false), (true, true)]
+            .map(|(descending, nulls_first)| SortOptions {
+                descending,
+                nulls_first,
+            });
+
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_orderings(directions.map(|options| {
+            vec![
+                PhysicalSortExpr::new_default(Arc::clone(&k)),
+                PhysicalSortExpr::new(Arc::clone(&x), options),
+            ]
+        }));
+
+        for options in directions {
+            let required = [
+                PhysicalSortExpr::new_default(Arc::clone(&k)),
+                PhysicalSortExpr::new(Arc::clone(&cast_x), options),
+            ];
+            assert!(properties.ordering_satisfy(required)?, "{options:?}");
+        }
+        Ok(())
+    }
+
     /// `find_longest_permutation` pins what it finds in normal form. With
     /// `b = c` and ordering `[a + b, d]`, finding either `a + b` or `a + c`
     /// pins the head of the ordering, whichever of `b` and `c` the class
@@ -425,6 +467,37 @@ mod tests {
                 properties.find_longest_permutation(&[plus(right), Arc::clone(&d)])?;
             assert_eq!(indices, vec![0, 1], "a + {right}");
         }
+        Ok(())
+    }
+
+    /// A literal key is found as a singleton and does not change the
+    /// properties. With `x` the constant `5` and ordering `[k, b % 5]`,
+    /// `[5, k, b % 5]` is found in full. (Adding `5` as a constant, as the
+    /// properties were changed before, put it in the class of `x`, so `b % 5`
+    /// no longer matched the ordering.)
+    #[test]
+    fn find_longest_permutation_with_literal() -> Result<()> {
+        let schema = Arc::new(Schema::new(
+            ["x", "k", "b"]
+                .map(|name| Field::new(name, DataType::Int32, true))
+                .to_vec(),
+        ));
+        let [x, k, b] = ["x", "k", "b"].map(|name| col(name, &schema).unwrap());
+        let b_mod_5 = Arc::new(BinaryExpr::new(b, Operator::Modulo, lit(5i32))) as _;
+
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_constants([ConstExpr::new(
+            x,
+            AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(5)))),
+        )])?;
+        properties.add_ordering([
+            PhysicalSortExpr::new_default(Arc::clone(&k)),
+            PhysicalSortExpr::new_default(Arc::clone(&b_mod_5)),
+        ]);
+
+        let (_, indices) =
+            properties.find_longest_permutation(&[lit(5i32), k, b_mod_5])?;
+        assert_eq!(indices, vec![0, 1, 2]);
         Ok(())
     }
 }
