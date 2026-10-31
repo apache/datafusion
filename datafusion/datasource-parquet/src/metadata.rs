@@ -31,10 +31,10 @@ use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_to_arrow_schema;
-use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
+use parquet::basic::{ColumnOrder, Encoding, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
-    RowGroupMetaData, SortingColumn,
+    ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder,
+    ParquetMetaDataReader, RowGroupMetaData, SortingColumn,
 };
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
@@ -45,6 +45,14 @@ use std::sync::Arc;
 /// merged result to be `Inexact` rather than `Absent`, as the estimate
 /// would be too unreliable otherwise.
 const PARTIAL_NDV_THRESHOLD: f64 = 0.75;
+
+fn is_all_dictionary_encoded(column: &ColumnChunkMetaData) -> bool {
+    column.dictionary_page_offset().is_some()
+        && column.page_encoding_stats_mask().is_some_and(|mask| {
+            mask.is_only(Encoding::PLAIN_DICTIONARY)
+                || mask.is_only(Encoding::RLE_DICTIONARY)
+        })
+}
 
 fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
     matches!(
@@ -449,22 +457,21 @@ impl<'a> DFParquetMetadata<'a> {
 
         let schema = if self.enable_rle_to_dictionary {
             let schema_descr = file_metadata.schema_descr();
-            // Top-level columns that have a dictionary page in at least one row group.
-            let dict_cols: HashSet<String> = metadata
-                .row_groups()
+            // Only promote top-level columns whose data pages are all dictionary encoded.
+            // Otherwise the reader must rebuild dictionaries for plain fallback pages.
+            let dict_cols: HashSet<String> = schema_descr
+                .columns()
                 .iter()
-                .flat_map(|rg| {
-                    rg.columns()
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(col_idx, col)| {
-                            col.dictionary_page_offset()?;
-                            let col_desc = schema_descr.column(col_idx);
-                            let parts = col_desc.path().parts();
-                            // Skip nested columns: their leaf name doesn't match the
-                            // Arrow top-level field name.
-                            (parts.len() == 1).then(|| parts[0].clone())
-                        })
+                .enumerate()
+                .filter_map(|(col_idx, col_desc)| {
+                    let parts = col_desc.path().parts();
+                    (parts.len() == 1
+                        && !metadata.row_groups().is_empty()
+                        && metadata
+                            .row_groups()
+                            .iter()
+                            .all(|rg| is_all_dictionary_encoded(rg.column(col_idx))))
+                    .then(|| parts[0].clone())
                 })
                 .collect();
             if dict_cols.is_empty() {
@@ -1254,6 +1261,54 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
     use arrow::datatypes::Field;
+    use parquet::basic::EncodingMask;
+    use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
+
+    fn column_with_data_page_encodings(
+        encodings: Option<&[Encoding]>,
+        has_dictionary_page: bool,
+    ) -> ColumnChunkMetaData {
+        let field = SchemaType::primitive_type_builder("col", PhysicalType::BYTE_ARRAY)
+            .build()
+            .unwrap();
+        let schema = SchemaDescriptor::new(Arc::new(
+            SchemaType::group_type_builder("schema")
+                .with_fields(vec![Arc::new(field)])
+                .build()
+                .unwrap(),
+        ));
+        let mut builder = ColumnChunkMetaData::builder(schema.column(0));
+        if has_dictionary_page {
+            builder = builder.set_dictionary_page_offset(Some(0));
+        }
+        if let Some(encodings) = encodings {
+            builder = builder.set_page_encoding_stats_mask(
+                EncodingMask::new_from_encodings(encodings.iter()),
+            );
+        }
+        builder.build().unwrap()
+    }
+
+    #[test]
+    fn dictionary_promotion_requires_only_dictionary_data_pages() {
+        for encoding in [Encoding::PLAIN_DICTIONARY, Encoding::RLE_DICTIONARY] {
+            let column = column_with_data_page_encodings(Some(&[encoding]), true);
+            assert!(is_all_dictionary_encoded(&column));
+        }
+
+        let mixed = column_with_data_page_encodings(
+            Some(&[Encoding::RLE_DICTIONARY, Encoding::PLAIN]),
+            true,
+        );
+        assert!(!is_all_dictionary_encoded(&mixed));
+
+        let missing_stats = column_with_data_page_encodings(None, true);
+        assert!(!is_all_dictionary_encoded(&missing_stats));
+
+        let missing_dictionary =
+            column_with_data_page_encodings(Some(&[Encoding::RLE_DICTIONARY]), false);
+        assert!(!is_all_dictionary_encoded(&missing_dictionary));
+    }
 
     #[test]
     fn test_lex_ordering_to_sorting_columns_uses_writer_schema() -> Result<()> {
