@@ -542,6 +542,14 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn limit_behavior(&self) -> LimitBehavior {
+        // A frame's end bound counts rows within a partition, so reading it as a
+        // row count of the input only holds when each partition is a contiguous
+        // run of it -- which is what `Sorted` means. In the other modes a
+        // partition's rows are interleaved with other partitions', and how far
+        // ahead this node reads is not known here.
+        if self.input_order_mode != InputOrderMode::Sorted {
+            return LimitBehavior::Window(None);
+        }
         LimitBehavior::Window(window_lookahead(&self.window_expr))
     }
 
