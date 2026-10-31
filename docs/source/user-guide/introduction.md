@@ -75,13 +75,13 @@ latency).
 
 Here are some example systems built using DataFusion:
 
-- Specialized Analytical Database systems such as [HoraeDB] and more general Apache Spark like system such as [Ballista]
-- New query language engines such as [prql-query] and accelerators such as [VegaFusion]
-- Research platform for new Database Systems, such as [Flock]
-- SQL support to another library, such as [Vortex]
-- Streaming data platforms such as [Synnada]
-- Tools for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as [qv]
-- Native Spark runtime replacement such as [Auron]
+- Specialized Analytical Database systems such as [HoraeDB](https://github.com/apache/horaedb) and more general Apache Spark like system such as [Ballista](https://github.com/apache/datafusion-ballista)
+- New query language engines such as [prql-query](https://github.com/prql/prql-query) and accelerators such as [VegaFusion](https://vegafusion.io/)
+- Research platform for new Database Systems, such as [Flock](https://github.com/flock-lab/flock)
+- SQL support to another library, such as [Vortex](https://vortex.dev/)
+- Streaming data platforms such as [Synnada](https://synnada.ai/)
+- Tools for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as [qv](https://github.com/timvw/qv)
+- Native Spark runtime replacement such as [Auron](https://github.com/apache/auron)
 - Distributed data cache to boost GPU utilization of AI workloads with [Kubeflow Trainer](https://www.kubeflow.org/docs/components/trainer/user-guides/data-cache/)
 
 By using DataFusion, projects are freed to focus on their specific
@@ -91,97 +91,82 @@ parallelized streaming execution plans, file format support, etc.
 
 ## Known Users
 
-Here are some active projects using DataFusion:
+Projects with a public GitHub repository must meet **all** of these criteria to
+appear in the active list:
 
- <!-- "Active" means github repositories that had at least one commit in the last 6 months -->
+- At least one commit on the default branch in the last 6 months (calendar months).
+- At least 100 stars.
+- At least 5 contributors, as shown in the repository's GitHub sidebar.
+
+Check these criteria when adding or updating an entry. Projects without a public
+repository must instead link to public evidence of DataFusion use, such as a blog
+post or documentation page. These criteria apply to Known Users, not the
+Integrations and Extensions lists below.
+
+Here are some active projects using DataFusion:
 
 - [Arroyo](https://github.com/ArroyoSystems/arroyo) Distributed stream processing engine in Rust
 - [ArkFlow](https://github.com/arkflow-rs/arkflow) High-performance Rust stream processing engine
-- [Auron] The Auron accelerator for big data engine (e.g., Spark, Flink) leverages native vectorized execution to accelerate query processing
-- [Ballista] Distributed SQL Query Engine
-- [CnosDB] Open Source Distributed Time Series Database
+- [Auron](https://github.com/apache/auron) The Auron accelerator for big data engine (e.g., Spark, Flink) leverages native vectorized execution to accelerate query processing
+- [Ballista](https://github.com/apache/datafusion-ballista) Distributed SQL Query Engine
+- [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
-- [Cube Store] Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics
+- [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust) Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics
 - [datafusion-dft](https://github.com/datafusion-contrib/datafusion-dft) Batteries included CLI, TUI, and server implementations for DataFusion.
-- [datapress](https://docs.datap-rs.org) An opinionated small and fast data server on parquet and delta tables.
 - [dbt Fusion engine](https://github.com/dbt-labs/dbt-fusion) The dbt Fusion engine, written in Rust, designed for speed and correctness with a native SQL understanding across DWH SQL dialects.
-- [delta-rs] Native Rust implementation of Delta Lake
-- [EDB Postgres Lakehouse] built with [Seafowl]
+- [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [Feldera](https://github.com/feldera/feldera) Fast query engine for incremental computation
-- [Funnel](https://funnel.io/) Data Platform powering Marketing Intelligence applications.
-- [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
-- [GreptimeDB] Open Source & Cloud Native Distributed Time Series Database
-- [hiop](https://hiop.io) Serverless Data Logistic Platform
-- [HoraeDB] Distributed Time-Series Database
-- [Hotdata](https://www.hotdata.dev) On-demand databases for AI agents with a unified query engine for vector, OLAP, and full-text search.
+- [Funnel](https://funnel.io/) Data Platform powering Marketing Intelligence applications. ([DataFusion use](https://funnel.io/devblog/the-data-that-wont-sit-still-engineering-at-the-edge-of-marketing-data))
+- [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
+- [hiop](https://hiop.io) Serverless Data Logistic Platform ([DataFusion use](https://github.com/apache/datafusion/pull/18114))
+- [Hotdata](https://www.hotdata.dev) On-demand databases for AI agents with a unified query engine for vector, OLAP, and full-text search. ([DataFusion use](https://www.hotdata.dev/blog/bringing-ducklake-to-apache-datafusion))
 - [Iceberg-rust](https://github.com/apache/iceberg-rust) Rust implementation of Apache Iceberg
-- [IceGate](https://icegate.tech) Observability data lake engine for metrics, traces, logs, and events, built on Apache Iceberg with OpenTelemetry ingestion
-- [InfluxDB] Time Series Database
-- [Kamu] Planet-scale streaming data pipeline
+- [InfluxDB](https://github.com/influxdata/influxdb) Time Series Database
+- [Kamu](https://github.com/kamu-data/kamu-cli) Planet-scale streaming data pipeline
 - [Kubeflow Trainer](https://github.com/kubeflow/trainer) Kubernetes-native project designed for
   scalable LLMs fine-tuning and distributed AI model training.
 - [LakeSoul](https://github.com/lakesoul-io/LakeSoul) Open source LakeHouse framework with native IO in Rust.
-- [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
-- [OpenObserve] Distributed cloud native observability platform
+- [Lance](https://github.com/lance-format/lance) Modern columnar data format for ML
+- [OpenObserve](https://github.com/openobserve/openobserve) Distributed cloud native observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
-- [Parseable] Open columnar observability data lake platform for logs, metrics, and traces.
-- [Massive.com](https://massive.com/) Stock Market API
-- [Mycorr](https://mycorr.app) Shared, versioned tables with units, links and SQL for humans and agents
-- [qv] Quickly view your data
+- [Parseable](https://github.com/parseablehq/parseable) Open columnar observability data lake platform for logs, metrics, and traces.
+- [Massive.com](https://github.com/massive-com) Stock Market API
+- [Mycorr](https://mycorr.app) Shared, versioned tables with units, links and SQL for humans and agents ([DataFusion use](https://docs.mycorr.app/developers/mcp-server.html#querying-with-sql))
+- [qv](https://github.com/timvw/qv) Quickly view your data
 - [R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/) Cloudflare's distributed engine for querying data in Iceberg Catalogs
 - [rerun.io](https://rerun.io/) Visualize and query robotics logs and transform them into training data.
-- [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
-- [ROAPI] Create full-fledged APIs for slowly moving datasets without writing a single line of code
+- [Restate](https://github.com/restatedev/restate) Easily build resilient applications using distributed durable async/await
 - [Sail](https://github.com/lakehq/sail) Unifying stream, batch and AI workloads with Apache Spark compatibility
 - [SedonaDB](https://github.com/apache/sedona-db) A single-node analytical database engine with geospatial as a first-class citizen
 - [Sleeper](https://github.com/gchq/sleeper) Serverless, cloud-native, log-structured merge tree based, scalable key-value store
-- [Spice.ai] Building blocks for data-driven AI applications
-- [Streamling](https://www.streamling.dev/) Data streaming runtime focused on performance, consistency, and extensibility
-- [Supermetal](https://supermetal.io/) is a change data capture (CDC) platform that synchronizes data between databases, data warehouses, and lakehouses
-- [Synnada] Streaming-first framework for data products
-- [VegaFusion] Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
-- [Vortex] An extensible, state of the art columnar file format
-- [Telemetry](https://telemetry.sh/) Structured logging made easy
+- [Spice.ai](https://github.com/spiceai/spiceai) Building blocks for data-driven AI applications
+- [Streamling](https://github.com/goldsky-io/streamling) Data streaming runtime focused on performance, consistency, and extensibility
+- [Supermetal](https://supermetal.io/) is a change data capture (CDC) platform that synchronizes data between databases, data warehouses, and lakehouses ([DataFusion use](https://github.com/apache/datafusion/pull/23790))
+- [Synnada](https://synnada.ai/) Streaming-first framework for data products
+- [Vortex](https://vortex.dev/) An extensible, state of the art columnar file format
+- [Telemetry](https://telemetry.sh/) Structured logging made easy ([DataFusion use](https://telemetry.sh/docs/discussion-topics/datafusion-sql-reference))
 - [Xorq](https://github.com/xorq-labs/xorq/) Xorq is a multi-engine batch transformation framework built on Ibis, DataFusion and Arrow
-- [KalamDB](https://github.com/jamals86/KalamDB) SQL-first realtime state database for AI agents, chat products, and multi-tenant SaaS.
 - [Infino](https://github.com/infino-ai/infino) Fast retrieval engine for SQL, full-text search, and vector search over Parquet on object storage
 
-Here are some less active projects that used DataFusion:
+Here are other projects using or having used DataFusion, including less active
+projects and projects that do not meet the active-list criteria:
 
 - [bdt](https://github.com/datafusion-contrib/bdt) Boring Data Tool
-- [Cloudfuse Buzz]
-- [Dask SQL] Distributed SQL query engine in Python
-- [Exon] Analysis toolkit for life-science applications
-- [Flock]
-- [Tensorbase]
+- [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
+- [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
+- [datapress](https://github.com/jeroenflvr/datapress) An opinionated small and fast data server on parquet and delta tables.
+- [EDB Postgres Lakehouse](https://www.enterprisedb.com/products/analytics) built with [Seafowl](https://github.com/splitgraph/seafowl)
+- [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
+- [Flock](https://github.com/flock-lab/flock)
+- [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
+- [HoraeDB](https://github.com/apache/horaedb) Distributed Time-Series Database (archived)
+- [IceGate](https://github.com/icegatetech/icegate) Observability data lake engine for metrics, traces, logs, and events, built on Apache Iceberg with OpenTelemetry ingestion
+- [KalamDB](https://github.com/jamals86/KalamDB) SQL-first realtime state database for AI agents, chat products, and multi-tenant SaaS.
+- [ROAPI](https://github.com/roapi/roapi) Create full-fledged APIs for slowly moving datasets without writing a single line of code
+- [Tensorbase](https://github.com/tensorbase/tensorbase)
+- [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 
 If you know of another project, please submit a PR to add a link!
-
-[ballista]: https://github.com/apache/datafusion-ballista
-[auron]: https://github.com/apache/auron
-[cloudfuse buzz]: https://github.com/cloudfuse-io/buzz-rust
-[cnosdb]: https://github.com/cnosdb/cnosdb
-[cube store]: https://github.com/cube-js/cube.js/tree/master/rust
-[dask sql]: https://github.com/dask-contrib/dask-sql
-[delta-rs]: https://github.com/delta-io/delta-rs
-[edb postgres lakehouse]: https://www.enterprisedb.com/products/analytics
-[exon]: https://github.com/wheretrue/exon
-[flock]: https://github.com/flock-lab/flock
-[kamu]: https://github.com/kamu-data/kamu-cli
-[greptimedb]: https://github.com/GreptimeTeam/greptimedb
-[horaedb]: https://github.com/apache/incubator-horaedb
-[influxdb]: https://github.com/influxdata/influxdb
-[openobserve]: https://github.com/openobserve/openobserve
-[parseable]: https://github.com/parseablehq/parseable
-[prql-query]: https://github.com/prql/prql-query
-[qv]: https://github.com/timvw/qv
-[roapi]: https://github.com/roapi/roapi
-[seafowl]: https://github.com/splitgraph/seafowl
-[spice.ai]: https://github.com/spiceai/spiceai
-[synnada]: https://synnada.ai/
-[tensorbase]: https://github.com/tensorbase/tensorbase
-[vegafusion]: https://vegafusion.io/
-[vortex]: https://vortex.dev/
 
 ## Integrations and Extensions
 
