@@ -178,8 +178,13 @@ fn create_null_mask(len: usize) -> NullBuffer
 where
     StandardUniform: Distribution<bool>,
 {
+    create_null_mask_with_density(len, 0.03).expect("should be nulls in buffer")
+}
+
+/// Returns a random null mask where each slot is null with probability
+/// `null_density`, or `None` if no slot ended up null
+fn create_null_mask_with_density(len: usize, null_density: f32) -> Option<NullBuffer> {
     let mut rng = make_rng();
-    let null_density = 0.03;
     let mut builder = NullBufferBuilder::new(len);
     for _ in 0..len {
         if rng.random::<f32>() < null_density {
@@ -188,7 +193,21 @@ where
             builder.append_non_null();
         }
     }
-    builder.finish().expect("should be nulls in buffer")
+    builder.finish()
+}
+
+/// Returns `dict` with a new random null mask on its keys, where each key is null
+/// with probability `null_density`. Any existing key nulls are replaced, and the
+/// key and value buffers are shared rather than copied
+fn with_null_keys<K: ArrowDictionaryKeyType>(
+    dict: &DictionaryArray<K>,
+    null_density: f32,
+) -> ArrayRef {
+    let keys = PrimitiveArray::<K>::new(
+        dict.keys().values().clone(),
+        create_null_mask_with_density(dict.len(), null_density),
+    );
+    Arc::new(DictionaryArray::new(keys, Arc::clone(dict.values())))
 }
 
 // Returns a new array that is the same as array, but with nulls
@@ -290,9 +309,15 @@ impl StringPool {
         &self,
         array_length: usize,
     ) -> ArrayRef {
-        Arc::new(DictionaryArray::<T>::from_iter(
-            self.iter_strings(array_length),
-        ))
+        Arc::new(self.typed_dictionary_array::<T>(array_length))
+    }
+
+    /// Like [`Self::dictionary_array`], but returns the concrete `DictionaryArray`
+    fn typed_dictionary_array<T: ArrowDictionaryKeyType>(
+        &self,
+        array_length: usize,
+    ) -> DictionaryArray<T> {
+        DictionaryArray::<T>::from_iter(self.iter_strings(array_length))
     }
 }
 
@@ -645,10 +670,33 @@ fn mixed_columns_benchmark(c: &mut Criterion) {
     });
 }
 
+/// Int32 dictionaries with 50% and 97% null keys. 0% and 3% are covered by
+/// the existing `dictionary_utf8_int32` "no nulls" and "nulls" cases in
+/// `criterion_benchmark`
+fn dictionary_benchmark(c: &mut Criterion) {
+    let pool = StringPool::new(100, 64);
+    let dict = pool.typed_dictionary_array::<Int32Type>(BATCH_SIZE);
+    let name = "dictionary_utf8_int32";
+    for null_percent in [50, 97] {
+        let array = with_null_keys(&dict, null_percent as f32 / 100.0);
+        c.bench_function(&format!("{name}: single, {null_percent}% null keys"), |b| {
+            do_hash_test(b, std::slice::from_ref(&array));
+        });
+        c.bench_function(
+            &format!("{name}: multiple, {null_percent}% null keys"),
+            |b| {
+                let arrays = vec![array.clone(), array.clone(), array.clone()];
+                do_hash_test(b, &arrays);
+            },
+        );
+    }
+}
+
 criterion_group!(
     benches,
     criterion_benchmark,
     sliced_array_benchmark,
-    mixed_columns_benchmark
+    mixed_columns_benchmark,
+    dictionary_benchmark
 );
 criterion_main!(benches);
