@@ -209,11 +209,10 @@ fn coerce_data_type(
             coerce_map_entries(table_entries, file_entries)
                 .map(|entries| Map(entries, *sorted))
         }
-        // Promote a plain file column to the dictionary type the table expects.
-        (Dictionary(_, _), _)
-            if enable_rle && can_promote_to_dictionary_type(file_type, table_type) =>
-        {
-            Some(table_type.clone())
+        // Preserve the file's offset width when promoting it to a dictionary.
+        // The projection can cast the much smaller dictionary values afterwards.
+        (Dictionary(_, _), _) if enable_rle => {
+            dictionary_reader_type(file_type, table_type, binary_to_string)
         }
         _ => None,
     }
@@ -327,86 +326,115 @@ fn common_dictionary_key_type(a: &DataType, b: &DataType) -> Option<DataType> {
     })
 }
 
-fn can_promote_to_dictionary_type(
+fn dictionary_reader_type(
     file_field_type: &DataType,
     table_dictionary_type: &DataType,
-) -> bool {
+    binary_to_string: bool,
+) -> Option<DataType> {
     let DataType::Dictionary(table_key, table_value) = table_dictionary_type else {
-        return false;
+        return None;
     };
-    if common_dictionary_value_type(file_field_type, table_value)
-        .is_none_or(|common| &common != table_value.as_ref())
-    {
-        return false;
+    let file_value = match file_field_type {
+        DataType::Dictionary(_, value) => value.as_ref(),
+        value => value,
+    };
+    let value_type =
+        common_dictionary_value_type(file_field_type, table_value).or_else(|| {
+            (binary_to_string
+                && matches!(
+                    file_value,
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+                )
+                && matches!(
+                    table_value.as_ref(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ))
+            .then(|| file_value.clone())
+        })?;
+    let file_key = match file_field_type {
+        DataType::Dictionary(file_key, _) => file_key.as_ref(),
+        // A plain column can have any number of distinct values, so narrow keys are unsafe.
+        _ => &DataType::Int32,
+    };
+    let key_type = common_dictionary_key_type(file_key, table_key)?;
+    if &key_type != table_key.as_ref() {
+        return None;
     }
-    if let DataType::Dictionary(file_key, _) = file_field_type {
-        return common_dictionary_key_type(file_key, table_key)
-            .is_some_and(|common| &common == table_key.as_ref());
-    }
-    // Plain file field: only allow promotion if the table key is at least Int32 wide.
-    // A plain column can have any number of distinct values, so narrow keys (Int8, Int16)
-    // are unsafe — uniform_dict_schemas widens to Int32 when a plain file is present, so
-    // this guard handles the case where can_promote_to_dictionary_type is called directly.
-    common_dictionary_key_type(&DataType::Int32, table_key)
-        .is_some_and(|common| &common == table_key.as_ref())
+
+    Some(DataType::Dictionary(
+        Box::new(key_type),
+        Box::new(value_type),
+    ))
 }
 
-/// Normalize per-file schemas so that a column promoted to `Dictionary` in
-/// *any* file is promoted to the same `Dictionary` type in *all* files.
-///
-/// This lets [`Schema::try_merge`] accept directories that mix dictionary and
-/// plain encodings for the same column.
+/// Normalize per-file schemas so a column remains `Dictionary` only when every
+/// file containing it can produce a dictionary natively.
 pub(crate) fn uniform_dict_schemas(schemas: Vec<Schema>) -> Vec<Schema> {
-    // First pass: record the dictionary type for every column that is Dictionary in
-    // at least one schema.
-    let mut dict_types: HashMap<String, DataType> = HashMap::new();
-    for schema in &schemas {
-        for field in schema.fields() {
-            if matches!(field.data_type(), DataType::Dictionary(_, _)) {
-                dict_types
-                    .entry(field.name().clone())
-                    .or_insert_with(|| field.data_type().clone());
-            }
-        }
-    }
-    if dict_types.is_empty() {
-        return schemas;
+    struct ColumnType {
+        saw_dictionary: bool,
+        all_dictionary: bool,
+        compatible: bool,
+        key_type: Option<DataType>,
+        value_type: DataType,
     }
 
+    let mut columns: HashMap<String, ColumnType> = HashMap::new();
     for schema in &schemas {
         for field in schema.fields() {
-            let Some(dict_type) = dict_types.get_mut(field.name()) else {
-                continue;
+            let (is_dictionary, key_type, value_type) = match field.data_type() {
+                DataType::Dictionary(key, value) => {
+                    (true, Some(key.as_ref().clone()), value.as_ref().clone())
+                }
+                data_type => (false, None, data_type.clone()),
             };
-            let DataType::Dictionary(key_type, value_type) = dict_type else {
-                continue;
-            };
-            let key_type = key_type.clone();
-            let value_type = value_type.as_ref().clone();
-            let new_key = if let DataType::Dictionary(file_key, _) = field.data_type() {
-                common_dictionary_key_type(&key_type, file_key)
-                    .map(Box::new)
-                    .unwrap_or_else(|| key_type.clone())
+            columns
+                .entry(field.name().clone())
+                .and_modify(|column| {
+                    column.saw_dictionary |= is_dictionary;
+                    column.all_dictionary &= is_dictionary;
+                    match common_dictionary_value_type(
+                        field.data_type(),
+                        &column.value_type,
+                    ) {
+                        Some(value_type) => column.value_type = value_type,
+                        None => column.compatible = false,
+                    }
+                    if let Some(key_type) = &key_type {
+                        column.key_type = match &column.key_type {
+                            Some(current) => {
+                                common_dictionary_key_type(current, key_type)
+                            }
+                            None => Some(key_type.clone()),
+                        };
+                        column.compatible &= column.key_type.is_some();
+                    }
+                })
+                .or_insert(ColumnType {
+                    saw_dictionary: is_dictionary,
+                    all_dictionary: is_dictionary,
+                    compatible: true,
+                    key_type,
+                    value_type,
+                });
+        }
+    }
+
+    let target_types: HashMap<_, _> = columns
+        .into_iter()
+        .filter(|(_, column)| column.saw_dictionary && column.compatible)
+        .map(|(name, column)| {
+            let data_type = if column.all_dictionary {
+                DataType::Dictionary(
+                    Box::new(column.key_type.expect("dictionary key type")),
+                    Box::new(column.value_type),
+                )
             } else {
-                // Plain field: treat as Int32 key capacity since we don't know how
-                // many distinct values it has. This prevents a narrow key (e.g. Int8)
-                // from being selected as the common type when one file uses a narrow
-                // dictionary and another uses a plain encoding with potentially more
-                // values than the key can represent.
-                common_dictionary_key_type(&key_type, &DataType::Int32)
-                    .map(Box::new)
-                    .unwrap_or_else(|| Box::new(DataType::Int32))
+                column.value_type
             };
-            if let Some(common_type) =
-                common_dictionary_value_type(field.data_type(), &value_type)
-            {
-                *dict_type = DataType::Dictionary(new_key, Box::new(common_type));
-            }
-        }
-    }
+            (name, data_type)
+        })
+        .collect();
 
-    // Only promote fields whose type family matches the dictionary value type,
-    // so schema normalization does not reinterpret binary bytes as UTF-8.
     schemas
         .into_iter()
         .map(|schema| {
@@ -414,10 +442,8 @@ pub(crate) fn uniform_dict_schemas(schemas: Vec<Schema>) -> Vec<Schema> {
                 .fields()
                 .iter()
                 .map(|field| {
-                    if let Some(dict_type) = dict_types.get(field.name())
-                        && can_promote_to_dictionary_type(field.data_type(), dict_type)
-                    {
-                        return field_with_new_type(field, dict_type.clone());
+                    if let Some(data_type) = target_types.get(field.name()) {
+                        return field_with_new_type(field, data_type.clone());
                     }
                     Arc::clone(field)
                 })
@@ -1821,43 +1847,43 @@ mod tests {
                 "utf8",
                 dict(DataType::Utf8),
                 DataType::Utf8,
-                dict(DataType::Utf8),
-                dict(DataType::Utf8),
+                DataType::Utf8,
+                DataType::Utf8,
             ),
             (
                 "large_utf8",
                 dict(DataType::LargeUtf8),
                 DataType::LargeUtf8,
-                dict(DataType::LargeUtf8),
-                dict(DataType::LargeUtf8),
+                DataType::LargeUtf8,
+                DataType::LargeUtf8,
             ),
             (
                 "utf8_large_utf8",
                 dict(DataType::Utf8),
                 DataType::LargeUtf8,
-                dict(DataType::LargeUtf8),
-                dict(DataType::LargeUtf8),
+                DataType::LargeUtf8,
+                DataType::LargeUtf8,
             ),
             (
                 "binary",
                 dict(DataType::Binary),
                 DataType::Binary,
-                dict(DataType::Binary),
-                dict(DataType::Binary),
+                DataType::Binary,
+                DataType::Binary,
             ),
             (
                 "large_binary",
                 dict(DataType::LargeBinary),
                 DataType::LargeBinary,
-                dict(DataType::LargeBinary),
-                dict(DataType::LargeBinary),
+                DataType::LargeBinary,
+                DataType::LargeBinary,
             ),
             (
                 "binary_large_binary",
                 dict(DataType::Binary),
                 DataType::LargeBinary,
-                dict(DataType::LargeBinary),
-                dict(DataType::LargeBinary),
+                DataType::LargeBinary,
+                DataType::LargeBinary,
             ),
             (
                 "binary_not_utf8",
@@ -1898,8 +1924,8 @@ mod tests {
 
     #[test]
     fn rle_schema_coercion_respects_dictionary_value_type() {
-        // Scan-time schema coercion can only use dictionary types already chosen by
-        // schema inference, and must leave incompatible file fields unchanged.
+        // Scan-time schema coercion preserves wider file offsets so the parquet reader
+        // can decode dictionary keys directly and cast only the dictionary values.
         let cases = vec![
             (
                 "utf8",
@@ -1914,10 +1940,10 @@ mod tests {
                 dict(DataType::LargeUtf8),
             ),
             (
-                "large_utf8_to_utf8_dict_not_safe",
+                "large_utf8_to_utf8_dict_preserves_offsets",
                 dict(DataType::Utf8),
                 DataType::LargeUtf8,
-                DataType::LargeUtf8,
+                dict(DataType::LargeUtf8),
             ),
             (
                 "utf8_to_large_utf8_dict",
@@ -1938,10 +1964,10 @@ mod tests {
                 dict(DataType::LargeBinary),
             ),
             (
-                "large_binary_to_binary_dict_not_safe",
+                "large_binary_to_binary_dict_preserves_offsets",
                 dict(DataType::Binary),
                 DataType::LargeBinary,
-                DataType::LargeBinary,
+                dict(DataType::LargeBinary),
             ),
             (
                 "binary_to_large_binary_dict",
@@ -1950,10 +1976,16 @@ mod tests {
                 dict(DataType::LargeBinary),
             ),
             (
-                "binary_not_utf8",
+                "binary_to_utf8_dict_preserves_file_type",
                 dict(DataType::Utf8),
                 DataType::Binary,
-                DataType::Binary,
+                dict(DataType::Binary),
+            ),
+            (
+                "large_binary_to_utf8_dict_preserves_file_type",
+                dict(DataType::Utf8),
+                DataType::LargeBinary,
+                dict(DataType::LargeBinary),
             ),
             (
                 "utf8_not_binary",
@@ -2061,38 +2093,42 @@ mod tests {
     }
 
     #[test]
-    fn uniform_dict_schemas_plain_field_widens_key_to_int32() {
-        // A plain field mixed with a narrow-key dictionary must widen the key to at
-        // least Int32 so that the plain file (with unknown cardinality) can be
-        // represented safely.
+    fn uniform_dict_schemas_demotes_mixed_files() {
         let cases = [
             (
-                "int8_dict + plain → int32",
+                "int8 dict",
                 DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
                 DataType::Utf8,
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                DataType::Utf8,
+                DataType::Utf8,
             ),
             (
-                "int16_dict + plain → int32",
+                "int16 dict",
                 DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
                 DataType::Utf8,
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                DataType::Utf8,
+                DataType::Utf8,
             ),
             (
-                "int32_dict + plain stays int32",
+                "int32 dict",
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                 DataType::Utf8,
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                DataType::Utf8,
+                DataType::Utf8,
             ),
             (
-                "int64_dict + plain stays int64",
+                "int64 dict",
                 DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8)),
                 DataType::Utf8,
-                DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8)),
-                DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8)),
+                DataType::Utf8,
+                DataType::Utf8,
+            ),
+            (
+                "plain first",
+                DataType::Utf8,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                DataType::Utf8,
+                DataType::Utf8,
             ),
         ];
         for (name, dict_type, plain_type, exp_dict, exp_plain) in cases {
