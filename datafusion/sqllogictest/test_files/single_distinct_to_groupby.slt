@@ -98,11 +98,21 @@ logical_plan
 02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)), count(DISTINCT t.xi)]]
 03)----TableScan: t projection=[g, xi]
 
-# `sum` reports nothing about `GroupsAccumulator` support from the argument
-# types, and neither does any aggregate but `count`. Silence is not evidence
-# that the rewrite pays, so the count keeps this plan unrewritten as well.
-# Rewritten, this shape measured 3.15x the peak memory over 4,000,000 rows in
-# 2,000 groups
+# `sum(DISTINCT v)` lacks a fast grouped accumulator: by default it rewrites into
+# the two-phase GROUP BY to avoid the 1.4–20x slower row-by-row GroupsAccumulatorAdapter.
+query TT
+EXPLAIN SELECT g, count(*) AS records, sum(DISTINCT v) AS distinct_v FROM t GROUP BY g;
+----
+logical_plan
+01)Projection: t.g, CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS records, sum(alias1) AS distinct_v
+02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(alias2), sum(alias1)]]
+03)----Aggregate: groupBy=[[t.g, CAST(t.v AS Int64) AS alias1]], aggr=[[count(Int64(1)) AS alias2]]
+04)------TableScan: t projection=[g, v]
+
+# When single_distinct_aggregation_prefer_memory = true, the rewrite is skipped to reduce peak memory
+statement ok
+set datafusion.optimizer.single_distinct_aggregation_prefer_memory = true;
+
 query TT
 EXPLAIN SELECT g, count(*) AS records, sum(DISTINCT v) AS distinct_v FROM t GROUP BY g;
 ----
@@ -110,6 +120,9 @@ logical_plan
 01)Projection: t.g, count(Int64(1)) AS count(*) AS records, sum(DISTINCT t.v) AS distinct_v
 02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)), sum(DISTINCT CAST(t.v AS Int64))]]
 03)----TableScan: t projection=[g, v]
+
+statement ok
+set datafusion.optimizer.single_distinct_aggregation_prefer_memory = false;
 
 # `min(DISTINCT v)` is the same value as `min(v)`. EliminateAggregateDistinct
 # drops the flag before this rule runs, so there is no distinct aggregate left
@@ -129,13 +142,52 @@ query TT
 EXPLAIN SELECT g, sum(v) AS sum_v, count(DISTINCT xi) AS distinct_xi FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, sum(alias2) AS sum_v, count(alias1) AS distinct_xi
-02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(alias2), count(alias1)]]
-03)----Aggregate: groupBy=[[t.g, t.xi AS alias1]], aggr=[[sum(CAST(t.v AS Int64)) AS alias2]]
-04)------TableScan: t projection=[g, xi, v]
+01)Projection: t.g, sum(t.v) AS sum_v, count(DISTINCT t.xi) AS distinct_xi
+02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(CAST(t.v AS Int64)), count(DISTINCT t.xi)]]
+03)----TableScan: t projection=[g, xi, v]
+
+########
+# Lone-distinct queries and single_distinct_aggregation_prefer_memory
+########
+
+# By default (prefer_memory = false), lone-distinct queries are always rewritten
+# into the two-phase GROUP BY to allow parallel accumulation across partitions.
+query TT
+EXPLAIN SELECT g, sum(DISTINCT v) AS distinct_v FROM t GROUP BY g;
+----
+logical_plan
+01)Projection: t.g, sum(alias1) AS distinct_v
+02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(alias1)]]
+03)----Aggregate: groupBy=[[t.g, CAST(t.v AS Int64) AS alias1]], aggr=[[]]
+04)------TableScan: t projection=[g, v]
+
+# When single_distinct_aggregation_prefer_memory = true, lone-distinct queries
+# whose aggregate has a native GroupsAccumulator skip the rewrite to reduce peak memory.
+statement ok
+set datafusion.optimizer.single_distinct_aggregation_prefer_memory = true;
+
+query TT
+EXPLAIN SELECT g, sum(DISTINCT v) AS distinct_v FROM t GROUP BY g;
+----
+logical_plan
+01)Projection: t.g, sum(DISTINCT t.v) AS distinct_v
+02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(DISTINCT CAST(t.v AS Int64))]]
+03)----TableScan: t projection=[g, v]
+
+# Both paths produce identical query results
+query II
+SELECT g, sum(DISTINCT v) AS distinct_v FROM t GROUP BY g ORDER BY g;
+----
+1 112
+2 3
+3 1
+
+statement ok
+set datafusion.optimizer.single_distinct_aggregation_prefer_memory = false;
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
+
 
 ########
 # count(*) vs count(col) vs count(1), grouped
