@@ -10620,17 +10620,7 @@ mod tests {
             NullEquality::NullEqualsNothing,
             true,
         )?;
-        let mut task_ctx = prepare_task_ctx(8192, false);
-        if let Some(limit) = memory_limit {
-            let runtime = RuntimeEnvBuilder::new()
-                .with_memory_limit(limit, 1.0)
-                .build_arc()?;
-            task_ctx = Arc::new(
-                TaskContext::default()
-                    .with_session_config(task_ctx.session_config().clone())
-                    .with_runtime(runtime),
-            );
-        }
+        let task_ctx = fallback_context(memory_limit);
         let batches = common::collect(join.execute(0, task_ctx)?).await?;
         let rows = batches.iter().map(|b| b.num_rows()).sum();
         let build_mem_used = join
