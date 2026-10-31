@@ -141,9 +141,9 @@ Please ensure your PR follows the [testing guide](testing.md). In particular:
 
 ## AI-Assisted Contributions
 
-We welcome AI-assisted PRs, but not unreviewed "AI dumps". See the
-[AI Policy](ai-policy.md) page for what we expect from authors and reviewers
-who use AI tools.
+We welcome AI-assisted contributions with meaningful, task-specific human
+supervision. We do not accept contributions from fully autonomous agents or
+unreviewed "AI dumps". See the [AI Policy](ai-policy.md) for details.
 
 ## Conventional Commits & Labeling PRs
 
