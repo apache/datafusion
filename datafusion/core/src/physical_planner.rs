@@ -3395,10 +3395,6 @@ impl DefaultPhysicalPlanner {
 
         let mut new_plan = Arc::clone(&plan);
         let optimizer_context = SessionOptimizerContext::new(session_state);
-        // The plan after each rule, so that a failed final check can name the
-        // rule that broke the plan. Plans share unchanged subtrees, so this
-        // costs one pointer per rule.
-        let mut plan_after_rule = Vec::with_capacity(optimizers.len());
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
@@ -3416,15 +3412,20 @@ impl DefaultPhysicalPlanner {
                 optimizer.name(),
                 displayable(new_plan.as_ref()).indent(false)
             );
-            observer(new_plan.as_ref(), optimizer.as_ref());
-            plan_after_rule.push((optimizer, Arc::clone(&new_plan)));
+            observer(new_plan.as_ref(), optimizer.as_ref())
         }
 
         // This runs once after all optimizer runs are complete, including
         // rules appended by the user, to verify that the plan is executable.
         let optimizer_options = &session_state.config_options().optimizer;
         if let Err(e) = check_plan_tree_sanity(&new_plan, optimizer_options) {
-            return Err(sanity_check_error(e, &new_plan, &plan, &plan_after_rule));
+            return Err(sanity_check_error(
+                e,
+                &new_plan,
+                plan,
+                optimizers,
+                &optimizer_context,
+            ));
         }
 
         debug!(
@@ -3672,52 +3673,56 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
     }
 }
 
-/// A physical optimizer rule and the plan it produced.
-type PlanAfterRule<'a> = (
-    &'a Arc<dyn PhysicalOptimizerRule + Send + Sync>,
-    Arc<dyn ExecutionPlan>,
-);
-
 /// Adds context to an error from the final [`check_plan_tree_sanity`].
 ///
 /// `EnsureRequirements` makes the order and distribution requirements hold,
 /// and every rule after it must keep them. When they do not hold for
 /// `final_plan`, the context names the rule that broke this contract: either
 /// `EnsureRequirements` itself, or the rule after which the requirements
-/// stopped holding.
+/// stopped holding. To find it, `optimizers` run again from `input_plan`, so
+/// planning that succeeds keeps no intermediate plans.
 fn sanity_check_error(
     error: DataFusionError,
     final_plan: &Arc<dyn ExecutionPlan>,
-    input_plan: &Arc<dyn ExecutionPlan>,
-    plan_after_rule: &[PlanAfterRule],
+    input_plan: Arc<dyn ExecutionPlan>,
+    optimizers: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
+    optimizer_context: &dyn PhysicalOptimizerContext,
 ) -> DataFusionError {
     const SANITY_CHECK: &str = "SanityCheckPlan";
+    let plain_error =
+        |error| DataFusionError::Context(SANITY_CHECK.to_string(), Box::new(error));
     if input_requirements_hold(final_plan) {
         // The error is about unbounded inputs or another invariant.
-        return DataFusionError::Context(SANITY_CHECK.to_string(), Box::new(error));
+        return plain_error(error);
     }
 
     let ensure_requirements = EnsureRequirements::new();
-    let enforced = plan_after_rule
+    let enforced = optimizers
         .iter()
-        .rposition(|(rule, _)| rule.name() == ensure_requirements.name());
+        .rposition(|rule| rule.name() == ensure_requirements.name());
     // Plans before `EnsureRequirements` need not satisfy the requirements, so
-    // only plans from its last run onwards are searched. Without it, every
-    // plan is searched.
-    let (searched, before_searched) = match enforced {
-        Some(idx) => (&plan_after_rule[idx..], None),
-        None => (plan_after_rule, Some(input_plan)),
-    };
-    let broken_by = match searched
-        .iter()
-        .rposition(|(_, plan)| input_requirements_hold(plan))
-    {
-        Some(idx) => searched.get(idx + 1),
-        None if before_searched.is_some_and(input_requirements_hold) => searched.first(),
-        None => None,
-    };
+    // only plans from its last run onwards are checked. Without it, every
+    // plan is checked, starting with the input plan.
+    let first_checked = enforced.unwrap_or(0);
+    let mut held = enforced.is_none() && input_requirements_hold(&input_plan);
+    let mut broken_by = None;
+    let mut plan = input_plan;
+    for (idx, rule) in optimizers.iter().enumerate() {
+        plan = match rule.optimize_with_context(plan, optimizer_context) {
+            Ok(plan) => plan,
+            // The rules did not run as they did before, so no rule is named.
+            Err(_) => return plain_error(error),
+        };
+        if idx >= first_checked {
+            let holds = input_requirements_hold(&plan);
+            if held && !holds {
+                broken_by = Some(rule);
+            }
+            held = holds;
+        }
+    }
     let context = match (broken_by, enforced) {
-        (Some((rule, _)), _) => format!(
+        (Some(rule), _) => format!(
             "{SANITY_CHECK}: order and distribution requirements stopped holding \
              after physical optimizer rule '{}'",
             rule.name()
