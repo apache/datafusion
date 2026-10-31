@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -23,6 +10,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::utils::quote_identifier;
 use datafusion_common::{
     DFSchema, DFSchemaRef, Result, TableReference, internal_err, plan_err,
 };
@@ -479,6 +467,19 @@ impl MergeIntoOp {
     }
 }
 
+impl Display for MergeIntoOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "on=[{}] clauses=[", self.on)?;
+        for (i, clause) in self.clauses.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{clause}")?;
+        }
+        write!(f, "]")
+    }
+}
+
 /// A single WHEN clause within a MERGE INTO statement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct MergeIntoClause {
@@ -488,6 +489,16 @@ pub struct MergeIntoClause {
     pub predicate: Option<Expr>,
     /// The action to take.
     pub action: MergeIntoAction,
+}
+
+impl Display for MergeIntoClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "WHEN {}", self.kind)?;
+        if let Some(predicate) = &self.predicate {
+            write!(f, " AND {predicate}")?;
+        }
+        write!(f, " THEN {}", self.action)
+    }
 }
 
 /// Which rows a MERGE WHEN clause applies to.
@@ -514,6 +525,17 @@ pub enum MergeIntoClauseKind {
     NotMatchedByTarget,
     /// `WHEN NOT MATCHED BY SOURCE`
     NotMatchedBySource,
+}
+
+impl Display for MergeIntoClauseKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Matched => write!(f, "MATCHED"),
+            Self::NotMatched => write!(f, "NOT MATCHED"),
+            Self::NotMatchedByTarget => write!(f, "NOT MATCHED BY TARGET"),
+            Self::NotMatchedBySource => write!(f, "NOT MATCHED BY SOURCE"),
+        }
+    }
 }
 
 impl MergeIntoClauseKind {
@@ -560,6 +582,46 @@ pub enum MergeIntoAction {
     Delete,
 }
 
+impl Display for MergeIntoAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Update(assignments) => {
+                write!(f, "UPDATE SET ")?;
+                for (i, (column, value)) in assignments.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{} = {value}", quote_identifier(column))?;
+                }
+                Ok(())
+            }
+            Self::Insert { columns, values } => {
+                write!(f, "INSERT")?;
+                if !columns.is_empty() {
+                    write!(
+                        f,
+                        " ({})",
+                        columns
+                            .iter()
+                            .map(|column| quote_identifier(column))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )?;
+                }
+                write!(f, " VALUES (")?;
+                for (i, value) in values.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{value}")?;
+                }
+                write!(f, ")")
+            }
+            Self::Delete => write!(f, "DELETE"),
+        }
+    }
+}
+
 fn make_count_schema() -> DFSchemaRef {
     Arc::new(
         Schema::new(vec![Field::new("count", DataType::UInt64, false)])
@@ -589,6 +651,27 @@ mod tests {
         )));
         assert_eq!(op.name(), "MergeInto");
         assert_eq!(format!("{op}"), "MergeInto");
+        let WriteOp::MergeInto(merge_op) = &op else {
+            unreachable!("constructed as MergeInto")
+        };
+        assert_eq!(
+            merge_op.to_string(),
+            "on=[id = source_id] clauses=[WHEN MATCHED AND qty > Int64(0) THEN UPDATE SET qty = source_qty]"
+        );
+
+        let empty = MergeIntoOp::new("target", lit(true), vec![]);
+        assert_eq!(empty.to_string(), "on=[Boolean(true)] clauses=[]");
+
+        let update = MergeIntoAction::Update(vec![("a, b".to_string(), lit(1_i64))]);
+        assert_eq!(update.to_string(), r#"UPDATE SET "a, b" = Int64(1)"#);
+        let insert = MergeIntoAction::Insert {
+            columns: vec!["id".to_string(), "a\"b".to_string()],
+            values: vec![lit(1_i64), lit(2_i64)],
+        };
+        assert_eq!(
+            insert.to_string(),
+            r#"INSERT (id, "a""b") VALUES (Int64(1), Int64(2))"#
+        );
     }
 
     #[test]

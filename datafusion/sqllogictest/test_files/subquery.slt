@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # make sure to a batch size smaller than row number of the table.
 statement ok
@@ -2124,14 +2111,44 @@ WHERE t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id)
 ----
 11
 
-# correlated_not_in_groupless_count_agg_is_not_count_bug_compensated
-query I rowsort
+# correlated_in_groupless_max_agg_embedded_in_or_is_not_count_bug_compensated
+query I
 SELECT t1_id FROM t1
-WHERE t1_int NOT IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id)
+WHERE t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) OR t1_id = 33
+ORDER BY t1_id
 ----
-22
+11
 33
-44
+
+# correlated_in_groupless_count_agg_stays_correlated
+# Errors rather than returning wrong rows. Expected `33`.
+query error Physical plan does not support logical expression InSubquery
+SELECT t1_id FROM t1
+WHERE 0 IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id)
+
+# correlated_not_in_groupless_count_agg_stays_correlated
+# Errors rather than returning wrong rows. Expected `11, 22, 44`.
+query error Physical plan does not support logical expression InSubquery
+SELECT t1_id FROM t1
+WHERE 0 NOT IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id)
+
+# correlated_in_groupless_count_agg_in_projection_stays_correlated
+# Errors rather than returning wrong rows.
+# Expected `(11, false), (22, false), (33, true), (44, false)`.
+query error Physical plan does not support logical expression InSubquery
+SELECT t1_id, 0 IN (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id) FROM t1
+
+# correlated_not_in_groupless_max_agg_stays_correlated
+# Errors rather than returning wrong rows. Expected `22, 44`.
+query error Physical plan does not support logical expression InSubquery
+SELECT t1_id FROM t1
+WHERE t1_int + 2 NOT IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id)
+
+# correlated_in_groupless_max_agg_in_projection_stays_correlated
+# Errors rather than returning wrong rows.
+# Expected `(11, true), (22, false), (33, NULL), (44, false)`.
+query error Physical plan does not support logical expression InSubquery
+SELECT t1_id, t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) FROM t1
 
 statement ok
 DROP TABLE limit_zero_outer;
@@ -4195,3 +4212,153 @@ DROP TABLE emp;
 
 statement ok
 RESET datafusion.explain.logical_plan_only;
+
+# Regression test for #26504: correlated subquery filtering an aliased derived
+# table on an outer column must preserve the derived table's correlated columns.
+query I
+SELECT * FROM (VALUES (1)) AS x(d)
+WHERE EXISTS (SELECT 1 FROM (SELECT * FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0);
+----
+1
+
+query I
+SELECT (SELECT n FROM (SELECT sum(y.c) AS n FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0) AS v
+FROM (VALUES (1)) AS x(d);
+----
+1
+
+query I
+SELECT * FROM (VALUES (1)) AS x(d)
+WHERE x.d IN (SELECT t.c FROM (SELECT * FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0);
+----
+1
+
+# Regression test for #26572: an uncorrelated scalar subquery is constant, so a
+# requirement on it is satisfied by any ordering, even when it is not projected
+# from a literal.
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+statement ok
+CREATE TABLE t26572 (a INT) AS VALUES (1), (2);
+
+query II
+SELECT t.a, (SELECT max(a) FROM t26572) AS m
+FROM t26572 AS u RIGHT JOIN t26572 AS t ON u.a = t.a
+ORDER BY t.a, m LIMIT 5;
+----
+1 2
+2 2
+
+query II
+SELECT t.a, (SELECT max(a) FROM t26572) AS m
+FROM t26572 AS u RIGHT JOIN t26572 AS t ON u.a = t.a
+ORDER BY m, t.a DESC LIMIT 5;
+----
+2 2
+1 2
+
+# Control, passes without the fix: a volatile leaf such as random() is not
+# constant, so it stays in the sort.
+query TT
+EXPLAIN SELECT a FROM t26572 ORDER BY a, random();
+----
+logical_plan
+01)Sort: t26572.a ASC NULLS LAST, random() ASC NULLS LAST
+02)--TableScan: t26572 projection=[a]
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST, random() ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: partitions=1, partition_sizes=[2]
+
+# Two different subqueries are both constant, but not known to be equal, so a
+# UNION of them is not constant and the sort stays.
+query TT
+EXPLAIN SELECT m FROM (
+  SELECT (SELECT max(a) FROM t26572) AS m FROM t26572
+  UNION ALL
+  SELECT (SELECT min(a) FROM t26572) AS m FROM t26572
+) ORDER BY m;
+----
+logical_plan
+01)Sort: m ASC NULLS LAST
+02)--Union
+03)----Projection: (<subquery>) AS m
+04)------Subquery:
+05)--------Aggregate: groupBy=[[]], aggr=[[max(t26572.a)]]
+06)----------TableScan: t26572 projection=[a]
+07)------TableScan: t26572 projection=[]
+08)----Projection: (<subquery>) AS m
+09)------Subquery:
+10)--------Aggregate: groupBy=[[]], aggr=[[min(t26572.a)]]
+11)----------TableScan: t26572 projection=[a]
+12)------TableScan: t26572 projection=[]
+physical_plan
+01)ScalarSubqueryExec: subqueries=2
+02)--SortPreservingMergeExec: [m@0 ASC NULLS LAST]
+03)----UnionExec
+04)------ProjectionExec: expr=[scalar_subquery(<pending>) as m]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: partitions=1, partition_sizes=[2]
+07)------ProjectionExec: expr=[scalar_subquery(<pending>) as m]
+08)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------DataSourceExec: partitions=1, partition_sizes=[2]
+10)--AggregateExec: mode=Final, gby=[], aggr=[max(t26572.a)]
+11)----CoalescePartitionsExec
+12)------AggregateExec: mode=Partial, gby=[], aggr=[max(t26572.a)]
+13)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)----------DataSourceExec: partitions=1, partition_sizes=[2]
+15)--AggregateExec: mode=Final, gby=[], aggr=[min(t26572.a)]
+16)----CoalescePartitionsExec
+17)------AggregateExec: mode=Partial, gby=[], aggr=[min(t26572.a)]
+18)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+19)----------DataSourceExec: partitions=1, partition_sizes=[2]
+
+query I
+SELECT m FROM (
+  SELECT (SELECT max(a) FROM t26572) AS m FROM t26572
+  UNION ALL
+  SELECT (SELECT min(a) FROM t26572) AS m FROM t26572
+) ORDER BY m;
+----
+1
+1
+2
+2
+
+# Nor are two different subqueries in one projection the same expression.
+query III
+SELECT (SELECT max(a) FROM t26572) AS x, (SELECT min(a) FROM t26572) AS y, a
+FROM t26572 ORDER BY y, x, a DESC;
+----
+2 1 2
+2 1 1
+
+statement ok
+DROP TABLE t26572;
+
+# A LEFT JOIN can be swapped into a physical RIGHT join with the subquery side
+# on the left. Its rows without a match are padded with NULLs, so `m` is not
+# constant there and the sort on it must stay.
+statement ok
+CREATE TABLE p26572 (a INT, b INT) AS VALUES (1, 10), (2, 20), (3, 30), (2, 5), (NULL, 7);
+
+query III
+SELECT x.a, s.a, s.m
+FROM p26572 x LEFT JOIN (
+  SELECT a, (SELECT max(a) FROM p26572) AS m FROM p26572 WHERE a > 1
+) s ON x.a = s.a
+ORDER BY s.m, x.a, s.a;
+----
+2 2 3
+2 2 3
+2 2 3
+2 2 3
+3 3 3
+1 NULL NULL
+NULL NULL NULL
+
+statement ok
+DROP TABLE p26572;
+
+statement ok
+RESET datafusion.execution.batch_size;

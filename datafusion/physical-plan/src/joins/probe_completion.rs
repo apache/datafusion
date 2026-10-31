@@ -1,32 +1,24 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Completion protocol shared by the probe partitions of a hash join.
+//! Completion protocol shared by the probe partitions of a join.
 //!
-//! The probe partitions of one `HashJoinExec` run concurrently over a shared
-//! build side. Two facts have to cross partition boundaries:
+//! The probe partitions of one `HashJoinExec` or `NestedLoopJoinExec` run
+//! concurrently over a shared build side. Some facts have to cross partition
+//! boundaries:
 //!
 //! - which partition emits the build-side rows in the final stage, namely the
-//!   last one to finish, and
+//!   last one to finish,
+//! - whether any partition stopped before it finished, in which case its
+//!   matches are missing and nobody may emit, and
 //! - what the partitions collectively saw, which the null-aware `NOT IN` rules
-//!   need: did any partition see a row, and did any see a NULL join key.
+//!   of the hash join need: did any partition see a row, and did any see a
+//!   NULL join key.
 //!
-//! [`ProbeCompletion`] owns both, because reading the second without ordering
-//! it against the first produced wrong results. A partition that read the NULL
+//! [`ProbeCompletion`] owns all of them, because reading the facts without
+//! ordering them against the choice of the last partition produced wrong
+//! results. A partition that read the NULL
 //! flag *before* decrementing the counter could observe `false`, have a
 //! sibling record a NULL and finish, then become the last partition itself and
 //! emit build rows that `NOT IN` must suppress.
@@ -64,6 +56,17 @@ pub(super) struct ProbeSideSummary {
     pub(super) has_null: bool,
 }
 
+/// Describes the state of a probe partition after it has finished its work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Completion {
+    /// Not the last partition to finish.
+    NotLast,
+    /// Last partition to finish and emit a summary.
+    Emit(ProbeSideSummary),
+    /// The last partition with some previous partition abandoned.
+    Abandoned,
+}
+
 /// Defines [`ProbeCompletion`] over the given atomic types.
 ///
 /// [loom] can only explore its own atomics, so the protocol is written once
@@ -82,7 +85,7 @@ macro_rules! define_probe_completion {
         type Flag = $flag;
 
         /// Tracks how many probe partitions are still running, together with
-        /// the null-aware facts they contribute.
+        /// the facts they contribute.
         ///
         /// See the [module docs](self) for the invariant this upholds.
         #[derive(Debug)]
@@ -93,6 +96,8 @@ macro_rules! define_probe_completion {
             saw_row: Flag,
             /// Set once any probe partition has seen a NULL join key.
             saw_null_key: Flag,
+            /// Set once any probe partition has stopped before it finished.
+            abandoned: Flag,
         }
 
         impl ProbeCompletion {
@@ -102,6 +107,7 @@ macro_rules! define_probe_completion {
                     running: Counter::new(probe_threads),
                     saw_row: Flag::new(false),
                     saw_null_key: Flag::new(false),
+                    abandoned: Flag::new(false),
                 }
             }
 
@@ -129,20 +135,45 @@ macro_rules! define_probe_completion {
                 self.saw_null_key.load(Ordering::Relaxed)
             }
 
-            /// Marks the calling partition finished, returning `Some` only for
-            /// the last one, together with what all partitions saw.
+            /// Marks the calling partition finished. Only the last one gets
+            /// more than [`Completion::NotLast`]: [`Completion::Emit`] with
+            /// what all partitions saw, or [`Completion::Abandoned`] if some
+            /// partition stopped early (see [`Self::abandon`]).
             ///
             /// The `AcqRel` decrement publishes this partition's own stores
             /// and acquires those of the partitions that finished earlier, so
             /// the summary handed to the last caller is complete.
-            pub(super) fn report_completed(&self) -> Option<ProbeSideSummary> {
+            pub(super) fn report_completed(&self) -> Completion {
                 // `fetch_sub` returns the value from *before* the decrement,
                 // so `1` means this call is the one that took it to zero.
                 let was_last = self.running.fetch_sub(1, Ordering::AcqRel) == 1;
-                was_last.then(|| ProbeSideSummary {
-                    non_empty: self.saw_row.load(Ordering::Relaxed),
-                    has_null: self.saw_null_key.load(Ordering::Relaxed),
-                })
+                match (was_last, self.abandoned.load(Ordering::Relaxed)) {
+                    (false, _) => Completion::NotLast,
+                    (true, false) => {
+                        let summary = ProbeSideSummary {
+                            non_empty: self.saw_row.load(Ordering::Relaxed),
+                            has_null: self.saw_null_key.load(Ordering::Relaxed),
+                        };
+                        Completion::Emit(summary)
+                    }
+                    (true, true) => Completion::Abandoned,
+                }
+            }
+
+            /// Marks `count` probe partitions as having stopped before they finished.
+            ///
+            /// They still count down, so the partitions that remain are not left
+            /// waiting. But their matches are missing, so the build-side rows must not
+            /// be emitted: the last partition is not handed a summary.
+            ///
+            /// `Relaxed` suffices for the flag, as in [`Self::record_batch`]: the
+            /// `AcqRel` decrement publishes it.
+            pub(super) fn abandon(&self, count: usize) -> bool {
+                if count == 0 {
+                    return false;
+                }
+                self.abandoned.store(true, Ordering::Relaxed);
+                self.running.fetch_sub(count, Ordering::AcqRel) == count
             }
         }
     };
@@ -166,14 +197,14 @@ mod tests {
         let completion = ProbeCompletion::new(3);
 
         completion.record_batch(true, false);
-        assert_eq!(completion.report_completed(), None);
+        assert_eq!(completion.report_completed(), Completion::NotLast);
 
         completion.record_batch(true, true);
-        assert_eq!(completion.report_completed(), None);
+        assert_eq!(completion.report_completed(), Completion::NotLast);
 
         assert_eq!(
             completion.report_completed(),
-            Some(ProbeSideSummary {
+            Completion::Emit(ProbeSideSummary {
                 non_empty: true,
                 has_null: true,
             })
@@ -188,7 +219,7 @@ mod tests {
 
         assert_eq!(
             completion.report_completed(),
-            Some(ProbeSideSummary {
+            Completion::Emit(ProbeSideSummary {
                 non_empty: false,
                 has_null: false,
             })
@@ -208,6 +239,22 @@ mod tests {
         completion.record_batch(true, true);
         assert!(completion.saw_null_key_hint());
     }
+
+    /// Abandoning no partitions changes nothing. A caller may report a count of
+    /// zero, for example when no partition went away before the left side
+    /// spilled, and that must not suppress the build-side rows.
+    #[test]
+    fn abandoning_no_partitions_still_emits() {
+        let completion = ProbeCompletion::new(1);
+        assert!(!completion.abandon(0));
+        assert_eq!(
+            completion.report_completed(),
+            Completion::Emit(ProbeSideSummary {
+                non_empty: false,
+                has_null: false,
+            })
+        );
+    }
 }
 
 /// Model-checked concurrency tests for the protocol.
@@ -215,7 +262,7 @@ mod tests {
 /// These instantiate the protocol over loom's atomics (see the
 /// [module docs](self)) and let loom enumerate the interleavings and store
 /// visibility the memory model allows. They fail if the decrement in
-/// `report_completed` is weakened to `Relaxed`.
+/// `report_completed` or `abandon` is weakened to `Relaxed`.
 ///
 /// Compiled only under `--cfg datafusion_loom`, which is also what pulls the `loom`
 /// dev-dependency into the build (see `datafusion-physical-plan`'s
@@ -226,6 +273,7 @@ mod tests {
 /// ```
 #[cfg(all(test, datafusion_loom))]
 mod loom_tests {
+    use super::Completion;
     use super::ProbeSideSummary;
     use loom::sync::Arc;
     use std::sync::atomic::Ordering;
@@ -258,9 +306,15 @@ mod loom_tests {
             let recorded = recorder.join().unwrap();
 
             let summary = match (recorded, observer) {
-                (Some(summary), None) | (None, Some(summary)) => summary,
-                (Some(_), Some(_)) => panic!("two partitions both finished last"),
-                (None, None) => panic!("no partition finished last"),
+                (Completion::Emit(summary), Completion::NotLast)
+                | (Completion::NotLast, Completion::Emit(summary)) => summary,
+                (Completion::Emit(_), Completion::Emit(_)) => {
+                    panic!("two partitions both finished last")
+                }
+                (Completion::NotLast, Completion::NotLast) => {
+                    panic!("no partition finished last")
+                }
+                other => panic!("unexpected outcome: {other:?}"),
             };
 
             assert!(
@@ -295,7 +349,11 @@ mod loom_tests {
             let here = completion.report_completed();
             let there = other.join().unwrap();
 
-            let summary = here.or(there).expect("some partition must finish last");
+            let summary = match (here, there) {
+                (Completion::Emit(summary), Completion::NotLast)
+                | (Completion::NotLast, Completion::Emit(summary)) => summary,
+                other => panic!("some partition must finish last: {other:?}"),
+            };
             assert_eq!(
                 summary,
                 ProbeSideSummary {
@@ -316,10 +374,12 @@ mod loom_tests {
 
             let other = {
                 let completion = Arc::clone(&completion);
-                loom::thread::spawn(move || completion.report_completed().is_some())
+                loom::thread::spawn(move || {
+                    completion.report_completed() != Completion::NotLast
+                })
             };
 
-            let here = completion.report_completed().is_some();
+            let here = completion.report_completed() != Completion::NotLast;
             let there = other.join().unwrap();
 
             assert!(here ^ there, "exactly one partition must finish last");
@@ -345,6 +405,32 @@ mod loom_tests {
             let there = other.join().unwrap();
 
             assert!(!here && !there, "the hint reported an unrecorded NULL");
+        });
+    }
+
+    /// A partition that stops early still counts down, so exactly one
+    /// partition finishes last. But its matches are missing, so no partition
+    /// may emit, whichever of the two finishes last.
+    #[test]
+    fn an_abandoned_partition_counts_down_but_suppresses_the_emit() {
+        loom::model(|| {
+            let completion = Arc::new(ProbeCompletion::new(2));
+
+            let quitter = {
+                let completion = Arc::clone(&completion);
+                loom::thread::spawn(move || completion.abandon(1))
+            };
+
+            let here = completion.report_completed();
+            let quitter_was_last = quitter.join().unwrap();
+
+            match (here, quitter_was_last) {
+                // This partition finished last and saw the abandon
+                (Completion::Abandoned, false) => {}
+                // The quitter finished last and releases the shared state
+                (Completion::NotLast, true) => {}
+                other => panic!("unexpected outcome: {other:?}"),
+            }
         });
     }
 }

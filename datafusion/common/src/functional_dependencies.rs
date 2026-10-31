@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! FunctionalDependencies keeps track of functional dependencies
 //! inside DFSchema.
@@ -472,9 +459,14 @@ pub fn aggregate_functional_dependencies(
     // The loop below only re-expresses input dependencies. Skip it when the
     // input has none. The GROUP BY-key dependency below always runs.
     if !func_dependencies.is_empty() {
-        // Compute once: this does not change in the loop.
-        let existing_target_indices =
-            get_target_functional_dependencies(aggr_input_schema, group_by_input_indices);
+        // Compare the columns covered by every dependency, whatever its NULL
+        // semantics: leaving out the ones that do not hold across NULLs would
+        // hide GROUP BY expressions this determinant does not cover and
+        // upgrade its mode to `Single` wrongly.
+        let existing_target_indices = get_target_indices_from_dependencies(
+            func_dependencies.iter(),
+            group_by_input_indices,
+        );
         for FunctionalDependence {
             source_indices,
             nullable,
@@ -500,8 +492,8 @@ pub fn aggregate_functional_dependencies(
                     new_source_input_indices.push(Some(*input_idx));
                 }
             }
-            let new_target_indices = get_target_functional_dependencies(
-                aggr_input_schema,
+            let new_target_indices = get_target_indices_from_dependencies(
+                func_dependencies.iter(),
                 &new_source_input_indices,
             );
             let mode = if existing_target_indices == new_target_indices
@@ -572,6 +564,12 @@ pub fn aggregate_functional_dependencies(
 /// Returns target indices, for the determinant keys that are inside
 /// group by expressions.
 ///
+/// Only dependencies that hold when NULL determinant values are grouped
+/// together are considered (see
+/// [`FunctionalDependence::is_valid_across_nulls`]): a nullable `UNIQUE`
+/// column permits multiple NULL rows that may differ in the other columns,
+/// so it does not determine them across the single NULL group.
+///
 /// `group_by_input_indices` holds, for each GROUP BY expression, the index of
 /// the `schema` field it references, or `None` for a computed expression.
 pub fn get_target_functional_dependencies(
@@ -582,21 +580,27 @@ pub fn get_target_functional_dependencies(
     if dependencies.is_empty() {
         return None;
     }
+    let dependencies = dependencies
+        .iter()
+        .filter(|dependency| dependency.is_valid_across_nulls(schema));
+    get_target_indices_from_dependencies(dependencies, group_by_input_indices)
+}
+
+fn get_target_indices_from_dependencies<'a>(
+    dependencies: impl IntoIterator<Item = &'a FunctionalDependence>,
+    group_by_input_indices: &[Option<usize>],
+) -> Option<Vec<usize>> {
     let mut combined_target_indices = HashSet::new();
-    for FunctionalDependence {
-        source_indices,
-        target_indices,
-        ..
-    } in &dependencies.deps
-    {
+    for dependency in dependencies {
         // If the GROUP BY expression contains a determinant key, we can use
         // the associated fields after aggregation even if they are not part
         // of the GROUP BY expression.
-        if source_indices
+        if dependency
+            .source_indices
             .iter()
             .all(|source_idx| group_by_input_indices.contains(&Some(*source_idx)))
         {
-            combined_target_indices.extend(target_indices.iter());
+            combined_target_indices.extend(dependency.target_indices.iter());
         }
     }
     (!combined_target_indices.is_empty()).then_some({
@@ -623,22 +627,21 @@ pub fn get_required_group_by_exprs_indices(
         .collect::<Option<Vec<_>>>()?;
 
     groupby_expr_indices.sort_unstable();
-    for FunctionalDependence {
-        source_indices,
-        target_indices,
-        ..
-    } in &dependencies.deps
-    {
-        if source_indices
+    for dependency in &dependencies.deps {
+        // If all source indices are among GROUP BY expression indices, we
+        // can remove target indices from GROUP BY expression indices and
+        // use source indices instead. The dependency must also hold across
+        // NULL keys, which GROUP BY collapses into a single group.
+        if dependency
+            .source_indices
             .iter()
             .all(|source_idx| groupby_expr_indices.contains(source_idx))
+            && dependency.is_valid_across_nulls(schema)
         {
-            // If all source indices are among GROUP BY expression indices, we
-            // can remove target indices from GROUP BY expression indices and
-            // use source indices instead.
-            groupby_expr_indices = set_difference(&groupby_expr_indices, target_indices);
             groupby_expr_indices =
-                merge_and_order_indices(groupby_expr_indices, source_indices);
+                set_difference(&groupby_expr_indices, &dependency.target_indices);
+            groupby_expr_indices =
+                merge_and_order_indices(groupby_expr_indices, &dependency.source_indices);
         }
     }
     groupby_expr_indices

@@ -205,8 +205,22 @@ The good thing about open code and open development is that any issues in one ch
 
 ## Stale PRs
 
+Open, non-draft PRs with no activity for 14 days are automatically marked as
+draft if they have merge conflicts, failing CI checks, or an outstanding
+changes-requested review on the latest push. PRs awaiting review with none of
+these conditions remain ready for review. Cancelled, pending, skipped, or missing
+CI checks do not trigger drafting. PRs in the merge queue are excluded.
+
+The automation leaves a comment explaining why the PR was drafted. After
+addressing the listed items, mark the PR **Ready for review**. If you need help
+or a CI failure is unrelated to your changes, leave a comment on the PR.
+
+Maintainers can preview eligible PRs by running the **Draft inactive PRs**
+workflow manually with its default `dry_run` input enabled.
+
 Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
 Commenting on the PR will remove the `stale` label.
+The automatic draft notification also counts as activity and restarts this timer.
 
 ## CI Runners
 
@@ -270,3 +284,17 @@ To make this work:
    synced fork builds much faster.
 3. Rebase your branch before you push. The fork run tests your branch as it
    is, while the merge queue tests it merged with `main`.
+
+#### Obsolete Merge Queue Runs
+
+The **Merge queue cleanup** workflow finds unfinished merge queue CI runs whose
+queue branch was removed or now points to a different commit. It scans when a
+new merge group is created and every 15 minutes.
+
+Cleanup keeps runs for active groups, commits already in their target branch,
+and rerun attempts. Contributors can rerun an obsolete job to investigate a
+failure. A failed check alone does not cause cancellation.
+
+The workflow only reports candidates until a maintainer sets the repository
+Actions variable `MERGE_QUEUE_CLEANUP_ENABLED` to `true`. Manual runs default
+to `dry_run`. To stop cancellation, remove the variable or set it to `false`.

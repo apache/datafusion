@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sort-Merge Join execution
 //!
@@ -47,6 +34,7 @@ use arrow::compute::{
     take_arrays,
 };
 use arrow::datatypes::{Schema, SchemaRef};
+use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::cast::as_uint64_array;
 use datafusion_common::instant::Instant;
 use datafusion_common::{
@@ -1704,73 +1692,76 @@ impl MaterializingSortMergeJoinStream {
         };
         let output_batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
 
-        if !filter_columns.is_empty() {
-            if let Some(f) = &self.filter {
-                let schema = self.filter_schema.as_ref().unwrap_or_else(|| f.schema());
-                let filter_batch =
-                    RecordBatch::try_new(Arc::clone(schema), filter_columns)?;
-                let filter_result = f
-                    .expression()
-                    .evaluate(&filter_batch)?
-                    .into_array(filter_batch.num_rows())?;
+        // A filter that reads no columns (e.g. a bound parameter or a volatile
+        // function) still has to be evaluated, so key on the filter itself.
+        if let Some(f) = &self.filter {
+            let schema = self.filter_schema.as_ref().unwrap_or_else(|| f.schema());
+            let filter_batch = RecordBatch::try_new_with_options(
+                Arc::clone(schema),
+                filter_columns,
+                &RecordBatchOptions::new().with_row_count(Some(total_matched_rows)),
+            )?;
+            let filter_result = f
+                .expression()
+                .evaluate(&filter_batch)?
+                .into_array(filter_batch.num_rows())?;
 
-                let filter_result_mask =
-                    datafusion_common::cast::as_boolean_array(&filter_result)?;
+            let filter_result_mask =
+                datafusion_common::cast::as_boolean_array(&filter_result)?;
 
-                // Convert NULL filter results to false — NULL means "not satisfied"
-                // per SQL semantics, same as Left/Right outer joins.
-                let mask = if filter_result_mask.null_count() > 0 {
-                    compute::prep_null_mask_filter(filter_result_mask)
-                } else {
-                    filter_result_mask.clone()
-                };
+            // Convert NULL filter results to false — NULL means "not satisfied"
+            // per SQL semantics, same as Left/Right outer joins.
+            let mask = if filter_result_mask.null_count() > 0 {
+                compute::prep_null_mask_filter(filter_result_mask)
+            } else {
+                filter_result_mask.clone()
+            };
 
-                if self.deferred_filtering {
-                    self.joined_record_batches.push_batch_with_filter_metadata(
-                        output_batch,
-                        &combined_left_indices,
-                        &mask,
-                        self.streamed_batch_counter,
-                        self.join_type,
-                    );
-                } else {
-                    let filtered_batch = filter_record_batch(&output_batch, &mask)?;
-                    self.joined_record_batches
-                        .push_batch_without_metadata(filtered_batch);
-                }
+            if self.deferred_filtering {
+                self.joined_record_batches.push_batch_with_filter_metadata(
+                    output_batch,
+                    &combined_left_indices,
+                    &mask,
+                    self.streamed_batch_counter,
+                    self.join_type,
+                );
+            } else {
+                let filtered_batch = filter_record_batch(&output_batch, &mask)?;
+                self.joined_record_batches
+                    .push_batch_without_metadata(filtered_batch);
+            }
 
-                // Track which buffered rows had all filter matches fail,
-                // so full join can emit them as null-joined later.
-                if self.join_type == JoinType::Full {
-                    let mut offset = 0usize;
-                    for (batch_idx, _left, right) in matched_chunks {
-                        let chunk_len = right.len();
-                        let buffered_batch = &mut self.buffered_data.batches[*batch_idx];
+            // Track which buffered rows had all filter matches fail,
+            // so full join can emit them as null-joined later.
+            if self.join_type == JoinType::Full {
+                let mut offset = 0usize;
+                for (batch_idx, _left, right) in matched_chunks {
+                    let chunk_len = right.len();
+                    let buffered_batch = &mut self.buffered_data.batches[*batch_idx];
 
-                        for i in 0..chunk_len {
-                            if right.is_null(i) {
-                                continue;
+                    for i in 0..chunk_len {
+                        if right.is_null(i) {
+                            continue;
+                        }
+                        let idx = right.value(i) as usize;
+                        match buffered_batch.join_filter_status[idx] {
+                            FilterState::SomePassed => {}
+                            _ if mask.value(offset + i) => {
+                                buffered_batch.join_filter_status[idx] =
+                                    FilterState::SomePassed;
                             }
-                            let idx = right.value(i) as usize;
-                            match buffered_batch.join_filter_status[idx] {
-                                FilterState::SomePassed => {}
-                                _ if mask.value(offset + i) => {
-                                    buffered_batch.join_filter_status[idx] =
-                                        FilterState::SomePassed;
-                                }
-                                _ => {
-                                    buffered_batch.join_filter_status[idx] =
-                                        FilterState::AllFailed;
-                                }
+                            _ => {
+                                buffered_batch.join_filter_status[idx] =
+                                    FilterState::AllFailed;
                             }
                         }
-                        offset += chunk_len;
                     }
-                    debug_assert_eq!(
-                        offset, total_matched_rows,
-                        "offset must advance through every chunk exactly once"
-                    );
+                    offset += chunk_len;
                 }
+                debug_assert_eq!(
+                    offset, total_matched_rows,
+                    "offset must advance through every chunk exactly once"
+                );
             }
         } else {
             self.joined_record_batches

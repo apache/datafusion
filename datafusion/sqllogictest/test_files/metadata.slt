@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 ## Tests for tables that has both metadata on each field as well as metadata on
@@ -140,8 +127,9 @@ NULL NULL l_bar
 # Regression test: UNION ALL + optimize_projections pruning unused columns causes
 # metadata loss when one branch has NULL literals (empty metadata) and the other
 # has field metadata. The optimizer prunes unused columns, triggering recompute_schema
-# which rebuilds the Union schema via intersect_metadata_for_union. Previously, this
-# intersection would drop metadata when any branch had empty metadata (from NULL literals).
+# which rebuilds the Union schema via merge_metadata_for_union. Previously, the
+# metadata intersection used there dropped metadata when any branch had empty metadata
+# (from NULL literals).
 # See https://github.com/apache/datafusion/issues/19049
 query T
 SELECT name FROM (
@@ -181,6 +169,34 @@ select name from (
 no_bar
 no_baz
 no_foo
+NULL
+
+# Regression test: conflicting field metadata across UNION legs with different
+# nullability. The logical and physical planners must agree on which value wins.
+# See https://github.com/apache/datafusion/issues/26880
+query I rowsort
+SELECT with_metadata(1, 'id', '1') UNION SELECT with_metadata(NULL, 'id', '2');
+----
+1
+NULL
+
+# Same, with the nullable leg first
+query I rowsort
+SELECT with_metadata(NULL, 'id', '2') UNION SELECT with_metadata(1, 'id', '1');
+----
+1
+NULL
+
+# Same, but the unused column `y` is pruned, so recompute_schema rebuilds the
+# Union schema with Union::try_new
+query I rowsort
+SELECT x FROM (
+  SELECT with_metadata(1, 'id', '1') AS x, 1 AS y
+  UNION ALL
+  SELECT with_metadata(NULL, 'id', '2') AS x, 2 AS y
+) GROUP BY x;
+----
+1
 NULL
 
 query P rowsort
@@ -531,6 +547,77 @@ query ?
 select arrow_metadata((select id from table_with_metadata where id = 1));
 ----
 {metadata_key: the id field}
+
+# coalesce, nvl, ifnull and nvl2: conflicting extension types are a planning error
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  with_metadata(name, 'ARROW:extension:name', 'a.type'),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select nvl2(id,
+  with_metadata(name, 'ARROW:extension:name', 'a.type'),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# These functions are rewritten to CASE before execution, so arrow_metadata()
+# does not observe the field they compute during planning. The tests below
+# observe it through the planning error instead: the outer coalesce only
+# reports 'a.type' if the inner expression carried it.
+
+# coalesce propagates an extension type its arguments agree on
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  coalesce(
+    with_metadata(name, 'ARROW:extension:name', 'a.type'),
+    with_metadata(l_name, 'ARROW:extension:name', 'a.type')),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# An untyped NULL argument does not block the extension type
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  coalesce(NULL, with_metadata(name, 'ARROW:extension:name', 'a.type')),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# An argument without metadata does not block the extension type of a later argument
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  coalesce(upper(name), with_metadata(l_name, 'ARROW:extension:name', 'a.type')),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  nvl(with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  ifnull(with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# nvl2 propagates the extension type of its second and third arguments
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  nvl2(id, with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# The first argument of nvl2 is only tested for NULL; its extension type does not propagate
+query T
+select coalesce(
+  nvl2(with_metadata(id, 'ARROW:extension:name', 'a.type'), name, l_name),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+----
+NULL
+l_bar
+baz
 
 statement ok
 drop table table_with_metadata;

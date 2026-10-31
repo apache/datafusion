@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Tests for `date_part` and `EXTRACT` (which is a different syntax
 # for the same function).
@@ -912,6 +899,58 @@ SELECT extract(epoch from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosec
 ----
 84770.123456789
 
+# sub-second parts of times, with a NULL row
+query IIII
+SELECT extract(second from t), extract(millisecond from t), extract(microsecond from t), extract(nanosecond from t)
+FROM (SELECT arrow_cast(column1, 'Time32(Second)') AS t
+      FROM (VALUES ('23:32:50.123456789'::time), (NULL), ('00:00:01.000000001'::time)))
+----
+50 50000 50000000 50000000000
+NULL NULL NULL NULL
+1 1000 1000000 1000000000
+
+query IIII
+SELECT extract(second from t), extract(millisecond from t), extract(microsecond from t), extract(nanosecond from t)
+FROM (SELECT arrow_cast(column1, 'Time32(Millisecond)') AS t
+      FROM (VALUES ('23:32:50.123456789'::time), (NULL), ('00:00:01.000000001'::time)))
+----
+50 50123 50123000 50123000000
+NULL NULL NULL NULL
+1 1000 1000000 1000000000
+
+query IIII
+SELECT extract(second from t), extract(millisecond from t), extract(microsecond from t), extract(nanosecond from t)
+FROM (SELECT arrow_cast(column1, 'Time64(Microsecond)') AS t
+      FROM (VALUES ('23:32:50.123456789'::time), (NULL), ('00:00:01.000000001'::time)))
+----
+50 50123 50123456 50123456000
+NULL NULL NULL NULL
+1 1000 1000000 1000000000
+
+query IIII
+SELECT extract(second from t), extract(millisecond from t), extract(microsecond from t), extract(nanosecond from t)
+FROM (SELECT arrow_cast(column1, 'Time64(Nanosecond)') AS t
+      FROM (VALUES ('23:32:50.123456789'::time), (NULL), ('00:00:01.000000001'::time)))
+----
+50 50123 50123456 50123456789
+NULL NULL NULL NULL
+1 1000 1000000 1000000001
+
+# times outside one day are NULL, like the other parts. The last row is 2^32 + 5
+# seconds, which must not wrap around to 5 seconds.
+query IIII
+SELECT extract(nanosecond from arrow_cast(arrow_cast(column1, 'Int32'), 'Time32(Second)')),
+       extract(nanosecond from arrow_cast(arrow_cast(column2, 'Int32'), 'Time32(Millisecond)')),
+       extract(nanosecond from arrow_cast(column3, 'Time64(Microsecond)')),
+       extract(nanosecond from arrow_cast(column4, 'Time64(Nanosecond)'))
+FROM (VALUES (-1, -1, -1, -1),
+             (86400, 86400000, 86400000000, 86400000000000),
+             (NULL, NULL, 4294967301000000, 4294967301000000000))
+----
+NULL NULL NULL NULL
+NULL NULL NULL NULL
+NULL NULL NULL NULL
+
 # test_extract_epoch
 
 query R
@@ -973,6 +1012,70 @@ query R
 SELECT extract(epoch from arrow_cast('1969-12-31', 'Date64'))
 ----
 -86400
+
+# sub-second parts of timestamps in each unit, before and after 1970, with a NULL row
+query IIII
+SELECT extract(second from ts), extract(millisecond from ts), extract(microsecond from ts), extract(nanosecond from ts)
+FROM (SELECT arrow_cast(column1, 'Timestamp(Second, None)') AS ts
+      FROM (VALUES ('2020-09-08T12:00:12'), (NULL), ('1969-12-31T23:59:58')))
+----
+12 12000 12000000 12000000000
+NULL NULL NULL NULL
+58 58000 58000000 58000000000
+
+query IIII
+SELECT extract(second from ts), extract(millisecond from ts), extract(microsecond from ts), extract(nanosecond from ts)
+FROM (SELECT arrow_cast(column1, 'Timestamp(Millisecond, None)') AS ts
+      FROM (VALUES ('2020-09-08T12:00:12.123'), (NULL), ('1969-12-31T23:59:58.123')))
+----
+12 12123 12123000 12123000000
+NULL NULL NULL NULL
+58 58123 58123000 58123000000
+
+query IIII
+SELECT extract(second from ts), extract(millisecond from ts), extract(microsecond from ts), extract(nanosecond from ts)
+FROM (SELECT arrow_cast(column1, 'Timestamp(Microsecond, None)') AS ts
+      FROM (VALUES ('2020-09-08T12:00:12.123456'), (NULL), ('1969-12-31T23:59:58.123456')))
+----
+12 12123 12123456 12123456000
+NULL NULL NULL NULL
+58 58123 58123456 58123456000
+
+query IIII
+SELECT extract(second from ts), extract(millisecond from ts), extract(microsecond from ts), extract(nanosecond from ts)
+FROM (SELECT arrow_cast(column1, 'Timestamp(Nanosecond, None)') AS ts
+      FROM (VALUES ('2020-09-08T12:00:12.123456789'), (NULL), ('1969-12-31T23:59:58.123456789')))
+----
+12 12123 12123456 12123456789
+NULL NULL NULL NULL
+58 58123 58123456 58123456789
+
+# Africa/Monrovia was UTC-00:44:30 until 1972, so the seconds depend on the timezone
+query IIII
+SELECT extract(second from ts), extract(millisecond from ts), extract(microsecond from ts), extract(nanosecond from ts)
+FROM (SELECT arrow_cast(column1, 'Timestamp(Millisecond, Some("Africa/Monrovia"))') AS ts
+      FROM (VALUES (500), (-1500), (NULL)))
+----
+30 30500 30500000 30500000000
+28 28500 28500000 28500000000
+NULL NULL NULL NULL
+
+query IIII
+SELECT extract(second from ts), extract(millisecond from ts), extract(microsecond from ts), extract(nanosecond from ts)
+FROM (SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("Africa/Monrovia"))') AS ts
+      FROM (VALUES (500000000), (-1500000000), (NULL)))
+----
+30 30500 30500000 30500000000
+28 28500 28500000 28500000000
+NULL NULL NULL NULL
+
+# timestamps outside the range arrow represents are NULL, like the other parts
+query IIII
+SELECT extract(second from ts), extract(millisecond from ts), extract(microsecond from ts), extract(nanosecond from ts)
+FROM (VALUES (arrow_cast(9223372036854775807, 'Timestamp(Second, None)')), (NULL)) AS t(ts)
+----
+NULL NULL NULL NULL
+NULL NULL NULL NULL
 
 # test_extract_interval
 
@@ -1143,23 +1246,131 @@ create table t (id int, i interval) as values
   (4, interval '8 months'),
   (5, NULL);
 
-query III
+query IIII
 select
   id,
   extract(second from i),
-  extract(month from i)
+  extract(month from i),
+  extract(nanosecond from i)
 from t
 order by id;
 ----
-0 0 5
-1 0 3
-2 0 0
-3 2 0
-4 0 8
-5 NULL NULL
+0 0 5 10
+1 0 3 0
+2 0 0 2000000
+3 2 0 2000000000
+4 0 8 0
+5 NULL NULL NULL
 
 statement ok
 drop table t;
+
+# nanosecond on an interval is the seconds field (within the minute) in nanoseconds,
+# like microsecond and millisecond.
+# Reproducer from https://github.com/apache/datafusion/issues/26678
+query III
+SELECT extract(nanosecond from interval '1.5 seconds'),
+       extract(microsecond from interval '1.5 seconds'),
+       extract(millisecond from interval '1.5 seconds')
+----
+1500000000 1500000 1500
+
+# past i32::MAX nanoseconds
+query I
+SELECT extract(nanosecond from interval '62.5 seconds')
+----
+2500000000
+
+query I
+SELECT extract(nanosecond from interval '59.999999999 seconds')
+----
+59999999999
+
+query I
+SELECT extract(nanosecond from interval '1 day 2 hours 3 minutes')
+----
+0
+
+query I
+SELECT extract(nanosecond from interval '-1.5 seconds')
+----
+-1500000000
+
+query I
+SELECT extract(nanosecond from arrow_cast('5.1 seconds', 'Interval(DayTime)'))
+----
+5100000000
+
+query I
+SELECT extract(nanosecond from arrow_cast('62.5 seconds', 'Interval(DayTime)'))
+----
+2500000000
+
+query I
+SELECT extract(nanosecond from arrow_cast(NULL, 'Interval(DayTime)'))
+----
+NULL
+
+# sub-second parts are the seconds field within the minute, with the sign of the
+# milliseconds or nanoseconds field, whatever the days and months
+query III
+SELECT extract(millisecond from i), extract(microsecond from i), extract(nanosecond from i)
+FROM (SELECT arrow_cast(column1, 'Interval(DayTime)') AS i FROM (VALUES
+  ('-62.5 seconds'), ('-60 seconds'), ('1 day 2 hours 5.1 seconds'),
+  ('-1 day 5.1 seconds'), ('-2 hours -5.1 seconds'), (NULL)))
+----
+-2500 -2500000 -2500000000
+0 0 0
+5100 5100000 5100000000
+5100 5100000 5100000000
+-5100 -5100000 -5100000000
+NULL NULL NULL
+
+query III
+SELECT extract(millisecond from i), extract(microsecond from i), extract(nanosecond from i)
+FROM (SELECT arrow_cast(column1, 'Interval(MonthDayNano)') AS i FROM (VALUES
+  ('-62.5 seconds'), ('-60 seconds'), ('-59.999999999 seconds'),
+  ('1 month -62.5 seconds'), ('-1 day -62.5 seconds'), (NULL)))
+----
+-2500 -2500000 -2500000000
+0 0 0
+-59999 -59999999 -59999999999
+-2500 -2500000 -2500000000
+-2500 -2500000 -2500000000
+NULL NULL NULL
+
+# millisecond and microsecond keep the fraction past i32::MAX nanoseconds.
+# Reproducer from https://github.com/apache/datafusion/issues/14738#issuecomment-6372885638
+query IIII
+SELECT extract(millisecond from interval '62.5 seconds'),
+       extract(microsecond from interval '62.5 seconds'),
+       extract(microsecond from interval '5.5 seconds'),
+       extract(microsecond from interval '59.999999 seconds')
+----
+2500 2500000 5500000 59999999
+
+query II
+SELECT extract(millisecond from interval '-62.5 seconds'),
+       extract(microsecond from interval '-62.5 seconds')
+----
+-2500 -2500000
+
+query II
+SELECT extract(millisecond from arrow_cast('62.5 seconds', 'Interval(DayTime)')),
+       extract(microsecond from arrow_cast('62.5 seconds', 'Interval(DayTime)'))
+----
+2500 2500000
+
+# Reproducer from https://github.com/apache/datafusion/issues/14738
+query III
+SELECT date_part('microseconds', interval '1 hour'),
+       date_part('milliseconds', interval '1 hour'),
+       date_part('seconds', interval '1 hour')
+----
+0 0 0
+
+query error DataFusion error: Arrow error: Compute error: Nanosecond does not support: Interval\(YearMonth\)
+SELECT extract(nanosecond from arrow_cast('10 months', 'Interval(YearMonth)'))
 
 # test_extract_duration
 
@@ -1177,6 +1388,78 @@ query R
 SELECT extract(epoch from arrow_cast(2, 'Duration(Second)'))
 ----
 2
+
+# epoch keeps the fraction of a duration whose total sub-second units exceed i32::MAX
+query RR
+SELECT extract(epoch from arrow_cast(2147483647, 'Duration(Nanosecond)')),
+       extract(epoch from arrow_cast(2147483648, 'Duration(Nanosecond)'))
+----
+2.147483647 2.147483648
+
+# Reproducer from https://github.com/apache/datafusion/issues/26673: every row keeps its fraction.
+# Before the fix, the rows at or above 2^31 ns (2.147483648 s) lost their fraction.
+query TTR
+SELECT description,
+       arrow_typeof(finished_at - started_at),
+       extract(epoch from finished_at - started_at)
+FROM (VALUES
+  ('1.25 seconds',      timestamp '2025-01-01 00:00:00', timestamp '2025-01-01 00:00:01.250000'),
+  ('2.10 seconds',      timestamp '2025-01-01 00:00:00', timestamp '2025-01-01 00:00:02.100000'),
+  ('2.50 seconds',      timestamp '2025-01-01 00:00:00', timestamp '2025-01-01 00:00:02.500000'),
+  ('4.763 seconds',     timestamp '2025-01-01 00:00:00', timestamp '2025-01-01 00:00:04.763000'),
+  ('12.923350 seconds', timestamp '2025-01-01 00:00:00', timestamp '2025-01-01 00:00:12.923350')
+) AS t(description, started_at, finished_at)
+----
+1.25 seconds Duration(ns) 1.25
+2.10 seconds Duration(ns) 2.1
+2.50 seconds Duration(ns) 2.5
+4.763 seconds Duration(ns) 4.763
+12.923350 seconds Duration(ns) 12.92335
+
+query R
+SELECT extract(epoch from arrow_cast(2147483648, 'Duration(Microsecond)'))
+----
+2147.483648
+
+query R
+SELECT extract(epoch from arrow_cast(2147483648, 'Duration(Millisecond)'))
+----
+2147483.648
+
+query R
+SELECT extract(epoch from arrow_cast(2147483648, 'Duration(Second)'))
+----
+2147483648
+
+query R
+SELECT extract(epoch from arrow_cast(-2500000000, 'Duration(Nanosecond)'))
+----
+-2.5
+
+query R
+SELECT extract(epoch from arrow_cast(NULL, 'Duration(Nanosecond)'))
+----
+NULL
+
+# NULLs stay NULL and don't change the other rows of the batch
+query R
+SELECT extract(epoch from d) FROM (VALUES
+  (arrow_cast(2500000000, 'Duration(Nanosecond)')),
+  (NULL),
+  (arrow_cast(1500000000, 'Duration(Nanosecond)'))
+) AS t(d)
+----
+2.5
+NULL
+1.5
+
+query RRRR
+SELECT extract(epoch from arrow_cast(9223372036854775807, 'Duration(Nanosecond)')),
+       extract(epoch from arrow_cast(-9223372036854775807, 'Duration(Nanosecond)')),
+       extract(epoch from arrow_cast(9223372036854775807, 'Duration(Second)')),
+       extract(epoch from arrow_cast(-9223372036854775807, 'Duration(Second)'))
+----
+9223372036.854776 -9223372036.854776 9223372036854776000 -9223372036854776000
 
 query I
 SELECT extract(millisecond from arrow_cast(2, 'Duration(Second)'))
@@ -1216,6 +1499,146 @@ query I
 SELECT extract(day from arrow_cast(NULL, 'Duration(Second)'))
 ----
 NULL
+
+# nanosecond on a duration is its total length in nanoseconds.
+# Reproducer from https://github.com/apache/datafusion/issues/26678
+query IIII
+SELECT extract(nanosecond from arrow_cast(1500000000, 'Duration(Nanosecond)')),
+       extract(nanosecond from arrow_cast(1500000, 'Duration(Microsecond)')),
+       extract(nanosecond from arrow_cast(1500, 'Duration(Millisecond)')),
+       extract(nanosecond from arrow_cast(2, 'Duration(Second)'))
+----
+1500000000 1500000000 1500000000 2000000000
+
+# around i32::MAX nanoseconds
+query III
+SELECT extract(nanosecond from arrow_cast(2147483647, 'Duration(Nanosecond)')),
+       extract(nanosecond from arrow_cast(2147483648, 'Duration(Nanosecond)')),
+       extract(nanosecond from arrow_cast(62500000000, 'Duration(Nanosecond)'))
+----
+2147483647 2147483648 62500000000
+
+query II
+SELECT extract(nanosecond from arrow_cast(-1500000000, 'Duration(Nanosecond)')),
+       extract(nanosecond from arrow_cast(-62500, 'Duration(Millisecond)'))
+----
+-1500000000 -62500000000
+
+query I
+SELECT extract(nanosecond from arrow_cast(column1, 'Duration(Millisecond)'))
+FROM (VALUES (1500), (NULL), (62500), (NULL), (-2))
+----
+1500000000
+NULL
+62500000000
+NULL
+-2000000
+
+query II
+SELECT extract(nanosecond from arrow_cast(9223372036854775807, 'Duration(Nanosecond)')),
+       extract(nanosecond from arrow_cast(-9223372036854775808, 'Duration(Nanosecond)'))
+----
+9223372036854775807 -9223372036854775808
+
+# values that overflow are NULL, like the other parts of a duration
+query II
+SELECT extract(nanosecond from arrow_cast(column1, 'Duration(Second)')),
+       extract(nanosecond from arrow_cast(column2, 'Duration(Millisecond)'))
+FROM (VALUES (9223372036, -9223372036854), (9223372037, -9223372036855), (NULL, NULL))
+----
+9223372036000000000 -9223372036854000000
+NULL NULL
+NULL NULL
+
+# millisecond and microsecond on a duration are its total length in that unit.
+# Reproducer from https://github.com/apache/datafusion/issues/14738#issuecomment-6372885638
+query II
+SELECT extract(millisecond from arrow_cast(2500000000, 'Duration(Nanosecond)')),
+       extract(microsecond from arrow_cast(2500000000, 'Duration(Nanosecond)'))
+----
+2500 2500000
+
+# truncates toward zero, like the other parts of a duration
+query III
+SELECT extract(millisecond from arrow_cast(-1500, 'Duration(Microsecond)')),
+       extract(millisecond from arrow_cast(-1500000, 'Duration(Nanosecond)')),
+       extract(second from arrow_cast(-1500, 'Duration(Millisecond)'))
+----
+-1 -1 -1
+
+query I
+SELECT extract(microsecond from arrow_cast(column1, 'Duration(Nanosecond)'))
+FROM (VALUES (5500000000), (NULL), (-62500000000), (NULL))
+----
+5500000
+NULL
+-62500000
+NULL
+
+# around i32::MAX
+query II
+SELECT extract(millisecond from arrow_cast(2147483647, 'Duration(Millisecond)')),
+       extract(microsecond from arrow_cast(2147, 'Duration(Second)'))
+----
+2147483647 2147000000
+
+# values that overflow Int32 are NULL, like the other parts of a duration
+query II
+SELECT extract(millisecond from arrow_cast(column1, 'Duration(Millisecond)')),
+       extract(microsecond from arrow_cast(column2, 'Duration(Second)'))
+FROM (VALUES (2147483648, 2148), (-2147483649, -2148), (NULL, NULL))
+----
+NULL NULL
+NULL NULL
+NULL NULL
+
+# Reproducer from https://github.com/apache/datafusion/issues/14738. Postgres returns 0, because
+# there the difference is an interval. Here it is a Duration, whose microsecond is its total
+# length, and 2.4e9 microseconds don't fit in Int32.
+query I
+SELECT date_part('microsecond', timestamp '1970-01-01T00:40:00' - timestamp '1970-01-01T00:00:00')
+----
+NULL
+
+# Non-null inputs can give NULL results, so the result is nullable.
+# Reproducers from https://github.com/apache/datafusion/issues/26685
+query I
+SELECT extract(second from ts) FROM (VALUES (arrow_cast(9223372036854775807, 'Timestamp(Second, None)'))) AS t(ts)
+----
+NULL
+
+query I
+SELECT extract(hour from d) FROM (VALUES (arrow_cast(9223372036854775807, 'Duration(Second)'))) AS t(d)
+----
+NULL
+
+query I
+SELECT extract(nanosecond from d) FROM (VALUES (arrow_cast(9223372037, 'Duration(Second)'))) AS t(d)
+----
+NULL
+
+query I
+SELECT extract(millisecond from d) FROM (VALUES (arrow_cast(2147483648, 'Duration(Millisecond)'))) AS t(d)
+----
+NULL
+
+# epoch is NULL only for a NULL input, so it keeps the input's nullability
+query TTT
+DESCRIBE SELECT extract(epoch from ts) AS e, extract(second from ts) AS s,
+       extract(millisecond from ts) AS ms, extract(nanosecond from ts) AS ns
+FROM (VALUES (timestamp '2020-01-01')) AS t(ts)
+----
+e Float64 NO
+s Int32 YES
+ms Int32 YES
+ns Int64 YES
+
+query TTT
+DESCRIBE SELECT extract(epoch from ts) AS e, extract(second from ts) AS s
+FROM (VALUES (timestamp '2020-01-01'), (NULL)) AS t(ts)
+----
+e Float64 YES
+s Int32 YES
 
 # test_extract_date_part_func
 
