@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 ## Math expression Tests
@@ -1305,21 +1292,79 @@ FROM (VALUES (2000.0::double), (-2000.0::double)) t(a);
 Infinity Infinity
 -Infinity -Infinity
 
-# Float 16/32/64 for log
+# log(base, value) widens float arguments to the wider of the two, so a wider
+# base is not narrowed to the value's type (#22581). Here base 2.5 is Float64.
 query RT
 SELECT log(2.5, arrow_cast(10.9, 'Float16')), arrow_typeof(log(2.5, arrow_cast(10.9, 'Float16')));
 ----
-2.6074219 Float16
+2.606835742462 Float64
 
 query RT
 SELECT log(2.5, 10.9::float), arrow_typeof(log(2.5, 10.9::float));
 ----
-2.606992 Float32
+2.606992159958 Float64
 
 query RT
 SELECT log(2.5, 10.9::double), arrow_typeof(log(2.5, 10.9::double));
 ----
 2.606992198152 Float64
+
+# Homogeneous float widths are preserved
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), arrow_cast(10.9, 'Float16')), arrow_typeof(log(arrow_cast(2.5, 'Float16'), arrow_cast(10.9, 'Float16')));
+----
+2.6074219 Float16
+
+# Unary Float16 log uses a Float16 default base.
+query RT
+SELECT log(arrow_cast(100.0, 'Float16')), arrow_typeof(log(arrow_cast(100.0, 'Float16')));
+----
+2 Float16
+
+query RT
+SELECT log(2.5::float, 10.9::float), arrow_typeof(log(2.5::float, 10.9::float));
+----
+2.606992 Float32
+
+# A Float16 base is widened to a Float32 value's type
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), 10.9::float), arrow_typeof(log(arrow_cast(2.5, 'Float16'), 10.9::float));
+----
+2.606992 Float32
+
+# #22581: a Float64 base must keep full precision against a Float32 value.
+# 16777217 is not representable in Float32, so an f32 computation would round it.
+query RT
+SELECT log(arrow_cast(16777217, 'Float64'), arrow_cast(2.0, 'Float32')), arrow_typeof(log(arrow_cast(16777217, 'Float64'), arrow_cast(2.0, 'Float32')));
+----
+0.041666666517 Float64
+
+# NULL arguments keep their existing result types
+query RT
+SELECT log(2.5::float, NULL), arrow_typeof(log(2.5::float, NULL));
+----
+NULL Float64
+
+query RT
+SELECT log(NULL, 2.0::float), arrow_typeof(log(NULL, 2.0::float));
+----
+NULL Float32
+
+query RT
+SELECT log(NULL, NULL), arrow_typeof(log(NULL, NULL));
+----
+NULL Float64
+
+# A Float16 base is widened to a wider value's type
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), 1.0::double), arrow_typeof(log(arrow_cast(2.5, 'Float16'), 1.0::double));
+----
+0 Float64
+
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), arrow_cast(1.0, 'Float16')), arrow_typeof(log(arrow_cast(2.5, 'Float16'), arrow_cast(1.0, 'Float16')));
+----
+0 Float16
 
 # lcm with array and scalar
 

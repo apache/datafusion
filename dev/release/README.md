@@ -90,20 +90,16 @@ git push -u apache branch-55 # push branch to apache remote
 
 ### 2. Prepare PR to Update the Release Version
 
-Update the DataFusion version in the root `Cargo.toml`, in `Cargo.lock` and in the user
-documentation. At the time of this writing the documentation files are
-
-- `docs/source/download.md`
-- `docs/source/user-guide/configs.md`
-- `docs/source/user-guide/crate-configuration.md`
-- `docs/source/user-guide/example-usage.md`
-
-For example, to update the version from `55.1.0` to `55.2.0`:
+Update the DataFusion version using the following Python script:
 
 ```shell
-# version and lockfile
-sed -i '' 's/"55\.1\.0"/"55.2.0"/g' Cargo.toml
-sed -i '' 's/55\.1\.0/55.2.0/' docs/source/download.md docs/source/user-guide/{configs,crate-configuration,example-usage}.md
+# replace NEW_VERSION before executing (e.g., 55.2.0)
+python3 dev/update_datafusion_versions.py NEW_VERSION
+```
+
+This updates the DataFusion version across all files, including documentation. The only extra step required is to update the `Cargo.lock` file, using the following command:
+
+```shell
 cargo update --workspace
 ```
 
@@ -311,6 +307,74 @@ Tag the same release candidate commit with the final release tag
 git checkout 55.2.0-rc1
 git tag 55.2.0
 git push apache 55.2.0
+```
+
+#### Publish the versioned documentation
+
+**1. Build the documentation from the release tag** using the configuration
+overlay (`docs/scripts/release/conf.py`) from the main checkout. For example,
+for `55.0.0`, from the repository root:
+
+```shell
+export DATAFUSION_DOCS_OVERLAY="$PWD/docs/scripts/release"
+git fetch apache tag 55.0.0
+git worktree add --detach /tmp/datafusion-55.0.0 55.0.0
+cd /tmp/datafusion-55.0.0/docs
+DATAFUSION_DOCS_SOURCE="$PWD/source" DATAFUSION_DOCS_VERSION=55.0.0 \
+  SPHINXOPTS="-W -c $DATAFUSION_DOCS_OVERLAY" \
+  uv run --package datafusion-docs --with sphinx-sitemap ./build.sh
+cd -
+```
+
+Notes:
+
+1. You need to use an absolute path to the overlay in your current checkout.
+2. The `--with sphinx-sitemap` option supplies the sitemap extension for older tags.
+
+To preview the result, build the docs from your main checkout
+(`uv run --package datafusion-docs ./build.sh` in `docs/`), copy the release
+build in under `versions/<version>/`, and serve the tree over HTTP (the version
+picker does not work when the pages are opened directly as files):
+
+```shell
+mkdir -p docs/build/html/versions/55.0.0
+rsync -a /tmp/datafusion-55.0.0/docs/build/html/ docs/build/html/versions/55.0.0/
+python3 -m http.server --directory docs/build/html 8000
+```
+
+Then open http://localhost:8000/ and http://localhost:8000/versions/55.0.0/
+and check the version picker in the navigation bar.
+
+**2. Add the built site to the `asf-site` branch.** Open a PR against
+`asf-site` that adds the release under `versions/<version>/` (for example
+[#25881](https://github.com/apache/datafusion/pull/25881)):
+
+```shell
+git fetch apache asf-site
+git worktree add -b docs/publish-55.0.0 /tmp/datafusion-asf-site apache/asf-site
+rsync -a --exclude '/.buildinfo' \
+  /tmp/datafusion-55.0.0/docs/build/html/ \
+  /tmp/datafusion-asf-site/versions/55.0.0/
+cd /tmp/datafusion-asf-site
+git add versions/55.0.0
+git commit -m "Publish documentation for 55.0.0"
+git push origin docs/publish-55.0.0
+```
+
+The release is live at `https://datafusion.apache.org/versions/55.0.0/` once
+the PR is merged.
+
+**3. Add the release to the version picker.** Open a PR against `main` that
+adds the release to `docs/source/_static/versions.json`. Put the new release
+directly after the `Development (main)` entry and move `"preferred": true` to it, so that
+it is treated as the current stable release. Only add releases that are already
+published, since the picker links to them directly.
+
+Finally, remove the temporary worktrees:
+
+```shell
+git worktree remove /tmp/datafusion-55.0.0
+git worktree remove /tmp/datafusion-asf-site
 ```
 
 ### 10. Publish on Crates.io

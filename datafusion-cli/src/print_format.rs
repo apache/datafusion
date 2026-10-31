@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Print format variants
 
@@ -219,8 +206,8 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{Int32Array, Time64NanosecondArray};
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use insta::{allow_duplicates, assert_snapshot};
 
     #[test]
@@ -500,6 +487,48 @@ mod tests {
             .with_header(WithHeader::Yes)
             .run();
         assert_eq!(output, "")
+    }
+
+    #[test]
+    fn invalid_temporal_format_errors_before_table_output() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "time",
+            DataType::Time64(TimeUnit::Nanosecond),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Time64NanosecondArray::from(vec![1_000, 2_000]))],
+        )
+        .unwrap();
+        let empty_batch = RecordBatch::new_empty(schema.clone());
+        let format_options = FormatOptions {
+            time_format: Some("%Y".to_owned()),
+            ..Default::default()
+        };
+
+        for batches in [vec![batch], vec![empty_batch]] {
+            let mut output = Vec::new();
+            let error = PrintFormat::Table
+                .print_batches(
+                    &mut output,
+                    schema.clone(),
+                    &batches,
+                    MaxRows::Limited(1),
+                    true,
+                    &format_options,
+                )
+                .expect_err("incompatible time formats must fail before writing output");
+
+            assert!(
+                error.to_string().contains("datafusion.format.time_format"),
+                "unexpected error: {error}"
+            );
+            assert!(
+                output.is_empty(),
+                "format errors must not write partial output"
+            );
+        }
     }
 
     #[derive(Debug)]
