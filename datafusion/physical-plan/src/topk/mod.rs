@@ -25,7 +25,6 @@ use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
 use arrow::array::{ArrayRef, RecordBatch, UInt32Array, UInt64Array};
 use arrow::datatypes::{FieldRef, Schema, SchemaRef};
-use datafusion_common::float_semantics::is_float_zero;
 use datafusion_common::utils::memory::RecordBatchMemoryTracker;
 use datafusion_common::{
     HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
@@ -636,7 +635,7 @@ impl TopK {
             // `-0.0` rows that belong in the TopK. For a zero threshold, use a
             // non-strict bound that keeps both zeros and do not filter on any
             // later key.
-            let float_zero = is_float_zero(value);
+            let float_zero = value.is_float_zero();
 
             // Create the appropriate operator based on sort order
             let op = match (sort_expr.options.descending, float_zero) {
