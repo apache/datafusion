@@ -703,35 +703,23 @@ mod tests {
             None,
         )?;
 
-        // can_repartition = false should be preserved after replace_children with Recompute
-        let window = Arc::new(WindowAggExec::try_new(
-            vec![window_expr.clone()],
-            Arc::clone(&input),
-            false,
-        )?);
-        assert!(!window.can_repartition);
+        for can_repartition in [false, true] {
+            let window = Arc::new(WindowAggExec::try_new(
+                vec![window_expr.clone()],
+                Arc::clone(&input),
+                can_repartition,
+            )?);
+            assert_eq!(window.can_repartition, can_repartition);
 
-        let new_child: Arc<dyn ExecutionPlan> =
-            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
-        let replaced = window.clone().replace_children(
-            vec![new_child],
-            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-        )?;
-        let replaced_window = replaced.downcast_ref::<WindowAggExec>().unwrap();
-        assert_eq!(replaced_window.can_repartition, false);
-
-        // can_repartition = true should also be preserved
-        let window_true =
-            Arc::new(WindowAggExec::try_new(vec![window_expr], input, true)?);
-        assert!(window_true.can_repartition);
-        let new_child2: Arc<dyn ExecutionPlan> =
-            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
-        let replaced_true = window_true.clone().replace_children(
-            vec![new_child2],
-            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-        )?;
-        let replaced_window_true = replaced_true.downcast_ref::<WindowAggExec>().unwrap();
-        assert_eq!(replaced_window_true.can_repartition, true);
+            let new_child: Arc<dyn ExecutionPlan> =
+                Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+            let replaced = window.replace_children(
+                vec![new_child],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )?;
+            let replaced_window = replaced.downcast_ref::<WindowAggExec>().unwrap();
+            assert_eq!(replaced_window.can_repartition, can_repartition);
+        }
 
         Ok(())
     }
