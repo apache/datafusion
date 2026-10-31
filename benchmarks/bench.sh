@@ -42,7 +42,6 @@ DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 SQL_CARGO_COMMAND=${SQL_CARGO_COMMAND:-"cargo bench --bench sql"}
-PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
 SIMULATE_LATENCY=${SIMULATE_LATENCY:-false}
 
 # Build latency arg based on SIMULATE_LATENCY setting
@@ -187,7 +186,6 @@ DATA_DIR            directory to store datasets
 CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
-PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
 SIMULATE_LATENCY    Serve local files as if they were remote object storage: per-request
                     latency, per-connection bandwidth and paginated LIST (default false)
 DATAFUSION_*        Set the given datafusion configuration
@@ -237,7 +235,6 @@ main() {
             echo "BENCHMARK: ${BENCHMARK}"
             echo "DATA_DIR: ${DATA_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
-            echo "PREFER_HASH_JOIN: ${PREFER_HASH_JOIN}"
             echo "***************************"
             case "$BENCHMARK" in
                 all)
@@ -480,7 +477,6 @@ main() {
             echo "DATA_DIR: ${DATA_DIR}"
             echo "RESULTS_DIR: ${RESULTS_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
-            echo "PREFER_HASH_JOIN: ${PREFER_HASH_JOIN}"
             echo "SIMULATE_LATENCY: ${SIMULATE_LATENCY}"
             echo "***************************"
 
@@ -846,7 +842,6 @@ run_tpch() {
       BENCH_RESULTS_FILE="$(sql_results_file tpch_sf${SCALE_FACTOR}_${FORMAT})" \
       BENCH_SIZE="${SCALE_FACTOR}" \
       DATA_DIR="${DATA_DIR}" \
-      PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
       TPCH_FILE_TYPE="${FORMAT}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
@@ -1058,7 +1053,6 @@ run_tpch_mem() {
       BENCH_SIZE="${SCALE_FACTOR}" \
       DATA_DIR="${DATA_DIR}" \
       TPCH_FILE_TYPE="mem" \
-      PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
@@ -1081,7 +1075,7 @@ run_tpcds() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpcds benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the compile profile benchmark helper
@@ -1298,7 +1292,7 @@ run_imdb() {
     RESULTS_FILE="${RESULTS_DIR}/imdb.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
-    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 data_h2o() {
