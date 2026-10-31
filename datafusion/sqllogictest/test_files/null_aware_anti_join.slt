@@ -410,9 +410,10 @@ NULL 0
 #############
 
 # Results under a batch size sweep are in null_aware_multi_column.slt. A tuple
-# NOT IN is a null-aware join whose leading keys are the tuple elements
-# (`value_keys`), followed by any correlation keys. Like the scalar NOT IN,
-# JoinSelection swaps it into a null-aware RightAnti that builds on the
+# NOT IN is a null-aware join whose leading keys are the tuple elements that
+# can be NULL (`value_keys`), followed by the elements that cannot and by any
+# correlation keys, which only narrow the scope of a row. Like the scalar NOT
+# IN, JoinSelection swaps it into a null-aware RightAnti that builds on the
 # subquery side when that side is not larger, keeping the key order.
 
 statement ok
@@ -603,6 +604,88 @@ physical_plan
 03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(a@0, x@1), (b@1, y@0)], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A correlated filter that rejects NULL makes `b = y` a scope key although
+# both columns are nullable (the `mc_scope` results in
+# null_aware_multi_column.slt).
+query TT
+EXPLAIN SELECT * FROM multi_col_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner i WHERE i.y >= o.b);
+----
+logical_plan
+01)LeftAnti Join: o.a = __correlated_sq_1.x, o.b = __correlated_sq_1.y Filter: __correlated_sq_1.y >= o.b null_aware
+02)--SubqueryAlias: o
+03)----TableScan: multi_col_outer projection=[k, a, b]
+04)--SubqueryAlias: __correlated_sq_1
+05)----SubqueryAlias: i
+06)------TableScan: multi_col_inner projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@0, a@1), (y@1, b@2)], filter=y@1 >= b@0, null_aware
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A dictionary can hold a NULL without a null bit, so its NOT NULL field does
+# not rule out a NULL element. A cast to a common type hides the dictionary
+# from the key's type, so the type of each column the key reads counts too:
+# `b` stays a value key whichever side is cast.
+statement ok
+CREATE TABLE multi_col_outer_dict AS
+SELECT k, a, arrow_cast(b, 'Dictionary(Int32, Int32)') AS b FROM multi_col_outer_nn;
+
+statement ok
+CREATE TABLE multi_col_inner_i64 AS
+SELECT k, x, arrow_cast(y, 'Int64') AS y FROM multi_col_inner_nn;
+
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_dict
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner_i64);
+----
+logical_plan
+01)LeftAnti Join: multi_col_outer_dict.a = __correlated_sq_1.x, CAST(multi_col_outer_dict.b AS Int64) = __correlated_sq_1.y null_aware(value_keys=2)
+02)--TableScan: multi_col_outer_dict projection=[k, a, b]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: multi_col_inner_i64 projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@0, a@1), (y@1, CAST(multi_col_outer_dict.b AS Int64)@3)], projection=[k@0, a@1, b@2], null_aware(value_keys=2)
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--ProjectionExec: expr=[k@0 as k, a@1 as a, b@2 as b, CAST(b@2 AS Int64) as CAST(multi_col_outer_dict.b AS Int64)]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+CREATE TABLE multi_col_outer_i64 AS
+SELECT k, a, arrow_cast(b, 'Int64') AS b FROM multi_col_outer_nn;
+
+statement ok
+CREATE TABLE multi_col_inner_dict AS
+SELECT k, x, arrow_cast(y, 'Dictionary(Int32, Int32)') AS y FROM multi_col_inner_nn;
+
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_i64
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner_dict);
+----
+logical_plan
+01)LeftAnti Join: multi_col_outer_i64.a = __correlated_sq_1.x, multi_col_outer_i64.b = __correlated_sq_1.multi_col_inner_dict.y null_aware(value_keys=2)
+02)--TableScan: multi_col_outer_i64 projection=[k, a, b]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: multi_col_inner_dict.x, CAST(multi_col_inner_dict.y AS Int64)
+05)------TableScan: multi_col_inner_dict projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@0, a@1), (multi_col_inner_dict.y@1, b@2)], null_aware(value_keys=2)
+02)--ProjectionExec: expr=[x@0 as x, CAST(y@1 AS Int64) as multi_col_inner_dict.y]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE multi_col_outer_dict;
+
+statement ok
+DROP TABLE multi_col_inner_i64;
+
+statement ok
+DROP TABLE multi_col_outer_i64;
+
+statement ok
+DROP TABLE multi_col_inner_dict;
 
 statement ok
 DROP TABLE multi_col_outer_nn;

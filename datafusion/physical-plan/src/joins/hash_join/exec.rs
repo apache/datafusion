@@ -10634,7 +10634,9 @@ mod tests {
 
     /// The hash table over the build rows' correlation scope keys is only
     /// looked up for probe rows with a NULL value key, so a probe side
-    /// without one never builds it, and the result is the same either way.
+    /// without one never builds it. A memory pool that holds the build side
+    /// but not that table makes the join pair the NULL-valued probe rows with
+    /// every build row instead. The result is the same in all three runs.
     #[tokio::test]
     async fn null_aware_scope_map_built_only_for_null_probe_values() -> Result<()> {
         // `(0, 0)` matches the build row `(0, 0)`; `(1, 1)` matches nothing.
@@ -10650,21 +10652,15 @@ mod tests {
             with_null >= without_null + 10_000 * size_of::<u32>(),
             "{without_null} -> {with_null}"
         );
-        Ok(())
-    }
-
-    /// A memory pool that holds the build side but not the scope map: the
-    /// join pairs the NULL-valued probe rows with every build row instead,
-    /// and gives the same result.
-    #[tokio::test]
-    async fn null_aware_scope_map_falls_back_when_memory_is_short() -> Result<()> {
-        let (_, without_null) =
-            run_scope_key_anti_join(None, vec![Some(0), Some(1)], None).await?;
+        // Not enough memory for the scope map.
         let limit = without_null + 10_000 * size_of::<u32>() / 2;
         let (rows, build_mem_used) =
             run_scope_key_anti_join(None, vec![Some(0), None], Some(limit)).await?;
-        assert_eq!(rows, 9_899);
-        assert_eq!(build_mem_used, without_null);
+        assert_eq!(rows, 9_899, "fallback without the scope map");
+        assert_eq!(
+            build_mem_used, without_null,
+            "fallback without the scope map"
+        );
         Ok(())
     }
 

@@ -787,32 +787,3 @@ async fn multi_column_not_in_sees_null_type_values() -> Result<()> {
     assert_batches_eq!(["++", "++"], &filtered);
     Ok(())
 }
-
-/// A cast to a common type makes the hidden NULL of a dictionary a real NULL
-/// under a type that hides none, and the cast keeps the non-nullable field.
-/// The element still stays a value key, on either side of the `IN`.
-#[tokio::test]
-async fn multi_column_not_in_keeps_cast_dictionary_as_value_key() -> Result<()> {
-    let with_null = || -> Result<ArrayRef> {
-        dictionary(vec![0, 1], Arc::new(Int32Array::from(vec![None, Some(3)])))
-    };
-    for (b, y) in [
-        // `CAST(o.b AS Int64)` on the outer side.
-        (
-            with_null()?,
-            Arc::new(Int64Array::from(vec![2])) as ArrayRef,
-        ),
-        // `CAST(i.y AS Int64)` in the subquery.
-        (
-            Arc::new(Int64Array::from(vec![2, 3])) as ArrayRef,
-            dictionary(vec![1], Arc::new(Int32Array::from(vec![None, Some(2)])))?,
-        ),
-    ] {
-        let ctx = hidden_null_context(b, y)?;
-        let plan = ctx.sql(HIDDEN_NULL_FILTERED).await?.into_optimized_plan()?;
-        let plan = plan.display_indent().to_string();
-        assert!(plan.contains("CAST("), "{plan}");
-        assert!(plan.contains("null_aware(value_keys=2)"), "{plan}");
-    }
-    Ok(())
-}

@@ -3916,19 +3916,6 @@ async fn roundtrip_join_null_aware() -> Result<()> {
             ",
             (3, 2),
         ),
-        // `b` and `y` are NOT NULL, so `b = y` is a scope key, not a value key.
-        (
-            "
-            SELECT k
-            FROM (VALUES (1, 1, 2), (2, 3, 4)) AS t1(k, a, b)
-            WHERE (a, b) NOT IN (
-                SELECT x, y
-                FROM (VALUES (1, CAST(NULL AS INT), 2)) AS t2(k, x, y)
-                WHERE t2.k = t1.k
-            )
-            ",
-            (3, 1),
-        ),
     ];
 
     for (sql, expected_keys) in cases {

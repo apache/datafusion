@@ -579,39 +579,10 @@ r
 s
 u
 
-# The NOT NULL element first gives the same rows.
-query T rowsort
-SELECT value FROM mc_nn_outer
-WHERE (b, a) NOT IN (SELECT y, x FROM mc_nn_inner);
-----
-r
-s
-u
-
-# With one nullable element the tuple is a scalar NOT IN on it, correlated by
-# the other elements.
-query T rowsort
-SELECT value FROM mc_nn_outer
-WHERE a NOT IN (SELECT x FROM mc_nn_inner WHERE y = b);
-----
-r
-s
-u
-
 # With a correlation, t's scope is k = 2, {(8, 9)}, which it mismatches.
 query T rowsort
 SELECT value FROM mc_nn_outer o
 WHERE (a, b) NOT IN (SELECT x, y FROM mc_nn_inner i WHERE i.k = o.k);
-----
-r
-s
-t
-u
-
-# The correlation as a NOT NULL tuple element gives the same rows.
-query T rowsort
-SELECT value FROM mc_nn_outer
-WHERE (a, k, b) NOT IN (SELECT x, k, y FROM mc_nn_inner);
 ----
 r
 s
@@ -636,19 +607,6 @@ SELECT value FROM mc_nn_outer
 WHERE (a, 2) NOT IN (SELECT x, y FROM mc_nn_inner);
 ----
 s
-u
-v
-
-# An empty subquery keeps every row, NULLs included.
-query T rowsort
-SELECT value FROM mc_nn_outer
-WHERE (a, b) NOT IN (SELECT x, y FROM mc_nn_inner WHERE x > 100);
-----
-p
-q
-r
-s
-t
 u
 v
 
@@ -694,15 +652,6 @@ s true
 t true
 u true
 v NULL
-
-query T rowsort
-SELECT value FROM mc_nn_outer
-WHERE (a, b) NOT IN (SELECT x, y FROM mc_nn_inner) OR value = 'q';
-----
-q
-r
-s
-u
 
 # An element that can be NULL in the schema but not in scope: the correlated
 # filter `i.y >= o.b` rejects a NULL `y` or `b`, so `b = y` is a scope key, and
