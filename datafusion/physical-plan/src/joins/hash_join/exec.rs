@@ -58,7 +58,7 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanBufferBuilder};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -680,8 +680,9 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 /// hash table is updated by iterating the build-side rows in reverse order, which keeps rows
 /// with smaller indices "on the top" of hash table. The build-side batches are first
 /// concatenated in their input order. The hash table is then filled from slices of the
-/// concatenated batch, at most as long as the largest build-side batch, starting from the
-/// last slice. Each slice is inserted with the offset of its first row in the concatenated batch.
+/// concatenated batch, at most as long as the largest build-side batch (or the longest
+/// key dictionary, when that is longer), starting from the last slice. Each slice is
+/// inserted with the offset of its first row in the concatenated batch.
 ///
 /// Example of build phase for 3 record batches, filled from slices of 3 rows:
 ///
@@ -3222,20 +3223,29 @@ fn build_in_memory(
         // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
         let mut hashmap = new_join_hashmap(num_rows, &mut reservation, metrics)?;
 
+        // Every slice shares the whole dictionary of a dictionary key, which
+        // `create_hashes` hashes on each call: a slice at least as long as the
+        // dictionary keeps that cost linear in the build rows.
+        let chunk_rows = left_values
+            .iter()
+            .filter_map(|values| values.as_any_dictionary_opt())
+            .map(|dict| dict.values().len())
+            .fold(max_batch_rows, usize::max);
+
         let scratch_reservation = reservation.new_empty();
         if prepared {
             scratch_reservation.try_grow(prepared::prepared_scratch_bytes(
-                max_batch_rows,
+                chunk_rows,
                 on_left.len(),
                 null_equality,
             )?)?;
         }
         // The maximum is known: avoid geometric growth and its excess capacity.
-        let mut hashes_buffer = Vec::with_capacity(max_batch_rows);
-        // `max_batch_rows` is 0 when the build side is empty
-        let chunk_rows = max_batch_rows.max(1);
+        let mut hashes_buffer = Vec::with_capacity(chunk_rows.min(num_rows));
+        // `chunk_rows` is 0 when the build side is empty
+        let chunk_rows = chunk_rows.max(1);
 
-        // Update the hashmap from slices of at most `max_batch_rows` rows,
+        // Update the hashmap from slices of at most `chunk_rows` rows,
         // starting from the last one, so rows with smaller indices end up on
         // top of the chains. Each slice is indexed at its offset in `batch`.
         for offset in (0..num_rows).step_by(chunk_rows).rev() {
@@ -5140,6 +5150,86 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    /// Build batches sharing one key dictionary that is longer than each batch
+    /// fill the hash map from slices longer than the batches, which must join
+    /// as if the build side were a single batch.
+    #[tokio::test]
+    async fn join_keeps_build_order_with_dictionary_keys() -> Result<()> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, false),
+            Field::new("b1", dict_type.clone(), true),
+        ]));
+        // Concatenation keeps a dictionary shared by every batch as is, so the
+        // 12 build rows are filled from slices of 5 rows: [0, 5), [5, 10) and
+        // [10, 12), each crossing the 2-row batch boundaries.
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["x", "y", "z", "w", "v"]));
+        let batch = |a: Vec<i32>, keys: Vec<Option<i32>>| -> Result<RecordBatch> {
+            let b1 = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(keys),
+                Arc::clone(&values),
+            )?;
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(a)), Arc::new(b1)],
+            )?)
+        };
+        let batches = vec![
+            batch(vec![1, 2], vec![Some(0), None])?,
+            batch(vec![3, 4], vec![Some(1), Some(2)])?,
+            batch(vec![5, 6], vec![Some(0), Some(1)])?,
+            batch(vec![7, 8], vec![Some(3), Some(0)])?,
+            batch(vec![9, 10], vec![None, Some(1)])?,
+            batch(vec![11, 12], vec![Some(0), Some(1)])?,
+        ];
+        let right_schema = Arc::new(Schema::new(vec![
+            Field::new("a2", DataType::Int32, false),
+            Field::new("b2", dict_type, true),
+        ]));
+        let right = RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![10, 30])),
+                Arc::new(DictionaryArray::<Int32Type>::try_new(
+                    Int32Array::from(vec![0, 1]),
+                    Arc::new(StringArray::from(vec!["x", "y"])),
+                )?),
+            ],
+        )?;
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &schema)?) as _,
+            Arc::new(Column::new_with_schema("b2", &right_schema)?) as _,
+        )];
+        let left = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let right = TestMemoryExec::try_new_exec(&[vec![right]], right_schema, None)?;
+        let (_, output, _) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            prepare_task_ctx(8192, false),
+        )
+        .await?;
+
+        assert_snapshot!(batches_to_string(&output), @r"
+        +----+----+----+----+
+        | a1 | b1 | a2 | b2 |
+        +----+----+----+----+
+        | 1  | x  | 10 | x  |
+        | 5  | x  | 10 | x  |
+        | 8  | x  | 10 | x  |
+        | 11 | x  | 10 | x  |
+        | 3  | y  | 30 | y  |
+        | 6  | y  | 30 | y  |
+        | 10 | y  | 30 | y  |
+        | 12 | y  | 30 | y  |
+        +----+----+----+----+
+        ");
         Ok(())
     }
 
