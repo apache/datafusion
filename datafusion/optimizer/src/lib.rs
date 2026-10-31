@@ -44,12 +44,14 @@ pub mod eliminate_nested_union {
     pub type EliminateNestedUnion = OptimizeUnions;
 }
 pub mod eliminate_outer_join;
+pub mod evaluation_sites;
 pub mod extract_equijoin_predicate;
 pub mod extract_leaf_expressions;
 pub mod filter_null_join_keys;
 pub mod optimize_projections;
 pub mod optimize_unions;
 pub mod optimizer;
+mod projection_inliner;
 pub mod propagate_empty_relation;
 pub mod push_down_filter;
 pub mod push_down_limit;

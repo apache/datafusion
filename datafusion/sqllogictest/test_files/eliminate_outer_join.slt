@@ -698,8 +698,8 @@ where coalesce(t2.y, 0) > 5;
 ----
 logical_plan
 01)Projection: t1.a
-02)--Filter: CASE WHEN __common_expr_3 IS NOT NULL THEN __common_expr_3 ELSE Int64(0) END > Int64(5)
-03)----Projection: CAST(t2.y AS Int64) AS __common_expr_3, t1.a
+02)--Filter: CASE WHEN __common_expr_1 IS NOT NULL THEN __common_expr_1 ELSE Int64(0) END > Int64(5)
+03)----Projection: CAST(t2.y AS Int64) AS __common_expr_1, t1.a
 04)------Left Join: t1.a = t2.x
 05)--------TableScan: t1 projection=[a]
 06)--------TableScan: t2 projection=[x, y]
