@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Physical expression schema rewriting utilities: [`PhysicalExprAdapter`],
 //! [`PhysicalExprAdapterFactory`], default implementations,
@@ -25,7 +12,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::{DataType, FieldRef, Fields, SchemaRef};
+use arrow::datatypes::{DataType, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_err,
     metadata::FieldMetadata,
@@ -38,7 +25,7 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::{
     ScalarFunctionExpr,
-    expressions::{self, CastExpr, Column},
+    expressions::{CastExpr, Column},
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
@@ -69,13 +56,50 @@ where
     K: Borrow<str> + Eq + Hash,
     V: Borrow<ScalarValue>,
 {
+    replace_columns_with_literals_impl(expr, replacements, None)
+}
+
+/// Replace column references in the given physical expression with literal values,
+/// like [`replace_columns_with_literals`], keeping the field metadata of the replaced
+/// columns.
+///
+/// The metadata of each literal, such as an Arrow extension type, is taken from the
+/// field with the same name in `schema`. Expressions that read the field metadata of
+/// their arguments, such as `arrow_metadata`, then see the same metadata as for the
+/// column.
+pub fn replace_columns_with_literals_keeping_metadata<K, V>(
+    expr: Arc<dyn PhysicalExpr>,
+    replacements: &HashMap<K, V>,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>>
+where
+    K: Borrow<str> + Eq + Hash,
+    V: Borrow<ScalarValue>,
+{
+    replace_columns_with_literals_impl(expr, replacements, Some(schema))
+}
+
+fn replace_columns_with_literals_impl<K, V>(
+    expr: Arc<dyn PhysicalExpr>,
+    replacements: &HashMap<K, V>,
+    schema: Option<&Schema>,
+) -> Result<Arc<dyn PhysicalExpr>>
+where
+    K: Borrow<str> + Eq + Hash,
+    V: Borrow<ScalarValue>,
+{
     expr.transform_down(|expr| {
         if let Some(column) = expr.downcast_ref::<Column>()
             && let Some(replacement_value) = replacements.get(column.name())
         {
-            return Ok(Transformed::yes(expressions::lit(
+            let metadata = schema
+                .and_then(|schema| schema.field_with_name(column.name()).ok())
+                .map(FieldMetadata::from)
+                .filter(|metadata| !metadata.is_empty());
+            return Ok(Transformed::yes(Arc::new(Literal::new_with_metadata(
                 replacement_value.borrow().clone(),
-            )));
+                metadata,
+            ))));
         }
         Ok(Transformed::no(expr))
     })
@@ -937,7 +961,7 @@ mod tests {
     use arrow::datatypes::{Field, Fields, Schema};
     use datafusion_common::assert_contains;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{Column, Literal, col};
+    use datafusion_physical_expr::expressions::{self, Column, Literal, col};
 
     fn assert_cast_expr(expr: &Arc<dyn PhysicalExpr>) -> &CastExpr {
         expr.downcast_ref::<CastExpr>().expect("Expected CastExpr")
@@ -1271,6 +1295,37 @@ mod tests {
             .downcast_ref::<Literal>()
             .expect("Expected literal expression");
         assert_eq!(*literal.value(), partition_value);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_columns_with_literals_keeping_metadata() -> Result<()> {
+        let value = ScalarValue::Int64(Some(10));
+        let replacements = HashMap::from([("a", &value), ("b", &value)]);
+        let metadata =
+            HashMap::from([("ARROW:extension:name".to_string(), "example".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true).with_metadata(metadata.clone()),
+            Field::new("b", DataType::Int64, true),
+        ]);
+
+        let literal_metadata = |name: &str, index: usize| -> Result<_> {
+            let column_expr = Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>;
+            let result = replace_columns_with_literals_keeping_metadata(
+                column_expr,
+                &replacements,
+                &schema,
+            )?;
+            let literal = result
+                .downcast_ref::<Literal>()
+                .expect("Expected literal expression");
+            assert_eq!(*literal.value(), value);
+            Ok(literal.return_field(&schema)?.metadata().clone())
+        };
+
+        assert_eq!(literal_metadata("a", 0)?, metadata);
+        assert!(literal_metadata("b", 1)?.is_empty());
 
         Ok(())
     }

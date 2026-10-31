@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_expr::expr::{
@@ -3116,6 +3103,44 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    // MySQL `DATETIME` without precision is `DATETIME(0)` and rounds the
+    // literal to whole seconds, which breaks equality and keyset seeks on
+    // sub-second timestamps. The MySQL dialect must carry the unit's precision.
+    #[test]
+    fn mysql_timestamp_cast_keeps_fractional_precision() -> Result<()> {
+        let unparser = Unparser::new(&MySqlDialect {});
+
+        for (scalar, expected) in [
+            (
+                ScalarValue::TimestampSecond(Some(1789980940), None),
+                "CAST('2026-09-21 08:55:40' AS DATETIME)",
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(1789980940006), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(3))",
+            ),
+            (
+                ScalarValue::TimestampMicrosecond(Some(1789980940006000), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(6))",
+            ),
+            (
+                ScalarValue::TimestampNanosecond(Some(1789980940006000000), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(6))",
+            ),
+        ] {
+            let ast = unparser.expr_to_sql(&Expr::Literal(scalar, None))?;
+            assert_eq!(format!("{ast}"), expected);
+        }
+
+        let expr = Expr::Cast(Cast::new(
+            Box::new(col("a")),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        ));
+        let ast = unparser.expr_to_sql(&expr)?;
+        assert_eq!(format!("{ast}"), "CAST(`a` AS DATETIME(6))");
         Ok(())
     }
 

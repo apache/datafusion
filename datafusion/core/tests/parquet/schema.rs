@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests for parquet schema handling
 use std::{collections::HashMap, fs, path::Path};
@@ -187,6 +174,40 @@ async fn schema_merge_can_preserve_metadata() {
     +----+------+
     ");
     assert_metadata(&actual, &expected_metadata);
+}
+
+/// Expressions pushed into the parquet scan see the field metadata of the table schema
+#[tokio::test]
+async fn pushed_down_projection_sees_field_metadata() {
+    let tmp_dir = TempDir::new().unwrap();
+    let table_dir = tmp_dir.path().join("parquet_test");
+
+    let f1 = Field::new("id", DataType::Int32, true)
+        .with_metadata(make_meta("ARROW:extension:name", "example.ext"));
+    let f2 = Field::new("name", DataType::Utf8, true);
+    write_files(table_dir.as_path(), vec![Schema::new(vec![f1, f2])]);
+    let table_path = table_dir.to_str().unwrap().to_string();
+
+    let ctx = SessionContext::new();
+    let options = ParquetReadOptions::default().skip_metadata(false);
+    ctx.register_parquet("t", &table_path, options)
+        .await
+        .unwrap();
+
+    let actual = ctx
+        .sql("SELECT arrow_metadata(id, 'ARROW:extension:name') AS m FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_snapshot!(batches_to_sort_string(&actual), @r"
+    +-------------+
+    | m           |
+    +-------------+
+    | example.ext |
+    +-------------+
+    ");
 }
 
 /// A column that only some files carry must be inferred as nullable, because

@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # This file was originally created by a porting script from:
 #   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
@@ -42,26 +29,37 @@ SELECT next_day('2015-01-14'::DATE, ' MO '::string);
 ----
 NULL
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Function 'next_day' expects 2 arguments but received 1
 SELECT next_day('2015-07-27'::DATE);
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Function 'next_day' expects 2 arguments but received 1
 SELECT next_day('Sun'::string);
 
 query error 'next_day' does not support zero arguments
 SELECT next_day();
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Function 'next_day' requires Date, but received Int32
 SELECT next_day(1::int, 'Sun'::string);
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Function 'next_day' expects 2 arguments but received 3
 SELECT next_day('2015-07-27'::DATE, 'Sat'::string, 'Sun'::string);
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Cannot cast string 'invalid_date' to value of Date32 type
 SELECT next_day('invalid_date'::string, 'Mon'::string);
 
 query D
 SELECT next_day('2000-01-01'::DATE, 2.0::float);
+----
+NULL
+
+# Preserve implicit weekday-to-string conversions.
+query D
+SELECT next_day(DATE '2015-07-23', arrow_cast('Mon', 'Binary'));
+----
+2015-07-27
+
+query D
+SELECT next_day(DATE '2015-07-23', true);
 ----
 NULL
 
@@ -100,3 +98,69 @@ query I
 SELECT arrow_cast(next_day(arrow_cast(95026230, 'Date32'), 'Tue'::string), 'Int32');
 ----
 95026237
+
+# https://github.com/apache/datafusion/issues/23889
+# Spark casts the start date to DATE, so STRING and TIMESTAMP are accepted
+query D
+SELECT next_day('2015-07-23'::string, 'Mon'::string);
+----
+2015-07-27
+
+query D
+SELECT next_day('2015-07-23 12:12:12'::string, 'Mon'::string);
+----
+2015-07-27
+
+query D
+SELECT next_day('2015-07-23 12:12:12'::timestamp, 'Mon'::string);
+----
+2015-07-27
+
+# Timestamp-to-date conversion must round down before the Unix epoch.
+query D
+SELECT next_day(TIMESTAMP '1969-12-31 23:59:59', 'Thu');
+----
+1970-01-01
+
+query D
+SELECT next_day(a, 'Mon'::string)
+FROM VALUES
+    ('2015-07-23'::string),
+    (NULL::string) as t(a);
+----
+2015-07-27
+NULL
+
+# Timestamp column with a day-of-week column
+query D
+SELECT next_day(a, b)
+FROM VALUES
+    ('2015-07-23 12:12:12'::timestamp, 'Mon'::string),
+    ('2015-07-23 23:59:59'::timestamp, 'Fri'::string),
+    (NULL::timestamp, 'Mon'::string) as t(a, b);
+----
+2015-07-27
+2015-07-24
+NULL
+
+# LargeUtf8 / Utf8View start dates
+query D
+SELECT next_day(arrow_cast('2015-07-23', 'LargeUtf8'), 'Mon');
+----
+2015-07-27
+
+query D
+SELECT next_day(arrow_cast('2015-07-23', 'Utf8View'), 'Mon');
+----
+2015-07-27
+
+# String start date and LargeUtf8 / Utf8View day-of-week
+query D
+SELECT next_day('2015-07-23', arrow_cast('Mon', 'LargeUtf8'));
+----
+2015-07-27
+
+query D
+SELECT next_day('2015-07-23', arrow_cast('Mon', 'Utf8View'));
+----
+2015-07-27

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Stream and channel implementations for window function expressions.
 //! The executor given here uses bounded memory (does not maintain all
@@ -69,8 +56,14 @@ use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
 
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, LimitBehavior, WindowLookahead};
+use crate::windows::WindowUDFExpr;
 use datafusion_common::hash_utils::RandomState;
+use datafusion_expr::{LimitEffect, WindowFrameBound, WindowFrameUnits};
+use datafusion_physical_expr::window::{
+    PlainAggregateWindowExpr, SlidingAggregateWindowExpr, StandardWindowExpr,
+    StandardWindowFunctionExpr,
+};
 use futures::stream::Stream;
 use futures::{StreamExt, ready};
 use hashbrown::hash_table::HashTable;
@@ -546,6 +539,10 @@ impl ExecutionPlan for BoundedWindowAggExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Window(window_lookahead(&self.window_expr))
     }
 
     #[cfg(feature = "proto")]
@@ -1608,6 +1605,56 @@ pub(crate) fn get_last_row_batch(batch: &RecordBatch) -> Result<RecordBatch> {
         return exec_err!("Latest batch should have at least 1 row");
     }
     Ok(batch.slice(batch.num_rows() - 1, 1))
+}
+
+/// The [`WindowLookahead`] of a window computing `exprs`, or `None` when an
+/// expression's frame or function does not bound it before execution.
+fn window_lookahead(exprs: &[Arc<dyn WindowExpr>]) -> Option<WindowLookahead> {
+    let mut lookahead = WindowLookahead::default();
+    for expr in exprs {
+        match limit_effect(expr) {
+            LimitEffect::None => {}
+            LimitEffect::Unknown => return None,
+            LimitEffect::Relative(rows) => {
+                lookahead.relative = lookahead.relative.max(rows)
+            }
+            LimitEffect::Absolute(rows) => {
+                lookahead.min_rows = Some(lookahead.min_rows.unwrap_or(0).max(rows))
+            }
+        }
+        // Only a ROWS frame with a literal end bounds the lookahead.
+        let frame = expr.get_window_frame();
+        if frame.units != WindowFrameUnits::Rows {
+            return None;
+        }
+        let end = match &frame.end_bound {
+            WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow => 0,
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(rows))) => {
+                *rows as usize
+            }
+            _ => return None,
+        };
+        lookahead.frame_end = lookahead.frame_end.max(end);
+    }
+    Some(lookahead)
+}
+
+/// The [`LimitEffect`] of one window expression. Plain and sliding aggregates
+/// never read ahead; window functions declare it.
+fn limit_effect(expr: &Arc<dyn WindowExpr>) -> LimitEffect {
+    if expr.as_any().is::<PlainAggregateWindowExpr>()
+        || expr.as_any().is::<SlidingAggregateWindowExpr>()
+    {
+        return LimitEffect::None;
+    }
+    expr.as_any()
+        .downcast_ref::<StandardWindowExpr>()
+        .and_then(|e| {
+            e.get_standard_func_expr()
+                .as_any()
+                .downcast_ref::<WindowUDFExpr>()
+        })
+        .map_or(LimitEffect::Unknown, |udf| udf.limit_effect())
 }
 
 #[cfg(test)]

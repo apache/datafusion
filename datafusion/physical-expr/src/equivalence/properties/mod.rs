@@ -1,23 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod dependency; // Submodule containing DependencyMap and Dependencies
 mod joins; // Submodule containing join_equivalence_properties
 mod union; // Submodule containing calculate_union
+mod walk; // Submodule containing SortKeyWalk
 
 pub use joins::*;
 pub use union::*;
@@ -30,6 +18,7 @@ use self::dependency::{
     Dependencies, DependencyMap, construct_prefix_orderings,
     generate_dependency_orderings, referred_dependencies,
 };
+use self::walk::SortKeyWalk;
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
@@ -41,15 +30,12 @@ use crate::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_physical_expr_common::sort_expr::options_compatible;
-use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
 use indexmap::IndexSet;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 
 /// `EquivalenceProperties` stores information about the output of a plan node
 /// that can be used to optimize the plan. Currently, it keeps track of:
@@ -143,7 +129,10 @@ pub struct EquivalenceProperties {
     /// constants/duplicates and in standard form) and a map associating leading
     /// terms with full sort expressions.
     oeq_cache: OrderingEquivalenceCache,
-    /// Table constraints that factor in equivalence calculations.
+    /// Table constraints that factor in equivalence calculations. Unlike
+    /// constants, constraints have no per-partition form: each one must hold
+    /// across all output partitions, since operators that merge partitions
+    /// keep them.
     constraints: Constraints,
     /// Schema associated with this object.
     schema: SchemaRef,
@@ -400,7 +389,7 @@ impl EquivalenceProperties {
         // Discover any new orderings based on the new equivalence classes:
         let leading_exprs: Vec<_> = self.oeq_cache.leading_map.keys().cloned().collect();
         for expr in leading_exprs {
-            self.discover_new_orderings(expr)?;
+            self.discover_new_orderings(&expr)?;
         }
         Ok(())
     }
@@ -468,77 +457,94 @@ impl EquivalenceProperties {
         // Discover any new orderings based on the constants:
         let leading_exprs: Vec<_> = self.oeq_cache.leading_map.keys().cloned().collect();
         for expr in leading_exprs {
-            self.discover_new_orderings(expr)?;
+            self.discover_new_orderings(&expr)?;
         }
         Ok(())
     }
 
     /// Discover new valid orderings in light of a new equality. Accepts a single
-    /// argument (`expr`) which is used to determine the orderings to update.
+    /// argument (`normal_expr`) which is used to determine the orderings to update.
     /// When constants or equivalence classes change, there may be new orderings
     /// that can be discovered with the new equivalence properties.
     /// For a discussion, see: <https://github.com/apache/datafusion/issues/9812>
     fn discover_new_orderings(
         &mut self,
-        normal_expr: Arc<dyn PhysicalExpr>,
+        normal_expr: &Arc<dyn PhysicalExpr>,
     ) -> Result<()> {
-        let Some(ordering_idxs) = self.oeq_cache.leading_map.get(&normal_expr) else {
+        let Some(ordering_idxs) = self.oeq_cache.leading_map.get(normal_expr) else {
             return Ok(());
         };
-        let eq_class = self
-            .eq_group
-            .get_equivalence_class(&normal_expr)
-            .map_or_else(|| vec![normal_expr], |class| class.clone().into());
-
         let mut new_orderings = vec![];
         for idx in ordering_idxs {
             let ordering = &self.oeq_cache.normal_cls[*idx];
-            let leading_ordering_options = ordering[0].options;
-
-            'exprs: for equivalent_expr in &eq_class {
-                let children = equivalent_expr.children();
-                if children.is_empty() {
-                    continue;
-                }
-                // Check if all children match the next expressions in the ordering:
-                let mut child_properties = vec![];
-                // Build properties for each child based on the next expression:
-                for (i, child) in children.into_iter().enumerate() {
-                    let Some(next) = ordering.get(i + 1) else {
-                        break 'exprs;
-                    };
-                    if !next.expr.eq(child) {
-                        break 'exprs;
-                    }
-                    let data_type = child.data_type(&self.schema)?;
-                    child_properties.push(ExprProperties {
-                        sort_properties: SortProperties::Ordered(next.options),
-                        range: Interval::make_unbounded(&data_type)?,
-                        preserves_lex_ordering: true,
-                        strictly_order_preserving: true,
-                    });
-                }
-                // Check if the expression is monotonic in all arguments:
-                let expr_properties =
-                    equivalent_expr.get_properties(&child_properties)?;
-                if expr_properties.preserves_lex_ordering
-                    && expr_properties.sort_properties
-                        == SortProperties::Ordered(leading_ordering_options)
-                {
-                    // Assume that `[c ASC, a ASC, b ASC]` is among existing
-                    // orderings. If equality `c = f(a, b)` is given, ordering
-                    // `[a ASC, b ASC]` implies the ordering `[c ASC]`. Thus,
-                    // ordering `[a ASC, b ASC]` is also a valid ordering.
-                    new_orderings.push(ordering[1..].to_vec());
-                    break;
-                }
-            }
+            new_orderings
+                .extend(self.implied_ordering(&ordering[0], ordering[1..].iter())?);
         }
-
         if !new_orderings.is_empty() {
             self.add_orderings(new_orderings);
         }
         Ok(())
+    }
+
+    /// Returns the ordering that the normal ordering `[leading, rest..]`
+    /// implies through an equality on its leading expression, if any.
+    ///
+    /// If data is sorted by `[c, a, b]` and `c = f(a, b)` for a function `f`
+    /// that preserves the lexicographical order of its arguments, the data is
+    /// also sorted by `[a, b]`: rows with different `(a, b)` are in the order
+    /// of `f(a, b)`, which is the order of `c`, and rows with equal `c` are
+    /// sorted by `[a, b]` anyway. Whatever follows `b` stays sorted as well, so
+    /// the implied ordering is all of `rest`.
+    fn implied_ordering<'b>(
+        &self,
+        leading: &PhysicalSortExpr,
+        rest: impl Iterator<Item = &'b PhysicalSortExpr> + Clone,
+    ) -> Result<Option<Vec<PhysicalSortExpr>>> {
+        // The expressions equal to `leading`; any of them can play `f(a, b)`:
+        let members = match self.eq_group.get_equivalence_class(&leading.expr) {
+            Some(class) => Either::Left(class.iter()),
+            None => Either::Right(std::iter::once(&leading.expr)),
+        };
+        for member in members {
+            let args = member.children();
+            // An expression without arguments, such as a column, implies
+            // nothing:
+            if args.is_empty() {
+                continue;
+            }
+            // The arguments must be the next expressions of the ordering, in
+            // order, and are then sorted the way the ordering says:
+            let mut sorted = rest.clone();
+            let mut arg_properties = vec![];
+            for arg in args {
+                match sorted.next() {
+                    Some(sort_expr) if sort_expr.expr.eq(arg) => {
+                        let data_type = arg.data_type(&self.schema)?;
+                        arg_properties.push(ExprProperties {
+                            sort_properties: SortProperties::Ordered(sort_expr.options),
+                            range: Interval::make_unbounded(&data_type)?,
+                            preserves_lex_ordering: true,
+                            strictly_order_preserving: true,
+                        });
+                    }
+                    // This ends the whole search: members after this one are
+                    // not tried, even if their arguments would match.
+                    _ => return Ok(None),
+                }
+            }
+            // `member` must preserve the lexicographical order of its
+            // arguments, in the direction of `leading`. If that cannot be
+            // derived, this member implies nothing:
+            let Ok(properties) = member.get_properties(&arg_properties) else {
+                continue;
+            };
+            if properties.preserves_lex_ordering
+                && properties.sort_properties == SortProperties::Ordered(leading.options)
+            {
+                return Ok(Some(rest.cloned().collect()));
+            }
+        }
+        Ok(None)
     }
 
     /// Updates the ordering equivalence class within assuming that the table
@@ -615,8 +621,9 @@ impl EquivalenceProperties {
     /// **Existing orderings:** `[[a, b, c], [a, d]]`, **constants:** `[]`
     /// 1. The function first checks the leading requirement `a`, which is
     ///    satisfied by `[a, b, c].first()`.
-    /// 2. `a` is added as a constant for the next iteration.
-    /// 3. Normal orderings become `[[b, c], [d]]`.
+    /// 2. `a` is pinned: the next key only has to be sorted among rows that
+    ///    tie on `a`.
+    /// 3. The orderings now start at `[b, c]` and `[d]`.
     /// 4. The function fails for `c` in the second iteration, as neither
     ///    `[b, c]` nor `[d]` satisfies `c`.
     ///
@@ -625,8 +632,9 @@ impl EquivalenceProperties {
     /// **Existing orderings:** `[[a, b, c], [a, d]]`, **constants:** `[]`
     /// 1. The function first checks the leading requirement `a`, which is
     ///    satisfied by `[a, b, c].first()`.
-    /// 2. `a` is added as a constant for the next iteration.
-    /// 3. Normal orderings become `[[b, c], [d]]`.
+    /// 2. `a` is pinned: the next key only has to be sorted among rows that
+    ///    tie on `a`.
+    /// 3. The orderings now start at `[b, c]` and `[d]`.
     /// 4. The function returns `true` as `[d]` satisfies `d`.
     pub fn ordering_satisfy_requirement(
         &self,
@@ -641,83 +649,8 @@ impl EquivalenceProperties {
         if self.satisfied_by_constraints(&normal_reqs) {
             return Ok(true);
         }
-        let schema = self.schema();
-        // Registering satisfied keys as constants mutates the state, so it
-        // needs an owned copy -- but only from the second requirement onwards.
-        // Single-element requirements (the common case) never pay for the clone.
-        let last_idx = normal_reqs.len() - 1;
-        let mut owned = None::<Self>;
-        for (idx, element) in normal_reqs.into_iter().enumerate() {
-            let eq_properties = owned.as_ref().unwrap_or(self);
-            // Check whether given requirement is satisfied:
-            let ExprProperties {
-                sort_properties, ..
-            } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
-            let satisfy = match sort_properties {
-                SortProperties::Ordered(options) => element.options.is_none_or(|opts| {
-                    let nullable = element.expr.nullable(schema).unwrap_or(true);
-                    options_compatible(&options, &opts, nullable)
-                }),
-                // Singleton expressions satisfy any requirement.
-                SortProperties::Singleton => true,
-                SortProperties::Unordered => false,
-            };
-            if !satisfy {
-                return Ok(false);
-            }
-            if idx == last_idx {
-                // Nothing left to check, so no need to update the state:
-                break;
-            }
-            // Treat satisfied keys (and the sub-expressions they pin down) as
-            // constants in subsequent iterations. See
-            // [`Self::add_satisfied_key_constants`] for the rationale.
-            owned
-                .get_or_insert_with(|| self.clone())
-                .add_satisfied_key_constants(element.expr)?;
-        }
-        Ok(true)
-    }
-
-    /// Registers a satisfied sort key as a constant for subsequent iterations
-    /// of the ordering satisfaction checks. We can do this because the "next"
-    /// key only matters in a lexicographical ordering when the keys to its
-    /// left have the same values (i.e. within a single tie group). Note that
-    /// these expressions are not properly "constants"; this is just an
-    /// implementation strategy confined to the satisfaction checks.
-    ///
-    /// For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
-    /// and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
-    /// Once we deduce that `[a ASC]` is satisfied, we add column `a` as a
-    /// constant to the algorithm state. This enables us to deduce that
-    /// `(b + c) ASC` is satisfied, given `a` is constant.
-    ///
-    /// In addition to the key itself, this also registers any sub-expressions
-    /// whose values the key pins down: if an expression is strictly
-    /// order-preserving, equal outputs imply equal values of its ordered
-    /// children, so within a tie group of the key those children are constant
-    /// as well. For example, if data is sorted by `[a, b]`, the requirement
-    /// `[CAST(a AS BIGINT) ASC, b ASC]` is satisfied: `a` is constant within
-    /// each group of equal `CAST(a AS BIGINT)` values, and hence `b` is
-    /// sorted within each such group.
-    fn add_satisfied_key_constants(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
-        let mut stack = vec![expr];
-        while let Some(expr) = stack.pop() {
-            let properties = self.get_expr_properties(Arc::clone(&expr));
-            if properties.strictly_order_preserving {
-                for child in expr.children() {
-                    let child_properties = self.get_expr_properties(Arc::clone(child));
-                    if matches!(
-                        child_properties.sort_properties,
-                        SortProperties::Ordered(_)
-                    ) {
-                        stack.push(Arc::clone(child));
-                    }
-                }
-            }
-            self.add_constants(std::iter::once(ConstExpr::from(expr)))?;
-        }
-        Ok(())
+        let keys = normal_reqs.iter().map(|req| (&req.expr, req.options));
+        Ok(SortKeyWalk::new(self).sorted_prefix_len(keys)? == normal_reqs.len())
     }
 
     /// Returns the number of consecutive sort expressions (starting from the
@@ -730,45 +663,10 @@ impl EquivalenceProperties {
             // length:
             return Ok(full_length);
         }
-        let schema = self.schema();
-        // Registering satisfied keys as constants mutates the state, so it
-        // needs an owned copy -- but only from the second sort expression
-        // onwards. Single-element orderings never pay for the clone.
-        let mut owned = None::<Self>;
-        for (idx, element) in normal_ordering.into_iter().enumerate() {
-            let eq_properties = owned.as_ref().unwrap_or(self);
-            // Check whether given ordering is satisfied:
-            let ExprProperties {
-                sort_properties, ..
-            } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
-            let satisfy = match sort_properties {
-                SortProperties::Ordered(options) => options_compatible(
-                    &options,
-                    &element.options,
-                    element.expr.nullable(schema).unwrap_or(true),
-                ),
-                // Singleton expressions satisfy any ordering.
-                SortProperties::Singleton => true,
-                SortProperties::Unordered => false,
-            };
-            if !satisfy {
-                // As soon as one sort expression is unsatisfied, return how
-                // many we've satisfied so far:
-                return Ok(idx);
-            }
-            if idx + 1 == full_length {
-                // Nothing left to check, so no need to update the state:
-                break;
-            }
-            // Treat satisfied keys (and the sub-expressions they pin down) as
-            // constants in subsequent iterations. See
-            // [`Self::add_satisfied_key_constants`] for the rationale.
-            owned
-                .get_or_insert_with(|| self.clone())
-                .add_satisfied_key_constants(Arc::clone(&element.expr))?;
-        }
-        // All sort expressions are satisfied, return full length:
-        Ok(full_length)
+        let keys = normal_ordering
+            .iter()
+            .map(|sort_expr| (&sort_expr.expr, Some(sort_expr.options)));
+        SortKeyWalk::new(self).sorted_prefix_len(keys)
     }
 
     /// Determines the longest normal prefix of `ordering` satisfied by the
@@ -1307,13 +1205,12 @@ impl EquivalenceProperties {
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<(Vec<PhysicalSortExpr>, Vec<usize>)> {
-        let mut eq_properties = self.clone();
+        let mut walk = SortKeyWalk::new(self);
         let mut result = vec![];
         // The algorithm is as follows:
         // - Iterate over all the expressions and insert ordered expressions
         //   into the result.
-        // - Treat inserted expressions as constants (i.e. add them as constants
-        //   to the state).
+        // - Pin inserted expressions (see [`SortKeyWalk`]).
         // - Continue the above procedure until no expression is inserted; i.e.
         //   the algorithm reaches a fixed point.
         // This algorithm should reach a fixed point in at most `exprs.len()`
@@ -1326,7 +1223,7 @@ impl EquivalenceProperties {
                 .filter_map(|&idx| {
                     let ExprProperties {
                         sort_properties, ..
-                    } = eq_properties.get_expr_properties(Arc::clone(&exprs[idx]));
+                    } = walk.expr_properties(Arc::clone(&exprs[idx]));
                     match sort_properties {
                         SortProperties::Ordered(options) => {
                             let expr = Arc::clone(&exprs[idx]);
@@ -1346,16 +1243,17 @@ impl EquivalenceProperties {
                 break;
             }
             // Remove indices that have an ordering from `search_indices`, and
-            // treat ordered expressions as constants in subsequent iterations.
-            // We can do this because the "next" key only matters in a lexicographical
+            // pin the ordered expressions (in normal form, as the walk sees
+            // the orderings) for the next iterations, if any. We can do this
+            // because the "next" key only matters in a lexicographical
             // ordering when the keys to its left have the same values.
-            //
-            // Note that these expressions are not properly "constants". This is just
-            // an implementation strategy confined to this function.
-            for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
-                let const_expr = ConstExpr::from(Arc::clone(expr));
-                eq_properties.add_constants(std::iter::once(const_expr))?;
+            for (_, idx) in &ordered_exprs {
                 search_indices.shift_remove(idx);
+            }
+            if !search_indices.is_empty() {
+                for (PhysicalSortExpr { expr, .. }, _) in &ordered_exprs {
+                    walk.pin(self.eq_group.normalize_expr(Arc::clone(expr)))?;
+                }
             }
             // Add new ordered section to the state.
             result.extend(ordered_exprs);
@@ -1402,11 +1300,7 @@ impl EquivalenceProperties {
     /// Returns an [`ExprProperties`] object containing the ordering and range
     /// information for the given expression.
     pub fn get_expr_properties(&self, expr: Arc<dyn PhysicalExpr>) -> ExprProperties {
-        ExprPropertiesNode::new_unknown(expr)
-            .transform_up(|expr| update_properties(expr, self))
-            .data()
-            .map(|node| node.data)
-            .unwrap_or_else(|_| ExprProperties::new_unknown())
+        SortKeyWalk::new(self).expr_properties(expr)
     }
 
     /// Returns whether `transformed_expr` reports the same ordering direction
@@ -1528,61 +1422,6 @@ impl Display for EquivalenceProperties {
         }
         Ok(())
     }
-}
-
-/// Calculates the properties of a given [`ExprPropertiesNode`].
-///
-/// Order information can be retrieved as:
-/// - If it is a leaf node, we directly find the order of the node by looking
-///   at the given sort expression and equivalence properties if it is a `Column`
-///   leaf, or we mark it as unordered. In the case of a `Literal` leaf, we mark
-///   it as singleton so that it can cooperate with all ordered columns.
-/// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
-///   and operator has its own rules on how to propagate the children orderings.
-///   However, before we engage in recursion, we check whether this intermediate
-///   node directly matches with the sort expression. If there is a match, the
-///   sort expression emerges at that node immediately, discarding the recursive
-///   result coming from its children.
-///
-/// Range information is calculated as:
-/// - If it is a `Literal` node, we set the range as a point value. If it is a
-///   `Column` node, we set the datatype of the range, but cannot give an interval
-///   for the range, yet.
-/// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
-///   and operator has its own rules on how to propagate the children range.
-fn update_properties(
-    mut node: ExprPropertiesNode,
-    eq_properties: &EquivalenceProperties,
-) -> Result<Transformed<ExprPropertiesNode>> {
-    // First, try to gather the information from the children:
-    if !node.expr.children().is_empty() {
-        // We have an intermediate (non-leaf) node, account for its children:
-        let children_props = node.children.iter().map(|c| c.data.clone()).collect_vec();
-        node.data = node.expr.get_properties(&children_props)?;
-    } else if node.expr.is::<Literal>() {
-        // We have a Literal, which is one of the two possible leaf node types:
-        node.data = node.expr.get_properties(&[])?;
-    } else if node.expr.is::<Column>() {
-        // We have a Column, which is the other possible leaf node type:
-        node.data.range =
-            Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?;
-        // A column is the identity mapping of itself, which is trivially
-        // strict:
-        node.data.strictly_order_preserving = true;
-    }
-    // Now, check what we know about orderings:
-    let normal_expr = eq_properties
-        .eq_group
-        .normalize_expr(Arc::clone(&node.expr));
-    let oeq_class = &eq_properties.oeq_cache.normal_cls;
-    if eq_properties.is_expr_constant(&normal_expr).is_some()
-        || oeq_class.is_expr_partial_const(&normal_expr)
-    {
-        node.data.sort_properties = SortProperties::Singleton;
-    } else if let Some(options) = oeq_class.get_options(&normal_expr) {
-        node.data.sort_properties = SortProperties::Ordered(options);
-    }
-    Ok(Transformed::yes(node))
 }
 
 /// This function examines whether a referring expression directly refers to a

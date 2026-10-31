@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`PhysicalOptimizer`] for optimizing [`ExecutionPlan`]s
 //!
@@ -33,7 +20,6 @@ use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
-use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
 use crate::topk_repartition::TopKRepartition;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
@@ -117,12 +103,14 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// - [`EnsureRequirements`] inserts the repartitioning and sorting needed to
 ///   satisfy the distribution and ordering requirements.
 /// - [`OutputRequirements`] records output requirements.
-/// - [`SanityCheckPlan`] rejects plans whose requirements are not satisfied.
-///   It should run last.
 ///
 /// Custom pipelines must keep these rules in a compatible relative order. We
 /// are working to remove these exceptions, so that all rules can be reordered
 /// freely.
+///
+/// After the last rule, including rules added by the user, the physical
+/// planner rejects the plan if its requirements are not satisfied (see
+/// [`check_plan_tree_sanity`](crate::sanity_checker::check_plan_tree_sanity)).
 ///
 /// ## Optimization Coverage Is Not Guaranteed
 ///
@@ -293,15 +281,10 @@ impl PhysicalOptimizer {
             // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new_post_optimization()),
-            // The SanityCheckPlan rule checks whether the order and
-            // distribution requirements of each node in the plan
-            // is satisfied. It will also reject non-runnable query
-            // plans that use pipeline-breaking operators on infinite
-            // input(s). The rule generates a diagnostic error
-            // message for invalid plans. It makes no changes to the
-            // given query plan; i.e. it only acts as a final
-            // gatekeeping rule.
-            Arc::new(SanityCheckPlan::new()),
+            // There is no `SanityCheckPlan` rule at the end of this list. The
+            // physical planner runs the same check on the final plan, after
+            // every rule including the ones appended by the user. See
+            // `crate::sanity_checker`.
         ];
 
         Self::with_rules(rules)
