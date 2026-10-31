@@ -8690,6 +8690,50 @@ mod tests {
         Ok(())
     }
 
+    /// A CollectLeft join's probe partitions share one build, so the first to finish building
+    /// publishes the dynamic filter: one partition runs to the end while the others never start,
+    /// as under a scheduler that runs only some of a stage's partitions at a time.
+    #[tokio::test]
+    async fn test_collect_left_dynamic_filter_does_not_wait_for_other_partitions()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, true)]));
+        let batch = |keys: Vec<i32>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(keys))],
+            )
+            .unwrap()
+        };
+        let left = TestMemoryExec::try_new_exec(
+            &[vec![batch(vec![1, 2])]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![batch(vec![1, 3])], vec![batch(vec![2, 4])]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let on = vec![(
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+        )];
+        let (join, dynamic_filter) =
+            hash_join_with_dynamic_filter(left, right, on, JoinType::Inner)?;
+
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            common::collect(stream),
+        )
+        .await
+        .expect("partition 0 waited for partition 1, which never runs")?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+        dynamic_filter.wait_complete().await;
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_hash_join_skips_probe_on_empty_build_after_partition_bounds_report()
     -> Result<()> {
