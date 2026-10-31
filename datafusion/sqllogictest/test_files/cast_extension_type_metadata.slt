@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Regression tests for logical CAST targets that carry explicit field metadata.
 
@@ -97,3 +84,31 @@ FROM (
 );
 ----
 00010203040506070809000102030506 NULL
+
+# Extension types of Parquet columns are visible to expressions evaluated in the scan,
+# also when the scan replaces a constant column with a literal from the statistics
+statement ok
+COPY (
+    SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID) AS uuid_val
+)
+TO 'test_files/scratch/cast_extension_type_metadata/uuid.parquet'
+STORED AS PARQUET;
+
+statement ok
+SET datafusion.execution.parquet.skip_metadata = false;
+
+statement ok
+CREATE EXTERNAL TABLE uuid_parquet
+STORED AS PARQUET
+LOCATION 'test_files/scratch/cast_extension_type_metadata/uuid.parquet';
+
+query ?T
+SELECT uuid_val, arrow_metadata(uuid_val, 'ARROW:extension:name') FROM uuid_parquet;
+----
+00010203040506070809000102030506 arrow.uuid
+
+statement ok
+DROP TABLE uuid_parquet;
+
+statement ok
+RESET datafusion.execution.parquet.skip_metadata;

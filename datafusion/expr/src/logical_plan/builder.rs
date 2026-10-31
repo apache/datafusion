@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module provides a builder for creating LogicalPlans
 
@@ -33,8 +20,8 @@ use crate::expr_rewriter::{
 use crate::logical_plan::{
     Aggregate, Analyze, AsOfJoin, AsOfMatch, Distinct, DistinctOn, EmptyRelation,
     Explain, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning,
-    PlanType, Prepare, Projection, Repartition, Sort, SubqueryAlias, TableScanBuilder,
-    Union, Unnest, Values, Window,
+    PlanType, Prepare, Projection, Repartition, Show, ShowKind, Sort, SubqueryAlias,
+    TableScanBuilder, Union, Unnest, Values, Window,
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
@@ -50,6 +37,7 @@ use crate::{
 };
 
 use super::dml::InsertOp;
+use crate::logical_plan::information_schema::ColumnsDetail;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -264,6 +252,63 @@ impl LogicalPlanBuilder {
         }))
     }
 
+    /// Create a `DESCRIBE <query>` plan, where `schema` is the output schema of the query.
+    pub fn describe(schema: Arc<Schema>) -> Result<Self> {
+        Self::show(
+            ShowKind::Describe { schema },
+            crate::information_schema::columns_schema(ColumnsDetail::Describe),
+        )
+    }
+
+    /// Create a `SHOW TABLES` plan.
+    pub fn show_tables() -> Result<Self> {
+        Self::show(ShowKind::Tables, crate::information_schema::tables_schema())
+    }
+
+    /// Create a `DESCRIBE <table>` or `SHOW [FULL|EXTENDED] COLUMNS FROM <table>` plan.
+    pub fn show_columns(
+        table_ref: TableReference,
+        detail: ColumnsDetail,
+    ) -> Result<Self> {
+        Self::show(
+            ShowKind::Columns { table_ref, detail },
+            crate::information_schema::columns_schema(detail),
+        )
+    }
+
+    /// Create a `SHOW CREATE TABLE <table>` plan.
+    pub fn show_create_table(table_ref: TableReference) -> Result<Self> {
+        Self::show(
+            ShowKind::CreateTable { table_ref },
+            crate::information_schema::views_schema(),
+        )
+    }
+
+    /// Create a `SHOW <variable>` / `SHOW ALL` plan. `name` is `None` for
+    /// `SHOW ALL`.
+    pub fn show_variables(name: Option<String>, verbose: bool) -> Result<Self> {
+        Self::show(
+            ShowKind::Variables { name, verbose },
+            crate::information_schema::df_settings_schema(verbose),
+        )
+    }
+
+    /// Create a `SHOW FUNCTIONS [LIKE <pattern>]` plan.
+    pub fn show_functions(filter: Option<String>) -> Result<Self> {
+        Self::show(
+            ShowKind::Functions { filter },
+            crate::information_schema::show_functions_schema(),
+        )
+    }
+
+    /// Shared helper for the `SHOW`-class factory methods above.
+    fn show(kind: ShowKind, output_schema: Schema) -> Result<Self> {
+        Ok(Self::new(LogicalPlan::Show(Show {
+            kind,
+            output_schema: Arc::new(DFSchema::try_from(output_schema)?),
+        })))
+    }
+
     /// Convert a regular plan into a recursive query.
     /// `is_distinct` indicates whether the recursive term should be de-duplicated (`UNION`) after each iteration or not (`UNION ALL`).
     pub fn to_recursive_query(
@@ -384,7 +429,6 @@ impl LogicalPlanBuilder {
         let mut fields = ValuesFields::new();
         for j in 0..n_cols {
             let field_type = schema.field(j).data_type();
-            let field_nullable = schema.field(j).is_nullable();
             for row in values.iter() {
                 let value = &row[j];
                 let data_type = value.get_type(schema)?;
@@ -399,7 +443,13 @@ impl LogicalPlanBuilder {
                     );
                 }
             }
-            fields.push(field_type.to_owned(), field_nullable);
+            let field = schema.field(j);
+
+            fields.push_with_metadata(
+                field_type.clone(),
+                field.is_nullable(),
+                Some(FieldMetadata::new_from_field(field)),
+            );
         }
 
         Self::infer_inner(values, fields, schema)
@@ -1790,10 +1840,6 @@ impl ValuesFields {
         Self::default()
     }
 
-    pub fn push(&mut self, data_type: DataType, nullable: bool) {
-        self.push_with_metadata(data_type, nullable, None);
-    }
-
     pub fn push_with_metadata(
         &mut self,
         data_type: DataType,
@@ -2200,58 +2246,31 @@ fn project_with_validation(
     let mut normalizer = ColumnNormalizer::new(&plan);
     let columnizer = Columnizer::new(&plan);
     for (e, validate) in expr {
-        let e = e.into();
-        match e {
+        let mut push_validated = |e: Expr| -> Result<()> {
+            if validate {
+                projected_expr.push(columnizer.columnize(normalizer.normalize(e)?)?)
+            } else {
+                projected_expr.push(e)
+            }
+            Ok(())
+        };
+        match e.into() {
             SelectExpr::Wildcard(opt) => {
                 has_wildcard = true;
                 let expanded = expand_wildcard(plan.schema(), &plan, Some(&opt))?;
-
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                let expanded = if let Some(replace) = opt.replace {
-                    replace_columns(expanded, &replace)?
-                } else {
-                    expanded
-                };
-
-                for e in expanded {
-                    if validate {
-                        projected_expr
-                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
-                    } else {
-                        projected_expr.push(e)
-                    }
-                }
+                apply_replace(expanded, opt.replace.as_ref())?
+                    .into_iter()
+                    .try_for_each(push_validated)?;
             }
             SelectExpr::QualifiedWildcard(table_ref, opt) => {
                 has_wildcard = true;
                 let expanded =
                     expand_qualified_wildcard(&table_ref, plan.schema(), Some(&opt))?;
-
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                let expanded = if let Some(replace) = opt.replace {
-                    replace_columns(expanded, &replace)?
-                } else {
-                    expanded
-                };
-
-                for e in expanded {
-                    if validate {
-                        projected_expr
-                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
-                    } else {
-                        projected_expr.push(e)
-                    }
-                }
+                apply_replace(expanded, opt.replace.as_ref())?
+                    .into_iter()
+                    .try_for_each(push_validated)?;
             }
-            SelectExpr::Expression(e) => {
-                if validate {
-                    projected_expr.push(columnizer.columnize(normalizer.normalize(e)?)?)
-                } else {
-                    projected_expr.push(e)
-                }
-            }
+            SelectExpr::Expression(e) => push_validated(e)?,
         }
     }
 
@@ -2277,6 +2296,18 @@ fn project_with_validation(
     // `columnizer` borrows `plan`, which moves into the projection below.
     drop(columnizer);
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+}
+
+/// Applies a wildcard's REPLACE statement, if it has one, to the columns the
+/// wildcard expanded to.
+fn apply_replace(
+    expanded: Vec<Expr>,
+    replace: Option<&PlannedReplaceSelectItem>,
+) -> Result<Vec<Expr>> {
+    match replace {
+        Some(replace) => replace_columns(expanded, replace),
+        None => Ok(expanded),
+    }
 }
 
 /// If there is a REPLACE statement in the projected expression in the form of

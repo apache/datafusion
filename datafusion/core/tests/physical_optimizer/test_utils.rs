@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Test utilities for physical optimizer tests
 
@@ -434,23 +421,42 @@ pub fn projection_exec(
     Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
 }
 
-/// A test [`ExecutionPlan`] whose requirements can be configured.
+/// A test [`ExecutionPlan`] with configurable input requirements.
+/// Its output properties follow its first input unless boundedness is overridden.
 #[derive(Debug)]
 pub struct RequirementsTestExec {
     required_input_ordering: Option<LexOrdering>,
     required_input_distribution: Distribution,
     maintains_input_order: bool,
-    input: Arc<dyn ExecutionPlan>,
+    inputs: Vec<Arc<dyn ExecutionPlan>>,
+    bounded_output: bool,
+    cache: Arc<PlanProperties>,
 }
 
 impl RequirementsTestExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+        let cache = Arc::clone(input.properties());
         Self {
             required_input_ordering: None,
             required_input_distribution: Distribution::UnspecifiedDistribution,
             maintains_input_order: true,
-            input,
+            inputs: vec![input],
+            bounded_output: false,
+            cache,
         }
+    }
+
+    /// Add another input with the same requirements and order-preservation flag.
+    pub fn with_additional_input(mut self, input: Arc<dyn ExecutionPlan>) -> Self {
+        self.inputs.push(input);
+        self
+    }
+
+    /// Model a custom operator that stops reading an unbounded input.
+    pub fn with_bounded_output(mut self) -> Self {
+        self.bounded_output = true;
+        Arc::make_mut(&mut self.cache).boundedness = Boundedness::Bounded;
+        self
     }
 
     /// sets the required input ordering
@@ -503,27 +509,31 @@ impl ExecutionPlan for RequirementsTestExec {
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
-        self.input.properties()
+        &self.cache
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![
             self.required_input_ordering
                 .as_ref()
-                .map(|ordering| OrderingRequirements::from(ordering.clone())),
+                .map(|ordering| OrderingRequirements::from(ordering.clone()));
+            self.inputs.len()
         ]
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
-        InputDistributionRequirements::new(vec![self.required_input_distribution.clone()])
+        InputDistributionRequirements::new(vec![
+            self.required_input_distribution.clone();
+            self.inputs.len()
+        ])
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![self.maintains_input_order]
+        vec![self.maintains_input_order; self.inputs.len()]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
+        self.inputs.iter().collect()
     }
 
     fn replace_children(
@@ -531,12 +541,16 @@ impl ExecutionPlan for RequirementsTestExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
         _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert_eq!(children.len(), 1);
-        Ok(RequirementsTestExec::new(Arc::clone(&children[0]))
+        assert_eq!(children.len(), self.inputs.len());
+        let mut plan = RequirementsTestExec::new(Arc::clone(&children[0]))
             .with_required_input_ordering(self.required_input_ordering.clone())
             .with_required_input_distribution(self.required_input_distribution.clone())
-            .with_maintains_input_order(self.maintains_input_order)
-            .into_arc())
+            .with_maintains_input_order(self.maintains_input_order);
+        plan.inputs.extend(children.into_iter().skip(1));
+        if self.bounded_output {
+            plan = plan.with_bounded_output();
+        }
+        Ok(plan.into_arc())
     }
 
     fn with_new_children(
@@ -1072,6 +1086,10 @@ impl ExecutionPlan for TestScan {
         _args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
         Ok(Arc::new(Statistics::new_unknown(&self.schema)))
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        self.supports_fetch
     }
 
     fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

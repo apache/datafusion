@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Common utilities for aggregate tables with input clustered by group keys.
 
@@ -299,6 +286,19 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
             + self.buffer.group_indices.allocated_size()
     }
 
+    /// Releases the capacity that the buffer holds beyond its stored groups,
+    /// such as hash table slots, the per-batch `group_indices` scratch and
+    /// per-batch accumulator scratch, so that [`Self::memory_size`] reflects
+    /// the remaining groups.
+    pub(in crate::aggregates) fn shrink_to_fit(&mut self) {
+        self.buffer.group_values.shrink_to_fit();
+        self.buffer.group_indices.clear();
+        self.buffer.group_indices.shrink_to_fit();
+        for acc in &mut self.buffer.accumulators {
+            acc.shrink_to_fit();
+        }
+    }
+
     pub(in crate::aggregates) fn metrics(&self) -> ClusteredAggregateTableMetrics {
         ClusteredAggregateTableMetrics {
             group_by: self.group_by_metrics.clone(),
@@ -339,12 +339,16 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
         debug_assert!(batch.num_rows() > 0);
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
-        // key/index buffers too so the memory reservation can be released
-        // before the batch is passed downstream or sorted for spilling.
+        // key/index buffers and accumulator scratch too so the memory
+        // reservation can be released before the batch is passed downstream or
+        // sorted for spilling.
         self.buffer.group_values.clear_shrink(0);
         self.buffer.group_indices.clear();
         self.buffer.group_indices.shrink_to_fit();
         self.buffer.group_clustering.reset();
+        for acc in &mut self.buffer.accumulators {
+            acc.shrink_to_fit();
+        }
 
         Ok(Some(batch))
     }

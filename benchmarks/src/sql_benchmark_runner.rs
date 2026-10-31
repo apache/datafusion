@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Shared SQL benchmark runner used by `benchmark_runner` and the Criterion
 //! SQL benchmark harness.
@@ -823,6 +810,35 @@ mod tests {
             debug: false,
             simulate_latency: false,
         }
+    }
+
+    #[tokio::test]
+    async fn tpch_init_preserves_session_settings() {
+        use crate::sql_benchmark::QueryDirective;
+        use datafusion::prelude::SessionConfig;
+
+        let mut config = SessionConfig::new();
+        config.options_mut().optimizer.prefer_hash_join = false;
+        config.options_mut().execution.hash_join_buffering_capacity = 4096;
+        let ctx = SessionContext::new_with_config(config);
+        let directory = default_sql_benchmark_directory();
+        // Exercise the suite's real init SQL without loading the TPC-H dataset.
+        for entry in fs::read_dir(directory.join("tpch/benchmarks")).unwrap() {
+            let benchmark = SqlBenchmark::new(&ctx, entry.unwrap().path(), &directory)
+                .await
+                .unwrap();
+            if let Some(queries) = benchmark.queries().get(&QueryDirective::Init) {
+                for query in queries {
+                    ctx.sql(query).await.unwrap().collect().await.unwrap();
+                }
+            }
+        }
+        let config = ctx.copied_config();
+        assert!(!config.options().optimizer.prefer_hash_join);
+        assert_eq!(
+            config.options().execution.hash_join_buffering_capacity,
+            4096
+        );
     }
 
     #[tokio::test]
