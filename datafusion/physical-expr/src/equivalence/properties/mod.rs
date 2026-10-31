@@ -508,9 +508,13 @@ impl EquivalenceProperties {
                         strictly_order_preserving: true,
                     });
                 }
-                // Check if the expression is monotonic in all arguments:
-                let expr_properties =
-                    equivalent_expr.get_properties(&child_properties)?;
+                // Check if the expression is monotonic in all arguments. If
+                // that cannot be derived, no new ordering is found:
+                let Ok(expr_properties) =
+                    equivalent_expr.get_properties(&child_properties)
+                else {
+                    continue;
+                };
                 if expr_properties.preserves_lex_ordering
                     && expr_properties.sort_properties
                         == SortProperties::Ordered(leading_ordering_options)
@@ -1548,7 +1552,14 @@ fn update_properties(
     if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
         let children_props = node.children.iter().map(|c| c.data.clone()).collect_vec();
-        node.data = node.expr.get_properties(&children_props)?;
+        // Properties that cannot be derived from the children, for example of a
+        // function whose input may be outside its domain, are unknown. The
+        // ordering of the node itself can still be known, so do not fail here,
+        // and keep the type of its range so that parents can derive from it.
+        node.data = node.expr.get_properties(&children_props).or_else(|_| {
+            Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)
+                .map(|range| ExprProperties::new_unknown().with_range(range))
+        })?;
     } else if node.expr.is::<Literal>() {
         // We have a Literal, which is one of the two possible leaf node types:
         node.data = node.expr.get_properties(&[])?;
