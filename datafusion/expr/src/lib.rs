@@ -143,7 +143,8 @@ pub use udaf::{
     udaf_default_window_function_display_name, udaf_default_window_function_schema_name,
 };
 pub use udf::{
-    ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, StructFieldMapping,
+    FieldPath, NestedInputAccess, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, StructFieldMapping,
 };
 pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
