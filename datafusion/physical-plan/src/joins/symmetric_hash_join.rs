@@ -29,8 +29,9 @@ use crate::joins::stream_join_utils::{
 use crate::joins::utils::{
     BatchSplitter, BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn,
     JoinOnRef, NoopBatchTransformer, StatefulStreamResult, apply_join_filter_to_indices,
-    build_batch_from_indices, build_join_schema, check_join_is_valid, equal_rows_arr,
-    matchable_join_keys, symmetric_join_output_partitioning, update_hash,
+    build_batch_from_indices, build_join_schema, check_join_is_valid,
+    co_partitioned_key_requirements, equal_rows_arr, matchable_join_keys,
+    symmetric_join_output_partitioning, update_hash,
 };
 use crate::projection::{
     JoinData, ProjectionExec, try_pushdown_through_join_with_column_indices,
@@ -255,7 +256,7 @@ impl SymmetricHashJoinExec {
         join_on: JoinOnRef,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let eq_properties = join_equivalence_properties(
+        let mut eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
@@ -266,8 +267,13 @@ impl SymmetricHashJoinExec {
             join_on,
         )?;
 
-        let output_partitioning =
-            symmetric_join_output_partitioning(left, right, &join_type)?;
+        let output_partitioning = symmetric_join_output_partitioning(
+            left,
+            right,
+            &join_type,
+            join_on,
+            &mut eq_properties,
+        )?;
 
         Ok(PlanProperties::new(
             eq_properties,
@@ -414,15 +420,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         match self.mode {
             StreamJoinPartitionMode::Partitioned => {
-                let (left_expr, right_expr) = self
-                    .on
-                    .iter()
-                    .map(|(l, r)| (Arc::clone(l) as _, Arc::clone(r) as _))
-                    .unzip();
-                InputDistributionRequirements::co_partitioned(vec![
-                    Distribution::KeyPartitioned(left_expr),
-                    Distribution::KeyPartitioned(right_expr),
-                ])
+                co_partitioned_key_requirements(&self.on)
             }
             StreamJoinPartitionMode::SinglePartition => {
                 InputDistributionRequirements::new(vec![

@@ -13,6 +13,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::distribution_requirements::InputDistributionRequirements;
 use crate::metrics::{
     self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
     MetricType,
@@ -65,11 +66,11 @@ use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_err,
 };
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{Column, case, is_not_null};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    LexOrdering, PhysicalExpr, PhysicalExprRef, add_offset_to_expr,
-    add_offset_to_physical_sort_exprs,
+    Distribution, EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalExprRef,
+    add_offset_to_expr, add_offset_to_physical_sort_exprs,
 };
 
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
@@ -2072,10 +2073,14 @@ pub enum StatefulStreamResult<T> {
     Continue,
 }
 
+/// Output partitioning of a partitioned join. Only a Full join reads `on` and adds to
+/// `eq_properties`, see `full_join_output_partitioning`.
 pub(crate) fn symmetric_join_output_partitioning(
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
     join_type: &JoinType,
+    on: JoinOnRef,
+    eq_properties: &mut EquivalenceProperties,
 ) -> Result<Partitioning> {
     let left_columns_len = left.schema().fields.len();
     let left_partitioning = left.output_partitioning();
@@ -2090,12 +2095,116 @@ pub(crate) fn symmetric_join_output_partitioning(
         JoinType::Inner | JoinType::Right => {
             adjust_right_output_partitioning(right_partitioning, left_columns_len)?
         }
-        JoinType::Full => {
-            // We could also use left partition count as they are necessarily equal.
-            Partitioning::UnknownPartitioning(right_partitioning.partition_count())
-        }
+        JoinType::Full => full_join_output_partitioning(left, right, on, eq_properties)?,
     };
     Ok(result)
+}
+
+/// Restates the left input's partitioning on `coalesce(left, right)` of each key pair and
+/// records in `eq_properties` that both coalesce orders are equal, so a parent keyed on
+/// either order matches. Any guard below that fails returns `UnknownPartitioning`.
+fn full_join_output_partitioning(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    on: JoinOnRef,
+    eq_properties: &mut EquivalenceProperties,
+) -> Result<Partitioning> {
+    let left_partitioning = left.output_partitioning();
+    let unknown =
+        Partitioning::UnknownPartitioning(right.output_partitioning().partition_count());
+    // A single partition already satisfies any key, so there is nothing to restate.
+    let single_partition = left_partitioning.partition_count() < 2;
+    let children = [left.as_ref(), right.as_ref()];
+    let co_partitioned = co_partitioned_key_requirements(on)
+        .unsatisfied_co_partitioned_children("Full join", &children)?
+        .is_empty();
+    if single_partition || !co_partitioned {
+        return Ok(unknown);
+    }
+    let left_columns_len = left.schema().fields.len();
+    let on = on
+        .iter()
+        .map(|(l, r)| {
+            let r = add_offset_to_expr(Arc::clone(r), left_columns_len as _)?;
+            Ok((Arc::clone(l), r))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // An unmatched row fills the other side's columns with NULL. A computed key such as
+    // `coalesce(a, 0)` is not NULL there, and a fact the join output still holds, such as
+    // `a = 5` or `c = coalesce(y, 0)`, breaks on that NULL.
+    let group = eq_properties.eq_group();
+    let null_on_unmatched_rows = |key: &PhysicalExprRef| {
+        let is_column = key.is::<Column>();
+        let is_constant = group.is_expr_constant(key).is_some();
+        let equals_computed = group
+            .get_equivalence_class(key)
+            .is_some_and(|class| class.iter().any(|expr| !expr.is::<Column>()));
+        is_column && !is_constant && !equals_computed
+    };
+    let all_keys_qualify = on
+        .iter()
+        .flat_map(|(l, r)| [l, r])
+        .all(null_on_unmatched_rows);
+    if !all_keys_qualify {
+        return Ok(unknown);
+    }
+    // Either side of a row may be null, so each key becomes `coalesce(left, right)`. A
+    // projection above the join looks up the keys as written, while a distribution check
+    // first normalizes each key column to the first column of its class, so both orders
+    // are recorded over both forms.
+    let mut coalesced = Vec::with_capacity(on.len());
+    for (l, r) in on {
+        let group = eq_properties.eq_group();
+        let [first_l, first_r] =
+            [&l, &r].map(|key| group.normalize_expr(Arc::clone(key)));
+        add_coalesce_orders_equal(eq_properties, &l, &r)?;
+        if !(first_l.eq(&l) && first_r.eq(&r)) {
+            add_coalesce_orders_equal(eq_properties, &first_l, &first_r)?;
+        }
+        coalesced.push(coalesce_keys(l, r)?);
+    }
+    let keys = Distribution::KeyPartitioned(coalesced);
+    Ok(left_partitioning
+        .adapt(&keys, eq_properties.schema())
+        .unwrap_or(unknown))
+}
+
+/// Builds `CASE WHEN first IS NOT NULL THEN first ELSE second END`, the physical form the
+/// planner gives `coalesce(first, second)`.
+fn coalesce_keys(
+    first: PhysicalExprRef,
+    second: PhysicalExprRef,
+) -> Result<PhysicalExprRef> {
+    case(
+        None,
+        vec![(is_not_null(Arc::clone(&first))?, first)],
+        Some(second),
+    )
+}
+
+/// Records in `eq_properties` that `coalesce(l, r)` equals `coalesce(r, l)`.
+fn add_coalesce_orders_equal(
+    eq_properties: &mut EquivalenceProperties,
+    l: &PhysicalExprRef,
+    r: &PhysicalExprRef,
+) -> Result<()> {
+    let left_first = coalesce_keys(Arc::clone(l), Arc::clone(r))?;
+    let right_first = coalesce_keys(Arc::clone(r), Arc::clone(l))?;
+    eq_properties.add_equal_conditions(left_first, right_first)
+}
+
+/// Requires both inputs of a partitioned join to be co-partitioned on their side of `on`.
+pub(crate) fn co_partitioned_key_requirements(
+    on: JoinOnRef,
+) -> InputDistributionRequirements {
+    let (left_keys, right_keys) = on
+        .iter()
+        .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
+        .unzip();
+    InputDistributionRequirements::co_partitioned(vec![
+        Distribution::KeyPartitioned(left_keys),
+        Distribution::KeyPartitioned(right_keys),
+    ])
 }
 
 /// Convert a boolean filter array into a unified mask bitmap.
@@ -2872,13 +2981,22 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::filter::FilterExec;
+    use crate::joins::{
+        HashJoinExec, PartitionMode, SortMergeJoinExec, StreamJoinPartitionMode,
+        SymmetricHashJoinExec,
+    };
     use crate::metrics::MetricValue;
+    use crate::repartition::RepartitionExec;
+    use crate::test::TestMemoryExec;
 
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{ScalarValue, SplitPoint, arrow_datafusion_err, arrow_err};
+    use datafusion_expr::Operator;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr::expressions::{UnKnownColumn, binary, lit};
 
     use crate::joins::join_hash_map::ProbeOffset::AtRow;
     use rstest::rstest;
@@ -5113,6 +5231,441 @@ mod tests {
 
         assert_eq!(adjusted, expected);
         Ok(())
+    }
+
+    fn int32_schema(first: &str, second: &str) -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new(first, DataType::Int32, true),
+            Field::new(second, DataType::Int32, true),
+        ]))
+    }
+
+    fn unknown_partitioned(schema: Arc<Schema>) -> Arc<dyn ExecutionPlan> {
+        TestMemoryExec::try_new_exec(&[vec![]], schema, None).expect("memory source")
+    }
+
+    fn repartitioned(
+        schema: Arc<Schema>,
+        partitioning: Partitioning,
+    ) -> Arc<dyn ExecutionPlan> {
+        let source = unknown_partitioned(schema);
+        Arc::new(RepartitionExec::try_new(source, partitioning).expect("repartition"))
+    }
+
+    fn hash_partitioned(
+        input: Arc<dyn ExecutionPlan>,
+        key: PhysicalExprRef,
+    ) -> Arc<dyn ExecutionPlan> {
+        let partitioning = Partitioning::Hash(vec![key], 4);
+        Arc::new(RepartitionExec::try_new(input, partitioning).expect("repartition"))
+    }
+
+    fn filtered(
+        schema: Arc<Schema>,
+        predicate: PhysicalExprRef,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            FilterExec::try_new(predicate, unknown_partitioned(schema)).expect("filter"),
+        )
+    }
+
+    fn col_at(name: &str, index: usize) -> PhysicalExprRef {
+        Arc::new(Column::new(name, index))
+    }
+
+    fn coalesced(first: PhysicalExprRef, second: PhysicalExprRef) -> PhysicalExprRef {
+        coalesce_keys(first, second).expect("coalesce")
+    }
+
+    fn range_on(
+        expr: PhysicalExprRef,
+        options: SortOptions,
+        split_points: &[i32],
+    ) -> Partitioning {
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new(expr, options)]).expect("one key");
+        let split_points = split_points
+            .iter()
+            .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(*value))]))
+            .collect();
+        let range = RangePartitioning::try_new(ordering, split_points).expect("range");
+        Partitioning::Range(range)
+    }
+
+    fn a_equals_c() -> JoinOn {
+        vec![(col_at("a", 0), col_at("c", 0))]
+    }
+
+    /// Inputs `(a, b)` and `(c, d)` hash partitioned on `a` and `c` into four partitions.
+    fn hash_inputs() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
+        let left = repartitioned(
+            int32_schema("a", "b"),
+            Partitioning::Hash(vec![col_at("a", 0)], 4),
+        );
+        let right = repartitioned(
+            int32_schema("c", "d"),
+            Partitioning::Hash(vec![col_at("c", 0)], 4),
+        );
+        (left, right)
+    }
+
+    fn full_hash_join(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: JoinOn,
+        projection: Option<Vec<usize>>,
+    ) -> HashJoinExec {
+        HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Full,
+            projection,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .expect("hash join")
+    }
+
+    fn full_join_partitioning(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+        on: JoinOnRef,
+    ) -> Partitioning {
+        let (schema, _) =
+            build_join_schema(&left.schema(), &right.schema(), &JoinType::Full);
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
+        symmetric_join_output_partitioning(
+            left,
+            right,
+            &JoinType::Full,
+            on,
+            &mut eq_properties,
+        )
+        .expect("join partitioning")
+    }
+
+    fn coalesce_orders_match(join: &dyn ExecutionPlan) -> bool {
+        let group = join.properties().equivalence_properties().eq_group();
+        let left_first = coalesced(col_at("a", 0), col_at("c", 2));
+        let right_first = coalesced(col_at("c", 2), col_at("a", 0));
+        group
+            .normalize_expr(left_first)
+            .eq(&group.normalize_expr(right_first))
+    }
+
+    #[test]
+    fn full_join_output_partitioning_coalesces_hash_keys() {
+        let (left, right) = hash_inputs();
+
+        assert_eq!(
+            full_join_partitioning(&left, &right, &a_equals_c()),
+            Partitioning::Hash(vec![coalesced(col_at("a", 0), col_at("c", 2))], 4)
+        );
+    }
+
+    #[test]
+    fn full_join_output_partitioning_coalesces_range_keys() {
+        let options = SortOptions::new(false, true);
+        let left = repartitioned(
+            int32_schema("a", "b"),
+            range_on(col_at("a", 0), options, &[10, 20, 30]),
+        );
+        let right = repartitioned(
+            int32_schema("c", "d"),
+            range_on(col_at("c", 0), options, &[10, 20, 30]),
+        );
+
+        let expected = range_on(
+            coalesced(col_at("a", 0), col_at("c", 2)),
+            options,
+            &[10, 20, 30],
+        );
+        assert_eq!(
+            full_join_partitioning(&left, &right, &a_equals_c()),
+            expected
+        );
+    }
+
+    #[test]
+    fn full_join_output_partitioning_coalesces_every_key_pair() {
+        let left = repartitioned(
+            int32_schema("a", "b"),
+            Partitioning::Hash(vec![col_at("a", 0), col_at("b", 1)], 4),
+        );
+        let right = repartitioned(
+            int32_schema("c", "d"),
+            Partitioning::Hash(vec![col_at("c", 0), col_at("d", 1)], 4),
+        );
+        let on = vec![
+            (col_at("a", 0), col_at("c", 0)),
+            (col_at("b", 1), col_at("d", 1)),
+        ];
+
+        let expected = Partitioning::Hash(
+            vec![
+                coalesced(col_at("a", 0), col_at("c", 2)),
+                coalesced(col_at("b", 1), col_at("d", 3)),
+            ],
+            4,
+        );
+        assert_eq!(full_join_partitioning(&left, &right, &on), expected);
+    }
+
+    #[test]
+    fn full_join_output_partitioning_is_unknown_for_different_range_split_points() {
+        let options = SortOptions::new(false, true);
+        let left = repartitioned(
+            int32_schema("a", "b"),
+            range_on(col_at("a", 0), options, &[10, 20, 30]),
+        );
+        let right = repartitioned(
+            int32_schema("c", "d"),
+            range_on(col_at("c", 0), options, &[10, 20, 40]),
+        );
+
+        assert_eq!(
+            full_join_partitioning(&left, &right, &a_equals_c()).to_string(),
+            "UnknownPartitioning(4)"
+        );
+    }
+
+    #[test]
+    fn full_join_output_partitioning_is_unknown_for_single_partition_inputs() {
+        let left = repartitioned(
+            int32_schema("a", "b"),
+            Partitioning::Hash(vec![col_at("a", 0)], 1),
+        );
+        let right = repartitioned(
+            int32_schema("c", "d"),
+            Partitioning::Hash(vec![col_at("c", 0)], 1),
+        );
+
+        assert_eq!(
+            full_join_partitioning(&left, &right, &a_equals_c()).to_string(),
+            "UnknownPartitioning(1)"
+        );
+    }
+
+    #[test]
+    fn full_join_output_partitioning_is_unknown_when_keys_are_not_the_join_keys() {
+        let left = repartitioned(
+            int32_schema("a", "b"),
+            Partitioning::Hash(vec![col_at("b", 1)], 4),
+        );
+        let (_, right) = hash_inputs();
+
+        assert_eq!(
+            full_join_partitioning(&left, &right, &a_equals_c()).to_string(),
+            "UnknownPartitioning(4)"
+        );
+    }
+
+    #[test]
+    fn full_join_output_partitioning_is_unknown_without_join_keys() {
+        let (left, right) = hash_inputs();
+
+        assert_eq!(
+            full_join_partitioning(&left, &right, &[]).to_string(),
+            "UnknownPartitioning(4)"
+        );
+    }
+
+    #[test]
+    fn full_symmetric_hash_join_reports_coalesced_partitioning() {
+        let (left, right) = hash_inputs();
+        let join = SymmetricHashJoinExec::try_new(
+            left,
+            right,
+            a_equals_c(),
+            None,
+            &JoinType::Full,
+            NullEquality::NullEqualsNothing,
+            None,
+            None,
+            StreamJoinPartitionMode::Partitioned,
+        )
+        .expect("symmetric hash join");
+        let expected =
+            Partitioning::Hash(vec![coalesced(col_at("a", 0), col_at("c", 2))], 4);
+        assert_eq!(join.properties().output_partitioning(), &expected);
+        assert!(coalesce_orders_match(&join));
+    }
+
+    fn projected_full_join(
+        sort_merge: bool,
+        projection: Vec<usize>,
+    ) -> Arc<dyn ExecutionPlan> {
+        let (left, right) = hash_inputs();
+        if !sort_merge {
+            return Arc::new(full_hash_join(left, right, a_equals_c(), Some(projection)));
+        }
+        let join = SortMergeJoinExec::try_new(
+            left,
+            right,
+            a_equals_c(),
+            None,
+            JoinType::Full,
+            vec![SortOptions::default()],
+            NullEquality::NullEqualsNothing,
+        )
+        .and_then(|join| join.with_projection(Some(projection)))
+        .expect("sort merge join");
+        Arc::new(join)
+    }
+
+    #[rstest]
+    fn full_join_projection_keeps_coalesced_keys(
+        #[values(false, true)] sort_merge: bool,
+    ) {
+        let join = projected_full_join(sort_merge, vec![0, 1, 2, 3]);
+
+        assert_eq!(
+            join.properties().output_partitioning(),
+            &Partitioning::Hash(vec![coalesced(col_at("a", 0), col_at("c", 2))], 4)
+        );
+        assert!(coalesce_orders_match(join.as_ref()));
+    }
+
+    #[rstest]
+    #[case::same_order(vec![0, 2], coalesced(col_at("a", 0), col_at("c", 1)))]
+    #[case::reordered(vec![2, 0], coalesced(col_at("a", 1), col_at("c", 0)))]
+    fn full_join_projection_remaps_coalesced_keys(
+        #[case] projection: Vec<usize>,
+        #[case] expected: PhysicalExprRef,
+        #[values(false, true)] sort_merge: bool,
+    ) {
+        let join = projected_full_join(sort_merge, projection);
+
+        assert_eq!(
+            join.properties().output_partitioning(),
+            &Partitioning::Hash(vec![expected], 4)
+        );
+    }
+
+    #[rstest]
+    fn full_join_projection_dropping_right_key_loses_the_key(
+        #[values(false, true)] sort_merge: bool,
+    ) {
+        let join = projected_full_join(sort_merge, vec![0, 1]);
+        let partitioning = join.properties().output_partitioning();
+
+        let Partitioning::Hash(keys, 4) = partitioning else {
+            panic!("expected Hash partitioning, got {partitioning}");
+        };
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].is::<UnKnownColumn>());
+    }
+
+    #[test]
+    fn full_hash_join_keys_coalesce_equally_when_a_filter_puts_another_column_first() {
+        // A filter `b = a` makes `b` the first column of the class. A distribution check
+        // normalizes `a` to `b` before it looks up the coalesced key, while a projection
+        // looks it up as written.
+        let schema = int32_schema("a", "b");
+        let predicate = binary(col_at("b", 1), Operator::Eq, col_at("a", 0), &schema)
+            .expect("predicate");
+        let left = hash_partitioned(filtered(schema, predicate), col_at("a", 0));
+        let (_, right) = hash_inputs();
+        let join = full_hash_join(left, right, a_equals_c(), None);
+
+        assert_eq!(
+            join.properties().output_partitioning(),
+            &Partitioning::Hash(vec![coalesced(col_at("a", 0), col_at("c", 2))], 4)
+        );
+        assert!(coalesce_orders_match(&join));
+        let reversed = coalesced(col_at("c", 2), col_at("a", 0));
+        let projection =
+            ProjectionExec::try_new(vec![(reversed, "k".to_string())], Arc::new(join))
+                .expect("projection");
+        assert_eq!(
+            projection.properties().output_partitioning(),
+            &Partitioning::Hash(vec![col_at("k", 0)], 4)
+        );
+    }
+
+    #[rstest]
+    #[case::left(coalesced(col_at("a", 0), lit(0i32)), col_at("c", 0))]
+    #[case::right(col_at("a", 0), coalesced(col_at("c", 0), lit(0i32)))]
+    fn full_hash_join_with_computed_key_reports_unknown_partitioning(
+        #[case] left_key: PhysicalExprRef,
+        #[case] right_key: PhysicalExprRef,
+    ) {
+        // An unmatched row gives the computed key the value 0, not NULL.
+        let left = repartitioned(
+            int32_schema("a", "b"),
+            Partitioning::Hash(vec![Arc::clone(&left_key)], 4),
+        );
+        let right = repartitioned(
+            int32_schema("c", "d"),
+            Partitioning::Hash(vec![Arc::clone(&right_key)], 4),
+        );
+        let on = vec![(Arc::clone(&left_key), Arc::clone(&right_key))];
+        let join = full_hash_join(left, right, on, None);
+
+        assert_eq!(
+            join.properties().output_partitioning().to_string(),
+            "UnknownPartitioning(4)"
+        );
+        let right_key = add_offset_to_expr(right_key, 2).expect("offset");
+        let group = join.properties().equivalence_properties().eq_group();
+        let left_first = coalesced(Arc::clone(&left_key), Arc::clone(&right_key));
+        let right_first = coalesced(right_key, left_key);
+        assert!(
+            !group
+                .normalize_expr(left_first)
+                .eq(&group.normalize_expr(right_first))
+        );
+    }
+
+    #[rstest]
+    #[case::column_keeps_partitioning(col_at("d", 1), true)]
+    #[case::computed_reports_unknown(coalesced(col_at("d", 1), lit(0i32)), false)]
+    fn full_hash_join_with_key_equal_to_input_expression(
+        #[case] equal_to: PhysicalExprRef,
+        #[case] keeps_partitioning: bool,
+    ) {
+        // A left-only row has NULL in both `c` and `d`, but 0 in `coalesce(d, 0)`.
+        let schema = int32_schema("c", "d");
+        let predicate =
+            binary(col_at("c", 0), Operator::Eq, equal_to, &schema).expect("predicate");
+        let right = hash_partitioned(filtered(schema, predicate), col_at("c", 0));
+        let (left, _) = hash_inputs();
+        let join = full_hash_join(left, right, a_equals_c(), None);
+
+        let expected = if keeps_partitioning {
+            Partitioning::Hash(vec![coalesced(col_at("a", 0), col_at("c", 2))], 4)
+        } else {
+            Partitioning::UnknownPartitioning(4)
+        };
+        assert_eq!(
+            join.properties().output_partitioning().to_string(),
+            expected.to_string()
+        );
+    }
+
+    #[test]
+    fn full_hash_join_with_constant_key_reports_unknown_partitioning() {
+        // The join output still marks `a` as constant, which right-only rows break. A
+        // parent `5 AS z` joins its class, so a key `coalesce(z, c)` would match.
+        let constant = ProjectionExec::try_new(
+            vec![
+                (lit(5i32), "a".to_string()),
+                (col_at("b", 1), "b".to_string()),
+            ],
+            unknown_partitioned(int32_schema("x", "b")),
+        )
+        .expect("projection");
+        let left = hash_partitioned(Arc::new(constant), col_at("a", 0));
+        let (_, right) = hash_inputs();
+        let join = full_hash_join(left, right, a_equals_c(), None);
+
+        assert_eq!(
+            join.properties().output_partitioning().to_string(),
+            "UnknownPartitioning(4)"
+        );
     }
 
     #[test]
