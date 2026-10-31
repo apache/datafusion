@@ -29,6 +29,7 @@ use rand::{Rng, SeedableRng};
 #[tokio::test(flavor = "multi_thread")]
 async fn null_aware_join_matches_reference() {
     let mut plans = NullAwarePlans::default();
+    let cases = cases();
     for seed in 0..20 {
         let mut rng = StdRng::seed_from_u64(seed);
         let outer = random_table(&mut rng, &["id", "k", "a", "b", "c"], 6);
@@ -36,6 +37,25 @@ async fn null_aware_join_matches_reference() {
         // smaller one that `JoinSelection` moves to the build side.
         let inner_rows = if seed % 2 == 0 { 6 } else { 2 };
         let inner = random_table(&mut rng, &["k", "x", "y", "z"], inner_rows);
+
+        // Reference results depend only on this seed's tables, so compute
+        // them once with a stable configuration instead of repeating them
+        // for every batch size and partition count below.
+        let reference_ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(1),
+        );
+        reference_ctx
+            .register_table("o", Arc::clone(&outer) as _)
+            .unwrap();
+        reference_ctx
+            .register_table("i", Arc::clone(&inner) as _)
+            .unwrap();
+        let mut expected_rows = Vec::with_capacity(cases.len());
+        for (_, reference) in &cases {
+            let (expected, _) = run(&reference_ctx, reference).await;
+            expected_rows.push(expected);
+        }
+
         for target_partitions in [1, 4] {
             for batch_size in [1, 3, 8192] {
                 let config = SessionConfig::new()
@@ -54,12 +74,11 @@ async fn null_aware_join_matches_reference() {
                 let ctx = SessionContext::new_with_config(config);
                 ctx.register_table("o", Arc::clone(&outer) as _).unwrap();
                 ctx.register_table("i", Arc::clone(&inner) as _).unwrap();
-                for (query, reference) in cases() {
-                    let (actual, plan) = run(&ctx, &query).await;
+                for ((query, reference), expected) in cases.iter().zip(&expected_rows) {
+                    let (actual, plan) = run(&ctx, query).await;
                     plans.record(plan.as_ref());
-                    let (expected, _) = run(&ctx, &reference).await;
                     assert_eq!(
-                        actual, expected,
+                        actual, *expected,
                         "seed={seed} target_partitions={target_partitions} \
                          batch_size={batch_size}\nquery: {query}\nreference: {reference}"
                     );
