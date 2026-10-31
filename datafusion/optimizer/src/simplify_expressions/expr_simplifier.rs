@@ -3641,6 +3641,13 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("f%o")));
         assert_no_change(regex_match(col("c1"), lit("^f%o")));
         assert_no_change(regex_match(col("c1"), lit("f_o")));
+        // `\` is the implicit escape character of `LIKE`
+        assert_no_change(regex_match(col("c1"), lit(r"\\")));
+        assert_no_change(regex_match(col("c1"), lit(r"\\foo")));
+        assert_no_change(regex_match(col("c1"), lit(r"^\\foo")));
+        assert_no_change(regex_match(col("c1"), lit(r"foo\\$")));
+        assert_no_change(regex_match(col("c1"), lit(r"foo|\\bar")));
+        assert_no_change(regex_imatch(col("c1"), lit(r"^foo\\$")));
 
         // empty cases
         assert_change(
@@ -3682,6 +3689,15 @@ mod tests {
         assert_change(
             regex_not_match(col("c1"), lit("^foo$")),
             col("c1").not_eq(lit("foo")),
+        );
+        // `=` has no wildcards or escapes, so the literal is used as is
+        assert_change(
+            regex_match(col("c1"), lit(r"^f\\o$")),
+            col("c1").eq(lit(r"f\o")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^f%_o$")),
+            col("c1").eq(lit("f%_o")),
         );
 
         // regular expressions that match exact captured literals
