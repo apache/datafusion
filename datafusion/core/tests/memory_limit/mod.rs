@@ -506,6 +506,106 @@ async fn sort_after_group_by_reserves_shared_output_once() {
 }
 
 #[tokio::test]
+async fn oom_window_agg_exec() {
+    TestCase::new()
+        .with_query("select sum(request_bytes) over () from t")
+        .with_expected_errors(vec![
+            "Resources exhausted: Additional allocation failed",
+            "WindowAggStream",
+        ])
+        .with_memory_limit(20_000)
+        .run()
+        .await
+}
+
+/// `WindowAggExec` reserves each buffer it holds once, even when its buffered
+/// input batches and their concatenation share buffers.
+#[tokio::test]
+async fn window_agg_exec_reserves_shared_buffers_once() -> Result<()> {
+    // The 2,000 one-row slices retain one ~280 KB batch, but reserving it per
+    // slice needs ~560 MB
+    let num_rows = 2_000;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("v", DataType::Utf8, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from_iter_values(0..num_rows as i64)),
+            Arc::new(StringArray::from_iter_values(
+                (0..num_rows).map(|i| format!("{i:0>100}")),
+            )),
+        ],
+    )?;
+    let slices = (0..num_rows).map(|i| batch.slice(i, 1)).collect();
+    let table = MemTable::try_new(schema, vec![slices])?;
+    let rows = run_with_memory_limit(table, WINDOW_OVER_ALL, 16 * 1024 * 1024).await?;
+    assert_eq!(rows, num_rows);
+
+    // A single input batch is its own concatenation. The 800 KB input and the
+    // 800 KB result fit in 2 MB, but counting the concatenation again does not
+    let num_rows = 100_000;
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from_iter_values(0..num_rows as i64))],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+    let rows = run_with_memory_limit(table, WINDOW_OVER_ALL, 2_000_000).await?;
+    assert_eq!(rows, num_rows);
+    Ok(())
+}
+
+const WINDOW_OVER_ALL: &str = "SELECT k, sum(k) OVER () FROM t";
+
+/// `WindowAggExec` holds the buffered input batches and their concatenation
+/// together. The 800 KB input, its 800 KB concatenation and the 800 KB
+/// result need more than 2 MB.
+#[tokio::test]
+async fn window_agg_exec_reserves_input_concatenation() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+    let batches = (0..2)
+        .map(|i| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from_iter_values(
+                    i * 50_000..(i + 1) * 50_000,
+                ))],
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let table = MemTable::try_new(schema, vec![batches])?;
+    let err = run_with_memory_limit(table, WINDOW_OVER_ALL, 2_000_000)
+        .await
+        .unwrap_err();
+    assert_contains!(err.to_string(), "Resources exhausted");
+    assert_contains!(err.to_string(), "WindowAggStream");
+    Ok(())
+}
+
+/// Runs `sql` over `table`, registered as `t`, in one partition with a memory
+/// limit, returning the number of output rows. The batch size keeps the scan
+/// from splitting the input batches.
+async fn run_with_memory_limit(
+    table: MemTable,
+    sql: &str,
+    memory_limit: usize,
+) -> Result<usize> {
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(memory_limit, 1.0)
+        .build_arc()?;
+    let config = SessionConfig::new()
+        .with_target_partitions(1)
+        .with_batch_size(100_000);
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+    ctx.register_table("t", Arc::new(table))?;
+
+    let batches = ctx.sql(sql).await?.collect().await?;
+    Ok(batches.iter().map(|b| b.num_rows()).sum())
+}
+
+#[tokio::test]
 async fn join_by_key_multiple_partitions() {
     let config = SessionConfig::new().with_target_partitions(2);
     TestCase::new()
