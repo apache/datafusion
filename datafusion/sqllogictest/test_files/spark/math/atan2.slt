@@ -137,15 +137,24 @@ SELECT atan2(-1.0::double, '-Infinity'::double);
 ----
 -3.141592653589793
 
-# signed zeros: -0 flips the sign on the negative x-axis (atan2(+0, -1) = pi above; atan2(-0, -1) = -pi)
+# Spark adds 0.0 to both arguments, turning -0.0 into 0.0
 query R
 SELECT atan2(-0.0::double, -1.0::double);
 ----
--3.141592653589793
+3.141592653589793
 
-# -0 in the first argument still returns 0 on the positive x-axis
 query R
 SELECT atan2(-0.0::double, 1.0::double);
+----
+0
+
+query R
+SELECT atan2(0.0::double, -0.0::double);
+----
+0
+
+query R
+SELECT atan2(-0.0::double, -0.0::double);
 ----
 0
 
