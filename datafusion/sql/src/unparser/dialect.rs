@@ -110,6 +110,36 @@ pub trait Dialect: Send + Sync {
         ast::DataType::Integer(None)
     }
 
+    /// The SQL type to use for Arrow Int16 unparsing
+    /// Most dialects use SmallInt, but some, like MySQL, require SIGNED
+    fn int16_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::SmallInt(None)
+    }
+
+    /// The SQL type to use for Arrow UInt8 unparsing
+    /// Most dialects use TinyIntUnsigned, but some, like MySQL, require UNSIGNED
+    fn uint8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::TinyIntUnsigned(None)
+    }
+
+    /// The SQL type to use for Arrow UInt16 unparsing
+    /// Most dialects use SmallIntUnsigned, but some, like MySQL, require UNSIGNED
+    fn uint16_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::SmallIntUnsigned(None)
+    }
+
+    /// The SQL type to use for Arrow UInt32 unparsing
+    /// Most dialects use IntegerUnsigned, but some, like MySQL, require UNSIGNED
+    fn uint32_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::IntegerUnsigned(None)
+    }
+
+    /// The SQL type to use for Arrow UInt64 unparsing
+    /// Most dialects use BigIntUnsigned, but some, like MySQL, require UNSIGNED
+    fn uint64_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::BigIntUnsigned(None)
+    }
+
     /// The SQL type to use for Timestamp unparsing
     /// Most dialects use Timestamp, but some, like MySQL, require Datetime
     /// Some dialects like Dremio does not support WithTimeZone and requires always Timestamp
@@ -585,6 +615,30 @@ impl Dialect for MySqlDialect {
         ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
     }
 
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
+    }
+
+    fn int16_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
+    }
+
+    fn uint8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    }
+
+    fn uint16_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    }
+
+    fn uint32_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    }
+
+    fn uint64_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    }
+
     fn timestamp_cast_dtype(
         &self,
         time_unit: &TimeUnit,
@@ -839,6 +893,11 @@ pub struct CustomDialect {
     int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
+    int16_cast_dtype: ast::DataType,
+    uint8_cast_dtype: ast::DataType,
+    uint16_cast_dtype: ast::DataType,
+    uint32_cast_dtype: ast::DataType,
+    uint64_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
     date32_cast_dtype: ast::DataType,
@@ -866,6 +925,11 @@ impl Default for CustomDialect {
             int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
+            int16_cast_dtype: ast::DataType::SmallInt(None),
+            uint8_cast_dtype: ast::DataType::TinyIntUnsigned(None),
+            uint16_cast_dtype: ast::DataType::SmallIntUnsigned(None),
+            uint32_cast_dtype: ast::DataType::IntegerUnsigned(None),
+            uint64_cast_dtype: ast::DataType::BigIntUnsigned(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
             timestamp_tz_cast_dtype: ast::DataType::Timestamp(
                 None,
@@ -930,6 +994,26 @@ impl Dialect for CustomDialect {
 
     fn int32_cast_dtype(&self) -> ast::DataType {
         self.int32_cast_dtype.clone()
+    }
+
+    fn int16_cast_dtype(&self) -> ast::DataType {
+        self.int16_cast_dtype.clone()
+    }
+
+    fn uint8_cast_dtype(&self) -> ast::DataType {
+        self.uint8_cast_dtype.clone()
+    }
+
+    fn uint16_cast_dtype(&self) -> ast::DataType {
+        self.uint16_cast_dtype.clone()
+    }
+
+    fn uint32_cast_dtype(&self) -> ast::DataType {
+        self.uint32_cast_dtype.clone()
+    }
+
+    fn uint64_cast_dtype(&self) -> ast::DataType {
+        self.uint64_cast_dtype.clone()
     }
 
     fn timestamp_cast_dtype(
@@ -1026,6 +1110,11 @@ pub struct CustomDialectBuilder {
     int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
+    int16_cast_dtype: ast::DataType,
+    uint8_cast_dtype: ast::DataType,
+    uint16_cast_dtype: ast::DataType,
+    uint32_cast_dtype: ast::DataType,
+    uint64_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
     date32_cast_dtype: ast::DataType,
@@ -1059,6 +1148,11 @@ impl CustomDialectBuilder {
             int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
+            int16_cast_dtype: ast::DataType::SmallInt(None),
+            uint8_cast_dtype: ast::DataType::TinyIntUnsigned(None),
+            uint16_cast_dtype: ast::DataType::SmallIntUnsigned(None),
+            uint32_cast_dtype: ast::DataType::IntegerUnsigned(None),
+            uint64_cast_dtype: ast::DataType::BigIntUnsigned(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
             timestamp_tz_cast_dtype: ast::DataType::Timestamp(
                 None,
@@ -1089,6 +1183,11 @@ impl CustomDialectBuilder {
             int8_cast_dtype: self.int8_cast_dtype,
             int64_cast_dtype: self.int64_cast_dtype,
             int32_cast_dtype: self.int32_cast_dtype,
+            int16_cast_dtype: self.int16_cast_dtype,
+            uint8_cast_dtype: self.uint8_cast_dtype,
+            uint16_cast_dtype: self.uint16_cast_dtype,
+            uint32_cast_dtype: self.uint32_cast_dtype,
+            uint64_cast_dtype: self.uint64_cast_dtype,
             timestamp_cast_dtype: self.timestamp_cast_dtype,
             timestamp_tz_cast_dtype: self.timestamp_tz_cast_dtype,
             date32_cast_dtype: self.date32_cast_dtype,
@@ -1187,6 +1286,36 @@ impl CustomDialectBuilder {
     /// Customize the dialect with a specific SQL type for Int32 casting: Integer, SIGNED, etc.
     pub fn with_int32_cast_dtype(mut self, int32_cast_dtype: ast::DataType) -> Self {
         self.int32_cast_dtype = int32_cast_dtype;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for Int16 casting: SmallInt, SIGNED, etc.
+    pub fn with_int16_cast_dtype(mut self, int16_cast_dtype: ast::DataType) -> Self {
+        self.int16_cast_dtype = int16_cast_dtype;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for UInt8 casting: TinyIntUnsigned, UNSIGNED, etc.
+    pub fn with_uint8_cast_dtype(mut self, uint8_cast_dtype: ast::DataType) -> Self {
+        self.uint8_cast_dtype = uint8_cast_dtype;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for UInt16 casting: SmallIntUnsigned, UNSIGNED, etc.
+    pub fn with_uint16_cast_dtype(mut self, uint16_cast_dtype: ast::DataType) -> Self {
+        self.uint16_cast_dtype = uint16_cast_dtype;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for UInt32 casting: IntegerUnsigned, UNSIGNED, etc.
+    pub fn with_uint32_cast_dtype(mut self, uint32_cast_dtype: ast::DataType) -> Self {
+        self.uint32_cast_dtype = uint32_cast_dtype;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for UInt64 casting: BigIntUnsigned, UNSIGNED, etc.
+    pub fn with_uint64_cast_dtype(mut self, uint64_cast_dtype: ast::DataType) -> Self {
+        self.uint64_cast_dtype = uint64_cast_dtype;
         self
     }
 
