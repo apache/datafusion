@@ -506,6 +506,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, context)?;
         let search_mode = self.get_search_algo()?;
         let stream = Box::pin(BoundedWindowAggStream::new(
@@ -514,8 +515,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
             input,
             BaselineMetrics::new(&self.metrics, partition),
             search_mode,
-            partition,
-            self.state_observer.clone(),
+            BoundedWindowStreamOptions {
+                partition_idx: partition,
+                state_observer: self.state_observer.clone(),
+                batch_size,
+            },
         )?);
         Ok(stream)
     }
@@ -1170,6 +1174,13 @@ fn evaluate_partition_by_column_values(
         .collect()
 }
 
+/// Configuration for a bounded window aggregation stream.
+struct BoundedWindowStreamOptions {
+    partition_idx: usize,
+    state_observer: Option<Arc<dyn WindowStateObserver>>,
+    batch_size: usize,
+}
+
 /// Stream for the bounded window aggregation plan.
 pub struct BoundedWindowAggStream {
     schema: SchemaRef,
@@ -1186,6 +1197,10 @@ pub struct BoundedWindowAggStream {
     /// expression inside `window_agg_states`.
     window_agg_states: Vec<PartitionWindowAggStates>,
     finished: bool,
+    /// Maximum number of rows in each emitted batch.
+    batch_size: usize,
+    /// Remaining rows of a computed batch, emitted before consuming more input.
+    pending_output: Option<RecordBatch>,
     window_expr: Vec<Arc<dyn WindowExpr>>,
     baseline_metrics: BaselineMetrics,
     /// Search mode for partition columns. This determines the algorithm with
@@ -1291,8 +1306,7 @@ impl BoundedWindowAggStream {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         search_mode: Box<dyn PartitionSearcher>,
-        partition_idx: usize,
-        state_observer: Option<Arc<dyn WindowStateObserver>>,
+        options: BoundedWindowStreamOptions,
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::default()).collect();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
@@ -1303,12 +1317,14 @@ impl BoundedWindowAggStream {
             partition_buffers: IndexMap::default(),
             window_agg_states: state,
             finished: false,
+            batch_size: options.batch_size,
+            pending_output: None,
             window_expr,
             baseline_metrics,
             search_mode,
             most_recent_row: None,
-            partition_idx,
-            state_observer,
+            partition_idx: options.partition_idx,
+            state_observer: options.state_observer,
         })
     }
 
@@ -1364,6 +1380,9 @@ impl BoundedWindowAggStream {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
+        if let Some(batch) = self.pending_output.take() {
+            return Poll::Ready(Some(Ok(self.split_output(batch))));
+        }
         if self.finished {
             return Poll::Ready(None);
         }
@@ -1385,7 +1404,7 @@ impl BoundedWindowAggStream {
                     &mut self.partition_buffers,
                 )?;
                 if let Some(batch) = self.compute_aggregates()? {
-                    return Poll::Ready(Some(Ok(batch)));
+                    return Poll::Ready(Some(Ok(self.split_output(batch))));
                 }
                 self.poll_next_inner(cx)
             }
@@ -1402,10 +1421,21 @@ impl BoundedWindowAggStream {
                     partition_batch_state.is_end = true;
                 }
                 if let Some(batch) = self.compute_aggregates()? {
-                    return Poll::Ready(Some(Ok(batch)));
+                    return Poll::Ready(Some(Ok(self.split_output(batch))));
                 }
                 Poll::Ready(None)
             }
+        }
+    }
+
+    /// Emit the first portion and retain a zero-copy slice for later polls.
+    fn split_output(&mut self, batch: RecordBatch) -> RecordBatch {
+        let len = batch.num_rows().min(self.batch_size);
+        if len < batch.num_rows() {
+            self.pending_output = Some(batch.slice(len, batch.num_rows() - len));
+            batch.slice(0, len)
+        } else {
+            batch
         }
     }
 
@@ -1715,6 +1745,7 @@ mod tests {
         state: PolingState,
         sleep_duration: Duration,
         send_exit: bool,
+        batches_sent: Option<Arc<std::sync::atomic::AtomicUsize>>,
     }
 
     impl PartitionStream for TestStreamPartition {
@@ -1772,6 +1803,9 @@ mod tests {
                             continue;
                         };
                         self.idx += 1;
+                        if let Some(count) = &self.batches_sent {
+                            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
                         return Poll::Ready(Some(Ok(input_batch)));
                     }
                     PolingState::Sleep(future) => {
@@ -1870,6 +1904,166 @@ mod tests {
 
     fn task_context() -> Arc<TaskContext> {
         Arc::new(task_context_helper())
+    }
+
+    #[tokio::test]
+    async fn bounded_window_output_respects_batch_size() -> Result<()> {
+        use arrow::array::{ArrayRef, Int64Array};
+        use arrow::compute::concat_batches;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let values: ArrayRef = Arc::new(Int64Array::from_iter_values(1..=10));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values])?;
+        let input = TestMemoryExec::try_new_exec(
+            &[vec![
+                batch.slice(0, 2),
+                batch.slice(2, 2),
+                batch.slice(4, 2),
+                batch.slice(6, 2),
+                batch.slice(8, 2),
+            ]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let args = vec![col("a", &schema)?];
+        let order = vec![PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions::default(),
+        }];
+        let window_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count".to_string(),
+            &args,
+            &[],
+            &order,
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::CurrentRow,
+                WindowFrameBound::Following(ScalarValue::UInt64(Some(6))),
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let window = Arc::new(BoundedWindowAggExec::try_new(
+            vec![window_expr],
+            input,
+            InputOrderMode::Sorted,
+            true,
+        )?);
+        let ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(2)),
+        );
+        let batches = collect(window.execute(0, ctx)?).await?;
+        assert!(
+            batches.iter().all(|batch| batch.num_rows() <= 2),
+            "batch sizes: {:?}",
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>()
+        );
+        let combined = concat_batches(&window.schema(), &batches)?;
+        let counts = combined
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(counts.values(), &[7, 7, 7, 7, 6, 5, 4, 3, 2, 1]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bounded_window_drains_output_before_reading_more_input() -> Result<()> {
+        use arrow::array::{ArrayRef, Int64Array};
+        use arrow::compute::concat_batches;
+        use datafusion_physical_expr_common::metrics::MetricValue;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let values: ArrayRef = Arc::new(Int64Array::from_iter_values(1..=10));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values])?;
+        let batches_sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let source = Arc::new(TestStreamPartition {
+            schema: Arc::clone(&schema),
+            batches: vec![batch.slice(0, 6), batch.slice(6, 4)],
+            idx: 0,
+            state: PolingState::BatchReturn,
+            sleep_duration: Duration::ZERO,
+            send_exit: true,
+            batches_sent: Some(Arc::clone(&batches_sent)),
+        });
+        let input = Arc::new(StreamingTableExec::try_new(
+            Arc::clone(&schema),
+            vec![source],
+            None,
+            vec![],
+            false,
+            None,
+        )?);
+        let args = vec![col("a", &schema)?];
+        let order = vec![PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions::default(),
+        }];
+        let expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count".to_string(),
+            &args,
+            &[],
+            &order,
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let window = Arc::new(BoundedWindowAggExec::try_new(
+            vec![expr],
+            input,
+            InputOrderMode::Sorted,
+            true,
+        )?);
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(2)),
+        );
+        let mut output = window.execute(0, context)?;
+        let mut batches = Vec::new();
+        for _ in 0..3 {
+            batches.push(output.next().await.unwrap()?);
+            assert_eq!(batches_sent.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+        batches.extend(collect(output).await?);
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![2, 2, 2, 2, 2]
+        );
+        let combined = concat_batches(&window.schema(), &batches)?;
+        let counts = combined
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(counts.values(), &(1..=10).collect::<Vec<_>>());
+        let metrics = window.metrics().unwrap();
+        assert_eq!(metrics.output_rows(), Some(10));
+        assert_eq!(
+            metrics
+                .sum(|m| matches!(m.value(), MetricValue::OutputBatches(_)))
+                .unwrap()
+                .as_usize(),
+            5
+        );
+        Ok(())
     }
 
     pub async fn collect_stream(
@@ -1995,6 +2189,7 @@ mod tests {
                 state: PolingState::BatchReturn,
                 sleep_duration: per_batch_wait_duration,
                 send_exit,
+                batches_sent: None,
             }) as _;
             n_partition
         ];
@@ -2313,7 +2508,14 @@ mod tests {
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
 
-        let batches = collect(physical_plan.execute(0, task_context())?).await?;
+        let context = Arc::new(
+            task_context_helper().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(5)
+                    .with_target_partitions(2),
+            ),
+        );
+        let batches = collect(physical_plan.execute(0, context)?).await?;
 
         // The skip must not delay results that are ready to be finalized;
         // they stream out as soon as every window expression has produced
