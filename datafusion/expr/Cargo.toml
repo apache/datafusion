@@ -64,6 +64,7 @@ datafusion-proto-common = { workspace = true, optional = true }
 datafusion-proto-models = { workspace = true, optional = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
+parquet-variant-compute = { workspace = true }
 recursive = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
